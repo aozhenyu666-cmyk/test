@@ -110,9 +110,15 @@ export function loadDaily(raw, now, tz) {
 }
 
 /** 渲染 每日/日期.md（写给人看的；机器状态在 daily.json）。 */
-export function renderDaily(state, names = {}) {
+export function renderDaily(state, names = {}, numbers = null) {
   const who = names.strategist || '鲸澜'
   const lines = ['# ' + state.day + ' · 今日', '', '> 早上的事和完成物、晚上的对账，都由' + who + '写。对账只看证据。', '']
+  // 第九轮第二项：四个数放在正文最前面（日报第一行）。传入才写，老调用点不受影响。
+  if (numbers) {
+    const pct = (v) => (v == null ? '—' : Math.round(v * 100) + '%')
+    lines.push('> 主动开局比 ' + pct(numbers.selfOpenRatio) + ' · 交付率 ' + pct(numbers.deliverRatio) +
+      ' · 空局率 ' + pct(numbers.badRatio) + ' · 局内偏离 ' + (Number(numbers.deviationMin) || 0) + ' 分钟', '')
+  }
   lines.push('## 今天的事（早上定）', '')
   if (!state.tasks.length) {
     lines.push('- （还没定）')
@@ -154,11 +160,11 @@ export function renderDaily(state, names = {}) {
 }
 
 /** 写每日文件（md）。返回 {ok, file, text}。 */
-export function writeDaily(kbDir, state, names = {}) {
+export function writeDaily(kbDir, state, names = {}, numbers = null) {
   const file = join(kbDir, DAILY_DIR, state.day + '.md')
   try {
     mkdirSync(join(kbDir, DAILY_DIR), { recursive: true })
-    writeFileSync(file, renderDaily(state, names), 'utf8')
+    writeFileSync(file, renderDaily(state, names, numbers), 'utf8')
     return { ok: true, file, text: '写进每日文件了：' + file }
   } catch (error) {
     return { ok: false, file: '', text: '每日文件写不进去：' + String((error && error.message) || error) }

@@ -473,3 +473,30 @@ test('A2 排程回话：排不下的时候说清是哪一件', () => {
   assert.match(text, /排不下：写 8000 字/)
   assert.match(text, /截止 09:00/)
 })
+
+// ---------------------------------------------------------------- 第九轮第二项：四个数进日报第一行
+
+test('S16 日报第一行写四个数：主动开局比 / 交付率 / 空局率 / 局内偏离', () => {
+  const md = renderDaily({ day: '2026-11-14', tasks: [], review: null }, {}, {
+    selfOpenRatio: 0.5, deliverRatio: 0.75, badRatio: 0.25, deviationMin: 12,
+  })
+  assert.match(md, /主动开局比 50%/)
+  assert.match(md, /交付率 75%/)
+  assert.match(md, /空局率 25%/)
+  assert.match(md, /局内偏离 12 分钟/)
+  // 必须在正文最前面（标题行之后第一段），不是藏在文末。
+  assert.ok(md.indexOf('主动开局比') < md.indexOf('今天的事'))
+})
+
+test('S17 算不出的比率写「—」，不写 0%', () => {
+  const md = renderDaily({ day: '2026-11-14', tasks: [], review: null }, {}, {
+    selfOpenRatio: null, deliverRatio: null, badRatio: null, deviationMin: 0,
+  })
+  assert.match(md, /主动开局比 — · 交付率 — · 空局率 — · 局内偏离 0 分钟/)
+  assert.doesNotMatch(md, /0%/)
+})
+
+test('S18 不传四数就不写那一行，老调用点行为不变', () => {
+  const md = renderDaily({ day: '2026-11-14', tasks: [], review: null })
+  assert.doesNotMatch(md, /主动开局比/)
+})

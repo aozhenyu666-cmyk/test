@@ -43,7 +43,7 @@ export function createBrainRuntime(deps) {
   function tick(phone, now, ctx = {}) {
     const day = deps.day(now)
     let state = loadEp()
-    const rolled = rollDay(state, { day, now, hourOf: deps.hourOf })
+    const rolled = rollDay(state, { day, now, hourOf: deps.hourOf, appsOf: deps.appsOf })
     state = rolled.state
     const o = observe(state, {
       now, day, minute: deps.minute(now),
@@ -77,7 +77,7 @@ export function createBrainRuntime(deps) {
     const day = deps.day(now)
     const days = Object.keys(state.digests).sort().slice(-14)
     return {
-      today: digestOf(state, day, { now, hourOf: deps.hourOf }),
+      today: digestOf(state, day, { now, hourOf: deps.hourOf, appsOf: deps.appsOf }),
       digests: days.map((d) => state.digests[d]),
       open: state.open ? { app: state.open.app, fun: state.open.fun, start: state.open.start, cause: state.open.cause, context: state.open.context } : null,
       cards: cardList(loadCards()),

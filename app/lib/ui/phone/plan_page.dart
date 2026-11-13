@@ -82,6 +82,10 @@ class _PlanPageState extends State<PlanPage> {
   /// 上一回插件点名的局（按标题）。只用来把那一行标红，判还是插件判的。
   Set<String> _missing = const {};
 
+  /// 四个数（第九轮第二项）：插件算好随 /plan/day 一起给，这里只显示，不自己算。
+  /// 比率算不出时插件给 null——显示「—」，不显示 0%，那是两回事。
+  Map<String, Object?> _numbers = const {};
+
   @override
   void initState() {
     super.initState();
@@ -101,6 +105,7 @@ class _PlanPageState extends State<PlanPage> {
       _recent = _strings(day?['recent']);
       _protocols = _protocolList(day?['protocols']);
       _min = day?['min'] is int ? day!['min'] as int : 0;
+      _numbers = day?['numbers'] is Map ? Map<String, Object?>.from(day!['numbers'] as Map) : const {};
       _rows = _rowsOf(day?['plan']);
       if (_rows.isEmpty) _rows = [_blank()];
     });
@@ -256,6 +261,7 @@ class _PlanPageState extends State<PlanPage> {
             ],
           )
         else ...[
+          if (_numbers.isNotEmpty) ...[_numbersCard(), const SizedBox(height: 12)],
           for (var i = 0; i < _rows.length; i += 1) _card(i),
           const SizedBox(height: 12),
           ListPageCard(
@@ -285,6 +291,39 @@ class _PlanPageState extends State<PlanPage> {
             ],
           ),
         ],
+      ],
+    );
+  }
+
+  /// 四个数：主动开局比、交付率、空局率、局内偏离分钟。
+  /// 只显示，不算：算法在插件 episodes.js 的日摘要里，手机复制一份迟早会不一致。
+  Widget _numbersCard() {
+    final pct = (Object? v) => v is num ? '${(v * 100).round()}%' : '—';
+    final dev = _numbers['deviationMin'] is int ? _numbers['deviationMin'] as int : 0;
+    final opened = _numbers['opened'] is int ? _numbers['opened'] as int : 0;
+    final top = _numbers['deviationTop'];
+    final rows = top is List ? top : const <Object?>[];
+    final names = <String>[
+      for (final x in rows)
+        if (x is Map && x['app'] is String) '${_label(x['app'] as String)} ${x['min']} 分',
+    ];
+    final topText = names.isEmpty ? '' : '主要在 ' + names.take(3).join('、');
+    return ListPageCard(
+      children: [
+        ListPageRow(
+          icon: AppIcons.chart,
+          title: '今天：交付 ${pct(_numbers['deliverRatio'])} · 空局 ${pct(_numbers['badRatio'])}',
+          subtitle: '主动开局 ${pct(_numbers['selfOpenRatio'])} · 局内偏离 $dev 分钟' +
+              (opened > 0 ? '（开了 $opened 局）' : ''),
+          subtitleMaxLines: 2,
+        ),
+        if (topText.isNotEmpty)
+          ListPageRow(
+            icon: AppIcons.time,
+            title: topText,
+            subtitle: '这些分钟花在这一局不允许的 App 上',
+            subtitleMaxLines: 2,
+          ),
       ],
     );
   }

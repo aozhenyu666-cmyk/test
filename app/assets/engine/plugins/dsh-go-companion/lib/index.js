@@ -1578,7 +1578,7 @@ export function apply(ctx) {
   const dailyToday = (now = Date.now()) => loadDaily(loadDailyState(), now, zoneOr(config.timeZone))
   const savePlan = (state) => {
     saveDailyState(state)
-    writeDaily(kbDir(notesDir(), home()), state)
+    writeDaily(kbDir(notesDir(), home()), state, {}, fourNumbers())
   }
   /**
    * A2：走一遍今天的时间表。块开始就把这一块立成任务模式（娱乐照规则锁），块结束继续点他交墙。
@@ -1728,7 +1728,20 @@ export function apply(ctx) {
     hourOf: (ms) => Math.floor(zoneMinuteOfDay(ms, zoneOr(config.timeZone)) / 60),
     // 有生效预案以它为依据的卡，状态记「有对策」。
     backed: () => presetRt.list(Date.now()).presets.filter((p) => p.status === '生效' && p.basis).map((p) => p.basis),
+    // 局内偏离分钟要按局号查这一局声明过哪些 App（严格模式用的是同一张表）。
+    appsOf: (boutId) => presetRt.appsOf(boutId),
   })
+
+  /** 第九轮第二项：四个数。计划页顶部、日报第一行、周报都读这一份，不各算一遍。 */
+  function fourNumbers(now = Date.now()) {
+    const dg = brainRt.view(now).today || {}
+    return {
+      selfOpenRatio: dg.selfOpenRatio ?? null,
+      deliverRatio: dg.deliverRatio ?? null,
+      badRatio: dg.badRatio ?? null,
+      deviationMin: Number(dg.deviationMin) || 0,
+    }
+  }
 
   function setGear(sw, by) {
     config = applyGear(config, sw, Date.now())
@@ -1893,7 +1906,7 @@ export function apply(ctx) {
       const tz = zoneOr(config.timeZone)
       const state = loadDaily(loadDailyState(), now, tz)
       const next = { ...state, tasks: v.tasks, review: state.review }
-      const wrote = writeDaily(kbDir(notesDir(), home()), next)
+      const wrote = writeDaily(kbDir(notesDir(), home()), next, {}, fourNumbers())
       if (wrote.ok) patch.daily = { day: state.day, tasks: v.tasks.length, at: now }
       saveDailyState(next)
     }
@@ -1916,7 +1929,7 @@ export function apply(ctx) {
           check: wallCheck(now),
         })
         const next = { ...state, review: { at: now, ...out } }
-        writeDaily(kbDir(notesDir(), home()), next)
+        writeDaily(kbDir(notesDir(), home()), next, {}, fourNumbers())
         saveDailyState(next)
         Object.assign(patch, {
           daily: { day: state.day, done: out.done, partial: out.partial, miss: out.miss, total: out.total, at: now },
@@ -2893,7 +2906,7 @@ export function apply(ctx) {
           check: wallCheck(now),
         })
         const next = { ...state, review: { at: now, ...out } }
-        const wrote = writeDaily(dir, next)
+        const wrote = writeDaily(dir, next, {}, fourNumbers())
         saveDailyState(next)
         config = {
           ...config,
@@ -3121,7 +3134,18 @@ export function apply(ctx) {
       // 局型清单和它的默认时长也一起给：手机不硬编码协议，插件加了新局型它自然就多一行。
       const protocols = builtinProtocols().filter((x) => x.ok)
         .map((x) => ({ id: x.protocol.id, name: x.protocol.name, minutes: x.protocol.budget?.minutes || 0 }))
-      return { v: 1, ok: true, plan: stored, min: zoneMinuteOfDay(now, tz), recent, protocols }
+      // 第二项：四个数显示在计划页顶部。数据源就是行为大脑的今天摘要，这里不另算一份。
+      // 比率算不出（今天还没开过局）给 null，手机那边显示「—」而不是 0。
+      const dg = brainRt.view(now).today || {}
+      const numbers = {
+        ...fourNumbers(now),
+        deviationTop: dg.deviationTop || [],
+        opened: Number(dg.bouts?.opened) || 0,
+        passed: Number(dg.bouts?.passed) || 0,
+        bad: Number(dg.bouts?.bad) || 0,
+        self: Number(dg.bouts?.self) || 0,
+      }
+      return { v: 1, ok: true, plan: stored, min: zoneMinuteOfDay(now, tz), recent, protocols, numbers }
     }
     const raw = Array.isArray(body?.items) ? body.items : []
     const plan = { ...stored, items: raw.map((i) => ({ ...(i || {}) })).filter((i) => i && i.protocolId) }
@@ -5937,7 +5961,7 @@ export function apply(ctx) {
       if (kind === 'perfunctory') presetRt.perfunctory(now, lastPhone)
     }
     if (r.state === 'closed' || r.state === 'escalated') {
-      brainRt.noteBout({ protocolId: live.protocol?.id, outcome: r.state === 'closed' ? 'done' : 'bad' }, now)
+      brainRt.noteBout({ protocolId: live.protocol?.id, outcome: r.state === 'closed' ? 'done' : 'bad', accepted: r.state === 'closed' && r.accepted !== false }, now)
       dropLive()
       return { ok: true, state: r.state, accepted: r.accepted !== false, say: '', toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' }
     }

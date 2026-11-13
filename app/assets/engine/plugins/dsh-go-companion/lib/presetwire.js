@@ -245,5 +245,7 @@ export function createPresetRuntime(deps) {
     history: (id) => historyOf(load(), id),
     isActive: (id) => isActive(load(), id),
     preset: (id) => presetOf(load(), id),
+    // 按局号取这一局声明的必需 / 允许应用（行为大脑算「局内偏离分钟」用）。
+    appsOf: (boutId) => boutAppsOf(load(), boutId),
   }
 }

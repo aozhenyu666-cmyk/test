@@ -386,3 +386,36 @@ test('/sisters 也带同一张「去定计划」：计划定了就没了', async
     assert.equal(after.body.planGate, null, '定了计划就不该再催')
   })
 })
+
+// ---- 第九轮第二项：四个数显示在计划页顶部 ------------------------------------------------
+
+test('/plan/day 带上四个数：字段齐全，没开过局时比率是 null 不是 0', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await call(t.h(), 'POST', '/plan/day', { action: 'list' })
+    const n = r.body.numbers
+    assert.ok(n, '计划页顶部要有四个数')
+    for (const k of ['selfOpenRatio', 'deliverRatio', 'badRatio', 'deviationMin']) {
+      assert.ok(k in n, '缺字段：' + k)
+    }
+    assert.equal(n.selfOpenRatio, null, '今天还没开过局，比率算不出来')
+    assert.equal(n.deliverRatio, null)
+    assert.equal(n.badRatio, null)
+    assert.equal(n.deviationMin, 0)
+    assert.equal(n.opened, 0)
+  })
+})
+
+test('/plan/day 的四个数与日摘要一致：开一局记一笔，数字跟着变', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await call(t.h(), 'POST', '/bouts', { action: 'open', protocolId: 'study', apps: { need: ['com.zhuoyin.tiku'], allow: [] } })
+    const r = await call(t.h(), 'POST', '/plan/day', { action: 'list' })
+    const n = r.body.numbers
+    assert.equal(n.opened, 1)
+    assert.equal(n.self, 1, '面板开的局算他自己开的')
+    assert.equal(n.selfOpenRatio, 1)
+    assert.equal(n.deliverRatio, 0, '开了还没交付')
+    assert.equal(n.passed, 0)
+  })
+})

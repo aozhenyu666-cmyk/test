@@ -205,18 +205,21 @@ export function noteLock(raw, at) {
  * 记一局。outcome：open（开了）/ done（正常收局）/ bad（升级、超时、空局）。
  * self=true 表示他自己开的（面板开局），否则是计划或系统开的。
  */
-export function noteBout(raw, { day, protocolId, outcome, self = false }) {
+export function noteBout(raw, { day, protocolId, outcome, self = false, accepted = false }) {
   const state = normalizeState(raw)
   const d = String(day || '')
   const p = String(protocolId || 'unknown')
   if (!d) return state
   const days = isPlain(state.bouts[d]) ? { ...state.bouts[d] } : {}
-  const row = isPlain(days[p]) ? { ...days[p] } : { opened: 0, self: 0, done: 0, bad: 0 }
+  const row = isPlain(days[p]) ? { ...days[p] } : { opened: 0, self: 0, done: 0, bad: 0, passed: 0 }
   if (outcome === 'open') {
     row.opened += 1
     if (self) row.self += 1
-  } else if (outcome === 'done') row.done += 1
-  else if (outcome === 'bad') row.bad += 1
+  } else if (outcome === 'done') {
+    row.done += 1
+    // 交付率 = 通过验收的局 ÷ 开了的局。收局但没过验收（say 收尾、缺交付物）不算。
+    if (accepted) row.passed = num(row.passed) + 1
+  } else if (outcome === 'bad') row.bad += 1
   days[p] = row
   state.bouts[d] = days
   return state
@@ -238,6 +241,32 @@ export function segsOf(state, day, now) {
  * @param {string} day
  * @param {{now?:number, hourOf:(ms:number)=>number}} opts  hourOf 把时间戳换成北京时间的小时
  */
+/**
+ * 局内偏离分钟：局内片段里、前台不在这一局「必需 + 允许」里的那些分钟。
+ *
+ * 只算**声明过 App** 的局。没声明的局（第七轮之前开的、或者他没在计划里写清）不参与——
+ * 没有允许清单就谈不上「不允许的 App」，硬算会把每一分钟都算成偏离。
+ *
+ * @param {object[]} segs 这一天（含还开着那段）的片段
+ * @param {(boutId:string)=>{need:string[],allow:string[]}|null} appsOf 按局号取这一局的 App
+ */
+export function deviationOf(segs, appsOf) {
+  let min = 0
+  const byApp = {}
+  for (const seg of Array.isArray(segs) ? segs : []) {
+    if (seg?.context !== '局内' || !seg.boutId || !seg.app) continue
+    const apps = typeof appsOf === 'function' ? appsOf(seg.boutId) : null
+    const allow = [...(apps?.need || []), ...(apps?.allow || [])]
+    if (!allow.length) continue
+    if (allow.includes(String(seg.app))) continue
+    const m = Math.max(0, (num(seg.end) - num(seg.start)) / 60_000)
+    min += m
+    byApp[seg.app] = (byApp[seg.app] || 0) + m
+  }
+  const top = Object.entries(byApp).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([app, m]) => ({ app, min: Math.round(m) }))
+  return { min: Math.round(min), top }
+}
+
 export function digestOf(state, day, opts) {
   const s = normalizeState(state)
   const segs = segsOf(s, day, opts.now)
@@ -260,9 +289,11 @@ export function digestOf(state, day, opts) {
     }
   }
   const bouts = isPlain(s.bouts[day]) ? s.bouts[day] : {}
-  const tally = { opened: 0, self: 0, done: 0, bad: 0 }
+  const tally = { opened: 0, self: 0, done: 0, bad: 0, passed: 0 }
   for (const row of Object.values(bouts)) for (const k of Object.keys(tally)) tally[k] += num(row[k])
   const top = Object.entries(apps).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([app, m]) => ({ app, min: Math.round(m) }))
+  // 局内偏离分钟：调用方给 appsOf（按局号取这一局的必需/允许），没给就不算。
+  const dev = opts.appsOf ? deviationOf(segs, opts.appsOf) : { min: 0, top: [] }
   return {
     day,
     funMin: Math.round(Math.max(segFun, num(s.marks.todayFun?.[day]))),
@@ -272,19 +303,22 @@ export function digestOf(state, day, opts) {
     funSegs: segs.filter((x) => x.fun).length,
     locks: num(s.marks.locks?.[day]),
     bouts: { ...tally, byProtocol: { ...bouts } },
-    // 四个数里能从这里算的三个；交付率要等验收接进来（第三项）。
+    // 四个数。比率算不出（分母为 0）给 null，不给 0——0 会被读成「一个都没做成」。
     selfOpenRatio: tally.opened ? Math.round((tally.self / tally.opened) * 100) / 100 : null,
     badRatio: tally.opened ? Math.round((tally.bad / tally.opened) * 100) / 100 : null,
+    deliverRatio: tally.opened ? Math.round((tally.passed / tally.opened) * 100) / 100 : null,
+    deviationMin: dev.min,
+    deviationTop: dev.top,
   }
 }
 
 /** 换天时把昨天的摘要定稿；顺手清掉太旧的片段和摘要。 */
-export function rollDay(raw, { day, now, hourOf, dayMs = 86_400_000 }) {
+export function rollDay(raw, { day, now, hourOf, dayMs = 86_400_000, appsOf }) {
   const state = normalizeState(raw)
   const prev = state.marks.lastDay
   state.marks.lastDay = day
   if (!prev || prev === day) return { state, finalized: null }
-  const finalized = digestOf(state, prev, { now, hourOf })
+  const finalized = digestOf(state, prev, { now, hourOf, appsOf })
   state.digests[prev] = finalized
   const segCut = num(now) - KEEP_SEG_DAYS * dayMs
   state.segs = state.segs.filter((x) => num(x.end) >= segCut).slice(-MAX_SEGS)
