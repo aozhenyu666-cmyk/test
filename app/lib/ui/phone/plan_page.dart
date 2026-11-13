@@ -159,10 +159,10 @@ class _PlanPageState extends State<PlanPage> {
     );
     if (picked == null || !mounted) return;
     setState(() {
-      _rows[index]
-        ..protocolId = picked.id
-        ..title = picked.name
-        ..budget = picked.minutes;
+      final row = _rows[index];
+      row.protocolId = picked.id;
+      row.title = picked.name;
+      row.budget = picked.minutes;
     });
   }
 
