@@ -660,7 +660,9 @@ object ProactiveRuntime {
         sessionUntil = until
         sessionAllow = allow
         sessionPkg = pkg
-        sessionGrace = if (graceMs > 0) graceMs else SessionPolicy.DEFAULT_GRACE_MS
+        // 0 是合法值，不是「没给」：R8 P4 的升级舱要求「不给第三方应用宽限」，
+        // 46 秒的宽限等于让他先白刷一分钟。缺省（没有这个键）由 applySession 填默认值。
+        sessionGrace = if (graceMs >= 0) graceMs else SessionPolicy.DEFAULT_GRACE_MS
         // 新一场连麦：上一次的前台停留不算数。
         frontPkg = null
         frontSince = 0L

@@ -13,6 +13,10 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { DatabaseSync } from 'node:sqlite'
 import { apply } from '../lib/index.js'
+import { blockDuringLock } from '../lib/apps.js'
+import { GEMINI_PACKAGES } from '../lib/gemini.js'
+import { funStep, landing, step } from '../lib/ladder.js'
+import { settingsOf } from '../lib/settings.js'
 
 function call(handler, method, path, body) {
   const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))])
@@ -199,3 +203,66 @@ for (const persona of PERSONAS) {
     assert.equal(sees[0].temperature, 0, '判球不要随机性')
   })
 }
+
+// ---- P4 升级阶梯的两个剧本（施工书 P4「最小交付」点名的那两个）----------------------------
+//
+// 这一段不起宿主：升级阶梯是纯函数（ladder.js），它要的只有「一条回答」和「一份手机快照」。
+// 上面那几个剧本必须起宿主，是因为它们要证明判球真的落进了账本；这里要证明的是另一件事——
+// 把分钟一拍一拍喂进去，第几分钟会锁、锁成什么样。起宿主反而会把这条线挡住。
+
+const DAY = Date.parse('2026-03-09T16:00:00Z') // 2026-03-10 00:00 +08，周二，工作日
+const at = (h, m = 0) => DAY + (h * 60 + m) * 60_000
+const MIN = (h, m = 0) => h * 60 + m
+const SETTINGS = settingsOf({})
+
+test('剧本一·30 分钟敷衍 3 次：审讯舱开起来，舱外的应用全被锁', () => {
+  // 一个只会「嗯」的人，每 10 分钟被问一次，每次都用同一个字糊过去。
+  let st = { day: DAY }
+  let verdict = null
+  for (const m of [0, 10, 20]) {
+    const r = step(st, {
+      text: '嗯',
+      now: at(10, m), day: DAY, min: MIN(10, m), dayKind: 'workday', settings: SETTINGS,
+    })
+    st = r.state
+    assert.equal(r.kind, 'perfunctory', '每一次都算敷衍，不是答错')
+    if (r.verdict) verdict = r.verdict
+  }
+  assert.ok(verdict, '30 分钟里敷衍 3 次必须升级')
+  assert.equal(verdict.rule, 'E1')
+  assert.equal(verdict.minutes, 10)
+
+  const l = landing(verdict, { now: at(10, 20), endOfDay: at(24) })
+  // 舱：只放行 Gemini，宽限 0（手机按 session.cell 取这两样）。
+  assert.equal(l.cell, 'cell')
+  assert.equal(l.until, at(10, 30), 'E1 是 10 分钟的舱')
+  assert.equal(l.tighten, false)
+
+  // 舱外的应用被锁：舱内的放行名单就是 Gemini 那几个包，别的娱乐包一个都不放。
+  const blocked = blockDuringLock([], { funLocked: true, allow: GEMINI_PACKAGES })
+  assert.ok(blocked.length > 0, '舱外要有东西可锁')
+  for (const pkg of GEMINI_PACKAGES) assert.ok(!blocked.includes(pkg), pkg + ' 在放行名单里')
+  assert.ok(blocked.includes('com.ss.android.ugc.aweme'), '抖音这一类舱内不许用')
+})
+
+test('剧本二·刷视频 16 分钟：被锁，并且进计划模态', () => {
+  // 工作时段（10:00 起）连刷 16 分钟抖音，每分钟一拍。
+  let st = { day: DAY }
+  let verdict = null
+  for (let i = 0; i <= 16; i += 1) {
+    const r = funStep(st, {
+      now: at(10, i), day: DAY, min: MIN(10, i), dayKind: 'workday', settings: SETTINGS,
+      foreground: 'com.ss.android.ugc.aweme', funPackage: true, funDeltaMs: 60_000,
+    })
+    st = r.state
+    if (r.verdict) { verdict = r.verdict; break }
+  }
+  assert.ok(verdict, '连刷 16 分钟必须被锁')
+  assert.equal(verdict.rule, 'L1', '工作时段连用 15 分钟就是 L1')
+  assert.equal(verdict.action.type, 'fun-lock-plan')
+
+  const l = landing(verdict, { now: at(10, 16), endOfDay: at(24) })
+  assert.equal(l.plan, true, '锁的同时进计划模态')
+  assert.equal(l.cell, '', '不因为刷视频开审讯舱——那是敷衍才有的代价')
+})
+

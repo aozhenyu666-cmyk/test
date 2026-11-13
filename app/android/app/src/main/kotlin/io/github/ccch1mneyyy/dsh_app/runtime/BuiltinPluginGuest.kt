@@ -196,6 +196,8 @@ object BuiltinPluginGuest {
                 // R8 J6/J5：题库（格式与完整性）与思维局六招（判定、强度、依据前置检查）。
                 "lib/bank.js",
                 "lib/thinking.js",
+                // R8 P4：升级阶梯的接线（分类 → 记敷衍 → 判升级 → 落手机）。
+                "lib/ladder.js",
             ),
         ),
     )

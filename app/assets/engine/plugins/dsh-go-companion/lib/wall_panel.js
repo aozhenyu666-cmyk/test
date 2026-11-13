@@ -47,19 +47,28 @@ function clock(at, tz) {
 
 /**
  * 今天的升级记录：一条一行，按最新在上。
- * @param {object[]} entries 账本条目
+ *
+ * 两种来源都认：bouts.js `listEscalations` 的表行（`{level, reason, startedAt}`）和账本条目
+ * （`{state:'escalate', rule, why, at}`）。前者是权威，后者是老数据。字段名不同不是笔误——
+ * 表那边是代码判的升级，账本那边是事后的一行注记。
+ * @param {object[]} rows
  * @param {{todayStart:number, tz:string, limit?:number}} opts
  */
-export function escalateRows(entries, { todayStart = 0, tz = '', limit = 12 } = {}) {
+export function escalateRows(rows, { todayStart = 0, tz = '', limit = 12 } = {}) {
   const out = []
-  for (const e of Array.isArray(entries) ? entries : []) {
-    if (!e || !ESCALATE_STATES.has(e.state)) continue
-    if (Number(e.at) < Number(todayStart)) continue
-    const rule = String(e.rule || e.code || '').trim()
+  for (const e of Array.isArray(rows) ? rows : []) {
+    // 非对象（null / 数字 / 字符串）不是记录，是坏输入：不能因此拼出一行空记录。
+    if (!e || typeof e !== 'object') continue
+    // 账本条目要过 state 过滤；表行没有 state，直接收。
+    if (e.state !== undefined && !ESCALATE_STATES.has(e.state)) continue
+    const at = Number(e.at ?? e.startedAt) || 0
+    if (at < Number(todayStart)) continue
+    const rule = String(e.rule || e.code || e.level || '').trim()
     const why = String(e.why || e.reason || '').trim()
-    const action = String(e.action || '').trim()
-    const head = clock(e.at, tz) + ' ' + (rule || '（没说哪条）')
-    out.push(head + (action ? ' · ' + action : '') + (why ? ' · ' + why : ''))
+    const action = String(e.action || e.landed || '').trim()
+    const ended = Number(e.endedAt) > 0 ? '（' + clock(e.endedAt, tz) + ' 结束·' + String(e.endedBy || '') + '）' : ''
+    const head = clock(at, tz) + ' ' + (rule || '（没说哪条）')
+    out.push(head + (action ? ' · ' + action : '') + (why ? ' · ' + why : '') + ended)
   }
   return out.sort().reverse().slice(0, Math.max(1, limit))
 }
@@ -120,7 +129,11 @@ export function buildWallSnapshot(input = {}) {
     accepted: input.plan?.accepted === true,
   }
 
-  const escalations = escalateRows(input.entries, { todayStart: input.todayStart, tz })
+  // 升级记录：有 escalations 表就只读表（权威），没有才退回账本。
+  const escalations = escalateRows(
+    Array.isArray(input.escalations) ? input.escalations : input.entries,
+    { todayStart: input.todayStart, tz },
+  )
   const escalate = {
     rows: escalations,
     note: escalations.length ? '今天升级了 ' + escalations.length + ' 次。' : '今天没有升级。',

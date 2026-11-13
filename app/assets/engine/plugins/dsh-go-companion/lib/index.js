@@ -51,7 +51,7 @@ import {
 import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
 // 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
-import { blockDuringLock, cleanApps, declaredFun, remark } from './apps.js'
+import { blockDuringLock, cleanApps, declaredFun, remark, roleOf } from './apps.js'
 import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
 import { fitBudget, stripInjection } from './budget.js'
 // B3：素材池（例句池 / 关键词卡 / depth 预算系数）。文件在用户笔记库里，缺了用内置种子。
@@ -92,13 +92,17 @@ import { planLines, planOf, tick } from './planwire.js'
 // 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
 import { buildWallSnapshot } from './wall_panel.js'
 import { wallAuditView, wallView } from './wall_view.js'
-import { settingsOf, applySettings } from './settings.js'
+import { settingsOf, applySettings, dayKindOf } from './settings.js'
 // 第八轮 W4：设定页。解析、渲染、预填都在 settings_panel.js，这里只接线。
 import { buildSettingsSnapshot, parseDay, parseLimits, settingsMarkdown } from './settings_panel.js'
 import { settingsDayView, settingsLimitsView } from './settings_view.js'
 import { builtinProtocolOf, builtinProtocols } from './builtin.js'
 import { createOfficial } from './boutrun.js'
-import { listBouts, listVerdicts, openBoutsDb, reapRunning, runningBout } from './bouts.js'
+import { listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, runningBout, startEscalation } from './bouts.js'
+// 第八轮 P4 接线：一条回答 → 分类 → 记敷衍 → 判升级 → 落手机。全部在 ladder.js 里，
+// 这里只负责把状态读写、数据库、手机快照喂给它。
+import { ALL_LOCK, CELL, funStep, landing, rowOf, step as ladderStep } from './ladder.js'
+import { evaluateEPrime } from './escalate.js'
 import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
@@ -1628,16 +1632,26 @@ export function apply(ctx) {
   /** 今天这份提交。没交过就是空的四项。 */
   const depositToday = (now) => depositOf(loadDepositState(), dayString(now, zoneOr(config.timeZone)))
   const geminiPackages = () => (Array.isArray(config.geminiPackages) && config.geminiPackages.length ? config.geminiPackages.map(String) : GEMINI_PACKAGES)
-  /** 正在进行的 Gemini 互动舱：手机据此只许 Gemini（急事底线 App 除外）。 */
+  /**
+   * 正在进行的 Gemini 互动舱：手机据此只许 Gemini（急事底线 App 除外）。
+   *
+   * 第八轮 P4：同一份舱还承担「升级舱」。`session.cell` 有两个值：
+   *   'cell'     E1/E2 的审讯舱——只放行 Gemini，且**不给第三方应用宽限**（施工书「但不给第三方应用宽限」）；
+   *   'all-lock' E1′ 的全机锁——放行名单为空，只剩急事底线和局界面（DSH 自己）。
+   * 不另造字段：手机 applySession 只读 until/allow/graceMs 三个，多一个形态就多一处它不认。
+   */
   const geminiSessionView = (now = Date.now()) => {
     const s = loadGemini().session
     if (!s || !(Number(s.until) > now)) return null
+    const cell = String(s.cell || '')
     return {
       app: geminiPackages()[0],
-      allow: geminiPackages(),
+      allow: cell === 'all-lock' ? [] : geminiPackages(),
       until: Number(s.until),
       // R7 P0-1：舱内第三方 App 的宽限。手机侧不再"非白名单一律锁"，按这个秒数先放行再升锁。
-      graceMs: Math.max(0, Number(config.sessionGraceMs) || 45_000),
+      // 升级舱一律 0：等 45 秒才锁，等于给了一次白刷。
+      graceMs: cell ? 0 : Math.max(0, Number(config.sessionGraceMs) || 45_000),
+      cell: cell || undefined,
       topic: String(s.topic || ''),
       mode: String(s.mode || 'think'),
       by: s.by || undefined,
@@ -1771,6 +1785,10 @@ export function apply(ctx) {
 
   /** 这一刻的全天状态（C2）：主状态只有一项，追问锁是叠在上面的临时层。 */
   function stateView(now, tz, phone) {
+    // 计划模态：machine.js 一直有这一层（priority 95），但这里从来没传过 plan，
+    // 于是「计划锁」永远不进——L1 的「直接锁 + 进计划模态」也就落不下去。
+    // 现在只认升级压下来的那一份（planUntil），没升级就不主动进模态。
+    const doc = loadLadderDoc()
     return resolveState({
       now,
       tz,
@@ -1779,6 +1797,7 @@ export function apply(ctx) {
       rhythm: lastRhythm || {},
       followup: followupView(config.followup, now),
       session: geminiSessionView(now),
+      plan: doc.planUntil > now ? { active: true, until: doc.planUntil, reason: '升级' } : null,
     })
   }
 
@@ -4281,9 +4300,211 @@ export function apply(ctx) {
   // 第八轮 P1/P2：计划的节拍。每分钟一次，只做两件事——把今天的计划维护在文件里，
   // 到点了交给 startBout。引擎挂了一段时间也不会多开一局：过点太久的在 planwire 里
   // 直接记成空局（LATE_SKIP_MIN），追补会把人连着按在椅子上开三局。
+  // ---- 第八轮 P4：升级阶梯接线 ---------------------------------------------------------------
+  //
+  // 上一批把 reply.js / escalate.js 写完了，但两个模块一条 import 都没有——规则全在、接线没有。
+  // 这一段就是那条接线，三个入口：
+  //   ladderAnswer  局官每收到一条回答（含超时、含 RETRY_LIMIT 打满）
+  //   ladderTick    /plan 每分钟拿手机快照算沉迷那一串
+  //   ladderE1Prime E1′：舱发出 60 秒 Gemini 没进前台 → 全机锁
+  //
+  // 状态只放一个文件（escalate.json），里面两块：`ladder` 是 escalate.js 的当天状态，
+  // 另外几个是「这个动作现在在手机上长什么样」（cell / cellUntil / planUntil / escalationId / tickAt）。
+  // 不另开表：escalate.js 的计数已经有了，再造一份就是两份账对不上。
+
+  function loadLadderDoc() {
+    const d = readState(stateFile('escalate.json'), null)
+    const src = d && typeof d === 'object' ? d : {}
+    return {
+      ladder: src.ladder && typeof src.ladder === 'object' ? src.ladder : {},
+      cell: String(src.cell || ''),
+      cellUntil: Number(src.cellUntil) || 0,
+      planUntil: Number(src.planUntil) || 0,
+      escalationId: String(src.escalationId || ''),
+      tickAt: Number(src.tickAt) || 0,
+    }
+  }
+  const saveLadderDoc = (d) => writeJson(stateFile('escalate.json'), d)
+
+  /** 他声明成工作/工具的那些包：L2 只问「既不是娱乐也不是这些」的 App。 */
+  const declaredApps = () => appsOf().filter((a) => a && a.role && a.role !== 'fun').map((a) => a.pkg)
+
+  /** 记一次升级。写进 escalations 表——墙的「今日升级」读的就是这张表。 */
+  // shortcut: 只写开、不写关（bouts.js 的 endEscalation 目前没被调用），所以墙只看开始时间，
+  // 那一行不显示「几点结束」。什么时候该补：复盘要按「这一轮怎么结束的」分类统计的那天。
+  function fileEscalation(verdict, now) {
+    const row = rowOf(verdict)
+    let db = null
+    try {
+      db = openBoutsDb(memoryPath())
+      const r = startEscalation(db, { reason: row.reason || row.level, level: row.level, now, home: home() })
+      return r.ok ? r.id : ''
+    } catch (error) {
+      // 记账失败不能让这一条升级不生效：锁还是要下发。
+      console.error('[companion] 升级落账失败：' + String((error && error.message) || error))
+      return ''
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // 关不掉不影响这一条
+      }
+    }
+  }
+
+  /**
+   * 把一条升级动作落到手机。手机只认两处（见 ladder.js 头注释）：连麦舱和墙的收紧。
+   * @returns {string} 这一条为什么落在那儿（给 record 用）
+   */
+  function applyLanding(verdict, now) {
+    const tz = zoneOr(config.timeZone)
+    const endOfDay = startOfDay(now, tz) + 86_400_000
+    const l = landing(verdict, { now, endOfDay })
+    if (!l) return ''
+    const doc = loadLadderDoc()
+    const next = { ...doc }
+    if (l.cell) {
+      const minutes = Math.max(1, Math.round((l.until - now) / 60_000))
+      saveGemini({
+        ...loadGemini(),
+        session: {
+          topic: String(verdict?.why || '').slice(0, 100), mode: 'interrogate', minutes,
+          startedAt: now, until: l.until, by: 'ladder', cell: l.cell,
+        },
+      })
+      // 拉起 Gemini 沿用 R4-4 的预约：手机到点自己调 /gemini/due 取简报并打开。
+      // 只有 cell 要拉——all-lock 是他不肯进舱，再拉一次没有意义。
+      if (l.cell === 'cell') {
+        saveGeminiSchedule({ at: now + 500, topic: String(verdict?.why || '').slice(0, 100), minutes, mode: 'interrogate', by: 'ladder' })
+      }
+      next.cell = l.cell
+      next.cellUntil = l.until
+    }
+    if (l.tighten) tightenNow(now, tz, { reason: String(verdict?.why || '升级').slice(0, 100), by: 'ladder' })
+    if (l.plan) next.planUntil = l.until
+    if (l.block) {
+      const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && b.app !== l.block)
+      commit({ blockExtra: [...keep, { app: l.block, until: l.until, by: 'ladder' }].slice(-30) })
+    }
+    if (l.ask) {
+      // L2 核对：先问一句。2 分钟不答由下一拍自己升级成「锁那个包」，这里不预判。
+      // 不说包名：代码认不出「抖音」这种中文名，硬拼一个英文包名给他看比不说更糟。
+      openFollowup('standby', '你在局里用的是没声明的应用。回去，还是收局？', now)
+    }
+    saveLadderDoc(next)
+    return [l.cell, l.tighten ? '墙收紧' : '', l.plan ? '计划模态' : '', l.block ? '锁 ' + l.block : '', l.ask ? '核对' : '']
+      .filter(Boolean).join('+')
+  }
+
+  /** 升级了：落账 + 落手机 + 记一笔。三件事一起做，少一件就是「说升级了其实没动」。 */
+  function raiseEscalation(verdict, now) {
+    const id = fileEscalation(verdict, now)
+    const landed = applyLanding(verdict, now)
+    record({
+      state: 'escalate', at: now, rule: verdict.rule, track: verdict.track || '',
+      action: String(verdict.action?.type || ''), landed, why: String(verdict.why || '').slice(0, 200),
+      escalationId: id || undefined,
+    })
+    if (id) saveLadderDoc({ ...loadLadderDoc(), escalationId: id })
+    return { id, landed }
+  }
+
+  /**
+   * 局官每收到一条回答。先分类，只有敷衍才记一次、才判升级。
+   * @param {{text?:string, timedOut?:boolean, passed?:boolean|null, recent?:string[],
+   *          now?:number, countIt?:boolean}} input
+   */
+  function ladderAnswer(text, input = {}) {
+    const now = Number(input.now) || Date.now()
+    const tz = zoneOr(config.timeZone)
+    const doc = loadLadderDoc()
+    const r = ladderStep(doc.ladder, {
+      text,
+      timedOut: input.timedOut === true,
+      passed: input.passed,
+      recent: Array.isArray(input.recent) ? input.recent : [],
+      now,
+      day: startOfDay(now, tz),
+      min: zoneMinuteOfDay(now, tz),
+      dayKind: dayKindOf(now, tz, config),
+      settings: settingsOf(config),
+      countIt: input.countIt !== false,
+    })
+    saveLadderDoc({ ...doc, ladder: r.state })
+    if (!r.verdict) return { kind: r.kind, verdict: null, note: r.note }
+    raiseEscalation(r.verdict, now)
+    return { kind: r.kind, verdict: r.verdict, note: r.note }
+  }
+
+  /**
+   * E1′：舱发出宽限期之后 Gemini 还没进前台（或手机上没有 Gemini）→ 全机锁。
+   * 由 /plan 每分钟兜一次——手机不一定每次都报 gemini-start，不能只等它。
+   */
+  function ladderE1Prime(now = Date.now()) {
+    const doc = loadLadderDoc()
+    if (doc.cell !== CELL || !(doc.cellUntil > now)) return null
+    const gem = geminiSessionView(now)
+    const fg = String(lastPhone?.app || '')
+    const r = evaluateEPrime({
+      now,
+      cellAt: Number(loadGemini().session?.startedAt) || 0,
+      geminiForeground: Boolean(gem && fg && gem.allow.includes(fg)),
+      hasGemini: geminiPackages().length > 0,
+    })
+    if (!r.rule) return null
+    // 先把舱标成 all-lock：不然下一分钟还会再判一次 E1′，一天能刷出几十条升级账。
+    saveLadderDoc({ ...doc, cell: ALL_LOCK })
+    const verdict = { rule: r.rule, track: 'E', action: r.action, why: r.why }
+    raiseEscalation(verdict, now)
+    return verdict
+  }
+
+  /**
+   * 沉迷那一串：每分钟拿手机快照算 L1–L3。
+   * 没有手机快照就什么都不算——不知道他在哪个 App 就判「在刷视频」，等于凭空造一次锁。
+   */
+  function ladderTick(now = Date.now()) {
+    const phone = lastPhone
+    const fg = String(phone?.app || '')
+    const doc = loadLadderDoc()
+    const last = doc.tickAt
+    saveLadderDoc({ ...doc, tickAt: now })
+    if (!phone || !fg) return null
+    const tz = zoneOr(config.timeZone)
+    const fun = roleOf(appsOf(), fg) === 'fun'
+    // 增量只算「上一拍也在这条路上」的那一段，且单拍最多算 3 分钟（引擎睡醒不该追补一小时）。
+    const funDeltaMs = fun && last > 0 && now > last ? Math.min(now - last, 3 * 60_000) : 0
+    const r = funStep(doc.ladder, {
+      now,
+      day: startOfDay(now, tz),
+      min: zoneMinuteOfDay(now, tz),
+      dayKind: dayKindOf(now, tz, config),
+      settings: settingsOf(config),
+      foreground: fg,
+      funPackage: fun,
+      declared: declaredApps(),
+      funDeltaMs,
+    })
+    saveLadderDoc({ ...loadLadderDoc(), ladder: r.state })
+    if (!r.verdict) return null
+    raiseEscalation(r.verdict, now)
+    return r.verdict
+  }
+
+  // 第八轮 P1/P2：计划的节拍。每分钟一次，只做两件事——把今天的计划维护在文件里，
+  // 到点了交给 startBout。引擎挂了一段时间也不会多开一局：过点太久的在 planwire 里
+  // 直接记成空局（LATE_SKIP_MIN），追补会把人连着按在椅子上开三局。
   function planBeat() {
     const now = Date.now()
     const tz = zoneOr(config.timeZone)
+    // P4：每分钟先补两件事——E1′（舱发出后没人进舱）和沉迷那一串（L1/L2/L3）。
+    // 两件都只读手机快照；没有快照就都不动（不凭空判一次锁）。
+    try {
+      ladderE1Prime(now)
+      ladderTick(now)
+    } catch (error) {
+      console.error('[companion] 升级阶梯失败：' + String((error && error.message) || error))
+    }
     const day = startOfDay(now, tz)
     const r = tick({
       now,
@@ -4310,6 +4531,11 @@ export function apply(ctx) {
     if (!r.start) return r
     const started = startBout(r.start)
     record({ state: 'plan-open', at: now, protocolId: r.start, ok: started.ok })
+    // 局开了＝他已经回到轨道上：L1 压下来的计划模态到这里结束（施工书 P1「只能以一份计划生效结束」）。
+    if (started.ok) {
+      const doc = loadLadderDoc()
+      if (doc.planUntil) saveLadderDoc({ ...doc, planUntil: 0 })
+    }
     if (!started.ok) {
       // 开不起来就记成空局：不然后面每一分钟都重试同一局。
       const plan = planOf(r.plan, day)
@@ -5243,12 +5469,29 @@ export function apply(ctx) {
   function wallSnapshot(now = Date.now()) {
     const tz = zoneOr(config.timeZone)
     const day = startOfDay(now, tz)
+    // P4：「今日升级」读 escalations 表，不读账本。升级是引擎判的、有开有关的一件事，
+    // 账本里那几条 escalate 只是事后的一行注记，拿它当数据源会漏掉 level 和结束时间。
+    let escalations = []
+    let db = null
+    try {
+      db = openBoutsDb(memoryPath())
+      escalations = listEscalations(db, { limit: 60 })
+    } catch (error) {
+      console.error('[companion] 读升级表失败：' + String((error && error.message) || error))
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // 关不掉不影响这一屏
+      }
+    }
     return buildWallSnapshot({
       now,
       tz,
       state: stateView(now, tz, lastPhone),
       plan: planOf(readState(stateFile('plan.json'), null), day),
       entries: readLedger(home(), 600),
+      escalations,
       todayStart: day,
       settings: settingsOf(config),
     })
@@ -5325,6 +5568,16 @@ export function apply(ctx) {
   function answerBout(text, form = 'text') {
     if (!live) return { ok: false, toast: '现在没有局。' }
     const r = live.official.answer(text, { form })
+    const now = Date.now()
+    // P4：局官每收到一条回答都先过一遍阶梯。敷衍记一次并可能升级；答错、混乱只回一句处置。
+    if (r.accepted !== false) {
+      if (r.state === 'escalated' || r.escalated) {
+        // RETRY_LIMIT 打满：同一拍重打三次还不过，这一拍就是敷衍。按升级办，不许只关局了事。
+        ladderAnswer('', { now })
+      } else {
+        ladderAnswer(text, { passed: r.passed === undefined ? null : r.passed, now })
+      }
+    }
     if (r.state === 'closed' || r.state === 'escalated') {
       dropLive()
       return { ok: true, toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' }

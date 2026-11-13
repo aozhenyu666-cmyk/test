@@ -134,7 +134,11 @@ test('外接 APP：他声明成娱乐的包随锁下发到封禁名单，声明�
     const task = r.body.rules.rules.find((x) => x.kind === 'task')
     assert.ok(task, JSON.stringify(r.body.rules))
     // 到点就是这一层锁的结束时间——手机那边 block 是「包名 → 到点」。
-    assert.equal(r.body.rules.block['com.tencent.qqlive'], task.until)
+    // 取的是**所有生效锁里最晚的那个**：白天默认锁（到下一段吃饭）通常比任务锁更晚，
+    // 只盯任务锁会让这条断言在饭点之外必然失败（真的踩到过）。等下一次 /plan 重算时自然收窄。
+    const untilLock = Math.max(...r.body.rules.rules.map((x) => Number(x.until) || 0))
+    assert.ok(untilLock >= task.until, '最晚的锁至少不比任务锁早')
+    assert.equal(r.body.rules.block['com.tencent.qqlive'], untilLock)
     assert.equal(r.body.rules.block['com.example.editor'], undefined, '工作类不拦')
   })
 })

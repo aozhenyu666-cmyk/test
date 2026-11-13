@@ -210,6 +210,9 @@ export function createOfficial(options = {}) {
       return {
         accepted: true, state: result.state, index: runner.index,
         repeat: result.reason === 'repeat', nextAskAt,
+        // 这一拍过没过。升级阶梯要它来分「答错只重打」和「敷衍走升级」——不给的话
+        // 调用方只能按字数猜，那正是 reply.js 头注释要修掉的那个洞。
+        passed,
         say: nextAskAt ? '' : sayNow(),
       }
     },
