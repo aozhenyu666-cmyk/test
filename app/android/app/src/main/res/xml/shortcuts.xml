@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Long-press on the launcher icon: 新对话 and 语音输入 (static), then up to three recent
+<!-- Long-press on the launcher icon: 新对话, 语音输入 and 局 (static), then up to three recent
      conversations (dynamic, shortcuts/ShortcutsPlugin.kt). All go through the non-exported
      shortcuts/EntryActivity; launchers start shortcuts as this app, so it needs no export.
      targetPackage is the applicationId (no build-type suffix today; add one and this breaks). -->

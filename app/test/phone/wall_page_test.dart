@@ -18,10 +18,12 @@ final int at = DateTime(2026, 11, 10, 9, 5).millisecondsSinceEpoch;
 
 /// 顶替 `dsh/proactive`：不起引擎，只回答这一页会问的三件事。
 class FakeWall extends ProactiveChannel {
-  FakeWall({this.thread, this.status, this.reply});
+  FakeWall({this.thread, this.statusBody, this.reply});
 
   WallThread? thread;
-  Map<String, Object?>? status;
+
+  /// 不能叫 `status`：`ProactiveChannel.status()` 是同名方法，Dart 不允许字段和方法重名。
+  Map<String, Object?>? statusBody;
   WallAppeal? reply;
 
   int threadCalls = 0;
@@ -34,7 +36,7 @@ class FakeWall extends ProactiveChannel {
   }
 
   @override
-  Future<Map<String, Object?>?> wallStatus() async => status;
+  Future<Map<String, Object?>?> wallStatus() async => statusBody;
 
   @override
   Future<WallAppeal?> wallAppeal({required int at, required String evidence, String? task}) async {
@@ -136,7 +138,7 @@ void main() {
   testWidgets('W9 状态条：锁着 + 锁到几点 + 原因', (tester) async {
     await pumpWall(
       tester,
-      FakeWall(thread: const WallThread(), status: {'locked': true, 'openUntil': at, 'why': '今天没交完成物'}),
+      FakeWall(thread: const WallThread(), statusBody: {'locked': true, 'openUntil': at, 'why': '今天没交完成物'}),
     );
     expect(find.text('锁着'), findsOneWidget);
     expect(find.text('锁到 09:05'), findsOneWidget);
@@ -145,13 +147,13 @@ void main() {
   });
 
   testWidgets('W10 状态条：开着', (tester) async {
-    await pumpWall(tester, FakeWall(thread: const WallThread(), status: {'locked': false}));
+    await pumpWall(tester, FakeWall(thread: const WallThread(), statusBody: {'locked': false}));
     expect(find.text('开着'), findsOneWidget);
     expect(find.textContaining('锁到'), findsNothing);
   });
 
   testWidgets('W11 读不到状态：说读不到，不猜「大概开着吧」', (tester) async {
-    await pumpWall(tester, FakeWall(thread: const WallThread(), status: null));
+    await pumpWall(tester, FakeWall(thread: const WallThread(), statusBody: null));
     expect(find.text('读不到墙的状态'), findsOneWidget);
     expect(find.text('开着'), findsNothing);
   });

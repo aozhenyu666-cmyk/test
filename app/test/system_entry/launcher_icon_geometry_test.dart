@@ -101,15 +101,16 @@ void main() {
 
     String attr(String block, String name) => RegExp('android:$name="([^"]+)"').firstMatch(block)!.group(1)!;
 
-    test('新对话 then 语音输入, with their labels and icons', () {
-      expect(shortcuts.map((s) => attr(s, 'shortcutId')), ['new_chat', 'voice_input']);
+    test('新对话 then 语音输入 then 局, with their labels and icons', () {
+      // 「局」这一条是第八轮加的（局立起来之后的主要入口），排在两条老快捷方式后面。
+      expect(shortcuts.map((s) => attr(s, 'shortcutId')), ['new_chat', 'voice_input', 'bouts']);
       final labels = {
         for (final m in RegExp(r'<string name="([^"]+)">([^<]+)</string>').allMatches(strings))
           m.group(1)!: m.group(2)!,
       };
       expect(
         [for (final s in shortcuts) labels[attr(s, 'shortcutShortLabel').replaceFirst('@string/', '')]],
-        ['新对话', '语音输入'],
+        ['新对话', '语音输入', '局'],
       );
       for (final s in shortcuts) {
         final icon = attr(s, 'icon').replaceFirst('@drawable/', '');
@@ -123,7 +124,7 @@ void main() {
     test('point at EntryActivity with the actions it knows', () {
       expect(
         [for (final s in shortcuts) attr(s, 'action')],
-        [_constant(entry, 'ACTION_NEW_CHAT'), _constant(entry, 'ACTION_VOICE')],
+        [_constant(entry, 'ACTION_NEW_CHAT'), _constant(entry, 'ACTION_VOICE'), _constant(entry, 'ACTION_BOUTS')],
       );
       for (final s in shortcuts) {
         expect(attr(s, 'targetPackage'), applicationId);

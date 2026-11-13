@@ -83,7 +83,7 @@
         </activity>
 
         <!-- 桌面图标 (icons/LauncherIcons.kt): one launcher entry per icon, all opening MainActivity;
-             exactly one is enabled. Each carries the long-press shortcuts (新对话, 语音输入;
+             exactly one is enabled. Each carries the long-press shortcuts (新对话, 语音输入, 局;
              recent conversations are moved over by shortcuts/ShortcutsPlugin.rebind).
              LauncherMist is every install's entry; the others start disabled, and switching one
              off puts it back to that default rather than disabling it, which would close a task

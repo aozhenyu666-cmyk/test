@@ -11,6 +11,7 @@ import 'package:dsh_app/pets/pet_sheets.dart';
 import 'package:dsh_app/state/locale_state.dart';
 
 import 'support/english_preview.dart';
+import 'support/quiet_agent_channel.dart';
 import 'support/quiet_performance.dart';
 import 'support/test_fonts.dart';
 
@@ -22,6 +23,12 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   PetSheets.enabled = false;
   // No device facts in tests: the app reads "unavailable" at once.
   PerformanceChannel.create = QuietPerformanceChannel.new;
+  // Same for the kernel's agent stream: no native end means silence, not a
+  // MissingPluginException on every screen that watches the transport.
+  // Re-installed before each test: a test that swaps this channel tears its
+  // own handler down afterwards.
+  installQuietAgentChannel();
+  setUp(installQuietAgentChannel);
   // Tests run in Chinese (goldens and finders were made in it); English
   // tests opt in with AppLocale.use(AppLocale.en) + an English MaterialApp.
   AppLanguageController.initial = AppLanguage.zh;

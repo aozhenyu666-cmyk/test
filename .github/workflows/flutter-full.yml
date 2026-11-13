@@ -23,6 +23,13 @@ on:
       - "app/pubspec.yaml"
       - "app/l10n.yaml"
   workflow_dispatch:
+    inputs:
+      # 只跑某几个文件（空格分隔），用来在修失败时把一轮从 10 分钟压到 2 分钟。
+      # 留空就是 normal 的全量（golden 除外）。
+      files:
+        description: "只跑这些测试文件（空格分隔，相对 app/）"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -87,7 +94,12 @@ jobs:
           DSH_TEST_FONT_DIR: /usr/share/fonts/opentype/noto
         run: |
           set -eu
-          grep -rL -e 'matchesGoldenFile' -e 'goldenBoth(' \
-            --include='*_test.dart' test > /tmp/nogolden.txt
-          echo "跑 $(wc -l < /tmp/nogolden.txt) 个测试文件，排除 $(grep -rl -e 'matchesGoldenFile' -e 'goldenBoth(' --include='*_test.dart' test | wc -l) 个比图的"
-          flutter test $(cat /tmp/nogolden.txt)
+          if [ -n "${{ inputs.files }}" ]; then
+            echo "只跑指定文件: ${{ inputs.files }}"
+            flutter test ${{ inputs.files }}
+          else
+            grep -rL -e 'matchesGoldenFile' -e 'goldenBoth(' \
+              --include='*_test.dart' test > /tmp/nogolden.txt
+            echo "跑 $(wc -l < /tmp/nogolden.txt) 个测试文件，排除 $(grep -rl -e 'matchesGoldenFile' -e 'goldenBoth(' --include='*_test.dart' test | wc -l) 个比图的"
+            flutter test $(cat /tmp/nogolden.txt)
+          fi
