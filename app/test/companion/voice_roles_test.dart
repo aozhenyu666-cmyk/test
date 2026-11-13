@@ -125,7 +125,7 @@ void main() {
     });
 
     test('说完了就全念', () {
-      expect(companionSpeakable('第一句。第二', 0, final_: true), ('第一句。第二', 7));
+      expect(companionSpeakable('第一句。第二', 0, final_: true), ('第一句。第二', 6));
     });
   });
 }
