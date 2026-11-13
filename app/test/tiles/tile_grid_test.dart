@@ -124,7 +124,7 @@ void main() {
 
       await tester.tap(find.text('自动化任务'));
       await tester.pumpAndSettle();
-      expect(taps, 0, '不响应点击');
+      expect(taps, 0, reason: '不响应点击');
     });
 
     testWidgets('a badge sits in the corner; a corner widget wins over it', (tester) async {

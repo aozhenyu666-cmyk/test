@@ -51,6 +51,14 @@ jobs:
       - name: pub get
         run: flutter pub get
 
+      # test/support/test_fonts.dart 的默认目录是 /usr/share/fonts/noto-cjk（本机/手机上的路径），
+      # runner 上没有；它读失败就是 StateError('Test font missing: ...') 直接判失败。
+      # Regular/Bold 在 fonts-noto-cjk，Light（w300，用作无衬线主字重）在 -extra，少装一个都不行。
+      - name: CJK fonts for the test engine
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk fonts-noto-cjk-extra
+
       # 跟另外三个 workflow 同一步，别省：gen-l10n 读的是合并后的 app_*.arb，字符串只写在
       # lib/l10n/parts/<area>_{zh,en}.arb 里，不合并的话 parts 里新增的键在 L10n 里根本不存在。
       # 漏这一步的代价：run 43356129766 编译失败，wall_page.dart 的 wallTitle 等键全都找不到
@@ -59,6 +67,9 @@ jobs:
         run: python3 tool/l10n_merge.py
 
       - name: Widget tests (bottom nav / tiles / notify)
+        env:
+          # apt 把 Noto CJK 装在这个目录（不是 test_fonts.dart 的默认值）。
+          DSH_TEST_FONT_DIR: /usr/share/fonts/opentype/noto
         run: |
           flutter test \
             test/shell/bottom_nav_test.dart \
