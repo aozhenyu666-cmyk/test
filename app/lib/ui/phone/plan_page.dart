@@ -16,6 +16,7 @@ import '../../loop/loop_channel.dart';
 import '../../proactive/proactive_state.dart';
 import '../common/app_sheet.dart';
 import '../common/list_page_row.dart';
+import '../common/sheet_title_bar.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
