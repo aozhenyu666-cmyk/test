@@ -483,7 +483,8 @@ object ProactiveRuntime {
         val list = ArrayList(ruleBook()?.active(now).orEmpty())
         val r = refuseUntil()
         if (r > now && list.none { it.until >= r }) list.add(LockRule(LockPriority.KIND_REFUSE, r))
-        if (sessionActive()) list.add(LockRule(LockPriority.KIND_SESSION, sessionUntil, if (sessionOwner == OWNER_WORK) workWhy else null))
+        // 工作模式和预案的严格模式都带自己的一句话；连麦舱没有，走默认文案。
+        if (sessionActive()) list.add(LockRule(LockPriority.KIND_SESSION, sessionUntil, workWhy))
         return LockPriority.primary(list)
     }
 
@@ -633,6 +634,8 @@ object ProactiveRuntime {
     @Volatile private var workWhy: String? = null
     private const val OWNER_PLUGIN = "plugin"
     private const val OWNER_WORK = "work"
+    /** Gemini 连麦用的两个包（和插件 gemini.js 的 GEMINI_PACKAGES 同一张表）。 */
+    private val GEMINI_PACKAGES = setOf("com.google.android.apps.bard", "com.google.android.googlequicksearchbox")
     private const val MIN_WORK_MINUTES = 5
     private const val MAX_WORK_MINUTES = 720
     /** 插件下发的宽限（`session.graceMs`）；没给就 45 秒。 */
@@ -660,6 +663,9 @@ object ProactiveRuntime {
         loadSession()
         return System.currentTimeMillis() < sessionUntil
     }
+    /** R9：这个舱是不是 Gemini 连麦（锁页的「回去」按钮按它换文案）。 */
+    fun sessionIsGemini(): Boolean = sessionApp()?.let { it in GEMINI_PACKAGES } ?: false
+
     fun sessionApp(): String? {
         if (!::app.isInitialized) return null
         loadSession()
@@ -717,6 +723,8 @@ object ProactiveRuntime {
             (s["allow"] as? List<*>)?.mapNotNull { it as? String }?.toSet() ?: emptySet(),
             s["app"] as? String,
             (s["graceMs"] as? Number)?.toLong() ?: SessionPolicy.DEFAULT_GRACE_MS,
+            // R9：预案的严格模式带一句解释（哪条预案、为什么、怎么解除），锁页照它说。
+            why = (s["why"] as? String)?.take(120),
         )
     }
 

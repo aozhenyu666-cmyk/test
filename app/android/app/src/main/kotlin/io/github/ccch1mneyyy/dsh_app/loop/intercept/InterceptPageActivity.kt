@@ -760,7 +760,8 @@ class InterceptPageActivity : Activity() {
             // Gemini 互动舱：主按钮是"回 Gemini"，不是回桌面。点它静默关页，不触发违抗复查。
             if (ProactiveRuntime.sessionActive()) {
                 ProactiveRuntime.sessionApp()?.let { gem ->
-                    addView(pillButton(AppStrings.get(ctx, R.string.intercept_return_gemini), primary = true, onTap = {
+                    val label = if (ProactiveRuntime.sessionIsGemini()) R.string.intercept_return_gemini else R.string.intercept_return_session
+                    addView(pillButton(AppStrings.get(ctx, label), primary = true, onTap = {
                         reported = true
                         eventId?.let { InterceptRuntime.onDismissed(it, "gemini") }
                         if (!isFinishing) finish()

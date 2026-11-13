@@ -32,6 +32,7 @@
     <string name="intercept_quick_sms">短信</string>
     <string name="intercept_quick_maps">地图</string>
     <string name="intercept_quick_pay">支付</string>
+    <string name="intercept_return_session">回本局继续</string>
     <string name="intercept_return_gemini">回 Gemini 继续</string>
     <string name="intercept_channel">拦截</string>
 </resources>

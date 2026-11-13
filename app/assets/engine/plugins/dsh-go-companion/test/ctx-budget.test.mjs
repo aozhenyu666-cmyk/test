@@ -71,7 +71,7 @@ test('C1 任一主状态的工具子集都不超过 8 个', () => {
 })
 
 test('C2 全部工具每一个都至少在一个状态下可达', () => {
-  assert.equal(ALL_TOOLS.length, 28) // 22 个原有工具 + fish_index（P0-3）+ take_stance/revise_stance（A1）+ mount_propose/mount_park/mount_close（C1）
+  assert.equal(ALL_TOOLS.length, 29) // 22 个原有工具 + fish_index（P0-3）+ take_stance/revise_stance（A1）+ mount_propose/mount_park/mount_close（C1）+ preset（R9 A）
   assert.equal(new Set(ALL_TOOLS).size, ALL_TOOLS.length, '并集里不许有重复')
   for (const name of ALL_TOOLS) {
     const reachable = STATE_TABLE.filter((r) => r.tools.includes(name)).map((r) => r.id)

@@ -187,8 +187,9 @@ test('第四轮 R4-2 + R7 P0-3：两姐妹逐状态工具完全一致；那些�
     for (const name of want) assert.ok(ALL_TOOLS.includes(name), '权限被砍了：' + name)
     for (const name of want) assert.ok(seen.has(name), '任何状态下都没挂出 ' + name + '，等于砍了')
     // dafeiyu_control 还是只管收紧那一组：放松走 grant_break / request_relax，不在这个开关里。
+    // R9 A：多了 strict_bout（这一局进严格模式）——也是收紧，局结束或破窗才解。
     setStatePin('morning')
-    assert.deepEqual(t.big.tools.dafeiyu_control.parameters.properties.action.enum.sort(), ['busy', 'mute', 'refuse', 'strict'])
+    assert.deepEqual(t.big.tools.dafeiyu_control.parameters.properties.action.enum.sort(), ['busy', 'mute', 'refuse', 'strict', 'strict_bout'])
   })
 })
 

@@ -109,6 +109,9 @@ import { listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, run
 // 这里只负责把状态读写、数据库、手机快照喂给它。
 import { ALL_LOCK, CELL, funStep, landing, rowOf, step as ladderStep } from './ladder.js'
 import { evaluateEPrime } from './escalate.js'
+// 第九轮 A 组：预案。锁只来自生效中的预案；规则在 presets.js，接线在 presetwire.js。
+import { createPresetRuntime } from './presetwire.js'
+import { classify as classifyAnswer } from './reply.js'
 import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
@@ -1663,6 +1666,51 @@ export function apply(ctx) {
       by: s.by || undefined,
     }
   }
+  // 第九轮 A 组：预案运行时。落手机的几条路都复用阶梯已有的那几处（舱、封禁、墙收紧、计划模态）。
+  const presetRt = createPresetRuntime({
+    load: () => readState(stateFile('presets.json'), null),
+    save: (d) => writeJson(stateFile('presets.json'), d),
+    record,
+    runningBout: () => {
+      // live 在插件体后面才声明；启动途中被问到就当没有局。
+      let cur = null
+      try {
+        cur = live
+      } catch {
+        return null
+      }
+      if (!cur || cur.official.view().closed) return null
+      return { id: String(cur.official.view().boutId || ''), kind: String(cur.protocol?.name || cur.protocol?.id || ''), openedAt: cur.openedAt }
+    },
+    ignore: () => [...NEVER_BLOCK],
+    day: (now) => dayString(now, zoneOr(config.timeZone)),
+    minute: (now) => zoneMinuteOfDay(now, zoneOr(config.timeZone)),
+    weekday: (now) => weekdayOf(now, zoneOr(config.timeZone)),
+    funToday,
+    apply: {
+      block: (app, until, why) => {
+        const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && b.app !== app)
+        commit({ blockExtra: [...keep, { app, until, by: 'preset', why: String(why || '').slice(0, 120) }].slice(-30) })
+      },
+      allLock: (until, why) => {
+        const now = Date.now()
+        saveGemini({ ...loadGemini(), session: { topic: String(why || '').slice(0, 100), mode: 'interrogate', minutes: Math.max(1, Math.round((until - now) / 60_000)), startedAt: now, until, by: 'preset', cell: ALL_LOCK } })
+      },
+      tool: (tool, until, topic) => {
+        const now = Date.now()
+        const minutes = Math.max(1, Math.round((until - now) / 60_000))
+        saveGemini({ ...loadGemini(), session: { topic, mode: 'think', minutes, startedAt: now, until, by: 'preset' } })
+        saveGeminiSchedule({ at: now + 500, topic, minutes, mode: 'think', by: 'preset' })
+      },
+      plan: (until) => saveLadderDoc({ ...loadLadderDoc(), planUntil: until }),
+      tighten: (why) => tightenNow(Date.now(), zoneOr(config.timeZone), { reason: String(why || '预案').slice(0, 100), by: 'preset' }),
+    },
+  })
+  /** 墙的默认锁归「全天默认锁」这条预案管：它没生效，墙就不上默认锁（收紧、深夜锁照旧）。 */
+  const wallCfgNow = () => (presetRt.isActive('default-lock') ? config : { ...config, wall: { ...(config.wall || {}), defaultLock: false } })
+  /** 手机的 session 槽：连麦舱 / 升级舱优先，其次是预案的严格模式。 */
+  const sessionNow = (now) => geminiSessionView(now) || presetRt.sessionView(now)
+
   function setGear(sw, by) {
     config = applyGear(config, sw, Date.now())
     try {
@@ -1878,7 +1926,7 @@ export function apply(ctx) {
     }
     // 墙：默认严格的时间表锁（白天非吃饭时段 default，夜里 night）。深夜锁这里不重复推（下面 rhythm 的 night 管），
     // 只推白天的默认锁；手机端 LockPriority 里 default 排在普通之上、拒绝之下。
-    const wd = wallDecision(config, now, tz)
+    const wd = wallDecision(wallCfgNow(), now, tz)
     if (wd.locked && wd.kind === WALL_KIND_DEFAULT) push(WALL_KIND_DEFAULT, wd.until, wd.why)
     // 追问锁：门开着就不放——回复敷衍时窗口不消失，到点由插件自己结束。
     if (lockActive(config.followup, now)) push('followup', Number(config.followup.until), '追问锁：把这一个问题说清楚')
@@ -1909,7 +1957,7 @@ export function apply(ctx) {
     const declared = new Set(declaredFun(appsOf()))
     if (untilLock > now && declared.size) {
       // blockDuringLock 已经减掉了紧急应用和舱内放行的包，这里只挑手机不认识的那些。
-      const toBlock = blockDuringLock(appsOf(), { funLocked: true, allow: geminiSessionView(now)?.allow || [] })
+      const toBlock = blockDuringLock(appsOf(), { funLocked: true, allow: sessionNow(now)?.allow || [] })
       for (const pkg of toBlock) if (declared.has(pkg) && !NEVER_BLOCK.includes(pkg)) block[pkg] = untilLock
     }
     return { v: 1, at: now, rules, block }
@@ -2001,12 +2049,13 @@ export function apply(ctx) {
     return {
       name: 'dafeiyu_control',
       description: '切换对他的管法（只能收紧，不能放松）：busy=忙时（不闲聊、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到一次，不评分不扣分）；' +
-        'refuse=拒绝模式 minutes 分钟（娱乐 App 一开就锁）；mute=安静 minutes 分钟；strict=严格。他亲口要求或明确同意时才用。' +
+        'refuse=拒绝模式 minutes 分钟（娱乐 App 一开就锁）；mute=安静 minutes 分钟；strict=严格；' +
+        'strict_bout=这一局进严格模式（只剩本局声明的 App，其余立即锁，局结束或破窗才解）。他亲口要求或明确同意时才用。' +
         '放松（回到闲时、关拒绝、切回温和）这里不做：他想放松只能等对账后的申请窗口。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['busy', 'refuse', 'mute', 'strict'] },
+          action: { type: 'string', enum: ['busy', 'refuse', 'mute', 'strict', 'strict_bout'] },
           minutes: { type: 'integer', minimum: 5, maximum: 480, description: 'busy / refuse / mute 的时长（分钟）' },
           what: { type: 'string', description: 'busy：他在忙什么（学习、做饭、写报告…）' },
         },
@@ -2036,6 +2085,10 @@ export function apply(ctx) {
         } else if (args.action === 'strict') {
           config = { ...config, mode: 'coach', modeUntil: 0 }
           text = '切到严格了。'
+        } else if (args.action === 'strict_bout') {
+          const r = presetRt.strictNow(now, String(args.what || ''), 'tool')
+          if (!r.ok) return { ok: false, text: r.text }
+          text = r.text
         } else {
           return { ok: false, text: '不认识的动作（这里只能收紧）。' }
         }
@@ -2965,6 +3018,63 @@ export function apply(ctx) {
    * 你能写 claim、能写拿什么撞（evidenceRefs）、能定怎么算说中（metrics）；
    * **不能写 verdict**——那两个字由墙的遥测在到期时填，你说了不算（predict.js settle）。
    */
+  /**
+   * 第九轮 A 组：预案工具。她能看、能新建（从影子开始）、能收紧、能给这一局记 App；放宽一律不行。
+   * 只在计划模态里给（P0-3 的每态 ≤ 8 个工具）：定计划时顺手把这一天的预案也定好。
+   */
+  function presetTool(role) {
+    return {
+      name: 'preset',
+      description: '预案：系统对什么情况做什么，全部是数据。action=list 看全部预案和此刻的严格模式；' +
+        'action=set 新建或改一条（preset 写整条：id/名称/状态/何时/条件/动作/解除）。新建一律先跑影子；' +
+        '影子满 24 小时你才能转生效。你只能收紧（启用、次数变少、窗口变长、多加动作），放宽只有他自己能改而且要等 2 小时。' +
+        '事件：切出 / 偏离停留 / 敷衍 / 局开始 / 局结束 / 到点。动作：严格模式 / 锁 / 全机锁 / 开工具 / 进入计划 / 说 / 记账 / 墙收紧。' +
+        '解除只能从：本局结束 / 到点 / 答出指令 / 破窗 / 用户确认 里选。条件用 JSON Logic，只能读 bout / time / today / front / fired。' +
+        'action=apps 给正在跑的这一局记必需应用和允许应用（包名）——严格模式和「切出」都按它判，定局时一定要问清。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['list', 'set', 'apps'] },
+          preset: { type: 'object', description: 'set：整条预案' },
+          need: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'apps：这一局必需的 App 包名' },
+          allow: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'apps：这一局还允许的 App 包名' },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        if (args.action === 'set') {
+          const r = presetRt.propose(args.preset, 'ai', now)
+          return { ok: r.ok, text: (r.ok ? '' : '没改成：') + r.text }
+        }
+        if (args.action === 'apps') return presetRt.setApps('current', { need: args.need, allow: args.allow }, now, role)
+        const l = presetRt.list(now)
+        const lines = l.presets.map((p) => '[' + p.status + '] ' + p.id + '：' + p.explain)
+        if (l.pending.length) lines.push('冷却中的放宽：' + l.pending.map((x) => x.presetId).join('、'))
+        if (l.strict) lines.push('此刻严格模式：只放行 ' + (l.strict.allow.join('、') || '局页'))
+        if (l.bout) lines.push('这一局（' + l.bout.kind + '）：必需 ' + (l.bout.apps.need.join('、') || '未声明') + '；允许 ' + (l.bout.apps.allow.join('、') || '未声明'))
+        return { ok: true, text: lines.join('\n') }
+      },
+    }
+  }
+
+  /**
+   * 第九轮 A 组：面板改预案。这里是「他自己」：放宽走 2 小时冷却期，期间可以撤销。
+   * action: list（默认）/ set / cancel / apps / strict / history
+   */
+  function presetsRoute(body = {}) {
+    const now = Date.now()
+    const action = String(body?.action || 'list')
+    if (action === 'set') return { v: 1, ...presetRt.propose(body.preset, 'user', now) }
+    if (action === 'cancel') return { v: 1, ...presetRt.cancel(String(body.pendingId || ''), now, 'user') }
+    if (action === 'apps') return { v: 1, ...presetRt.setApps(String(body.boutId || 'current'), { need: body.need, allow: body.allow }, now, 'user') }
+    if (action === 'strict') return { v: 1, ...presetRt.strictNow(now, String(body.why || ''), 'user') }
+    if (action === 'history') return { v: 1, ok: true, history: presetRt.history(String(body.id || '')) }
+    return { v: 1, ok: true, ...presetRt.list(now) }
+  }
+
   function workflowTool(role) {
     return {
       name: 'workflow_propose',
@@ -3205,7 +3315,7 @@ export function apply(ctx) {
     const tz = requestZone(body?.timeZone, config)
     const action = String(body?.action || 'status')
     const status = () => {
-      const wd = wallDecision(config, now, tz)
+      const wd = wallDecision(wallCfgNow(), now, tz)
       // 额度为什么可能是 0：四段没交齐。界面得能把这句话说出来，不然只看到 0 不知道原因。
       const dep = statusOf(depositToday(now))
       return {
@@ -3624,6 +3734,8 @@ export function apply(ctx) {
         // 这一轮照样生效
       }
       // penalty 一起记账：晚上对账和信用分都看得到这次扣了多少。
+      // 破窗是每条预案的出口：严格模式一起收掉。
+      presetRt.strictOff(now, 'breakglass')
       record({ state: 'breakglass', at: now, minutes, penalty, steps: Number(body?.steps) || undefined, note: typeof body?.note === 'string' ? body.note.slice(0, 300) : undefined })
       return { v: 1, ok: true, breakUntil: until, penalty }
     }
@@ -4195,7 +4307,7 @@ export function apply(ctx) {
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
         takeStanceTool(role), reviseStanceTool(role),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
-        fishIndexTool(),
+        fishIndexTool(), presetTool(role),
       ].filter(Boolean)
       const list = all.filter((tool) => sub.has(tool.name))
       toolBag.set(role, { sid, all, state })
@@ -4341,6 +4453,7 @@ export function apply(ctx) {
     }
   }
   const saveLadderDoc = (d) => writeJson(stateFile('escalate.json'), d)
+
 
   /** 他声明成工作/工具的那些包：L2 只问「既不是娱乐也不是这些」的 App。 */
   const declaredApps = () => appsOf().filter((a) => a && a.role && a.role !== 'fun').map((a) => a.pkg)
@@ -4529,7 +4642,8 @@ export function apply(ctx) {
       record({ state: 'bout-timeout', at: now, boutId, result: String(t.state), reason: String(t.reason || '') })
       // 到点没交＝这一拍没接：跟「答错重打」分开记，升级阶梯按 timedOut 分类。
       try {
-        ladderAnswer('', { timedOut: true, now })
+        if (presetRt.isActive('ladder-perfunctory')) ladderAnswer('', { timedOut: true, now })
+        presetRt.perfunctory(now, lastPhone)
       } catch (error) {
         console.error('[companion] 超时记阶梯失败：' + String((error && error.message) || error))
       }
@@ -4553,7 +4667,8 @@ export function apply(ctx) {
     // 两件都只读手机快照；没有快照就都不动（不凭空判一次锁）。
     try {
       ladderE1Prime(now)
-      ladderTick(now)
+      // 沉迷那一串归「沉迷升级阶梯」这条内置预案管：停用了就不判。
+      if (presetRt.isActive('ladder-immersion')) ladderTick(now)
     } catch (error) {
       console.error('[companion] 升级阶梯失败：' + String((error && error.message) || error))
     }
@@ -4628,7 +4743,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -4697,6 +4812,7 @@ export function apply(ctx) {
       if (path === '/workflows') return send(res, 200, workflowsRoute(body.value))
         if (path === '/deposit') return send(res, 200, depositRoute(body.value))
         if (path === '/mount') return send(res, 200, mountRoute(body.value))
+        if (path === '/presets') return send(res, 200, presetsRoute(body.value))
         if (path === '/drill-op') return send(res, 200, drillOpRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
@@ -4724,6 +4840,7 @@ export function apply(ctx) {
         }
         return send(res, r.status, r.body)
       }
+      if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/status') {
         return send(res, 200, statusBody())
       }
@@ -4892,6 +5009,12 @@ export function apply(ctx) {
     }
     const mind = sense(phone, ledger, sessionId, now)
     if (phone) lastPhone = phone
+    // 第九轮：预案。手机一切 App 就会来问一次 /plan，所以严格模式能在这一问的回答里就落下去。
+    try {
+      presetRt.tick(phone, now)
+    } catch (error) {
+      console.error('[companion] 预案失败：' + String((error && error.message) || error))
+    }
     // 作息：早上门、晚上门、深夜阶段（先算，力度和拒绝要用）。
     {
       const min = localMinute(phone, zoneMinuteOfDay(now, tz))
@@ -5100,7 +5223,8 @@ export function apply(ctx) {
       refuse: refuseUntilAt(now) > now ? { until: refuseUntilAt(now) } : null,
       gear: effectiveGear(config, now),
       // Gemini 互动舱：这段时间只许 Gemini（allow 里的包名），其余 App 由手机直接锁。
-      session: geminiSessionView(now),
+      // 第九轮：没有舱时，预案的严格模式占这个槽（放行本局应用，0 宽限）。
+      session: sessionNow(now),
       // D4：预约的下一场连麦（手机据此 arm 闹钟；到点调 /gemini/due 取 launch）。
       geminiSchedule: (() => {
         const s = loadGeminiSchedule()
@@ -5114,7 +5238,7 @@ export function apply(ctx) {
       obligations: obligationsView(config.obligations, now),
       // 第二轮·墙：此刻娱乐锁/开、申请窗口开没开、本周还剩几天放松额度（面板和手机据此显示）。
       wall: (() => {
-        const wd = wallDecision(config, now, tz)
+        const wd = wallDecision(wallCfgNow(), now, tz)
         return {
           locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0,
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
@@ -5447,7 +5571,7 @@ export function apply(ctx) {
       // 面板上的墙：此刻锁/开、本周剩余额度、今天有没有修改。
       wall: (() => {
         const tz = zoneOr(config.timeZone)
-        const wd = wallDecision(config, now, tz)
+        const wd = wallDecision(wallCfgNow(), now, tz)
         return {
           locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0,
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
@@ -5618,7 +5742,7 @@ export function apply(ctx) {
     return loaded.ok ? loaded.protocol : null
   }
 
-  function startBout(protocolId) {
+  function startBout(protocolId, opts = {}) {
     const protocol = builtinProtocolOf(protocolId) ||
       (String(protocolId) === 'thinking' ? thinkingProtocol() : null)
     if (!protocol) return { ok: false, toast: '没有这个协议：' + String(protocolId || '') }
@@ -5636,8 +5760,10 @@ export function apply(ctx) {
       const why = started.error === 'busy' ? '库里已经有一局在跑。' : '开局失败：' + started.error
       return { ok: false, toast: why }
     }
-    live = { official, db }
+    live = { official, db, protocol, openedAt: Date.now() }
     record({ state: 'bout-open', at: Date.now(), protocolId: protocol.id, via: 'panel' })
+    // 第九轮：开局时带了 App 要求就记下（严格模式和「切出」都按它判）。
+    if (opts.apps && typeof opts.apps === 'object') presetRt.setApps('current', opts.apps, Date.now(), String(opts.by || 'panel'))
     return { ok: true, toast: '开局：' + protocol.name + '。' + String(started.say || '') }
   }
 
@@ -5648,12 +5774,16 @@ export function apply(ctx) {
     const now = Date.now()
     // P4：局官每收到一条回答都先过一遍阶梯。敷衍记一次并可能升级；答错、混乱只回一句处置。
     if (r.accepted !== false) {
-      if (r.state === 'escalated' || r.escalated) {
+      const maxed = r.state === 'escalated' || r.escalated
+      const passed = r.passed === undefined ? null : r.passed
+      // 阶梯归「敷衍升级阶梯」这条内置预案管；停用了就只分类、不升级。
+      let kind = null
+      if (presetRt.isActive('ladder-perfunctory')) {
         // RETRY_LIMIT 打满：同一拍重打三次还不过，这一拍就是敷衍。按升级办，不许只关局了事。
-        ladderAnswer('', { now })
-      } else {
-        ladderAnswer(text, { passed: r.passed === undefined ? null : r.passed, now })
+        kind = (maxed ? ladderAnswer('', { now }) : ladderAnswer(text, { passed, now }))?.kind
       }
+      if (!kind) kind = classifyAnswer({ text: maxed ? '' : text, passed }).kind
+      if (kind === 'perfunctory') presetRt.perfunctory(now, lastPhone)
     }
     if (r.state === 'closed' || r.state === 'escalated') {
       dropLive()
@@ -5725,6 +5855,11 @@ export function apply(ctx) {
   function boutsRoute(body) {
     const action = String(body?.action || '')
     if (!action) return boutsShareRoute(body)
+    // 第九轮：计划界面开局时一并带上这一局的必需 / 允许应用（严格模式和「切出」按它判）。
+    if (action === 'open') {
+      const r = startBout(String(body?.protocolId || ''), { apps: body?.apps, by: 'panel' })
+      return { v: 1, ...r }
+    }
     if (!['ask', 'spoken', 'answer', 'fallback'].includes(action)) {
       return { v: 1, ok: false, code: 'bad-action' }
     }

@@ -49,7 +49,7 @@ export const STATE_TABLE = [
     tools: ['notes_vault', 'fish_index', 'dafeiyu_control', 'kb_write'] },
   { id: 'plan', priority: 95, enter: ['plan-lock'], lock: 'plan', back: null,
     agenda: '计划模态：先把今天的局定下来。第一句必须是计划，不是问题；他不开口就 10 分钟后自动生效。',
-    tools: ['daily_plan', 'dafeiyu_control', 'notes_vault', 'fish_index', 'kb_write'] },
+    tools: ['daily_plan', 'dafeiyu_control', 'notes_vault', 'fish_index', 'kb_write', 'preset'] },
   { id: 'evening', priority: 90, enter: ['evening-followup', 'evening-gate'], lock: 'evening', back: null,
     agenda: '晚间对账：逐项核对今天的完成物，满意才收；满意后今晚的申请窗口才可能开。',
     tools: ['daily_review', 'submit_to_wall', 'submit_verdict', 'request_relax', 'submit_prediction', 'notes_vault', 'fish_index', 'kb_write'] },

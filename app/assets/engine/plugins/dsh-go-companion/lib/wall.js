@@ -64,6 +64,9 @@ export function wallConfig(config) {
   const meals = Array.isArray(w.meals) ? normalizeMeals(w.meals) : DEFAULT_WALL.meals
   return {
     enabled: w.enabled !== false,
+    // 第九轮：「其余时间默认锁」单独一个开关，由「全天默认锁」这条预案决定。
+    // 关掉它只去掉默认锁；收紧、放风、吃饭、深夜锁照旧。
+    defaultLock: w.defaultLock !== false,
     meals,
     eveningOpen: w.eveningOpen === true,
     relaxSegmentMin: clampInt(w.relaxSegmentMin, 15, 240, RELAX_SEGMENT_MIN),
@@ -180,6 +183,9 @@ export function wallDecision(config, now, tz) {
     // 仅当已过对账时间附近才算「晚间之后」；对账门本身由 rhythm 处理，这里只负责不额外上默认锁。
     // 简化：晚间开放时，默认锁只到下一段吃饭 / 深夜锁之前仍然成立于白天，傍晚放开。
   }
+
+  // 第九轮：默认锁归预案管。预案没生效，其余时间就不锁（收紧在上面已经判过，不受影响）。
+  if (!w.defaultLock) return { locked: false, kind: null, until: 0, why: null, openUntil: 0 }
 
   // 其余时间：默认锁。until 取「下一次开放或下一道更高优先级门」的边界，手机据此离线也能按时松。
   const until = nextBoundary(w, min, midnight, endOfDay)
