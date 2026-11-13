@@ -10,6 +10,7 @@ import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 import 'deposit_page.dart';
 import 'wall_page.dart';
+import 'plan_page.dart';
 
 /// C2：四个基本操作的显示名和图标。键是插件给的 op 码，不在这里造第二套命名。
 const _opLabels = <String, (String, IconData)>{
@@ -76,6 +77,23 @@ class _SistersPageState extends State<SistersPage> {
         ),
       ],
       children: [
+        // 第九轮 B1：今天还没有计划——先把他带到计划界面。三个角色谁在场都是这一张。
+        if (view?.planGate ?? false) ...[
+          ListPageCard(
+            children: [
+              ListPageRow(
+                icon: AppIcons.calendar,
+                title: '今天还没有计划',
+                subtitle: '先把今天几局、每局用哪些 App 定下来；不定就一直挂着这张',
+                subtitleMaxLines: 2,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const PlanPage()),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         if (view == null)
           const ListPageCard(
             children: [ListPageRow(icon: AppIcons.info, title: '连不上大肥鱼，稍后再试', titleMaxLines: 2)],

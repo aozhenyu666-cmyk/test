@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { LATE_SKIP_MIN, emptyPlan, endsIn, planLines, planOf, tick } from '../lib/planwire.js'
+import { LATE_SKIP_MIN, appPrompt, emptyPlan, endsIn, missingApps, planLines, planOf, tick } from '../lib/planwire.js'
 
 // 2026-03-10 00:00 +08，周二，工作日。
 const DAY = Date.parse('2026-03-09T16:00:00Z')
@@ -151,4 +151,45 @@ test('endsIn 是天亮前的剩余毫秒', () => {
   assert.equal(endsIn(DAY, DAY), 86_400_000)
   assert.equal(endsIn(DAY, DAY + 86_400_000), 0)
   assert.equal(endsIn(0, DAY), 0)
+})
+
+// ---- 第九轮 B1：每局带 App，开局跟着走 ------------------------------------------------------
+
+test('计划里的 App 要求存得住：开局时一起交给严格模式', () => {
+  const draft = tick(base())
+  const items = draft.plan.items.map((i, n) => (n === 0
+    ? { ...i, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku', 'com.android.calculator2'] }
+    : i))
+  const stored = { ...draft.plan, items, accepted: true, at: at(9) }
+  const r = tick(base({ now: at(9), stored }))
+  assert.equal(r.action, 'open')
+  // 存盘再读回来（normItem 会重跑一遍）：不认识的字符要挡掉，其余原样。
+  const again = planOf({ ...stored, items: [{ ...items[0], need: ['ok.pkg', '不是包名', ''] }] }, DAY)
+  assert.deepEqual(again.items[0].need, ['ok.pkg'])
+  assert.deepEqual(again.items[0].allow, ['com.zhuoyin.tiku', 'com.android.calculator2'])
+})
+
+test('开局的那一拍带上 App；不带也照开（不阻塞）', () => {
+  const draft = tick(base())
+  const stored = { ...draft.plan, accepted: true, at: at(9) }
+  const r = tick(base({ now: at(9), stored }))
+  assert.equal(r.action, 'open')
+  assert.deepEqual(r.apps, { need: [], allow: [] }, '没写 App 的局给空表，别给 null')
+})
+
+test('提交前：缺必需或允许应用的局被点名，一局都不能空', () => {
+  const plan = {
+    items: [
+      { id: 'a', title: '刷题', need: ['x.y'], allow: ['x.y'] },
+      { id: 'b', title: '学习', need: ['tv.danmaku.bili'], allow: [] },
+      { id: 'c', title: '写东西', allow: ['com.tencent.mm'] },
+      { id: 'd', title: '休息', need: ['a.b'], allow: ['a.b'] },
+    ],
+  }
+  assert.deepEqual(missingApps(plan), ['学习', '写东西'])
+  assert.ok(appPrompt(plan).includes('学习、写东西'))
+  assert.ok(appPrompt(plan).includes('必需应用和允许应用都要写'))
+  // 都有：什么都不说。
+  assert.equal(appPrompt({ items: [{ title: 'x', need: ['a'], allow: ['a'] }] }), '')
+  assert.equal(appPrompt(null), '', '空计划不是「缺项」，别给一句没头没脑的提示')
 })

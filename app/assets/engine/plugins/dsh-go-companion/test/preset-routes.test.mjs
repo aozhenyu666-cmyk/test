@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply, setStatePin } from '../lib/index.js'
 import { wallDecision, WALL_KIND_DEFAULT } from '../lib/wall.js'
+import { minuteOfDay } from '../lib/tz.js'
 
 const PREFIX = '/dsh-go-companion/v1'
 const SIS = 'session-sis'
@@ -69,7 +70,13 @@ async function withHome(fn) {
   } finally {
     if (old === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = old
-    rmSync(home, { recursive: true, force: true })
+    // Windows：sqlite 句柄还没放（进程里开着局库），rmSync 会 EPERM。断言已经跑完了，
+    // 这一句只是收尾——收不掉就别把一条好测试判成失败。Linux（CI）照旧删干净。
+    try {
+      rmSync(home, { recursive: true, force: true })
+    } catch {
+      // 交给系统清理临时目录
+    }
   }
 }
 
@@ -280,5 +287,102 @@ test('影子预案触发只记账，不落手机', async () => {
     assert.notEqual(r.body.session?.cell, 'all-lock', '影子的全机锁不该落下去')
     assert.ok(t.ledger().some((e) => e.state === 'preset-shadow' && e.presetId === 'shadow-dwell'))
     assert.equal(t.ledger().some((e) => e.state === 'preset-fire' && e.presetId === 'shadow-dwell'), false)
+  })
+})
+
+// ---- 第九轮 B1：计划界面（/plan/day） -------------------------------------------------------
+
+test('/plan/day：哪一局缺必需或允许应用就交不上去，并点名是哪一局', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await call(t.h(), 'POST', '/plan/day', {
+      action: 'set',
+      items: [
+        { protocolId: 'study', title: '刷题', minute: 9 * 60, budget: 60, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku'] },
+        { protocolId: 'execute', title: '写东西', minute: 10 * 60 + 30, budget: 40, need: ['com.tencent.mm'], allow: [] },
+      ],
+    })
+    assert.equal(r.body.ok, false)
+    assert.equal(r.body.code, 'apps-missing')
+    assert.deepEqual(r.body.missing, ['写东西'])
+    assert.ok(r.body.text.includes('写东西'), r.body.text)
+  })
+})
+
+test('/plan/day：都写清了就定下来，立刻生效（不用等 10 分钟），到点开局带上这一局的 App', async (tc) => {
+  await withHome(async (home) => {
+    // 到点开局走的是 60 秒那一拍（planBeat 里的 tick + startBout），不是 /plan 请求本身，
+    // 所以这里把时钟和定时器一起接管，手动推一拍。
+    tc.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.UTC(2026, 10, 14, 1, 0, 0) })
+    try {
+      const t = setup(home)
+      const r = await call(t.h(), 'POST', '/plan/day', {
+        action: 'set',
+        items: [
+          { protocolId: 'study', title: '刷题', minute: minuteOfDay(Date.now(), 'Asia/Shanghai'), budget: 60, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku', 'com.dict'] },
+        ],
+      })
+      assert.equal(r.body.ok, true, r.body.text)
+      assert.equal(r.body.plan.accepted, true, '交上去就是生效，不是草案')
+      assert.equal(r.body.plan.items[0].need[0], 'com.zhuoyin.tiku')
+      // 下一拍：到点，局自己开，App 要求跟着这一局走。
+      tc.mock.timers.tick(60_000)
+      assert.ok(t.ledger().some((e) => e.state === 'plan-open' && e.ok), '到点就开局，不用他再点')
+      const apps = (await t.presets({ action: 'list' })).body.bout?.apps
+      assert.deepEqual(apps.need, ['com.zhuoyin.tiku'])
+      assert.deepEqual(apps.allow, ['com.zhuoyin.tiku', 'com.dict'])
+      // 而且这 App 要求是真在管：跑到没写允许的地方就是严格模式，允许名单就是这一局写的两个。
+      await t.plan(at('com.zhuoyin.tiku'))
+      const p = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
+      assert.equal(p.body.session?.kind, 'strict', '这一局一开就按自己的 App 管')
+      assert.deepEqual(p.body.session.allow.sort(), ['com.dict', 'com.zhuoyin.tiku'])
+    } finally {
+      tc.mock.timers.reset()
+    }
+  })
+})
+
+test('/plan/day GET：读今天的计划；今天还没有计划时 /plan 带 planGate', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const before = await t.plan(at('com.miui.home'))
+    assert.equal(before.body.planGate?.need, true, '没计划要挂一张「去定计划」')
+    const g = await call(t.h(), 'GET', '/plan/day')
+    assert.equal(g.body.ok, true)
+    await call(t.h(), 'POST', '/plan/day', {
+      action: 'set',
+      items: [{ protocolId: 'study', title: '刷题', minute: 9 * 60, budget: 60, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku'] }],
+    })
+    const after = await t.plan(at('com.zhuoyin.tiku'))
+    assert.equal(after.body.planGate, null, '计划定了就不再挂卡')
+  })
+})
+
+test('/plan/day GET：局型清单和最近用过的 App 一起给，手机不用硬编码', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    // 先把「最近用过」喂进去：这一串是每次 /plan 都在送的。
+    await t.plan({ ...at('com.douyin', { fun: true }), switches: { recent: [{ pkg: 'com.douyin', agoMs: 60_000 }] } })
+    const g = await call(t.h(), 'GET', '/plan/day')
+    assert.equal(g.body.ok, true)
+    const ids = g.body.protocols.map((p) => p.id)
+    for (const id of ['study', 'execute', 'design', 'outing', 'rest']) assert.ok(ids.includes(id), '缺 ' + id)
+    assert.ok(g.body.protocols.every((p) => typeof p.name === 'string' && p.name.length > 0))
+    assert.ok(g.body.protocols.every((p) => p.minutes > 0), '默认时长要能预填')
+    assert.ok(g.body.recent.includes('com.douyin'), '最近用过的包名要带上：' + JSON.stringify(g.body.recent))
+  })
+})
+
+test('/sisters 也带同一张「去定计划」：计划定了就没了', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const before = await call(t.h(), 'POST', '/sisters', { timeZone: 'Asia/Shanghai' })
+    assert.equal(before.body.planGate?.need, true, '姐妹页也要能挂卡')
+    await call(t.h(), 'POST', '/plan/day', {
+      action: 'set',
+      items: [{ protocolId: 'study', title: '刷题', minute: 9 * 60, budget: 60, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku'] }],
+    })
+    const after = await call(t.h(), 'POST', '/sisters', { timeZone: 'Asia/Shanghai' })
+    assert.equal(after.body.planGate, null, '定了计划就不该再催')
   })
 })

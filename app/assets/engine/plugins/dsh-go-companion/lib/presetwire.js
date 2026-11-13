@@ -34,6 +34,14 @@ export function createPresetRuntime(deps) {
   const load = () => normalizeDoc(deps.load())
   const save = (d) => deps.save(d)
 
+  /**
+   * A5 热生效：插件没有推送通道，手机是拉的一方。所以改过预案之后留一个观察窗——
+   * 窗内每次 /plan 都让手机 5 秒后再来问，改动最晚隔一次就问到了，不用等它下一次定时醒。
+   */
+  const WATCH_MS = 2 * 60_000
+  const stamp = (d, now) => ({ ...d, revAt: now })
+  const saveNow = (d, now) => deps.save(stamp(d, now))
+
   /** 条件里能读的变量。只有白名单里这几样，读不到聊天原文、读不到笔记正文。 */
   function dataOf(now, bout, phone, doc) {
     const fired = doc.obs?.firedDay === deps.day(now) && doc.obs?.fired ? doc.obs.fired : {}
@@ -109,6 +117,7 @@ export function createPresetRuntime(deps) {
     const apps = boutAppsOf(d, bout?.id || '')
     const o = observe(d.obs, {
       now, front: phone?.app || null, fun: phone?.fun === true, minutes: Number(phone?.minutes) || 0,
+      recent: phone?.switches?.recent || null,
       bout, apps, ignore: deps.ignore(), day: deps.day(now), minute: deps.minute(now),
     })
     d.obs = { ...(d.obs || {}), ...o.obs }
@@ -116,7 +125,7 @@ export function createPresetRuntime(deps) {
     const events = phone ? o.events : o.events.filter((e) => e.type !== '切出' && e.type !== '偏离停留')
     const r = runEvents(d, events, now, bout, phone)
     save(r.doc)
-    return { fires: r.fires, strict: strictView(r.doc, now, bout?.id || null) }
+    return { fires: r.fires, strict: strictView(r.doc, now, bout?.id || null), watchUntil: (Number(r.doc.revAt) || 0) + WATCH_MS }
   }
 
   /** 局官判了一条敷衍。 */
@@ -150,14 +159,14 @@ export function createPresetRuntime(deps) {
       allow, until: now + 6 * 3_600_000, boutId: bout.id, presetId: 'manual',
       why: (text ? text + ' ' : '') + '严格模式：只剩本局应用。解除：本局结束 / 破窗',
     }, now)
-    save(d)
+    saveNow(d, now)
     deps.record({ state: 'strict-on', at: now, by, boutId: bout.id, allow })
     return { ok: true, text: allow.length ? '这一局进严格模式：只剩 ' + allow.join('、') + '。' : '这一局进严格模式：本局没声明 App，只剩局页。', allow }
   }
 
   /** 破窗等出口：收掉严格模式。 */
   function strictOff(now, by) {
-    save(clearStrict(load()))
+    saveNow(clearStrict(load()), now)
     deps.record({ state: 'strict-off', at: now, by })
   }
 
@@ -167,7 +176,7 @@ export function createPresetRuntime(deps) {
     if (!id) return { ok: false, text: '现在没有局。' }
     const r = setBoutApps(load(), id, apps)
     if (!r.ok) return { ok: false, text: '没记上。' }
-    save(r.doc)
+    saveNow(r.doc, now)
     deps.record({ state: 'bout-apps', at: now, boutId: id, need: r.apps.need, allow: r.apps.allow, by })
     return { ok: true, text: '记下了：必需 ' + (r.apps.need.join('、') || '无') + '；允许 ' + (r.apps.allow.join('、') || '无') + '。', apps: r.apps }
   }
@@ -176,7 +185,7 @@ export function createPresetRuntime(deps) {
   function propose(raw, by, now) {
     const r = proposeChange(load(), { raw, by, now })
     if (r.ok && r.kind !== 'same') {
-      save(r.doc)
+      saveNow(r.doc, now)
       deps.record({ state: 'preset-change', at: now, by, presetId: String(raw?.id || ''), kind: r.kind, pendingId: r.pendingId, effectiveAt: r.effectiveAt })
     } else if (!r.ok) {
       deps.record({ state: 'preset-refused', at: now, by, presetId: String(raw?.id || ''), code: r.code })
@@ -187,7 +196,7 @@ export function createPresetRuntime(deps) {
   function cancel(pendingId, now, by) {
     const r = cancelPending(load(), pendingId)
     if (r.ok) {
-      save(r.doc)
+      saveNow(r.doc, now)
       deps.record({ state: 'preset-cancel', at: now, by, pendingId })
     }
     return { ok: r.ok, text: r.ok ? '撤销了。' : '没有这条待生效的放宽。' }

@@ -359,6 +359,8 @@ export function normalizeDoc(raw) {
   for (const key of ['custom', 'overrides', 'history', 'rt', 'obs', 'boutApps', 'versions']) if (isPlain(raw[key])) d[key] = { ...raw[key] }
   if (Array.isArray(raw.pending)) d.pending = raw.pending.filter(isPlain).slice(-50)
   if (isPlain(raw.strict)) d.strict = { ...raw.strict }
+  // 最后一次改动预案的时刻（A5 热生效的观察窗用它，见 presetwire.js）。
+  if (Number(raw.revAt) > 0) d.revAt = Number(raw.revAt)
   return d
 }
 
@@ -608,10 +610,23 @@ export function observe(obs, ctx) {
   const front = ctx.front || null
   const off = isOff(front, ctx)
   let offSince = num(prev.offSince)
+  // 手机报的包名序列（ctx.recent）：把两次 /plan 之间切走又切回来的那些补上。
+  // 只算水位线（prev.switchedAt）之后的新切换，同一段绝不会数两遍。
+  const recent = Array.isArray(ctx.recent) && ctx.recent.length ? ctx.recent : null
+  let switchedAt = num(prev.switchedAt)
+  if (recent) {
+    const fresh = recent
+      .map((r) => ({ app: String(r?.app || ''), at: now - Math.max(0, num(r?.agoMs)) }))
+      .filter((r) => r.app && r.at > switchedAt)
+      .sort((a, b) => a.at - b.at)
+    for (const r of fresh) if (isOff(r.app, ctx)) events.push({ type: '切出', app: r.app, at: r.at })
+    if (fresh.length) switchedAt = fresh[fresh.length - 1].at
+  }
   if (off) {
     const fresh = !prev.off || prev.front !== front
     if (fresh) {
-      events.push({ type: '切出', app: front, at: now })
+      // 有序列就以序列为准：同一个切换在这里再报一次就是重复计数。
+      if (!recent) events.push({ type: '切出', app: front, at: now })
       // 手机报的「这个 App 已经开了几分钟」比我们上次看见它更早时，以手机为准。
       offSince = now - Math.max(0, num(ctx.minutes)) * 60_000
     }
@@ -624,7 +639,7 @@ export function observe(obs, ctx) {
   const day = String(ctx.day || '')
   const clockFired = prev.day === day && isPlain(prev.clockFired) ? { ...prev.clockFired } : {}
   events.push({ type: '到点', minute: num(ctx.minute), day, at: now })
-  return { events, obs: { front, off, offSince, boutId, day, clockFired } }
+  return { events, obs: { front, off, offSince, boutId, day, clockFired, switchedAt } }
 }
 
 // ---------------------------------------------------------------- 匹配

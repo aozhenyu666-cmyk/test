@@ -111,7 +111,17 @@ function cleanSwitches(raw) {
   if (!raw || typeof raw !== 'object') return null
   const n = (v) => Math.max(0, Math.min(500, Math.round(Number(v) || 0)))
   const apps = Array.isArray(raw.apps90s) ? raw.apps90s.map((a) => String(a).slice(0, 30)).filter(Boolean).slice(0, 8) : []
-  return { in90s: n(raw.in90s), apps90s: apps, in15m: n(raw.in15m), distinct15m: n(raw.distinct15m) }
+  // 第九轮：包名序列。apps90s 是给人和模型看的名字，数「切出」必须用包名——
+  // 两次 /plan 之间切走又切回来的那些，只靠前台差集是数不到的。
+  const recent = Array.isArray(raw.recent)
+    ? raw.recent.map((r) => {
+      if (!r || typeof r !== 'object') return null
+      const app = String(r.pkg || '').slice(0, 80)
+      if (!/^[A-Za-z0-9_.]+$/.test(app)) return null
+      return { app, agoMs: Math.max(0, Math.min(15 * 60_000, Math.round(Number(r.agoMs) || 0))) }
+    }).filter(Boolean).slice(0, 20)
+    : []
+  return { in90s: n(raw.in90s), apps90s: apps, in15m: n(raw.in15m), distinct15m: n(raw.distinct15m), recent }
 }
 
 /** 今天娱乐类一共多少分钟。 */

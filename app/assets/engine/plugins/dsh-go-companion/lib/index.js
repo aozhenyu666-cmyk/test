@@ -88,7 +88,7 @@ import { buildSnapshot, sistersView } from './panel.js'
 import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from './bouts_view.js'
 import { boutsTileStatus, buildBoutsSnapshot } from './bouts_panel.js'
 // 第八轮 P1/P2：计划的节拍。草案、到点开局、过点记空局的规则全在 planwire.js，这里只接线。
-import { planLines, planOf, tick } from './planwire.js'
+import { appPrompt, missingApps, planLines, planOf, tick } from './planwire.js'
 // 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
 import { buildWallSnapshot } from './wall_panel.js'
 import { wallAuditView, wallView } from './wall_view.js'
@@ -1620,7 +1620,8 @@ export function apply(ctx) {
       block = cur ? blockLine(cur, min) : (late && min < late.end + 10 ? lateLine(late) : '')
     }
     // 第八轮 P1/P2：今天的局也挂在这一层。计划一定下来，这一层就不许再出现开放问句。
-    const today = planLines(planOf(readState(stateFile('plan.json'), null), startOfDay(now, tz)), { now, min })
+    const planToday = planOf(readState(stateFile('plan.json'), null), startOfDay(now, tz))
+    const today = planLines(planToday, { now, min })
     return [block, ...today].filter(Boolean).join('\n')
   }
   /** A2：一件交墙通过了 → 那块收工，剩下的重排一次（额度由 daily.reschedule 管）。 */
@@ -3075,6 +3076,45 @@ export function apply(ctx) {
     return { v: 1, ok: true, ...presetRt.list(now) }
   }
 
+  /**
+   * 第九轮 B1：计划界面的读写。手机/面板拿这一张改今天的局，改完就生效（不再等 10 分钟确认）。
+   * 提交前必须过 missingApps：任何一局缺必需应用或允许应用都拒收，并点名是哪一局。
+   */
+  // 第九轮 B1：今天还没有生效的、没开完的计划 → 挂一张「去定计划」。三个角色谁在场都是同一张，
+  // 所以判定只写这一处：/plan 下发一次给手机，/sisters 下发一次给姐妹页。
+  function planGateNow(now, tz) {
+    const p = planOf(readState(stateFile('plan.json'), null), startOfDay(now, tz))
+    const has = p.items.length > 0 && p.accepted && p.items.some((i) => !i.openedAt && !i.missed)
+    return has ? null : { need: true, reason: 'no-plan', at: Number(p.at) || 0 }
+  }
+
+  function planDayRoute(body = {}) {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const day = startOfDay(now, tz)
+    const stored = planOf(readState(stateFile('plan.json'), null), day)
+    const action = String(body?.action || 'list')
+    if (action !== 'set' && action !== 'confirm') {
+      // 手机那边要用「最近用过的 App」给选择器排序：这正是每次 /plan 都送上来的那一串，
+      // 已经过完包名过滤和 15 分钟截断（phone.js cleanSwitches），这里只取名字。
+      // 注意 cleanSwitches 已经把 pkg 改叫 app 了。
+      const recent = (lastPhone?.switches?.recent || []).map((x) => String(x?.app || '')).filter(Boolean).slice(0, 20)
+      // 局型清单和它的默认时长也一起给：手机不硬编码协议，插件加了新局型它自然就多一行。
+      const protocols = builtinProtocols().filter((x) => x.ok)
+        .map((x) => ({ id: x.protocol.id, name: x.protocol.name, minutes: x.protocol.budget?.minutes || 0 }))
+      return { v: 1, ok: true, plan: stored, min: zoneMinuteOfDay(now, tz), recent, protocols }
+    }
+    const raw = Array.isArray(body?.items) ? body.items : []
+    const plan = { ...stored, items: raw.map((i) => ({ ...(i || {}) })).filter((i) => i && i.protocolId) }
+    const miss = missingApps(plan)
+    if (miss.length) return { v: 1, ok: false, code: 'apps-missing', missing: miss, text: appPrompt(plan) }
+    // 写之前过一遍 normItem（planOf 会做），坏条目直接丢掉，不留半张计划。
+    const next = planOf({ ...plan, day, edits: (Number(stored.edits) || 0) + 1, accepted: true, at: now }, day)
+    writeJson(stateFile('plan.json'), next)
+    record({ state: 'plan-edit', at: now, items: next.items.length, by: String(body?.by || 'panel') })
+    return { v: 1, ok: true, plan: next, text: '计划定了：' + next.items.length + ' 局。' }
+  }
+
   function workflowTool(role) {
     return {
       name: 'workflow_propose',
@@ -4513,7 +4553,9 @@ export function apply(ctx) {
     if (l.plan) next.planUntil = l.until
     if (l.block) {
       const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && b.app !== l.block)
-      commit({ blockExtra: [...keep, { app: l.block, until: l.until, by: 'ladder' }].slice(-30) })
+      // 第九轮 A6：锁页要说清这是哪一条。阶梯锁之前只写包名和到点，锁页只能显示默认文案。
+      const why = ('升级阶梯：' + String(verdict?.why || '')).slice(0, 120)
+      commit({ blockExtra: [...keep, { app: l.block, until: l.until, by: 'ladder', why }].slice(-30) })
     }
     if (l.ask) {
       // L2 核对：先问一句。2 分钟不答由下一拍自己升级成「锁那个包」，这里不预判。
@@ -4701,7 +4743,7 @@ export function apply(ctx) {
     if (r.action === 'draft' || r.action === 'confirm') record({ state: 'plan-' + r.action, at: now, items: r.plan.items.length })
     if (r.action === 'skip') record({ state: 'plan-skip', at: now, why: r.why })
     if (!r.start) return r
-    const started = startBout(r.start)
+    const started = startBout(r.start, { apps: r.apps, by: 'plan' })
     record({ state: 'plan-open', at: now, protocolId: r.start, ok: started.ok })
     // 局开了＝他已经回到轨道上：L1 压下来的计划模态到这里结束（施工书 P1「只能以一份计划生效结束」）。
     if (started.ok) {
@@ -4743,7 +4785,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -4813,6 +4855,7 @@ export function apply(ctx) {
         if (path === '/deposit') return send(res, 200, depositRoute(body.value))
         if (path === '/mount') return send(res, 200, mountRoute(body.value))
         if (path === '/presets') return send(res, 200, presetsRoute(body.value))
+        if (path === '/plan/day') return send(res, 200, planDayRoute(body.value))
         if (path === '/drill-op') return send(res, 200, drillOpRoute(body.value))
         config = mergeConfig(config, body.value)
         writeConfig(config)
@@ -4841,6 +4884,7 @@ export function apply(ctx) {
         return send(res, r.status, r.body)
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
+      if (req.method === 'GET' && path === '/plan/day') return send(res, 200, planDayRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/status') {
         return send(res, 200, statusBody())
       }
@@ -5010,8 +5054,9 @@ export function apply(ctx) {
     const mind = sense(phone, ledger, sessionId, now)
     if (phone) lastPhone = phone
     // 第九轮：预案。手机一切 App 就会来问一次 /plan，所以严格模式能在这一问的回答里就落下去。
+    let presetWatchUntil = 0
     try {
-      presetRt.tick(phone, now)
+      presetWatchUntil = Number(presetRt.tick(phone, now)?.watchUntil) || 0
     } catch (error) {
       console.error('[companion] 预案失败：' + String((error && error.message) || error))
     }
@@ -5206,6 +5251,9 @@ export function apply(ctx) {
     // 这一条比场面上的球要紧：拉起了就不说话，等他在 Gemini 里交代。
     const drift = config.control !== false && canTalk && !gem.inside ? driftPullNow(now, phone, tz) : null
     if (drift) Object.assign(out, { speak: false, reason: 'gemini-drift' })
+    // A5 热生效：插件推不动手机（手机是拉的一方）。改过预案的两分钟内让它 5 秒回来问一次，
+    // 下一次问就拿到新的严格模式 / 锁 / 放行名单，不用等他退出重进，也不用等下一次定时醒。
+    if (presetWatchUntil > now) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now + 5000, now + 5000)
     if (!out.speak) nextSpeaker = null
     return {
       v: 1, ...out, silence, sessionId, speaker: nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion',
@@ -5217,6 +5265,12 @@ export function apply(ctx) {
       trust: { score: trust.score, band: trust.band },
       // 临时封禁名单：手机把这些也当娱乐 App 管。
       block: blockedNow(now),
+      // A6：每个锁都要能解释。这是「哪个 App 被哪条预案锁的」那一句，锁页直接显示。
+      blockWhy: (Array.isArray(config.blockExtra) ? config.blockExtra : [])
+        .filter((b) => b && Number(b.until) > now && !NEVER_BLOCK.includes(b.app) && b.why)
+        .map((b) => ({ app: b.app, why: String(b.why).slice(0, 120), until: Math.round(Number(b.until)), by: String(b.by || '') })),
+      // 第九轮 B1：今天还没有计划 → 手机的浮层/首页挂一张「去定计划」，三个角色谁在场都同一张。
+      planGate: planGateNow(now, tz),
       // 通知防波堤：忙时 / 任务模式期间，非白名单通知收进缓存（手机端 NotificationShield）。
       shield: effectiveGear(config, now) === 'busy' || aiTask(config, now) ? { until: Math.max(Number(config.gearUntil) || 0, now + ROLL_MS) } : null,
       // 拒绝模式：手机记住到期时间，自己在每次切到娱乐 App 的那一刻就锁，不等这一问。
@@ -5541,6 +5595,8 @@ export function apply(ctx) {
       timeline: Array.isArray(snap.timeline) ? snap.timeline : [],
       wall: snap.wall || null,
       audit: auditOf({ memory: loadWallMem(), auditText, today }),
+      // 第九轮 B1：姐妹页也挂同一张「去定计划」——三个角色都不该让他自己去翻菜单。
+      planGate: planGateNow(now, tz),
       // C2：四个操作近 14 天的通过率。面板和周报都读这一张，不再自己算一遍。
       drillOps: opStats(readLedger(home(), 800), startOfDay(now, tz) - 13 * 86_400_000),
     }

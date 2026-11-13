@@ -380,6 +380,46 @@ test('observe：回到允许 App 停留清零', () => {
   assert.equal(r.events.some((e) => e.type === '偏离停留'), false)
 })
 
+// 手机报的包名序列：两次 /plan 之间切走又切回来的那些，只看前台差集是数不到的。
+test('observe：手机报的包名序列补上漏掉的切出', () => {
+  const r = observe({}, ctxOf({
+    front: 'com.study',
+    recent: [
+      { app: 'com.douyin', agoMs: 50_000 },
+      { app: 'com.study', agoMs: 40_000 },
+      { app: 'com.douyin', agoMs: 30_000 },
+      { app: 'com.study', agoMs: 10_000 },
+    ],
+  }))
+  const cut = r.events.filter((e) => e.type === '切出')
+  assert.equal(cut.length, 2, '两次切到抖音，现在是学习 → 前台差集看不到它们')
+  // 时间按手机报的来，不是全算在这一拍。
+  assert.equal(cut[0].at, T0 - 50_000)
+  assert.equal(cut[1].at, T0 - 30_000)
+})
+
+test('observe：同一段序列不会数两遍（水位线）', () => {
+  const seq = [{ app: 'com.douyin', agoMs: 20_000 }, { app: 'com.study', agoMs: 5_000 }]
+  const first = observe({}, ctxOf({ front: 'com.study', recent: seq }))
+  assert.equal(first.events.filter((e) => e.type === '切出').length, 1)
+  // 下一次 /plan 带回同一段（手机的时间窗是滑动的），只该出现新切换。
+  const second = observe(first.obs, ctxOf({ now: T0 + 15_000, front: 'com.study', recent: seq }))
+  assert.equal(second.events.filter((e) => e.type === '切出').length, 0)
+})
+
+test('observe：序列里切到允许的 App、或切到桌面，都不算切出', () => {
+  const r = observe({}, ctxOf({
+    front: 'com.study',
+    apps: { need: ['com.study'], allow: ['com.tencent.mm'] },
+    recent: [
+      { app: 'com.miui.home', agoMs: 30_000 },
+      { app: 'com.tencent.mm', agoMs: 20_000 },
+      { app: 'com.study', agoMs: 5_000 },
+    ],
+  }))
+  assert.equal(r.events.filter((e) => e.type === '切出').length, 0)
+})
+
 // ---------------------------------------------------------------- 匹配
 
 const run = (doc, seq) => {

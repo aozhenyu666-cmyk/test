@@ -36,6 +36,7 @@ import 'proactive_page.dart';
 import 'sisters_page.dart';
 import 'intercept_page.dart';
 import 'phone_disclosure_sheet.dart';
+import 'plan_page.dart';
 import 'phone_background_guide.dart';
 import 'phone_unlock_page.dart';
 import 'phone_widgets.dart';
@@ -376,6 +377,14 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
                 subtitle: l10n.proactiveSubtitle,
                 subtitleMaxLines: 2,
                 onTap: () => _push(const ProactivePage()),
+              ),
+              // 第九轮 B1：今天的计划。每局必须写清「必需 / 允许应用」，缺了插件不收。
+              ListPageRow(
+                icon: AppIcons.calendar,
+                title: '今天的计划',
+                subtitle: '一局一行：开始时间、时长、必需应用、允许应用。交上去立刻生效',
+                subtitleMaxLines: 2,
+                onTap: () => _push(const PlanPage()),
               ),
               // 姐妹（R4-5）：两张角色卡，加一块墙的今日审计。只读——放松规则的入口不在这里。
               ListPageRow(

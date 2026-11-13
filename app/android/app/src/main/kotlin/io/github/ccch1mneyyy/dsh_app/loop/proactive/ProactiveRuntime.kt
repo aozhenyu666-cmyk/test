@@ -489,8 +489,14 @@ object ProactiveRuntime {
     }
 
     /** The one line the lock page shows for the primary lock. */
-    private fun lockWhy(now: Long = System.currentTimeMillis()): String? =
+    private fun lockWhy(now: Long = System.currentTimeMillis(), pkg: String? = null): String? =
         primaryLock(now)?.let { it.why ?: LockPriority.defaultWhy(it.kind) }
+            // 第九轮 A6：单个 App 被预案锁住时，没人在规则表里写解释——那句 why 跟着 /plan 的
+            // blockWhy 下来。没有就退回一句实话，不让锁页显示成「拒绝模式」（那是另一件事）。
+            ?: pkg?.let { blockWhys[it] ?: if (it in blockedNow()) "这个 App 现在锁着：到点自动解锁" else null }
+
+    /** 这一局 /plan 报上来的「哪个 App 被哪条预案锁了」，只在内存里（下一次 /plan 就换一份）。 */
+    @Volatile private var blockWhys: Map<String, String> = emptyMap()
 
     /** Temporary block list: the last /plan answer plus the cached snapshot (survives restarts). */
     private fun blockedNow(): Set<String> = blocked + (ruleBook()?.blocked(System.currentTimeMillis()) ?: emptySet())
@@ -954,7 +960,7 @@ object ProactiveRuntime {
         // 拒绝模式: lock now, at the door; the /plan answer would come a second later.
         // C2: also with the engine dead — this reads only the cached rules and the local clock.
         if (now < lockUntil(now) && listed(packageName)) {
-            val f = Force(4, packageName, lockWhy(now) ?: "拒绝模式", now + FORCE_HOLD_MS, refuse = true)
+            val f = Force(4, packageName, lockWhy(now, packageName) ?: "拒绝模式", now + FORCE_HOLD_MS, refuse = true)
             force = f
             enforce(f, fresh = true)
             // 打开被拦的 App = 插件再问义务那一次机会（只问一次；重复开关不会每次都堵）。
@@ -1156,6 +1162,13 @@ object ProactiveRuntime {
         ruleBook()?.replace(planSnapshot(map, stamp), stamp)
         setShieldUntil(((map["shield"] as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L)
         blocked = (map["block"] as? List<*>)?.mapNotNull { it as? String }?.filter { it !in NEVER_LOCK }?.toSet() ?: emptySet()
+        // A6：锁页的「哪条预案、怎么解除」。插件只给带 why 的那几条（阶梯锁、预案锁），其余为空。
+        blockWhys = (map["blockWhy"] as? List<*>)?.mapNotNull { e ->
+            val m = e as? Map<*, *> ?: return@mapNotNull null
+            val app = m["app"] as? String ?: return@mapNotNull null
+            val why = m["why"] as? String ?: return@mapNotNull null
+            if (app.isBlank() || why.isBlank()) null else app to why
+        }?.toMap() ?: emptyMap()
         // Gemini 互动舱：插件给 allow 就进入"只许 Gemini"，null 就退出。
         applySession(map["session"] as? Map<*, *>)
         val refusing = System.currentTimeMillis() < lockUntil()
@@ -1586,6 +1599,11 @@ object ProactiveRuntime {
                     "apps90s" to recent.map { it.second }.distinct().take(8).map { label(it) ?: it },
                     "in15m" to switches.size,
                     "distinct15m" to switches.map { it.second }.distinct().size,
+                    // 第九轮：包名序列（新的在前）。apps90s 是给人看的中文名，数「切出」必须用包名——
+                    // 两次 /plan 之间切走又切回来的那些，插件只靠前台差集是数不到的。
+                    "recent" to switches.reversed().take(20).map {
+                        linkedMapOf<String, Any?>("pkg" to it.second, "agoMs" to (now - it.first).coerceAtLeast(0L))
+                    },
                 )
             },
         )

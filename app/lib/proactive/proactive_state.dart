@@ -381,6 +381,35 @@ class ProactiveChannel {
     }
   }
 
+  /// 第九轮 B1：今天的计划（插件 `GET /plan/day`）。
+  ///
+  /// 回 `plan`（今天的计划文档）/ `min`（当前分钟）/ `recent`（最近用过的包名，给选择器排序）。
+  /// 失败返回 null：页面如实显示读不到，不编一张空计划。
+  Future<Map<String, Object?>?> planDay() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('planDay');
+      if (raw is! Map) return null;
+      if (raw['error'] is Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 第九轮 B1：把今天这一份计划交上去（插件 `POST /plan/day`）。
+  ///
+  /// 缺「必需/允许应用」时插件回 `ok:false` + `missing`（点名是哪几局），原样带回：
+  /// 校验只有插件那一处，手机不另写一份规则。
+  Future<Map<String, Object?>?> planDaySet(List<Map<String, Object?>> items) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('planDay', {'action': 'set', 'items': items});
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   /// A3：申诉一条判定。后端 `POST /wall/appeal`。
   ///
   /// 只收「一条具体判定 + 新的物理证据」，每天 2 次；判还是由插件里的墙算，
@@ -785,6 +814,7 @@ class SistersView {
     this.timeline = const [],
     this.audit = SistersAudit.empty,
     this.drillOps = const {},
+    this.planGate = false,
     this.error,
   });
 
@@ -801,6 +831,9 @@ class SistersView {
   /// C2：操作 → 近 14 天通过率（`brief` / `predict` / `ask` / `recall`）。
   /// 没练过的操作也在表里，`asked` 是 0——没练过 ≠ 满分。
   final Map<String, DrillOpStat> drillOps;
+
+  /// 第九轮 B1：今天还没有生效的计划。三个角色谁在场都是同一张「去定计划」。
+  final bool planGate;
 
   /// 插件那边的错误码（`no_transport` / `no_answer` / `timeout` …）；null 表示正常。
   final String? error;
@@ -825,6 +858,7 @@ class SistersView {
       timeline: _notes(raw['timeline']),
       audit: SistersAudit.fromWire(raw['audit']),
       drillOps: _stats(raw['drillOps']),
+      planGate: raw['planGate'] is Map && (raw['planGate'] as Map)['need'] == true,
     );
   }
 

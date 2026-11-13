@@ -24,6 +24,14 @@ export function emptyPlan(day) {
   return { v: 1, day: Number(day) || 0, items: [], edits: 0, accepted: false, at: 0, talkedAt: 0 }
 }
 
+/** 包名表：去空、截长度、最多 20 个（和 presets.setBoutApps 同一个上限）。 */
+export function pkgsOf(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((x) => String(x || '').trim().slice(0, 80))
+    .filter((x) => /^[A-Za-z0-9_.]+$/.test(x))
+    .slice(0, 20)
+}
+
 function normItem(raw) {
   if (!raw || typeof raw !== 'object') return null
   const protocolId = String(raw.protocolId || '').trim()
@@ -37,6 +45,9 @@ function normItem(raw) {
     minute: Math.max(0, Math.min(24 * 60 - 1, Math.round(minute))),
     budget: Math.max(1, Math.min(180, Math.round(Number(raw.budget) || 25))),
   }
+  // 第九轮 B1：每局带「必需 / 允许」应用。开局时跟着 startBout 一起交给严格模式（施工书 §5）。
+  if (Array.isArray(raw.need)) item.need = pkgsOf(raw.need)
+  if (Array.isArray(raw.allow)) item.allow = pkgsOf(raw.allow)
   if (raw.why) item.why = String(raw.why).slice(0, 60)
   if (Number(raw.openedAt) > 0) item.openedAt = Number(raw.openedAt)
   if (raw.missed) item.missed = String(raw.missed).slice(0, 60)
@@ -93,7 +104,7 @@ export function tick(input) {
   const day = Number(input.day) || 0
   const min = Number(input.min) || 0
   const plan = planOf(input.stored, day)
-  const out = { plan, action: 'hold', start: '', sentence: '', why: '', nextAt: now + 60_000 }
+  const out = { plan, action: 'hold', start: '', apps: null, sentence: '', why: '', nextAt: now + 60_000 }
 
   // 1. 换天了还没有草案：出草案。刚出还不算数（10 分钟内他可以改，也可以不理）。
   if (plan.rolled) {
@@ -156,6 +167,7 @@ export function tick(input) {
     next.openedAt = now
     out.action = 'open'
     out.start = next.protocolId
+    out.apps = { need: [...(next.need || [])], allow: [...(next.allow || [])] }
     out.sentence = next.title + '，' + next.budget + ' 分钟，开始。'
     steps += 1
     break
@@ -163,6 +175,21 @@ export function tick(input) {
 
   out.nextAt = out.action === 'skip' ? now + 60_000 : nextAtOf(plan, day, now)
   return out
+}
+
+/** 计划里每一局都要写清必需应用和允许应用（施工书 §5 B1）。返回缺项那几局的名字。 */
+export function missingApps(plan) {
+  const items = Array.isArray(plan?.items) ? plan.items : []
+  return items
+    .filter((i) => !(Array.isArray(i.need) && i.need.length) || !(Array.isArray(i.allow) && i.allow.length))
+    .map((i) => String(i.title || i.id || i.protocolId || '这一局'))
+}
+
+/** 缺项时给他看的那一句；不缺点返回空串。 */
+export function appPrompt(plan) {
+  const miss = missingApps(plan)
+  if (!miss.length) return ''
+  return '这几局没写清用哪些 App：' + miss.join('、') + '。必需应用和允许应用都要写，一局都不能空。'
 }
 
 /**
