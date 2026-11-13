@@ -276,24 +276,19 @@ DSHAPP url dsh web: http://127.0.0.1:51234/?token=launch-tok
 
     for (final failingPs in [false, true]) {
       test('legacy node-like unrelated process survives (ps fails: $failingPs)', () async {
+        final report = StringBuffer();
+        void dump(String label, ProcessResult r) =>
+            report.writeln('$label exit=${r.exitCode} out=「${r.stdout.toString().trim()}」 err=「${r.stderr.toString().trim()}」');
         final sleep = Process.runSync('sh', ['-c', 'command -v sleep']).stdout.toString().trim();
         final alias = Link('${bin.path}/node-unrelated')..createSync(sleep);
+        report.writeln('sleep=「$sleep」 alias=${alias.path}');
+        // Same duration, plain name: tells "the runner killed our child" apart
+        // from "only a node-like process disappears".
+        final control = await Process.start(sleep, ['30']);
+        addTearDown(control.kill);
         final other = await Process.start(alias.path, ['30']);
         addTearDown(other.kill);
-        final sw = Stopwatch()..start();
-        void checkpoint(String where) {
-          final ps = Process.runSync('ps', ['-p', '${other.pid}', '-o', 'pid=,ppid=,stat=,args=']);
-          if (ps.exitCode != 0) {
-            final args = File('${home.path}/dsh-args.txt');
-            fail(
-              'DEBUG $where pid=${other.pid} ms=${sw.elapsedMilliseconds} psExit=${ps.exitCode} '
-              'log=${File('${home.path}/.dsh-app-remote/web.log').readAsStringSync()} '
-              'pidFile=${File('${home.path}/.dsh-app-remote/web.pid').existsSync()} '
-              'dshArgs=${args.existsSync() ? args.readAsStringSync() : ''}',
-            );
-          }
-        }
-        checkpoint('after spawn');
+        report.writeln('control=${control.pid} other=${other.pid}');
         if (failingPs) {
           final ps = File('${bin.path}/ps')..writeAsStringSync('#!/bin/sh\nexit 1\n');
           Process.runSync('chmod', ['+x', ps.path]);
@@ -303,14 +298,29 @@ DSHAPP url dsh web: http://127.0.0.1:51234/?token=launch-tok
         File('${dir.path}/web.cmd').writeAsStringSync('dsh web');
         File('${dir.path}/web.log').writeAsStringSync('dsh web: http://127.0.0.1:1/?token=old\n');
         expect(File('${dir.path}/web.st').existsSync(), isFalse);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        dump('ps control', Process.runSync('ps', ['-p', '${control.pid}', '-o', 'pid=,stat=,args=']));
+        dump('ps other', Process.runSync('ps', ['-p', '${other.pid}', '-o', 'pid=,stat=,args=']));
+        dump(
+          'ps grep',
+          Process.runSync('sh', [
+            '-c',
+            "ps -eo pid,ppid,stat,args | grep -E 'node-unrelated|sleep 30' | grep -v grep",
+          ]),
+        );
         final started = await bootstrap().ensureRunning();
-        checkpoint('after ensureRunning');
-        expect(started.reused, isFalse);
-        expect(started.token, isNot('old'));
+        report.writeln('started reused=${started.reused} token=${started.token} port=${started.port} pid=${started.pid}');
+        dump('ps control after', Process.runSync('ps', ['-p', '${control.pid}', '-o', 'pid=,stat=,args=']));
+        dump('ps other after', Process.runSync('ps', ['-p', '${other.pid}', '-o', 'pid=,stat=,args=']));
+        dump('log', Process.runSync('cat', ['${dir.path}/web.log']));
+        final args = File('${home.path}/dsh-args.txt');
+        report.writeln('dshArgs=「${args.existsSync() ? args.readAsStringSync().trim() : '-'}」');
+        expect(started.reused, isFalse, reason: report.toString());
+        expect(started.token, isNot('old'), reason: report.toString());
         expect(
           Process.runSync('kill', ['-0', '${other.pid}']).exitCode,
           0,
-          reason: 'unrelated node-like process survived',
+          reason: 'unrelated node-like process survived\n$report',
         );
       });
     }
