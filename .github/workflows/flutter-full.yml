@@ -15,7 +15,7 @@ name: flutter-full
 
 on:
   push:
-    branches: [deepseek/round8]
+    branches: [deepseek/round8, deepseek/round9]
     paths:
       - ".github/workflows/flutter-full.yml"
       - "app/lib/**"

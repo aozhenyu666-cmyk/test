@@ -16,7 +16,7 @@ name: shell-widgets
 
 on:
   push:
-    branches: [deepseek/round8]
+    branches: [deepseek/round8, deepseek/round9]
     paths:
       - ".github/workflows/shell-widgets.yml"
       - "app/lib/ui/shell/**"
