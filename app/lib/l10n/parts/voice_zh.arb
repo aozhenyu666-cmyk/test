@@ -137,5 +137,20 @@
     }
   },
   "voiceModelNoticePreparing": "正在校验语音模型",
-  "voiceModelNoticeFailed": "语音模型下载失败，打开 App 重试"
+  "voiceModelNoticeFailed": "语音模型下载失败，打开 App 重试",
+  "voiceOutSection": "声音输出",
+  "voiceOutFooter": "念出来的文字会发给你选的服务。关掉就只用手机自带语音，文字不出手机。",
+  "voiceOutEnable": "外接语音",
+  "voiceOutEnableHint": "局官、大鱼、小鱼共用这一档声音",
+  "voiceOutService": "服务",
+  "voiceOutKey": "密钥",
+  "voiceOutKeySet": "已填写",
+  "voiceOutKeyUnset": "未填写",
+  "voiceOutOfficial": "局官音色",
+  "voiceOutStrategist": "大鱼音色",
+  "voiceOutCompanion": "小鱼音色",
+  "voiceOutVoiceFollow": "跟随服务默认",
+  "voiceOutPreview": "试听",
+  "voiceOutPreviewText": "这一局，我记下了。",
+  "voiceOutPreviewFailed": "没能念出来，换个服务或音色再试"
 }
