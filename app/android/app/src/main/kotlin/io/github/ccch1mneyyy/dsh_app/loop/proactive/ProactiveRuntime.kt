@@ -649,8 +649,8 @@ object ProactiveRuntime {
         sessionAllow = runCatching { p.getString("sessionAllow", "").orEmpty() }.getOrDefault("")
             .split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         sessionPkg = runCatching { p.getString("sessionApp", "").orEmpty() }.getOrDefault("").ifBlank { null }
-        sessionOwner = runCatching { p.getString("sessionOwner", "") }.getOrDefault("").ifBlank { OWNER_PLUGIN }
-        workWhy = runCatching { p.getString("workWhy", "") }.getOrDefault("").ifBlank { null }
+        sessionOwner = runCatching { p.getString("sessionOwner", "").orEmpty() }.getOrDefault("").ifBlank { OWNER_PLUGIN }
+        workWhy = runCatching { p.getString("workWhy", "").orEmpty() }.getOrDefault("").ifBlank { null }
         sessionSince = runCatching { p.getLong("sessionSince", 0L) }.getOrDefault(0L)
         sessionGrace = runCatching { p.getLong("sessionGraceMs", SessionPolicy.DEFAULT_GRACE_MS) }
             .getOrDefault(SessionPolicy.DEFAULT_GRACE_MS)
@@ -774,7 +774,7 @@ object ProactiveRuntime {
             // l10n:keep agent tool result
             val who = if (sessionOwner == OWNER_WORK) "工作模式" else "连麦舱"
             // l10n:keep agent tool result
-            "$who进行中：还剩 $left 分钟，允许 ${sessionAllow.joinToString("、")}。"
+            "${who}进行中：还剩 $left 分钟，允许 ${sessionAllow.joinToString("、")}。"
         } else {
             // l10n:keep agent tool result
             "现在没有工作模式，也没有连麦舱。"
