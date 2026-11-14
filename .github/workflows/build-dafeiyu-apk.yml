@@ -19,6 +19,8 @@ env:
   PROOT_VERSION: 5.1.107.102
   DSH_MAVEN_MIRRORS: 0
   TZ: Asia/Shanghai
+  DSH_TEST_FONT_DIR: /usr/share/fonts/opentype/noto
+  NOTO_CJK_VERSION: 1:20230817+repack1-3
 
 jobs:
   android-arm64:
@@ -49,6 +51,30 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+      - name: Restore Noto CJK test fonts
+        id: fonts
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/test-fonts
+          key: test-fonts-${{ env.NOTO_CJK_VERSION }}
+      - name: Download Noto CJK test fonts
+        if: steps.fonts.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          sudo apt-get update -q
+          apt-get download fonts-noto-cjk="$NOTO_CJK_VERSION" fonts-noto-cjk-extra="$NOTO_CJK_VERSION"
+          for deb in fonts-noto-cjk*.deb; do dpkg-deb -x "$deb" unpacked; done
+          mkdir -p ~/test-fonts
+          cp unpacked/usr/share/fonts/opentype/noto/NotoSansCJK-{Regular,Bold,Light}.ttc ~/test-fonts/
+      - name: Save Noto CJK test fonts
+        if: steps.fonts.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/test-fonts
+          key: ${{ steps.fonts.outputs.cache-primary-key }}
+      - name: Install Noto CJK test fonts
+        run: |
+          sudo install -Dm644 -t "$DSH_TEST_FONT_DIR" ~/test-fonts/NotoSansCJK-*.ttc
       - name: Verify l10n source sync & run Flutter analyze + Dafeiyu tests
         working-directory: app
         run: |
