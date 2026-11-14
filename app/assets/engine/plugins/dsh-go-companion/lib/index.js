@@ -133,7 +133,10 @@ import {
   STRATEGIST_AUDIT_DIRECTIVE, antiSycophancyRewriteHint, detectSycophancy, detectTelemetryContradiction,
   stripStrategistAudit, telemetryContradictionHint,
 } from './strategist_audit.js'
-import { inferDepartment, isValidDepartment } from './departments.js'
+import {
+  collectDepartmentSop, dispatchDepartmentSop, governDepartmentSop, inferDepartment, isValidDepartment,
+  routeBoutDepartment, strategizeDepartmentSop,
+} from './departments.js'
 import { TIER_AMBIGUOUS, TIER_CONTEXTUAL, TIER_EXEMPT, classifyAppTier, detectDegradedEscape, evaluateContextualExemption } from './app_governance.js'
 import {
   activeAppLease, checkEmergencyPassPullBack, cleanExternalState, evaluateDailySchedulingFloor,
@@ -5435,7 +5438,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -5630,6 +5633,78 @@ export function apply(ctx) {
           const role = String(body.value?.role || 'strategist')
           const out = composeAndEnqueueBout(body.value?.protocol || body.value || {}, role)
           return send(res, out.ok ? 200 : 400, { v: 1, ...out })
+        }
+        if (path === '/departments') {
+          const act = String(body.value?.action || 'status')
+          const now = Date.now()
+          const tz = zoneOr(config.timeZone)
+          if (act === 'collect') {
+            const out = collectDepartmentSop({
+              targetQuestion: body.value?.targetQuestion,
+              rawFacts: body.value?.rawFacts,
+              source: body.value?.source,
+              kb: kbDir(notesDir(), home()),
+              at: now,
+              tz,
+            })
+            return send(res, out.ok ? 200 : 400, { v: 1, ...out })
+          }
+          if (act === 'strategize') {
+            const out = strategizeDepartmentSop({
+              rawFactCards: body.value?.rawFactCards,
+              openQuestionCard: body.value?.openQuestionCard,
+              decision: body.value?.decision,
+              falsifyPath: body.value?.falsifyPath,
+              rationale: body.value?.rationale,
+            })
+            return send(res, out.ok ? 200 : 400, { v: 1, ...out })
+          }
+          if (act === 'dispatch') {
+            let db = null
+            try {
+              db = openBoutsDb(memoryPath())
+              const out = dispatchDepartmentSop({
+                db,
+                boutsHistory: body.value?.boutsHistory,
+                proposedQueue: body.value?.proposedQueue,
+                windowStartMs: body.value?.windowStartMs,
+                now,
+              })
+              return send(res, out.ok ? 200 : 400, { v: 1, ...out })
+            } finally {
+              try { db?.close?.() } catch {}
+            }
+          }
+          if (act === 'govern') {
+            const out = governDepartmentSop({
+              lockedQueue: body.value?.lockedQueue,
+              verdicts: body.value?.verdicts,
+              telemetry: body.value?.telemetry,
+              kb: kbDir(notesDir(), home()),
+              writeNightly: body.value?.writeNightly !== false,
+              at: now,
+              tz,
+            })
+            return send(res, 200, { v: 1, ...out })
+          }
+          if (act === 'route') {
+            let db = null
+            try {
+              db = openBoutsDb(memoryPath())
+              const out = routeBoutDepartment({
+                db,
+                home: home(),
+                boutId: body.value?.boutId || live?.official?.view?.()?.id || '',
+                currentDept: body.value?.currentDept || live?.department || '',
+                input: body.value?.input || {},
+                now,
+              })
+              return send(res, out.ok ? 200 : 400, { v: 1, ...out })
+            } finally {
+              try { db?.close?.() } catch {}
+            }
+          }
+          return send(res, 200, { v: 1, ok: true, currentDepartment: live?.department || '' })
         }
         config = mergeConfig(config, body.value)
         writeConfig(config)
@@ -6850,6 +6925,9 @@ export function apply(ctx) {
     if (action === 'open') {
       const r = startBout(String(body?.protocolId || ''), { apps: body?.apps, packet: body?.packet, department: body?.department, by: 'panel' })
       return { v: 1, ...r }
+    }
+    if (action === 'close') {
+      return { v: 1, ...closeBoutNow() }
     }
     if (!['ask', 'spoken', 'answer', 'fallback'].includes(action)) {
       return { v: 1, ok: false, code: 'bad-action' }

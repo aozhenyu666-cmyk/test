@@ -209,6 +209,35 @@ test('M4.2: /protocols/compose 与 compose_bout_protocol 工具端到端入库 d
     assert.equal(openRes.status, 200)
     assert.equal(openRes.body.ok, true, openRes.body.toast)
 
+    const closeRes = await call(h.handler(), 'POST', '/dsh-go-companion/v1/bouts', { action: 'close' })
+    assert.equal(closeRes.status, 200)
+    assert.equal(closeRes.body.ok, true)
+
+    const denyDept = await call(h.handler(), 'POST', '/dsh-go-companion/v1/departments', {
+      action: 'strategize',
+      rawFactCards: [],
+      decision: '无据硬猜',
+    })
+    assert.equal(denyDept.status, 400)
+    assert.equal(denyDept.body.code, 'ERR_NO_RAW_FACTS')
+
+    const collectDept = await call(h.handler(), 'POST', '/dsh-go-companion/v1/departments', {
+      action: 'collect',
+      targetQuestion: '为什么重连偶发读旧状态',
+      rawFacts: ['事务提交前快照对并发连接不可见'],
+    })
+    assert.equal(collectDept.status, 200)
+    assert.equal(collectDept.body.ok, true)
+
+    const passDept = await call(h.handler(), 'POST', '/dsh-go-companion/v1/departments', {
+      action: 'strategize',
+      rawFactCards: collectDept.body.raw_fact_cards,
+      decision: '拆分为显式提交短事务并携带版本校验',
+      falsifyPath: '压测再现旧版本读取即回退',
+    })
+    assert.equal(passDept.status, 200)
+    assert.equal(passDept.body.ok, true)
+
     const db = openBoutsDb(join(home, 'fish-memory', 'fish-memory.sqlite'))
     try {
       const protos = listProtocols(db)

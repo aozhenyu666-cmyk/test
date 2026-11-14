@@ -41,6 +41,18 @@ export function boutsNowView(_scope, caps = {}) {
   return { type: 'stack', title: '现在', children }
 }
 
+const PROTOCOL_OPTIONS = [
+  { label: '执行', value: 'execute' },
+  { label: '学习', value: 'study' },
+  { label: '多球', value: 'multi_shuttle_drill' },
+  { label: '切片', value: 'video_slice_standard' },
+  { label: '通勤', value: 'commute_anti_daydream' },
+  { label: '微3m', value: 'micro_landing_3m' },
+  { label: '外出', value: 'outing' },
+  { label: '设计', value: 'design' },
+  { label: '休息', value: 'rest' },
+]
+
 /** 队列：今天的局。 */
 export function boutsQueueView(_scope, caps = {}) {
   const children = [
@@ -57,13 +69,7 @@ export function boutsQueueView(_scope, caps = {}) {
       children: [
         {
           type: 'segmented', label: '哪种局', bind: 'data.form.protocolId',
-          options: [
-            { label: '执行', value: 'execute' },
-            { label: '学习', value: 'study' },
-            { label: '外出', value: 'outing' },
-            { label: '设计', value: 'design' },
-            { label: '休息', value: 'rest' },
-          ],
+          options: PROTOCOL_OPTIONS,
         },
       ],
     })
@@ -88,13 +94,7 @@ export function boutsProtocolsView(_scope, caps = {}) {
       children: [
         {
           type: 'segmented', label: '哪种局', bind: 'data.form.protocolId',
-          options: [
-            { label: '执行', value: 'execute' },
-            { label: '学习', value: 'study' },
-            { label: '外出', value: 'outing' },
-            { label: '设计', value: 'design' },
-            { label: '休息', value: 'rest' },
-          ],
+          options: PROTOCOL_OPTIONS,
         },
       ],
     })

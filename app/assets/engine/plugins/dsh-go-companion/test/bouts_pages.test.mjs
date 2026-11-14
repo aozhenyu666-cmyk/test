@@ -494,3 +494,12 @@ test('W3 磁贴：什么数据都没有时也不抛，字段形状不变', () =>
   assert.equal(status.beats, 0)
   assert.equal(status.running, false)
 })
+
+test('W4 三条标杆协议与 micro_landing_3m 均暴露在队列/协议库加局选项中', () => {
+  for (const viewFn of [boutsQueueView, boutsProtocolsView]) {
+    const view = JSON.stringify(viewFn({}, FORM))
+    for (const pid of ['multi_shuttle_drill', 'video_slice_standard', 'commute_anti_daydream', 'micro_landing_3m']) {
+      assert.ok(view.includes(pid), `missing ${pid} in view`)
+    }
+  }
+})

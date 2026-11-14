@@ -348,5 +348,122 @@ sid = await newSession({ mode: 'partner' })
   check('I3.9 这一声没把追问锁报掉，窗口还在', pl4.body.followup?.active === true && pl4.body.followup.until > Date.now(), pl4.body.followup)
 }
 
+// ---------------------------------------------------------------- J. v3.0 认知自主核心特性 + 三条标杆协议真引擎回放
+console.log('【J. v3.0 标杆协议 + 造局 + 四部 SOP + 六骰/六拍 + 租约豁免 + 弹性降级】')
+reset()
+{
+  const tzDay = dayZone()
+  // J1. 三条标杆协议真引擎开局 -> 问 -> 答 -> 收局 + 动态造局 (/protocols/compose)
+  for (const pid of ['multi_shuttle_drill', 'video_slice_standard', 'commute_anti_daydream']) {
+    const o = await route('POST', '/bouts', { action: 'open', protocolId: pid })
+    check(`J1.${pid} 在真引擎上可开局`, o.status === 200 && o.body?.ok === true, o.body)
+    const asked = await route('POST', '/bouts', { action: 'ask' })
+    check(`J1.${pid} /bouts ask 给出首拍提问`, asked.body?.ok === true && String(asked.body?.say || '').length > 0, asked.body)
+    const closed = await route('POST', '/bouts', { action: 'close' })
+    check(`J1.${pid} /bouts close cleanly closes bout`, closed.body?.ok === true, closed.body)
+  }
+
+  const badWall = await route('POST', '/protocols/compose', {
+    role: 'strategist',
+    protocol: { id: 'e2e-bad-wall', name: '越权墙', needs: ['全机锁'], steps: [{ id: 's1', ask: '说一句', limit: '2m', timeout: '收局' }] },
+  })
+  check('J1.compose 声明墙能力被拒 (400)', badWall.status === 400 && badWall.body?.ok === false, badWall.body)
+
+  const badLoop = await route('POST', '/protocols/compose', {
+    role: 'strategist',
+    protocol: { id: 'e2e-bad-loop', name: '死循环', steps: [{ id: 's1', ask: '一直卡住', limit: '2m', timeout: '重打' }] },
+  })
+  check('J1.compose 无确定终局出口被拒 (400)', badLoop.status === 400 && badLoop.body?.ok === false, badLoop.body)
+
+  const goodCompose = await route('POST', '/protocols/compose', {
+    role: 'strategist',
+    protocol: { id: 'e2e-weakness-drill', name: 'E2E 缓存反例专攻', goal: '补齐 SQLite 缓存失效反例', minutes: 20, department: 'dept:strategize' },
+  })
+  check('J1.compose 合法动态协议通过校验并入队', goodCompose.status === 200 && goodCompose.body?.ok === true && goodCompose.body?.protocol?.id === 'e2e-weakness-drill', goodCompose.body)
+  const openComposed = await route('POST', '/bouts', { action: 'open', protocolId: 'e2e-weakness-drill' })
+  check('J1.compose 生成的动态协议可立即开局', openComposed.body?.ok === true, openComposed.body)
+  await route('POST', '/bouts', { action: 'close' })
+
+  // J2. 四部门隐式 SOP（无原始事实卡时 ERR_NO_RAW_FACTS 拦截 -> 收集建卡 -> 谋划通过 -> 统筹 -> 督办）
+  const stratDeny = await route('POST', '/departments', {
+    action: 'strategize', rawFactCards: [], decision: '直接下结论跳过取证',
+  })
+  check('J2.1 谋划思考部无 raw_fact_cards 直接拒单 ERR_NO_RAW_FACTS', stratDeny.status === 400 && stratDeny.body?.code === 'ERR_NO_RAW_FACTS', stratDeny.body)
+
+  const collectOk = await route('POST', '/departments', {
+    action: 'collect',
+    targetQuestion: '为什么缓存写入在并发下偶尔读到旧快照',
+    rawFacts: ['WAL 模式下读事务持有旧视图直到 COMMIT 后新事务开启', '连接池复用未重置 read snapshot'],
+    source: 'vault-e2e',
+  })
+  check('J2.2 信息收集部产出 raw_fact_cards 与 Obsidian 卡', collectOk.status === 200 && collectOk.body?.ok === true && (collectOk.body?.raw_fact_cards || []).length === 2, collectOk.body)
+
+  const stratOk = await route('POST', '/departments', {
+    action: 'strategize',
+    rawFactCards: collectOk.body?.raw_fact_cards || [],
+    decision: '将写入与只读查询拆到显式短事务并在提交后刷新版本戳',
+    falsifyPath: '并发压测 100 次后仍出现旧版本号即推翻该方案',
+  })
+  check('J2.3 谋划思考部绑定 raw_fact_cards 后通过', stratOk.status === 200 && stratOk.body?.ok === true && stratOk.body?.single_point_decision?.falsifyPath?.length > 0, stratOk.body)
+
+  const dispOk = await route('POST', '/departments', {
+    action: 'dispatch',
+    boutsHistory: [{ status: 'closed', closedAt: Date.now() - 86_400_000 }],
+    proposedQueue: [{ protocolId: 'multi_shuttle_drill', title: '多球机制拆解' }],
+  })
+  check('J2.4 统筹规划部锁定可执行队列', dispOk.status === 200 && dispOk.body?.ok === true && (dispOk.body?.locked_plan_modality_queue || []).length === 1, dispOk.body)
+
+  const govOk = await route('POST', '/departments', {
+    action: 'govern',
+    lockedQueue: dispOk.body?.locked_plan_modality_queue || [],
+    verdicts: [{ pass: true }],
+    telemetry: { workMinutesToday: 40, funMinutesToday: 5 },
+  })
+  check('J2.5 督办审计部产出行为审计与履约率', govOk.status === 200 && govOk.body?.ok === true && govOk.body?.daily_behavior_audit?.adherenceRate === 1, govOk.body)
+
+  // J3. 六骰 & 六拍认知槽（含连续 2 次失败给出观测锚点提示 + 通过写入 ledger）
+  const dSlots = await route('POST', '/wall', { action: 'dice-slots', stage: 1, query: '缓存' })
+  check('J3.1 /wall dice-slots 返回当前阶段骰子槽', dSlots.body?.ok === true && Array.isArray(dSlots.body?.slots) && dSlots.body.slots.length >= 1, dSlots.body)
+
+  const dFail1 = await route('POST', '/wall', { action: 'dice-judge', dice: 6, prompt: '换个解释？', answer: '太短', sourceContext: 'WAL 事务在 COMMIT 前仅对当前连接可见，其它连接读旧快照。', anchors: ['事务隔离', '旧快照', 'COMMIT 可见性'] })
+  const dFail2 = await route('POST', '/wall', { action: 'dice-judge', dice: 6, prompt: '换个解释？', answer: '大概吧', sourceContext: 'WAL 事务在 COMMIT 前仅对当前连接可见，其它连接读旧快照。', anchors: ['事务隔离', '旧快照', 'COMMIT 可见性'] })
+  check('J3.2 六骰连续 2 次失败触发脚手架观测锚点提示', dFail1.body?.pass === false && dFail2.body?.pass === false && dFail2.body?.failures === 2 && String(dFail2.body?.anchorHint || '').length > 0, dFail2.body)
+
+  const dPass = await route('POST', '/wall', { action: 'dice-judge', dice: 6, prompt: '换个解释？', answer: '如果缓存写入前并发事务还没提交，因为 WAL 快照隔离导致读连接看到旧版本号而不只是网络延迟。', sourceContext: 'WAL 事务在 COMMIT 前仅对当前连接可见。' })
+  check('J3.3 具体因果解释通过六骰判官并落账', dPass.body?.pass === true && ledger().some((e) => e.state === 'wall-dice-judge' && e.pass === true), dPass.body)
+
+  const stSlots = await route('POST', '/wall', { action: 'stroke-slots', track: 'multi_shuttle_drill', topic: 'WAL 快照隔离' })
+  check('J3.4 /wall stroke-slots 返回六拍认知槽', stSlots.body?.ok === true && stSlots.body?.track === 'multi_shuttle_drill' && Array.isArray(stSlots.body?.slots) && stSlots.body.slots.length === 6, stSlots.body)
+  const stPass = await route('POST', '/wall', { action: 'stroke-judge', stroke: 'stroke_2_evidence', track: 'multi_shuttle_drill', answer: '依据 WAL 文档第3节，未提交事务对其他连接保持快照隔离，因此并发读必然命中旧页。', sourceContext: 'WAL 文档第3节', noteTitle: 'WAL隔离复盘' })
+  check('J3.5 /wall stroke-judge 验收具体证据拍通过', stPass.body?.pass === true && ledger().some((e) => e.state === 'wall-stroke-judge' && e.pass === true), stPass.body)
+
+  // J4. 外部 Agent 租约 (/lease) + recap-fallback + 3 分钟紧急通行证 (/emergency-pass)
+  const leaseIssued = await route('POST', '/lease', { action: 'issue', agentId: 'chatgpt', topic: '排查 WAL 锁冲突', ttlMs: 15 * 60_000 })
+  check('J4.1 /lease issue 下发外部 Agent 白名单租约', leaseIssued.status === 200 && leaseIssued.body?.ok === true && (leaseIssued.body?.lease?.packages || []).includes('com.openai.chatgpt'), leaseIssued.body)
+  const planLeased = await route('POST', '/plan', { roll: 100, timeZone: tzDay, phone: game(10) })
+  check('J4.2 /plan 租约期允许白名单外部 Agent 包名', (planLeased.body?.session?.allow || []).includes('com.openai.chatgpt'), planLeased.body?.session)
+  const recapFb = await route('POST', '/lease', { action: 'recap-fallback', agentId: 'chatgpt', captureFailed: true, spokenOrTextRecap: '刚确认并发事务未提交前读旧快照，卡点在连接池未重置版本戳。' })
+  check('J4.3 /lease recap-fallback 录屏降级复盘可受理并落账', recapFb.body?.ok === true && ledger().some((e) => e.state === 'external-lease-recap'), recapFb.body)
+
+  const ep = await route('POST', '/emergency-pass', { reason: '楼下取快递扫码验证' })
+  check('J4.4 /emergency-pass 授予 3 分钟无惩罚应急通行证', ep.status === 200 && ep.body?.ok === true && ep.body?.until > Date.now(), ep.body)
+  const planEp = await route('POST', '/plan', { roll: 100, timeZone: tzDay, phone: game(10) })
+  check('J4.5 /plan 通行证有效期内放行', planEp.body?.emergencyPass?.active === true && planEp.body?.force?.level === 0, planEp.body)
+  await route('POST', '/lease', { action: 'revoke', reason: 'e2e-done' })
+
+  // J5. 弹性缓冲降级 -> 3 次 scheduling_failure 触发低功耗保底日 (/elastic-check) + PC 心跳 (/event pc-activity)
+  let el3 = null
+  for (let i = 1; i <= 3; i += 1) {
+    el3 = await route('POST', '/elastic-check', { plannedAt: Date.now() - 25 * 60_000, startedAt: 0, bufferMin: 20 })
+    if (i === 1) {
+      check('J5.1 第1次超时记 scheduling_failure 且降级 micro_landing_3m', el3.body?.exceeded === true && el3.body?.classification === 'scheduling_failure' && el3.body?.fallbackBout?.protocolId === 'micro_landing_3m' && el3.body?.schedulingFloor?.lowPowerFloor === false, el3.body)
+    }
+  }
+  check('J5.2 当日第3次超时触发低功耗保底日 (lowPowerFloor + ledger)', el3?.body?.schedulingFloor?.lowPowerFloor === true && ledger().some((e) => e.state === 'low-power-floor'), el3?.body)
+
+  const pcHb = await route('POST', '/event', { type: 'pc-activity', activeApp: 'code.exe', activeTitle: 'accept.mjs - dsh', category: 'coding', focusMinutes: 18, entertainmentMinutes: 0, isAfk: false })
+  check('J5.3 /event pc-activity 记录桌面端心跳并落账', pcHb.body?.ok === true && pcHb.body?.pc?.category === 'coding' && ledger().some((e) => e.state === 'pc-heartbeat' && e.category === 'coding'), pcHb.body)
+}
+
 console.log(failed ? '✗ ' + failed + ' 项失败' : '✓ 全部通过')
 process.exit(failed ? 1 : 0)
