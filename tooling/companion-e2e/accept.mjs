@@ -404,7 +404,7 @@ reset()
     decision: '将写入与只读查询拆到显式短事务并在提交后刷新版本戳',
     falsifyPath: '并发压测 100 次后仍出现旧版本号即推翻该方案',
   })
-  check('J2.3 谋划思考部绑定 raw_fact_cards 后通过', stratOk.status === 200 && stratOk.body?.ok === true && stratOk.body?.single_point_decision?.falsifyPath?.length > 0, stratOk.body)
+  check('J2.3 谋划思考部绑定 raw_fact_cards 后通过', stratOk.status === 200 && stratOk.body?.ok === true && String(stratOk.body?.single_point_decision?.falsify_path || '').length > 0, stratOk.body)
 
   const dispOk = await route('POST', '/departments', {
     action: 'dispatch',
@@ -433,9 +433,10 @@ reset()
   check('J3.3 具体因果解释通过六骰判官并落账', dPass.body?.pass === true && ledger().some((e) => e.state === 'wall-dice-judge' && e.pass === true), dPass.body)
 
   const stSlots = await route('POST', '/wall', { action: 'stroke-slots', track: 'multi_shuttle_drill', topic: 'WAL 快照隔离' })
-  check('J3.4 /wall stroke-slots 返回六拍认知槽', stSlots.body?.ok === true && stSlots.body?.track === 'multi_shuttle_drill' && Array.isArray(stSlots.body?.slots) && stSlots.body.slots.length === 6, stSlots.body)
-  const stPass = await route('POST', '/wall', { action: 'stroke-judge', stroke: 'stroke_2_evidence', track: 'multi_shuttle_drill', answer: '依据 WAL 文档第3节，未提交事务对其他连接保持快照隔离，因此并发读必然命中旧页。', sourceContext: 'WAL 文档第3节', noteTitle: 'WAL隔离复盘' })
-  check('J3.5 /wall stroke-judge 验收具体证据拍通过', stPass.body?.pass === true && ledger().some((e) => e.state === 'wall-stroke-judge' && e.pass === true), stPass.body)
+  const stMatch = await route('POST', '/wall', { action: 'stroke-slots', track: 'department_match', topic: 'WAL 快照隔离' })
+  check('J3.4 /wall stroke-slots 返回多球(3拍)与部门比赛(6拍)槽位', stSlots.body?.ok === true && stSlots.body?.track === 'multi_shuttle_drill' && stSlots.body?.slots?.length === 3 && stMatch.body?.track === 'department_match' && stMatch.body?.slots?.length === 6, { drill: stSlots.body, match: stMatch.body })
+  const stPass = await route('POST', '/wall', { action: 'stroke-judge', stroke: 'stroke_2_condense', track: 'multi_shuttle_drill', answer: '依据 WAL 文档第3节，未提交事务对其他连接保持快照隔离，因此并发读必然命中旧页。', sourceContext: 'WAL 文档第3节', noteTitle: 'WAL隔离复盘' })
+  check('J3.5 /wall stroke-judge 验收第二拍并落账', stPass.body?.pass === true && ledger().some((e) => e.state === 'wall-stroke-judge' && e.pass === true), stPass.body)
 
   // J4. 外部 Agent 租约 (/lease) + recap-fallback + 3 分钟紧急通行证 (/emergency-pass)
   const leaseIssued = await route('POST', '/lease', { action: 'issue', agentId: 'chatgpt', topic: '排查 WAL 锁冲突', ttlMs: 15 * 60_000 })
