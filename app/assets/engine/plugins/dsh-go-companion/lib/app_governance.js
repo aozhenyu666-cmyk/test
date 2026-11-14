@@ -110,16 +110,6 @@ export function evaluateContextualExemption(prevState = {}, input = {}, now = Da
   const screenText = String(input.screenText || input.phone?.screenText || '')
   const tierInfo = classifyAppTier(pkg, input.declaredApps)
 
-  if (tierInfo.tier !== TIER_CONTEXTUAL) {
-    return {
-      exempt: false,
-      reclaimed: Boolean(s.until && Number(s.until) > now),
-      reason: 'not-tier1',
-      until: 0,
-      state: { pkg: '', until: 0, grantedAt: 0, reason: '' },
-    }
-  }
-
   // 一旦发现画面已是纯休闲 feed（朋友圈/推荐流等），立即回收豁免
   if (screenText && LEISURE_FEED_RE.test(screenText)) {
     return {
@@ -128,6 +118,29 @@ export function evaluateContextualExemption(prevState = {}, input = {}, now = Da
       reason: 'leisure-feed-detected',
       until: 0,
       state: { pkg, until: 0, grantedAt: 0, reason: 'leisure-feed-detected' },
+    }
+  }
+
+  // 分屏双窗：工作应用同屏可见且当前非黑名单应用 -> 静默给予 Tier 0/1 临时语境豁免
+  const splitWork = Boolean(input.splitScreenVisible) && Boolean(input.workVisible) && tierInfo.tier !== TIER_BLACKLIST
+  if (splitWork) {
+    const next = { pkg, grantedAt: now, until: now + CONTEXT_EXEMPT_MS, reason: 'split-screen-work' }
+    return {
+      exempt: true,
+      reclaimed: false,
+      reason: 'split-screen-work',
+      until: next.until,
+      state: next,
+    }
+  }
+
+  if (tierInfo.tier !== TIER_CONTEXTUAL) {
+    return {
+      exempt: false,
+      reclaimed: Boolean(s.until && Number(s.until) > now),
+      reason: 'not-tier1',
+      until: 0,
+      state: { pkg: '', until: 0, grantedAt: 0, reason: '' },
     }
   }
 
@@ -143,12 +156,23 @@ export function evaluateContextualExemption(prevState = {}, input = {}, now = Da
   }
 
   const recentScreenshot = Number(input.recentScreenshotAt) > 0 && now - Number(input.recentScreenshotAt) <= CONTEXT_EXEMPT_MS
-  const recentShare = Number(input.recentShareAt) > 0 && now - Number(input.recentShareAt) <= CONTEXT_EXEMPT_MS
+  const recentShare = Boolean(input.recentShareIntent)
+    || (Number(input.recentShareAt) > 0 && now - Number(input.recentShareAt) <= CONTEXT_EXEMPT_MS)
   const recentWork = Number(input.recentWorkAt) > 0 && now - Number(input.recentWorkAt) <= CONTEXT_EXEMPT_MS && isGalleryOrFilePkg(pkg)
+  const quickReturn = Boolean(input.quickReturn)
+    || (Number(input.leftWorkAt) > 0 && now - Number(input.leftWorkAt) <= CONTEXT_EXEMPT_MS)
   const ocrStudyMatch = Boolean(screenText && TASK_OCR_RE.test(screenText))
 
-  if (recentScreenshot || recentShare || recentWork || ocrStudyMatch) {
-    const why = recentShare ? 'share-intent' : recentScreenshot ? 'recent-screenshot' : ocrStudyMatch ? 'ocr-task-context' : 'work-switch'
+  if (recentScreenshot || recentShare || recentWork || quickReturn || ocrStudyMatch) {
+    const why = recentShare
+      ? 'share-intent'
+      : recentScreenshot
+        ? 'recent-screenshot'
+        : ocrStudyMatch
+          ? 'ocr-task-context'
+          : quickReturn
+            ? 'quick-return'
+            : 'work-switch'
     const next = { pkg, grantedAt: now, until: now + CONTEXT_EXEMPT_MS, reason: why }
     return {
       exempt: true,
@@ -173,14 +197,15 @@ export function evaluateContextualExemption(prevState = {}, input = {}, now = Da
  * 1) 在 Tier 2 未知/桌面/浏览器内连续滞留 > 120 秒
  * 2) 近 3 分钟内在 >= 4 个非 Tier 0 应用之间高频来回跳切
  */
-export function detectDegradedEscape(state = {}, { phone, declaredApps = [], now = Date.now() } = {}) {
+export function detectDegradedEscape(state = {}, { phone, declaredApps = [], now = Date.now(), contextExempt = false } = {}) {
   const s = state && typeof state === 'object' ? { ...state } : {}
   const pkg = pkgStr(phone?.app)
   const tierInfo = classifyAppTier(pkg, declaredApps)
+  const unexemptGalleryOrFiles = Boolean(pkg) && isGalleryOrFilePkg(pkg) && !contextExempt
 
   let dwellPkg = String(s.dwellPkg || '')
   let dwellSince = Number(s.dwellSince) || 0
-  if (pkg && tierInfo.tier === TIER_AMBIGUOUS) {
+  if (pkg && (tierInfo.tier === TIER_AMBIGUOUS || unexemptGalleryOrFiles)) {
     if (dwellPkg !== pkg || !dwellSince) {
       dwellPkg = pkg
       dwellSince = now
@@ -204,6 +229,16 @@ export function detectDegradedEscape(state = {}, { phone, declaredApps = [], now
     return {
       degraded: true,
       reason: 'rapid-hopping',
+      distinctApps: distinct3m.size,
+      dwellSeconds: Math.round(dwellMs / 1000),
+      nextState: { dwellPkg, dwellSince, lastTriggerAt: now },
+    }
+  }
+
+  if (unexemptGalleryOrFiles && dwellMs > TIER2_WANDER_MS) {
+    return {
+      degraded: true,
+      reason: 'gallery-or-files-dwell',
       distinctApps: distinct3m.size,
       dwellSeconds: Math.round(dwellMs / 1000),
       nextState: { dwellPkg, dwellSince, lastTriggerAt: now },

@@ -56,20 +56,32 @@ export function buildTelemetrySnapshot(input = {}, now = Date.now()) {
   const state = cleanOne(input.state || 'standby', 24)
   const dept = cleanOne(input.department || '', 24)
   const bout = input.bout
+  const boutLeft = Number.isFinite(Number(bout?.leftMin)) ? ` 剩${Math.max(0, Math.round(Number(bout.leftMin)))}m` : ''
   const boutText = bout && bout.protocolId
-    ? `局:${cleanOne(bout.protocolId, 28)}(${bout.department ? cleanOne(bout.department, 16) : '未分部'})`
+    ? `局:${cleanOne(bout.protocolId, 28)}(${bout.department ? cleanOne(bout.department, 16) : '未分部'})${boutLeft}`
     : '无进行中的局'
   const phone = input.phone
+  const funToday = Number(input.funMinutesToday ?? phone?.funMinutesToday) || 0
+  const workToday = Number(input.workMinutesToday ?? phone?.workMinutesToday) || 0
+  const neutralToday = Number(input.neutralMinutesToday ?? phone?.neutralMinutesToday) || 0
+  const gradedParts = []
+  if (funToday > 0) gradedParts.push(`今日娱乐${Math.round(funToday)}m`)
+  if (workToday > 0) gradedParts.push(`正事${Math.round(workToday)}m`)
+  if (neutralToday > 0) gradedParts.push(`中性${Math.round(neutralToday)}m`)
+  const sw30 = input.switches30m ?? phone?.switches30m
+  const swText = Number.isFinite(Number(sw30)) ? ` 30m切${Math.max(0, Math.round(Number(sw30)))}次` : ''
   const appText = phone?.app
     ? `前台:${cleanOne(phone.label || phone.app, 24)} ${Math.round(Number(phone.minutes) || 0)}m` +
       (phone.fun ? '[娱乐]' : phone.work ? '[正事]' : '') +
-      (Number(phone.funMinutesToday) > 0 ? ` 今日娱乐${Math.round(Number(phone.funMinutesToday))}m` : '')
-    : '前台:未知'
+      (gradedParts.length ? ` ${gradedParts.join('/')}` : '') +
+      swText
+    : `前台:未知${gradedParts.length ? ' ' + gradedParts.join('/') : ''}${swText}`
   const guardParts = []
   if (input.withdrawalUntil && Number(input.withdrawalUntil) > now) guardParts.push('冷却撤回中')
   if (input.leaseApp) guardParts.push(`租约:${cleanOne(input.leaseApp, 24)}`)
   if (input.emergencyPassUntil && Number(input.emergencyPassUntil) > now) guardParts.push('紧急放行中')
   if (input.contextExempt) guardParts.push(`豁免:${cleanOne(input.contextExempt, 20)}`)
+  if (Number.isFinite(Number(input.bufferLeftMin))) guardParts.push(`缓冲余${Math.max(0, Math.round(Number(input.bufferLeftMin)))}m`)
   if (Number.isFinite(Number(input.credit))) guardParts.push(`信用${Math.round(Number(input.credit))}`)
   if (Number.isFinite(Number(input.earnedMin)) && Number(input.earnedMin) > 0) guardParts.push(`挣得娱乐${Math.round(Number(input.earnedMin))}m`)
 
@@ -79,7 +91,13 @@ export function buildTelemetrySnapshot(input = {}, now = Date.now()) {
     `[设备] ${appText}`,
     `[护栏] ${guardParts.length ? guardParts.join(' · ') : '正常监控'}`,
   ]
-  if (input.extraLine) lines.push(`[焦点] ${cleanOne(input.extraLine, 100)}`)
+  const wallGap = Number.isFinite(Number(input.minsSinceLastWallPass))
+    ? `距上次墙过关${Math.max(0, Math.round(Number(input.minsSinceLastWallPass)))}m`
+    : ''
+  if (input.extraLine || wallGap) {
+    const focusText = [input.extraLine ? cleanOne(input.extraLine, 80) : '', wallGap].filter(Boolean).join(' · ')
+    lines.push(`[焦点] ${cleanOne(focusText, 110)}`)
+  }
   return lines.slice(0, MAX_TELEMETRY_LINES)
 }
 

@@ -120,16 +120,23 @@ export function recordReplyOutcome(rawState, { verdict = '', hadTargetAppUse = f
  * 手机切 App 或开局等真实动作时检查是否满足立刻解除条件（或超时自然解除）。
  * @returns {{state:object, released:boolean, reason:string}}
  */
-export function checkWithdrawalRelease(rawState, { isTargetApp = false, actionHappened = false, now = Date.now() } = {}) {
+export function checkWithdrawalRelease(
+  rawState,
+  { isTargetApp = false, actionHappened = false, wallPassed = false, legalBuffer = false, now = Date.now() } = {},
+) {
   const cur = cleanWithdrawalState(rawState)
   const at = Number(now) || Date.now()
   if (cur.personaCooldownUntil <= 0) {
     // 非冷却期内若进入了目标 App，也顺便清掉之前的 1 次敷衍计数，避免旧敷衍跨工作时段累积。
-    if (isTargetApp && cur.streak > 0) return { state: { ...cur, streak: 0 }, released: false, reason: '' }
+    if ((isTargetApp || wallPassed || legalBuffer) && cur.streak > 0) {
+      return { state: { ...cur, streak: 0 }, released: false, reason: '' }
+    }
     return { state: cur, released: false, reason: '' }
   }
   let releaseReason = ''
   if (at >= cur.personaCooldownUntil) releaseReason = 'timeout'
+  else if (wallPassed) releaseReason = 'wall-pass'
+  else if (legalBuffer) releaseReason = 'legal-buffer'
   else if (isTargetApp) releaseReason = 'target-app'
   else if (actionHappened) releaseReason = 'action-started'
 
@@ -147,7 +154,18 @@ export function checkWithdrawalRelease(rawState, { isTargetApp = false, actionHa
   }
 }
 
-/** withdrawal 期的极简冷淡退场回复：不追问、不讲道理、不情绪安抚。 */
+const WITHDRAWAL_FLUFF_RE = /(?:我理解|抱抱|心疼|没关系|加油|辛苦了|别难过|怎么了|发生什么|聊聊吧|安慰)/
+
+/** withdrawal 期的极简冷淡退场回复：不追问、不讲道理、不情绪安抚；保留简短客观轻戳。 */
 export function withdrawalReply(names = { companion: '鱼丸' }) {
   return '行，我去忙别的了。你真动手了再叫我。'
+}
+
+export function filterWithdrawalOutput(text, opts = {}) {
+  const s = String(text || '').trim()
+  const names = opts.names || { companion: '鱼丸' }
+  if (!s || WITHDRAWAL_FLUFF_RE.test(s) || s.length > 42) {
+    return withdrawalReply(names)
+  }
+  return s
 }

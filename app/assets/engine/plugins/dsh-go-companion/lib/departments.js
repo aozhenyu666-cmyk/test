@@ -8,8 +8,12 @@
 //
 // 原则：用户绝不手工选部门，由系统依据输入缺口与当前状态自动流转并写入 bouts.department 与 ledger。
 
-import { updateBout } from './bouts.js'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { listBouts, updateBout } from './bouts.js'
+import { dayString } from './daily.js'
 import { appendLedger } from './ledger.js'
+import { JUDGE_FILE, writeObsidianCard } from './notes.js'
 
 export const DEPARTMENTS = Object.freeze(['dept:collect', 'dept:strategize', 'dept:dispatch', 'dept:govern'])
 
@@ -91,4 +95,245 @@ export function routeBoutDepartment({ db, home = '', boutId = '', currentDept = 
     })
   }
   return { ok: true, changed: true, department: next.department, reason: next.reason }
+}
+
+// ---------------------------------------------------------------- V3 四部 SOP 入口/出口硬门禁
+
+export const COLLECT_QUESTION_MAX_CHARS = 25
+export const DISPATCH_WINDOW_MS = 5 * 60_000
+export const ERR_NO_RAW_FACTS = 'ERR_NO_RAW_FACTS'
+
+/**
+ * 信息收集部 SOP：target_question (≤25 字) → raw_fact_cards (≥1 张) + 写入 Obsidian 收集箱/。
+ */
+export function collectDepartmentSop({
+  targetQuestion = '',
+  rawFacts = [],
+  source = '',
+  kb = '',
+  at = Date.now(),
+  tz = 'Asia/Shanghai',
+} = {}) {
+  const q = String(targetQuestion || '').trim()
+  if (!q) return { ok: false, department: 'dept:collect', code: 'ERR_EMPTY_QUESTION', message: '信息收集部必须给出明确目标问题。' }
+  if (q.length > COLLECT_QUESTION_MAX_CHARS) {
+    return {
+      ok: false,
+      department: 'dept:collect',
+      code: 'ERR_QUESTION_TOO_LONG',
+      limit: COLLECT_QUESTION_MAX_CHARS,
+      message: `target_question 超过 ${COLLECT_QUESTION_MAX_CHARS} 字上限（当前 ${q.length} 字）。`,
+    }
+  }
+  const items = (Array.isArray(rawFacts) ? rawFacts : [rawFacts])
+    .map((f, idx) => {
+      if (f && typeof f === 'object') {
+        const text = String(f.fact || f.text || f.summary || '').trim()
+        if (!text) return null
+        return {
+          id: String(f.id || `fact_${at}_${idx + 1}`),
+          target_question: q,
+          fact: text,
+          source: String(f.source || source || 'obsidian').trim(),
+          at: Number(f.at) || at,
+        }
+      }
+      const text = String(f || '').trim()
+      if (!text) return null
+      return {
+        id: `fact_${at}_${idx + 1}`,
+        target_question: q,
+        fact: text,
+        source: String(source || 'obsidian').trim(),
+        at,
+      }
+    })
+    .filter(Boolean)
+
+  if (items.length < 1) {
+    return { ok: false, department: 'dept:collect', code: ERR_NO_RAW_FACTS, message: '未产出至少 1 张原始事实卡（raw_fact_cards）。' }
+  }
+
+  let obsidianPath = ''
+  if (kb) {
+    obsidianPath = writeObsidianCard({
+      kb,
+      folder: '收集箱',
+      slug: `${dayString(at, tz)}-${q.slice(0, 16)}`,
+      title: q,
+      tags: ['collect', 'raw-fact'],
+      department: 'dept:collect',
+      body: items.map((c, i) => `${i + 1}. ${c.fact}${c.source ? `（来源：${c.source}）` : ''}`).join('\n'),
+      at,
+      tz,
+    })
+  }
+
+  return {
+    ok: true,
+    department: 'dept:collect',
+    target_question: q,
+    raw_fact_cards: items,
+    obsidianPath,
+  }
+}
+
+/**
+ * 谋划思考部 SOP 硬门禁：没有绑定 ≥1 张 raw_fact_cards 或未决问题卡时直接拒单 ERR_NO_RAW_FACTS。
+ */
+export function strategizeDepartmentSop({
+  rawFactCards = [],
+  openQuestionCard = null,
+  decision = '',
+  falsifyPath = '',
+  rationale = '',
+} = {}) {
+  const cards = Array.isArray(rawFactCards) ? rawFactCards.filter((c) => c && (c.fact || c.text || c.id)) : []
+  const hasQuestionCard = Boolean(
+    openQuestionCard &&
+      (String(openQuestionCard.id || '').trim() ||
+        String(openQuestionCard.target_question || openQuestionCard.question || '').trim()),
+  )
+  if (cards.length < 1 && !hasQuestionCard) {
+    return {
+      ok: false,
+      department: 'dept:strategize',
+      code: ERR_NO_RAW_FACTS,
+      message: '谋划思考部硬门禁拦截：缺少关联 raw_fact_cards 或未决问题卡，禁止无据决策。',
+    }
+  }
+  const coreDecision = String(decision || '').trim()
+  if (!coreDecision) {
+    return {
+      ok: false,
+      department: 'dept:strategize',
+      code: 'ERR_EMPTY_DECISION',
+      message: '单点决策结论不能为空。',
+    }
+  }
+  return {
+    ok: true,
+    department: 'dept:strategize',
+    single_point_decision: {
+      decision: coreDecision,
+      falsify_path: String(falsifyPath || '').trim(),
+      rationale: String(rationale || '').trim(),
+      linked_card_ids: cards.map((c, i) => String(c.id || `card_${i + 1}`)),
+      open_question_id: hasQuestionCard ? String(openQuestionCard.id || openQuestionCard.target_question || openQuestionCard.question) : '',
+    },
+  }
+}
+
+/** 计算近 7 天真实完成局数与每日排期上限（防过载排期）。 */
+export function rolling7dCompletedCap({ db = null, boutsHistory = [], now = Date.now(), minCap = 1, maxCap = 6 } = {}) {
+  const since = Number(now) - 7 * 86_400_000
+  const rows = db ? listBouts(db, { status: 'closed', limit: 200 }) : Array.isArray(boutsHistory) ? boutsHistory : []
+  const completed7d = rows.filter((b) => {
+    if (!b || b.status !== 'closed') return false
+    const closedAt = Number(b.closedAt ?? b.closed_at) || 0
+    const reason = String(b.closeReason ?? b.close_reason ?? 'done')
+    return closedAt >= since && closedAt <= Number(now) && reason === 'done'
+  }).length
+  const dailyCap = completed7d <= 0 ? minCap : Math.max(minCap, Math.min(maxCap, Math.ceil(completed7d / 7)))
+  return { completed7d, dailyCap }
+}
+
+/**
+ * 统筹规划部 SOP：≤ 5 分钟排期窗口 + 读取近 7 天真实完成局上限，拦截过载排期。
+ */
+export function dispatchDepartmentSop({
+  db = null,
+  boutsHistory = [],
+  proposedQueue = [],
+  windowStartMs = 0,
+  now = Date.now(),
+} = {}) {
+  if (Number(windowStartMs) > 0 && Number(now) - Number(windowStartMs) > DISPATCH_WINDOW_MS) {
+    return {
+      ok: false,
+      department: 'dept:dispatch',
+      code: 'ERR_DISPATCH_WINDOW_EXPIRED',
+      elapsedMs: Number(now) - Number(windowStartMs),
+      message: '统筹排期窗口已超过 5 分钟上限，需重新收敛后排期。',
+    }
+  }
+  const items = Array.isArray(proposedQueue) ? proposedQueue.filter(Boolean) : []
+  if (!items.length) {
+    return { ok: false, department: 'dept:dispatch', code: 'ERR_EMPTY_QUEUE', message: '排期队列为空。' }
+  }
+  const { completed7d, dailyCap } = rolling7dCompletedCap({ db, boutsHistory, now })
+  if (items.length > dailyCap) {
+    return {
+      ok: false,
+      department: 'dept:dispatch',
+      code: 'ERR_OVERSCHEDULED',
+      dailyCap,
+      completed7d,
+      requested: items.length,
+      message: `过载排期已拦截：近 7 天完成 ${completed7d} 局，当日上限 ${dailyCap} 局，请求了 ${items.length} 局。`,
+    }
+  }
+  return {
+    ok: true,
+    department: 'dept:dispatch',
+    dailyCap,
+    completed7d,
+    locked_plan_modality_queue: items.map((item, idx) => ({
+      ...(typeof item === 'object' ? item : { protocolId: String(item) }),
+      order: idx + 1,
+      locked: true,
+      lockedAt: now,
+    })),
+  }
+}
+
+/**
+ * 督办审计部 SOP：绑定 locked_plan_modality_queue -> daily_behavior_audit，晚间回写 判断.md。
+ */
+export function governDepartmentSop({
+  lockedQueue = [],
+  verdicts = [],
+  telemetry = {},
+  kb = '',
+  writeNightly = true,
+  at = Date.now(),
+  tz = 'Asia/Shanghai',
+} = {}) {
+  const queue = Array.isArray(lockedQueue) ? lockedQueue : []
+  const list = Array.isArray(verdicts) ? verdicts : []
+  const passed = list.filter((v) => v && v.pass === true).length
+  const failed = list.filter((v) => v && v.pass === false).length
+  const plannedCount = queue.length
+  const adherenceRate = plannedCount > 0 ? Number((passed / plannedCount).toFixed(2)) : 1
+  const audit = {
+    day: dayString(at, tz),
+    plannedCount,
+    passedCount: passed,
+    failedCount: failed,
+    adherenceRate,
+    funMinutes: Math.max(0, Math.round(Number(telemetry?.funMinutesToday ?? telemetry?.entertainmentMinutes) || 0)),
+    workMinutes: Math.max(0, Math.round(Number(telemetry?.workMinutesToday) || 0)),
+  }
+  let judgePath = ''
+  if (kb && writeNightly) {
+    try {
+      mkdirSync(kb, { recursive: true })
+      judgePath = join(kb, JUDGE_FILE)
+      const marker = `<!-- govern-audit:${audit.day} -->`
+      const cur = existsSync(judgePath) ? readFileSync(judgePath, 'utf8') : ''
+      if (!cur.includes(marker)) {
+        const line = `\n${marker}\n### ${audit.day} · 督办行为审计\n- 计划局数：${audit.plannedCount} | 通过：${audit.passedCount} | 未过：${audit.failedCount} | 履约率：${Math.round(audit.adherenceRate * 100)}%\n- 客观时长：正事 ${audit.workMinutes} 分钟 / 娱乐 ${audit.funMinutes} 分钟\n`
+        if (cur) appendFileSync(judgePath, line, 'utf8')
+        else writeFileSync(judgePath, `# 判断\n${line}`, 'utf8')
+      }
+    } catch {
+      judgePath = ''
+    }
+  }
+  return {
+    ok: true,
+    department: 'dept:govern',
+    daily_behavior_audit: audit,
+    judgePath,
+  }
 }

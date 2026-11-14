@@ -9,4 +9,11 @@
     <string name="tile_bouts">局</string>
     <string name="tile_bouts_running">进行中 · 今日 %1$d 拍</string>
     <string name="tile_bouts_today">今日 %1$d 拍</string>
+    <string name="watchdog_channel">无障碍保活看门狗</string>
+    <string name="watchdog_title">DSH Go 无障碍看门狗</string>
+    <string name="watchdog_ok">无障碍服务运行正常</string>
+    <string name="watchdog_off">手机控制开关已关闭</string>
+    <string name="watchdog_restored">无障碍服务已自动拉起恢复</string>
+    <string name="watchdog_needs_manual">请在系统设置中重新开启无障碍服务</string>
+    <string name="watchdog_needs_grant">缺少无障碍授权，请在设置中重新授权</string>
 </resources>

@@ -33,6 +33,8 @@ export const DAILY_EMERGENCY_PASS_CAP = 3
 export const MIN_ELASTIC_BUFFER_MIN = 15
 export const MAX_ELASTIC_BUFFER_MIN = 20
 export const MICRO_BOUT_MINUTES = 3
+export const MAX_RECAP_SECONDS = 30
+export const DAILY_SCHEDULING_FAILURE_FLOOR_CAP = 3
 
 const pkgValid = (p) => typeof p === 'string' && /^[A-Za-z0-9_.]{1,160}$/.test(p.trim())
 
@@ -40,7 +42,7 @@ export function emptyExternalState() {
   return {
     v: 1,
     lease: null,
-    emergencyPass: { until: 0, grantedAt: 0, reason: '', day: '', countToday: 0 },
+    emergencyPass: { until: 0, grantedAt: 0, pulledBackAt: 0, reason: '', day: '', countToday: 0 },
   }
 }
 
@@ -64,6 +66,7 @@ export function cleanExternalState(raw) {
     emergencyPass: {
       until: Math.max(0, Number(ep.until) || 0),
       grantedAt: Math.max(0, Number(ep.grantedAt) || 0),
+      pulledBackAt: Math.max(0, Number(ep.pulledBackAt) || 0),
       reason: String(ep.reason || '').slice(0, 80),
       day: String(ep.day || '').slice(0, 16),
       countToday: Math.max(0, Math.round(Number(ep.countToday) || 0)),
@@ -163,6 +166,56 @@ export function isEmergencyPassActive(rawState, now = Date.now()) {
   return state.emergencyPass.until > now
 }
 
+/** 3 分钟 Emergency Pass 到期强制拉回判定：每次到期仅触发一次 pull-back，保留当日计数以便限额审计。 */
+export function checkEmergencyPassPullBack(rawState, { now = Date.now(), pkg = '' } = {}) {
+  const state = cleanExternalState(rawState)
+  const ep = state.emergencyPass
+  if (ep.until > 0 && ep.until <= now && ep.pulledBackAt < ep.until) {
+    return {
+      pullBack: true,
+      reason: 'emergency-pass-expired',
+      expiredAt: ep.until,
+      grantedAt: ep.grantedAt,
+      passReason: ep.reason,
+      pkg: String(pkg || ''),
+      state: { ...state, emergencyPass: { ...ep, pulledBackAt: now } },
+    }
+  }
+  return { pullBack: false, reason: '', expiredAt: 0, grantedAt: ep.grantedAt, passReason: ep.reason, pkg: String(pkg || ''), state }
+}
+
+/** 外部抓取失败时触发 30 秒极简口述/文字复盘兜底（MAX_RECAP_SECONDS = 30）。 */
+export function evaluateExternalRecapFallback({ captureFailed = false, captureText = '', spokenOrTextRecap = '', durationSec = 0, agentId = 'gemini_live' } = {}) {
+  const extracted = !captureFailed ? extractAgentRecap(captureText) : ''
+  if (extracted) {
+    return { ok: true, mode: 'captured', agentId, maxSeconds: MAX_RECAP_SECONDS, durationSec: 0, degraded: false, recap: extracted, prompt: '' }
+  }
+  const cleanSpoken = String(spokenOrTextRecap || '').trim()
+  if (cleanSpoken) {
+    const clippedSec = Math.min(MAX_RECAP_SECONDS, Math.max(1, Math.round(Number(durationSec) || MAX_RECAP_SECONDS)))
+    return {
+      ok: true,
+      mode: 'spoken_fallback_30s',
+      agentId,
+      maxSeconds: MAX_RECAP_SECONDS,
+      durationSec: clippedSec,
+      degraded: true,
+      recap: cleanSpoken.slice(0, 160),
+      prompt: '外部抓取失败，用 30 秒口述/一句话复盘：完成了什么、卡在哪、下一步是什么？',
+    }
+  }
+  return {
+    ok: false,
+    mode: 'awaiting_30s_recap',
+    agentId,
+    maxSeconds: MAX_RECAP_SECONDS,
+    durationSec: 0,
+    degraded: true,
+    recap: '',
+    prompt: '外部抓取失败，请补一段不超过 30 秒的语音或文字复盘（完成/卡点/下一步）。',
+  }
+}
+
 /**
  * 弹性缓冲期（15–20 分钟）与 scheduling_failure 降级：
  * 到计划起跑时间超出 bufferMin 仍未开局，判定为调度过载（scheduling_failure），
@@ -188,4 +241,26 @@ export function evaluateElasticBuffer({ plannedAt = 0, startedAt = 0, now = Date
       why: `超出 ${clampedMin} 分钟弹性缓冲未启动，已归因 scheduling_failure，降级为 3 分钟微局着陆。`,
     },
   }
+}
+
+/** 当日 scheduling_failure 累计 >= 3 次 -> 自动进入低电量保底模式（low_power_floor），当天仅保留 3 分钟微局。 */
+export function evaluateDailySchedulingFloor({ failureCountToday = 0, cap = DAILY_SCHEDULING_FAILURE_FLOOR_CAP } = {}) {
+  const count = Math.max(0, Math.round(Number(failureCountToday) || 0))
+  const threshold = Math.max(1, Math.round(Number(cap) || DAILY_SCHEDULING_FAILURE_FLOOR_CAP))
+  if (count >= threshold) {
+    return {
+      lowPowerFloor: true,
+      mode: 'low_power_floor',
+      failureCountToday: count,
+      threshold,
+      preserveOnly: 'micro_landing_3m',
+      fallbackBout: {
+        protocolId: 'micro_landing_3m',
+        minutes: MICRO_BOUT_MINUTES,
+        department: 'dept:dispatch',
+        why: `今日已累计 ${count} 次 scheduling_failure（>= ${threshold}），自动进入低电量保底模式（low_power_floor），仅保留 3 分钟微局着陆。`,
+      },
+    }
+  }
+  return { lowPowerFloor: false, mode: 'normal', failureCountToday: count, threshold, preserveOnly: '', fallbackBout: null }
 }

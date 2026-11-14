@@ -1097,7 +1097,7 @@ class RuntimeController private constructor(private val app: Context) : DshProce
             val policyDelay = SafePolicy.autoRestartDelay(f.kind, code, upMs, autoRestarts.toList(), now)
             val delay = policyDelay?.takeIf { !outcome.restartSafe && DshService.isRunning }
             EngineExitLog.engineExit(app, code, expected = false, kind = f.kind.wire, upMs = upMs, restartInMs = delay,
-                recentRestarts = autoRestarts.count { now - it < SafePolicy.RESTART_WINDOW_MS }, tail = tail)
+                recentRestarts = autoRestarts.count { now - it < 600_000L }, tail = tail)
             if (policyDelay != null && delay == null && !outcome.restartSafe) {
                 EngineExitLog.note(app, "restartSkipped", "service not running")
             }

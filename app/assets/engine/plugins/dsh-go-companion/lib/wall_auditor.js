@@ -14,8 +14,8 @@
 
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { evaluateSixDiceSlot, slotsForStage } from './six_dice.js'
-import { candidateNotesForLinking } from './notes.js'
+import { buildStrokePlan, evaluateSixDiceSlot, evaluateStroke, slotsForStage } from './six_dice.js'
+import { candidateNotesForLinking, writeBidirectionalWikiLinks } from './notes.js'
 
 export const WALL_LABEL = '〔墙〕'
 /** 一份笔记要长多少才算"写了东西"：大约一两百个汉字。改个错别字、加个空行都不够。 */
@@ -313,5 +313,49 @@ export async function auditSixDiceSlot(input = {}, deps = {}) {
     model: deps.model || '',
     timeoutMs: input.timeoutMs || deps.timeoutMs || 8_000,
   })
-  return { ...res, candidateNotes }
+  return { ...res, l2_fallback_offline: Boolean(res?.l2_fallback_offline), candidateNotes }
 }
+
+/** 运行 V3 六拍认知槽（含双轨计划、确定性犯规拦截、L2 离线降级标记及第六拍双向 WikiLink 回写）。 */
+export async function auditStrokeSlot(input = {}, deps = {}) {
+  const stroke = String(input.stroke || 'stroke_1_recall')
+  const notesDir = String(deps.notesDir || input.notesDir || '')
+  const candidateNotes = Array.isArray(input.candidateNotes)
+    ? input.candidateNotes.slice(0, 3)
+    : (stroke === 'stroke_6_systematize' && notesDir
+        ? candidateNotesForLinking(notesDir, {
+            stage3Note: input.stage3Note || '',
+            query: input.query || input.sourceContext || input.answer || '',
+            limit: 3,
+          })
+        : [])
+  const res = await evaluateStroke({
+    stroke,
+    phase: input.phase || 'A',
+    track: input.track || 'multi_shuttle_drill',
+    prompt: input.prompt || '',
+    answer: input.answer || '',
+    sourceContext: String(input.sourceContext || ''),
+    anchors: Array.isArray(input.anchors) ? input.anchors : [],
+    retries: Number(input.retries ?? input.failures) || 0,
+    linkedNotes: candidateNotes,
+    stream: deps.stream || null,
+    provider: deps.provider || '',
+    model: deps.model || '',
+    timeoutMs: input.timeoutMs || deps.timeoutMs || 8_000,
+  })
+  let wikiWriteback = null
+  if (res.pass && stroke === 'stroke_6_systematize' && notesDir && input.writeBackLinks !== false && input.noteTitle) {
+    wikiWriteback = writeBidirectionalWikiLinks({
+      notesDir,
+      kb: deps.kb || input.kb || '',
+      noteTitle: input.noteTitle,
+      noteSlug: input.noteSlug || '',
+      body: input.answer || '',
+      candidateNotes,
+    })
+  }
+  return { ...res, l2_fallback_offline: Boolean(res?.l2_fallback_offline), candidateNotes, wikiWriteback }
+}
+
+export { buildStrokePlan }

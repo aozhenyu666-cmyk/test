@@ -182,6 +182,7 @@ export async function evaluateSixDiceSlot({
       failures: 0,
       anchorHint: '',
       judgedBy: 'code-fallback',
+      l2_fallback_offline: true,
     }
   }
 
@@ -222,11 +223,12 @@ export async function evaluateSixDiceSlot({
       failures: 0,
       anchorHint: '',
       judgedBy: 'timeout-fallback',
+      l2_fallback_offline: true,
     }
   }
 
   if (parsed.pass) {
-    return { ...parsed, failures: 0, anchorHint: '', judgedBy: 'l2-model' }
+    return { ...parsed, failures: 0, anchorHint: '', judgedBy: 'l2-model', l2_fallback_offline: false }
   }
   const nextFailures = Number(failures) + 1
   return {
@@ -234,5 +236,286 @@ export async function evaluateSixDiceSlot({
     failures: nextFailures,
     anchorHint: failureAnchorHint(nextFailures, { sourceText: sourceContext, anchors }),
     judgedBy: 'l2-model',
+    l2_fallback_offline: false,
+  }
+}
+
+// ---------------------------------------------------------------- V3 羽毛球六拍认知引擎 (Dual-Track + Foul Detection + Scaffold)
+
+export const STROKE_ORDER = Object.freeze([
+  'stroke_1_recall',
+  'stroke_2_condense',
+  'stroke_3_question',
+  'stroke_4_predict',
+  'stroke_5_associate',
+  'stroke_6_systematize',
+])
+
+export const FOUL_CODES = Object.freeze([
+  'foul:copied_verbatim',
+  'foul:abstract_impression',
+  'foul:vague_modifier',
+  'foul:unfalsifiable_question',
+  'foul:tautology_bet',
+  'foul:out_of_bounds_daydream',
+  'foul:weak_link_relation',
+])
+
+export const STROKES = Object.freeze({
+  stroke_1_recall: {
+    id: 'stroke_1_recall',
+    name: '第一拍·闭卷复述',
+    dice: 1,
+    minChars: 10,
+    ask: '脱离原文，用自己的话复述刚看到的核心事实与条件变化。',
+    schema: { requiredFields: ['observation'], closedBook: true },
+  },
+  stroke_2_condense: {
+    id: 'stroke_2_condense',
+    name: '第二拍·极简浓缩',
+    dice: 1,
+    minChars: 8,
+    ask: '去掉形容词与猜测，一句话钉死主干命题与关键数字。',
+    schema: { requiredFields: ['coreThesis'], forbidVague: true },
+  },
+  stroke_3_question: {
+    id: 'stroke_3_question',
+    name: '第三拍·追问反转',
+    dice: 4,
+    minChars: 10,
+    ask: '提出一个可证伪的反转问题：若哪个前置条件不成立，结论立刻推翻？',
+    schema: { requiredFields: ['unknownVar', 'falsifyCondition'], requireQuestion: true },
+  },
+  stroke_4_predict: {
+    id: 'stroke_4_predict',
+    name: '第四拍·两段式预判推演',
+    dice: 2,
+    minChars: 10,
+    ask: 'Phase A 先押注可观测结果（不含同义反复），Phase B 再对照实际结果归因。',
+    phases: ['A', 'B'],
+    schema: { requiredFields: ['hypothesis', 'observableOutcome'], twoPhase: true },
+  },
+  stroke_5_associate: {
+    id: 'stroke_5_associate',
+    name: '第五拍·边界受限联想',
+    dice: 3,
+    minChars: 12,
+    ask: '只准在同构机制或历史已验证案例里类比，说清共同因果结构与边界差异。',
+    schema: { requiredFields: ['targetConcept', 'relationMechanism'], bounded: true },
+  },
+  stroke_6_systematize: {
+    id: 'stroke_6_systematize',
+    name: '第六拍·入网立规联结',
+    dice: 5,
+    minChars: 12,
+    ask: '将本轮结论收敛为可执行规则，并双向联结 ≤3 篇已有笔记 [[WikiLink]]。',
+    schema: { requiredFields: ['ruleOrPrinciple', 'linkedNotes'], maxCandidates: 3, bidirectional: true },
+  },
+})
+
+const ABSTRACT_IMPRESSION_RE = /(?:很有道理|非常有道理|收获很大|很有启发|太厉害了|非常震撼|感觉很棒|写得真好|挺有意思|学到了不少)/
+const VAGUE_MODIFIER_RE = /(?:大概|也许|可能|差不多|某种程度|基本|比较|一般般|还行|稍微|有点)/g
+const FALSIFY_MARKER_RE = /(?:如果|若|一旦|假设|什么条件|怎么证明|能否证伪|哪一步|反例|推翻|否则|还是|究竟|为何)/
+const TAUTOLOGY_BET_RE = /(?:做了就会变好|只要做了就能完成|不拖延就能成功|赢了就赢|有效果就是有效|认真学就能学会|努力就会成功|没问题就是正常)/
+const DAYDREAM_RE = /(?:财务自由|一夜暴富|彻底逆袭|外星人|穿越|直接无敌|全宇宙|明年上市|躺着赚钱)/
+const WEAK_LINK_RE = /(?:感觉有点像|都有道理|莫名觉得像|顺口一提|大概是一回事|说不上来但很像)/
+const MECHANISM_LINK_RE = /(?:因为|机制|结构|因果|差异|反比|正比|对应|条件|约束|前提|导致)/
+
+function maxVerbatimOverlapChars(source, answer) {
+  const s = String(source || '').replace(/\s+/g, '')
+  const a = String(answer || '').replace(/\s+/g, '')
+  if (s.length < 12 || a.length < 12) return 0
+  let longest = 0
+  for (let i = 0; i <= a.length - 12; i++) {
+    const sub = a.slice(i, i + 12)
+    if (s.includes(sub)) {
+      let len = 12
+      while (i + len < a.length && s.includes(a.slice(i, i + len + 1))) len++
+      if (len > longest) longest = len
+    }
+  }
+  return longest
+}
+
+export function detectStrokeFoul({
+  stroke = 'stroke_1_recall',
+  phase = 'A',
+  answer = '',
+  sourceContext = '',
+  linkedNotes = [],
+} = {}) {
+  const text = String(answer || '').trim()
+  const s = String(stroke || 'stroke_1_recall')
+
+  if (s === 'stroke_1_recall' && sourceContext) {
+    const aNorm = text.replace(/\s+/g, '')
+    const overlap = maxVerbatimOverlapChars(sourceContext, text)
+    if (overlap >= 18 || (aNorm.length >= 12 && overlap >= Math.floor(aNorm.length * 0.78))) {
+      return { foulCode: 'foul:copied_verbatim', directive: '犯规（照抄原文）：请闭卷用自己的语言重构核心事实，勿原句搬运。' }
+    }
+  }
+
+  const anchorsNow = concreteNouns(text)
+  const hasDigit = /\d/.test(text)
+  const hasMechanismTerm = /(?:对比|因为|由于|实验|小时|分钟|%|题目|规则|公式|条件|机制|样本|因果|变量|模型|数据)/.test(text)
+  if (ABSTRACT_IMPRESSION_RE.test(text) && !hasDigit && !hasMechanismTerm) {
+    return { foulCode: 'foul:abstract_impression', directive: '犯规（空洞感想）：禁止感叹或抒情评价，请给出具体对象与客观指标。' }
+  }
+
+  const vagueMatches = text.match(VAGUE_MODIFIER_RE) || []
+  if ((s === 'stroke_2_condense' && vagueMatches.length >= 1 && !hasDigit) || vagueMatches.length >= 2) {
+    return { foulCode: 'foul:vague_modifier', directive: '犯规（模糊修饰词）：去掉「大概/可能/差不多」，钉死具体数值或主干结论。' }
+  }
+
+  if (s === 'stroke_3_question') {
+    if (!/[？?]/.test(text) || !FALSIFY_MARKER_RE.test(text)) {
+      return { foulCode: 'foul:unfalsifiable_question', directive: '犯规（不可证伪提问）：必须提出具体反证条件或哪一步条件失效会推翻结论。' }
+    }
+  }
+
+  if (s === 'stroke_4_predict') {
+    if (DAYDREAM_RE.test(text)) {
+      return { foulCode: 'foul:out_of_bounds_daydream', directive: '犯规（越界空想）：预判必须限定在当前局/本任务可观测结果内。' }
+    }
+    if (TAUTOLOGY_BET_RE.test(text) || (String(phase).toUpperCase() === 'A' && countChars(text) < 12 && !hasDigit)) {
+      return { foulCode: 'foul:tautology_bet', directive: '犯规（同义反复押注）：Phase A 押注必须给出可证伪的时间/数量/错误边界。' }
+    }
+  }
+
+  if (s === 'stroke_5_associate') {
+    if (DAYDREAM_RE.test(text)) {
+      return { foulCode: 'foul:out_of_bounds_daydream', directive: '犯规（越界空想）：联想必须收束在与当前任务同构的真实机制内。' }
+    }
+    if (WEAK_LINK_RE.test(text) || !MECHANISM_LINK_RE.test(text)) {
+      return { foulCode: 'foul:weak_link_relation', directive: '犯规（弱联系牵强类比）：必须写明共同因果机制或关键边界差异。' }
+    }
+  }
+
+  if (s === 'stroke_6_systematize') {
+    const hasLinkText = /\[\[[^\]]+\]\]/.test(text)
+    if (!hasLinkText && (!Array.isArray(linkedNotes) || linkedNotes.length === 0)) {
+      return { foulCode: 'foul:weak_link_relation', directive: '犯规（未形成知识联结）：第 6 拍须明确关联已有笔记 [[WikiLink]]。' }
+    }
+  }
+
+  return { foulCode: '', directive: '' }
+}
+
+export function buildStrokePlan({
+  track = 'multi_shuttle_drill',
+  strokes = null,
+  topic = '',
+  anchors = [],
+  candidateNotes = [],
+} = {}) {
+  const normalizedTrack = track === 'department_match' ? 'department_match' : 'multi_shuttle_drill'
+  const selectedIds = Array.isArray(strokes) && strokes.length
+    ? strokes.filter((id) => Boolean(STROKES[id]))
+    : normalizedTrack === 'department_match'
+      ? [...STROKE_ORDER]
+      : ['stroke_1_recall', 'stroke_2_condense', 'stroke_4_predict']
+  const cleanTopic = String(topic || '').trim().slice(0, 40)
+  const hint = Array.isArray(anchors) && anchors.length ? `（锚点：${anchors.slice(0, 2).join(' / ')}）` : ''
+  const slots = selectedIds.map((id, idx) => {
+    const meta = STROKES[id]
+    return {
+      order: idx + 1,
+      stroke: meta.id,
+      slot: meta.id,
+      dice: meta.dice,
+      name: meta.name,
+      track: normalizedTrack,
+      schema: meta.schema,
+      prompt: (cleanTopic ? `围绕「${cleanTopic}」：` : '') + meta.ask + hint,
+      ...(meta.phases ? { phases: meta.phases } : {}),
+      ...(id === 'stroke_6_systematize' && Array.isArray(candidateNotes)
+        ? { candidateNotes: candidateNotes.slice(0, 3) }
+        : {}),
+    }
+  })
+  return { track: normalizedTrack, slots }
+}
+
+/**
+ * V3 羽毛球六拍闭环质检：
+ * 1) 先跑 L1 确定性犯规检查（照抄/空洞/模糊/不可证伪/同义反复/越界/弱联结）；
+ * 2) retries === 2（或 >=2）时注入 2-3 个具体观察锚点 scaffold_hints；
+ * 3) 离线或 >8s 超时走 l2_fallback_offline=true 降级放行。
+ */
+export async function evaluateStroke({
+  stroke = 'stroke_1_recall',
+  phase = 'A',
+  track = 'multi_shuttle_drill',
+  prompt = '',
+  answer = '',
+  sourceContext = '',
+  anchors = [],
+  retries = 0,
+  linkedNotes = [],
+  stream = null,
+  provider = '',
+  model = '',
+  timeoutMs = 8_000,
+} = {}) {
+  const meta = STROKES[stroke] || STROKES.stroke_1_recall
+  const normalizedRetries = Math.max(0, Math.round(Number(retries) || 0))
+  const scaffoldHints = normalizedRetries === 2
+    ? extractObservationAnchors(sourceContext, anchors, 3)
+    : []
+
+  const foul = detectStrokeFoul({ stroke: meta.id, phase, answer, sourceContext, linkedNotes })
+  if (foul.foulCode) {
+    return {
+      pass: false,
+      code: foul.foulCode,
+      foulCode: foul.foulCode,
+      stroke: meta.id,
+      phase,
+      track,
+      directive: foul.directive,
+      retries: normalizedRetries + 1,
+      scaffold_hints: normalizedRetries === 2
+        ? (scaffoldHints.length >= 2 ? scaffoldHints : extractObservationAnchors(sourceContext, ['核心对象', '约束条件', '变化量'], 3))
+        : [],
+      judgedBy: 'code-foul',
+      l2_fallback_offline: false,
+    }
+  }
+
+  const base = await evaluateSixDiceSlot({
+    dice: meta.dice,
+    prompt: prompt || meta.ask,
+    answer,
+    sourceContext,
+    anchors,
+    failures: normalizedRetries,
+    stream,
+    provider,
+    model,
+    timeoutMs,
+  })
+
+  if (!base.pass) {
+    return {
+      ...base,
+      stroke: meta.id,
+      phase,
+      track,
+      foulCode: '',
+      retries: normalizedRetries + 1,
+      scaffold_hints: normalizedRetries === 2
+        ? (scaffoldHints.length >= 2 ? scaffoldHints : extractObservationAnchors(sourceContext, ['核心对象', '约束条件', '变化量'], 3))
+        : [],
+    }
+  }
+
+  return {
+    ...base,
+    stroke: meta.id,
+    phase,
+    track,
+    foulCode: '',
+    retries: 0,
+    scaffold_hints: [],
   }
 }

@@ -127,12 +127,19 @@ import {
   funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from './followup.js'
 import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState, toolsElsewhere, toolsFor } from './machine.js'
-import { buildTelemetrySnapshot } from './memory_blocks.js'
-import { checkWithdrawalRelease, cleanWithdrawalState, isInWithdrawal, recordReplyOutcome, withdrawalReply } from './withdrawal.js'
-import { STRATEGIST_AUDIT_DIRECTIVE, antiSycophancyRewriteHint, detectSycophancy, stripStrategistAudit } from './strategist_audit.js'
+import { CORE_TOKEN_LIMIT, buildTelemetrySnapshot, estimateTokens } from './memory_blocks.js'
+import { checkWithdrawalRelease, cleanWithdrawalState, filterWithdrawalOutput, isInWithdrawal, recordReplyOutcome, withdrawalReply } from './withdrawal.js'
+import {
+  STRATEGIST_AUDIT_DIRECTIVE, antiSycophancyRewriteHint, detectSycophancy, detectTelemetryContradiction,
+  stripStrategistAudit, telemetryContradictionHint,
+} from './strategist_audit.js'
 import { inferDepartment, isValidDepartment } from './departments.js'
 import { TIER_AMBIGUOUS, TIER_CONTEXTUAL, TIER_EXEMPT, classifyAppTier, detectDegradedEscape, evaluateContextualExemption } from './app_governance.js'
-import { activeAppLease, cleanExternalState, evaluateElasticBuffer, grantEmergencyPass, isEmergencyPassActive, issueAppLease, revokeAppLease } from './external_agents.js'
+import {
+  activeAppLease, checkEmergencyPassPullBack, cleanExternalState, evaluateDailySchedulingFloor,
+  evaluateElasticBuffer, evaluateExternalRecapFallback, grantEmergencyPass, isEmergencyPassActive,
+  issueAppLease, revokeAppLease,
+} from './external_agents.js'
 
 /**
  * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
@@ -159,7 +166,7 @@ import { DEPTS, TRIGGER_TEXT, blockLine, fixedBlocksOf, lateLine, markBlockDone,
 import { DEPARTMENTS, DEPT_DUTY, appendSlot, behaviorReport, completeOf, depositLines, depositOf, missingText, normalizeEntry, reconcileEntry, slotAsk, statusOf, withEntry } from './deposit.js'
 import { AUDIT_CODES, APPEAL_CODES, APPEAL_MAX_PER_DAY, appealLeft, appealVoice, verdictVoice, wallThread } from './wall_voice.js'
 import {
-  SCREENSHOT_DIRS, auditSixDiceSlot, auditTask, baselineFor, buildSixDicePlan, checkMorningTasks, evidenceType,
+  SCREENSHOT_DIRS, auditSixDiceSlot, auditStrokeSlot, auditTask, baselineFor, buildSixDicePlan, buildStrokePlan, checkMorningTasks, evidenceType,
   listScreenshots, loadWallMemory, noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
 } from './wall_auditor.js'
 import { executeCapability } from './capabilities.js'
@@ -613,6 +620,16 @@ export function apply(ctx) {
   const saveBrain = (b) => writeJson(stateFile('brain.json'), b)
   const loadWithdrawal = () => cleanWithdrawalState(readState(stateFile('withdrawal.json'), null))
   const saveWithdrawal = (w) => writeJson(stateFile('withdrawal.json'), w)
+  const releaseWithdrawalOnAction = (opts = {}, now = Date.now()) => {
+    const wr = checkWithdrawalRelease(loadWithdrawal(), { ...opts, now })
+    if (wr.released) {
+      saveWithdrawal(wr.state)
+      record({ state: 'withdrawal-release', at: now, reason: wr.reason, ...(opts.app ? { app: opts.app } : {}) })
+    } else if ((opts.isTargetApp || opts.wallPassed || opts.legalBuffer) && wr.state.streak === 0) {
+      saveWithdrawal(wr.state)
+    }
+    return wr
+  }
   const loadAppGov = () => {
     const raw = readState(stateFile('app-gov.json'), null)
     return raw && typeof raw === 'object' ? { ...raw } : { contextExempt: {}, escape: {}, recentWorkAt: 0, recentScreenshotAt: 0, recentShareAt: 0 }
@@ -2766,6 +2783,7 @@ export function apply(ctx) {
     const rate = wallRate(now)
     const done = (pass, data, missing = []) => {
       record({ state: 'wall-audit', at: now, kind, pass, by })
+      if (pass) releaseWithdrawalOnAction({ wallPassed: true, actionHappened: true }, now)
       const text = wallText({ title: label, data, pass, missing, rate })
       vaultAudit(now, text)
       return { ok: true, pass, text }
@@ -2829,6 +2847,7 @@ export function apply(ctx) {
       rows.forEach((x, i) => vaultTask(now, i, x.t, x.r.verdict === 'done' ? '完成' : x.r.verdict === 'partial' ? '一半' : '未完成', x.r.why))
       const text = wallText({ title: label + '：有证据完成 ' + ok + '/' + rows.length + '，结果作用于明天', data, pass: true, rate: wallRate(now) })
       record({ state: 'wall-audit', at: now, kind, pass: true, by })
+      releaseWithdrawalOnAction({ wallPassed: true, actionHappened: true }, now)
       vaultAudit(now, text)
       return { ok: true, pass: true, text }
     }
@@ -3791,6 +3810,7 @@ export function apply(ctx) {
     }
     if (action === 'relax') {
       const r = requestRelax(now, tz, { atHour: body?.atHour, minutes: body?.minutes, reason: body?.reason, by: 'ui' })
+      if (r.ok) releaseWithdrawalOnAction({ legalBuffer: true, actionHappened: true }, now)
       return { ...status(), ok: r.ok, error: r.ok ? undefined : { code: r.code, message: r.text }, text: r.text }
     }
     if (action === 'tighten') {
@@ -3822,6 +3842,32 @@ export function apply(ctx) {
         state: 'wall-dice-judge', at: now, dice, slot: out.slot,
         pass: out.pass, code: out.code, judgedBy: out.judgedBy,
       })
+      if (out.pass) releaseWithdrawalOnAction({ wallPassed: true, actionHappened: true }, now)
+      return { v: 1, ok: Boolean(out.pass), ...out }
+    }
+    if (action === 'stroke-slots') {
+      const plan = buildStrokePlan({
+        track: body?.track || 'multi_shuttle_drill',
+        strokes: body?.strokes,
+        topic: body?.topic || '',
+        anchors: body?.anchors || [],
+      })
+      return { v: 1, ok: true, ...plan }
+    }
+    if (action === 'stroke-judge') {
+      const target = judgeTargetOf(ctx, config.sessionId, config) || {}
+      const out = await auditStrokeSlot(body || {}, {
+        notesDir: notesDir(),
+        kb: kbDir(notesDir(), home()),
+        stream: streamOf(),
+        provider: target.provider || '',
+        model: target.model || '',
+      })
+      record({
+        state: 'wall-stroke-judge', at: now, stroke: out.stroke,
+        pass: out.pass, code: out.code, foulCode: out.foulCode || '', judgedBy: out.judgedBy,
+      })
+      if (out.pass) releaseWithdrawalOnAction({ wallPassed: true, actionHappened: true }, now)
       return { v: 1, ok: Boolean(out.pass), ...out }
     }
     if (action === 'capability') {
@@ -3901,6 +3947,7 @@ export function apply(ctx) {
       },
     )
     record({ state: 'appeal', at: now, target: at, evidence, code: r.code, pass: r.pass })
+    if (r.pass) releaseWithdrawalOnAction({ wallPassed: true, actionHappened: true }, now)
     return {
       v: 1, ok: true,
       appeal: { code: r.code, pass: r.pass, text: verdictVoice(r.code, r.vars), left: left - 1, appealLeft: left - 1 },
@@ -4768,11 +4815,37 @@ export function apply(ctx) {
     const govNow = loadAppGov()
     const leaseNow = activeAppLease(extNow, nowMs)
     const loreText = matchActiveLorebook(role, mainState?.id || 'standby', nowMs)
-    const telemetryText = buildTelemetrySnapshot({
+    const gradedSummary = (() => {
+      const appMap = appsOf()
+      let fun = 0
+      let work = 0
+      let neutral = 0
+      const todayRows = Array.isArray(lastPhone?.today) ? lastPhone.today : []
+      for (const row of todayRows) {
+        const m = Math.max(0, Number(row?.minutes) || 0)
+        const r = roleOf(appMap, row?.app)
+        if (r === 'fun' || row?.fun) fun += m
+        else if (r === 'work' || row?.work) work += m
+        else neutral += m
+      }
+      if (!fun && Number(lastPhone?.funMinutesToday) > 0) fun = Number(lastPhone.funMinutesToday)
+      return { fun, work, neutral }
+    })()
+    const ledgerRecent = readLedger(home(), 200)
+    const lastWallPassAt = [...ledgerRecent].reverse().find((e) => e?.state === 'wall-audit' && e.pass === true)?.at
+    const minsSinceLastWallPass = lastWallPassAt ? Math.max(0, Math.round((nowMs - Number(lastWallPassAt)) / 60_000)) : undefined
+    const lastHeard = [...ledgerRecent].reverse().find((e) => e?.state === 'heard' && typeof e.text === 'string')?.text || ''
+    const telemetrySnapshotLines = buildTelemetrySnapshot({
       state: mainState?.id || 'standby',
       department: live?.department || '',
       bout: live?.protocol ? { protocolId: live.protocol.id, department: live.department || '' } : null,
       phone: lastPhone,
+      funMinutesToday: gradedSummary.fun,
+      workMinutesToday: gradedSummary.work,
+      neutralMinutesToday: gradedSummary.neutral,
+      switches30m: Number.isFinite(Number(lastPhone?.switches30m)) ? Number(lastPhone.switches30m) : undefined,
+      bufferLeftMin: typeof elasticBufferLeftMin === 'function' ? elasticBufferLeftMin(nowMs) : undefined,
+      minsSinceLastWallPass,
       withdrawalUntil: wNow.personaCooldownUntil,
       leaseApp: leaseNow?.agentId || '',
       emergencyPassUntil: extNow.emergencyPass?.until || 0,
@@ -4781,7 +4854,15 @@ export function apply(ctx) {
       earnedMin: earnedRt.leftOf(todayEarned(nowMs, zoneOr(config.timeZone))),
       extraLine: freshPcLine(nowMs),
       timeZone: zoneOr(config.timeZone),
-    }, nowMs).join('\n')
+    }, nowMs)
+    const telemetryText = telemetrySnapshotLines.join('\n')
+    const contradiction = role === 'strategist'
+      ? detectTelemetryContradiction(lastHeard, {
+          lines: telemetrySnapshotLines,
+          funMinutesToday: gradedSummary.fun,
+          phone: lastPhone,
+        })
+      : null
     const blocks = [
       {
         id: 'persona',
@@ -4796,6 +4877,9 @@ export function apply(ctx) {
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
       { id: 'telemetry', layer: 'content', priority: 9, text: telemetryText },
       ...(loreText ? [{ id: 'lorebook', layer: 'content', priority: 7, text: '【情境记忆】\n' + loreText }] : []),
+      ...(contradiction?.contradicted
+        ? [{ id: 'telemetry-contradiction', layer: 'state', priority: 72, text: telemetryContradictionHint(contradiction) }]
+        : []),
       ...(role === 'companion' && isInWithdrawal(wNow, nowMs)
         ? [{ id: 'withdrawal', layer: 'state', priority: 70, text: '当前处于冷静撤回期：停止哄人、追问或情绪安抚，仅简短回应等待实质行动。' }]
         : []),
@@ -4830,7 +4914,7 @@ export function apply(ctx) {
     // 账本那边有按行位置断言的既有用例，不能被每轮一条的注入记录挤动。
     try {
       appendFileSync(stateFile('ctx-budget.jsonl'), JSON.stringify({
-        at: Date.now(), role, chars: fitted.chars, kept: fitted.kept, dropped: fitted.dropped,
+        at: Date.now(), role, chars: fitted.chars, tokens: estimateTokens(fitted.text), kept: fitted.kept, dropped: fitted.dropped,
       }) + '\n', 'utf8')
     } catch {
       // 记不上不能拖垮人设
@@ -5462,29 +5546,51 @@ export function apply(ctx) {
             if (rev.hadLease) record({ state: 'external-lease-revoke', at: now, reason: rev.reason })
             return send(res, 200, { v: 1, ok: true, hadLease: rev.hadLease })
           }
+          if (act === 'recap-fallback') {
+            const fb = evaluateExternalRecapFallback({
+              captureFailed: Boolean(body.value?.captureFailed ?? true),
+              captureText: body.value?.captureText || '',
+              spokenOrTextRecap: body.value?.spokenOrTextRecap || body.value?.recap || '',
+              durationSec: body.value?.durationSec,
+              agentId: body.value?.agentId || 'gemini_live',
+            })
+            if (fb.ok) {
+              record({ state: 'external-lease-recap', at: now, agentId: fb.agentId, mode: fb.mode, recap: fb.recap })
+            }
+            return send(res, 200, { v: 1, ...fb })
+          }
           return send(res, 200, { v: 1, ok: true, lease: activeAppLease(cur, now), emergencyPass: isEmergencyPassActive(cur, now) ? cur.emergencyPass : null })
         }
         if (path === '/elastic-check') {
           const now = Date.now()
           const tz = zoneOr(config.timeZone)
+          const dayStr = dayString(now, tz)
           const resBuf = evaluateElasticBuffer({
             plannedAt: body.value?.plannedAt,
             startedAt: body.value?.startedAt,
             bufferMin: body.value?.bufferMin,
             now,
           })
+          const priorFailures = readLedger(home(), 300)
+            .filter((e) => e?.state === 'scheduling-failure' && dayString(Number(e.at) || 0, tz) === dayStr)
+            .length
+          const schedulingFloor = evaluateDailySchedulingFloor({
+            failureCountToday: priorFailures + (resBuf.exceeded ? 1 : 0),
+          })
           let escalationId = null
           let earnedDeducted = 0
           let fallbackEnqueued = false
           if (resBuf.exceeded) {
             record({ state: 'scheduling-failure', at: now, overdueMin: resBuf.overdueMin, protocolId: resBuf.fallbackBout?.protocolId })
+            if (schedulingFloor.lowPowerFloor) {
+              record({ state: 'low-power-floor', at: now, failureCountToday: schedulingFloor.failureCountToday })
+            }
             let db = null
             try {
               db = openBoutsDb(memoryPath())
               const esc = startEscalation(db, { reason: 'scheduling_failure', level: 'L1', now, home: home() })
               if (esc?.ok) escalationId = esc.id
               if (resBuf.fallbackBout) {
-                const dayStr = dayString(now, tz)
                 const existing = getDayPlan(db, dayStr)
                 const queue = [...(existing?.queue || [])]
                 const recentDup = queue.some((q) => q?.protocolId === resBuf.fallbackBout.protocolId && now - Number(q.queuedAt || 0) < 10 * 60_000)
@@ -5493,9 +5599,9 @@ export function apply(ctx) {
                   saveDayPlan(db, {
                     id: existing?.id || ('plan:' + dayStr),
                     day: dayStr,
-                    template: existing?.template || 'elastic-fallback',
-                    queue,
-                    edits: [...(existing?.edits || []), { at: now, by: 'elastic-check', reason: 'scheduling_failure' }],
+                    template: schedulingFloor.lowPowerFloor ? 'low-power-floor' : (existing?.template || 'elastic-fallback'),
+                    queue: schedulingFloor.lowPowerFloor ? [{ ...resBuf.fallbackBout, queuedAt: now, minute: zoneMinuteOfDay(now, tz) }] : queue,
+                    edits: [...(existing?.edits || []), { at: now, by: 'elastic-check', reason: schedulingFloor.lowPowerFloor ? 'low_power_floor' : 'scheduling_failure' }],
                     activation: existing?.activation || 'auto',
                     home: home(),
                     now,
@@ -5518,7 +5624,7 @@ export function apply(ctx) {
             earnedDeducted = spentRes.spent
             if (earnedDeducted > 0) saveEarned(spentRes.state)
           }
-          return send(res, 200, { v: 1, ...resBuf, escalationId, earnedDeducted, fallbackEnqueued })
+          return send(res, 200, { v: 1, ...resBuf, schedulingFloor, escalationId, earnedDeducted, fallbackEnqueued })
         }
         if (path === '/protocols/compose') {
           const role = String(body.value?.role || 'strategist')
@@ -5548,7 +5654,7 @@ export function apply(ctx) {
           const sp = speakerOf(r.body.sessionId)
           let outText = sp === 'strategist' ? stripStrategistAudit(r.body.text).cleanText : r.body.text
           if (config.dual !== false && Boolean(config.strategistSessionId) && sp === 'companion' && isInWithdrawal(loadWithdrawal(), Date.now())) {
-            outText = withdrawalReply(roleNames(config))
+            outText = filterWithdrawalOutput(outText, { names: roleNames(config) })
           }
           const n = roleNames(config)
           // 双人格：话前面标上是谁说的（〔鱼丸〕/〔鲸澜〕），浮层据此显示名字。
@@ -5702,11 +5808,21 @@ export function apply(ctx) {
       recentWorkAt: appGov.recentWorkAt,
       recentScreenshotAt: appGov.recentScreenshotAt,
       recentShareAt: appGov.recentShareAt,
+      recentShareIntent: Boolean(body?.recentShareIntent),
+      splitScreenVisible: Boolean(body?.splitScreenVisible),
+      workVisible: Boolean(body?.workVisible),
+      quickReturn: Boolean(body?.quickReturn),
+      leftWorkAt: Number(body?.leftWorkAt) || 0,
       declaredApps: appsOf(),
     }, now)
     appGov.contextExempt = exemptRes.state
     if (exemptRes.exempt && phone) phone.fun = false
-    const escapeRes = detectDegradedEscape(appGov.escape, { phone, declaredApps: appsOf(), now })
+    const escapeRes = detectDegradedEscape(appGov.escape, {
+      phone,
+      declaredApps: appsOf(),
+      now,
+      contextExempt: Boolean(exemptRes.exempt),
+    })
     const prevEscapeLogAt = Number(appGov.escape?.lastTriggerAt) || 0
     appGov.escape = escapeRes.nextState
     if (escapeRes.degraded && now - prevEscapeLogAt >= 2 * 60_000) {
@@ -5720,12 +5836,22 @@ export function apply(ctx) {
       })
     }
     saveAppGov(appGov)
-    const extState = loadExternal()
+    let extState = loadExternal()
+    const pullBackRes = checkEmergencyPassPullBack(extState, { now, pkg: phone?.app })
+    if (pullBackRes.pullBack) {
+      extState = pullBackRes.state
+      saveExternal(extState)
+      record({ state: 'emergency-pass-pullback', at: now, expiredAt: pullBackRes.expiredAt, reason: pullBackRes.passReason, app: phone?.app || '' })
+    }
     const leaseNow = activeAppLease(extState, now)
     const emergencyActive = isEmergencyPassActive(extState, now)
     const elasticRes = body?.elasticPlan ? evaluateElasticBuffer({ ...body.elasticPlan, now }) : null
+    let schedulingFloor = null
     if (elasticRes?.exceeded) {
       record({ state: 'scheduling-failure', at: now, overdueMin: elasticRes.overdueMin, protocolId: elasticRes.fallbackBout?.protocolId })
+      const dayStr = dayString(now, tz)
+      const countToday = ledger.filter((e) => e?.state === 'scheduling-failure' && dayString(Number(e.at) || 0, tz) === dayStr).length + 1
+      schedulingFloor = evaluateDailySchedulingFloor({ failureCountToday: countToday })
     }
     {
       const boutApps = [...(Array.isArray(live?.apps?.need) ? live.apps.need : []), ...(Array.isArray(live?.apps?.allow) ? live.apps.allow : [])]
@@ -6025,7 +6151,8 @@ export function apply(ctx) {
       degradedEscape: escapeRes.degraded ? { active: true, reason: escapeRes.reason, distinctApps: escapeRes.distinctApps, dwellSeconds: escapeRes.dwellSeconds } : null,
       lease: leaseNow,
       emergencyPass: emergencyActive ? { active: true, until: epUntil, reason: extState.emergencyPass.reason } : null,
-      ...(elasticRes ? { elasticBuffer: elasticRes } : {}),
+      ...(pullBackRes.pullBack ? { emergencyPullBack: { triggered: true, reason: pullBackRes.reason, expiredAt: pullBackRes.expiredAt } } : {}),
+      ...(elasticRes ? { elasticBuffer: { ...elasticRes, ...(schedulingFloor ? { schedulingFloor } : {}) } } : {}),
       trust: { score: trust.score, band: trust.band },
       // 临时封禁名单：手机把这些也当娱乐 App 管。
       block: blockedNow(now),

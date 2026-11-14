@@ -457,3 +457,59 @@ export function candidateNotesForLinking(notesDir, { stage3Note = '', query = ''
   return picks.slice(0, cap)
 }
 
+/**
+ * 第六拍入网立规：写入主笔记前向 [[WikiLink]]，并双向回写反链至候选笔记文件（最多 3 篇，幂等不重复写入，跳过私密目录）。
+ */
+export function writeBidirectionalWikiLinks({
+  notesDir,
+  kb = '',
+  noteTitle = '',
+  noteSlug = '',
+  body = '',
+  candidateNotes = [],
+  department = 'dept:strategize',
+  at = Date.now(),
+  tz = 'Asia/Shanghai',
+} = {}) {
+  const title = String(noteTitle || '').trim()
+  if (!notesDir || !title) return { notePath: '', backlinkedFiles: [] }
+  const targetKb = kb || join(notesDir, KB_DIR)
+  const picks = (Array.isArray(candidateNotes) && candidateNotes.length
+    ? candidateNotes
+    : candidateNotesForLinking(notesDir, { query: `${title} ${body}`, limit: 3 })
+  ).slice(0, 3)
+  const linkTargets = picks.map((c) => c.title || c.path || c.id).filter(Boolean)
+  const notePath = writeObsidianCard({
+    kb: targetKb,
+    folder: 'cards',
+    slug: noteSlug || undefined,
+    title,
+    tags: ['stroke-6', 'wikilink'],
+    department,
+    links: linkTargets,
+    body,
+    at,
+    tz,
+  })
+  const backlinkTag = wikiLink(title)
+  const backlinkedFiles = []
+  for (const c of picks) {
+    const rawRel = String(c?.path || c?.rel || '').trim()
+    if (!rawRel) continue
+    if (PRIVATE_DIRS.some((p) => rawRel.includes(p))) continue
+    const abs = rawRel.startsWith(notesDir) ? rawRel : join(notesDir, rawRel)
+    if (!existsSync(abs)) continue
+    try {
+      const cur = readFileSync(abs, 'utf8')
+      if (!cur.includes(backlinkTag)) {
+        const prefix = cur.includes('## 双向联结') ? '' : '\n## 双向联结\n'
+        appendFileSync(abs, `${prefix}- ${backlinkTag}\n`, 'utf8')
+      }
+      backlinkedFiles.push(abs)
+    } catch {
+      // skip read-only or unreadable target
+    }
+  }
+  return { notePath, backlinkedFiles, forwardLinks: linkTargets.map((t) => wikiLink(t)) }
+}
+
