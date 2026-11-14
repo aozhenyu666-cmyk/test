@@ -1431,6 +1431,10 @@ def cmd_assemble(args):
                 if os.path.islink(full):  # symlinked dirs are recorded as symlinks, not walked
                     dirnames.remove(name)
                     filenames.append(name)
+                    continue
+                sub_rel = (rel_dir + "/" if rel_dir else "") + name
+                if drop_reason(sub_rel, abi, args.prune_dev_metadata):
+                    dirnames.remove(name)
             for name in sorted(filenames):
                 full = os.path.join(dirpath, name)
                 rel = (rel_dir + "/" if rel_dir else "") + name
