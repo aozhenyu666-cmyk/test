@@ -68,9 +68,9 @@ export const DDL = [
   "CREATE UNIQUE INDEX IF NOT EXISTS bouts_one_running ON bouts(status) WHERE status = 'running'",
 ]
 
-const INSERT_FACT = 'INSERT INTO facts (id, scope, text, kind, importance, pinned, key, tags, created_at, updated_at, ' +
+const INSERT_FACT = 'INSERT INTO facts (id, scope, text, kind, importance, pinned, key, tags, triggers, scene_tags, created_at, updated_at, ' +
   'last_hit_at, hits, hit_bonus, expires_at, source, status, superseded_by, superseded_reason, corrected_from, forget_reason) ' +
-  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
 
 const INSERT_TOPIC = 'INSERT INTO topics (id, scope, title, detail, status, priority, opened_at, updated_at, ' +
   'last_touch_at, next_ask_at, attempts, due_at, closed_at, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -79,7 +79,8 @@ const CLEAR_ALL = ['DELETE FROM facts', 'DELETE FROM topics', 'DELETE FROM episo
 
 function factRow(f) {
   return [f.id, f.scope, f.text, f.kind || 'fact', num(f.importance, 1), f.pinned ? 1 : 0, f.key || '',
-    JSON.stringify(f.tags || []), num(f.createdAt), num(f.updatedAt), num(f.lastHitAt), num(f.hits),
+    JSON.stringify(f.tags || []), JSON.stringify(f.triggers || []), JSON.stringify(f.sceneTags || []),
+    num(f.createdAt), num(f.updatedAt), num(f.lastHitAt), num(f.hits),
     Number(f.hitBonus) || 0, num(f.expiresAt), f.source || '', f.status || 'active', f.supersededBy || '',
     f.supersededReason || '', f.correctedFrom || '', f.forgetReason || '']
 }
@@ -93,6 +94,7 @@ function fromFactRow(r) {
   return {
     id: r.id, scope: r.scope, text: r.text, kind: r.kind || 'fact', importance: Number(r.importance) || 0,
     pinned: Number(r.pinned) === 1, key: r.key || '', tags: parseTags(r.tags),
+    triggers: parseTags(r.triggers), sceneTags: parseTags(r.scene_tags),
     createdAt: Number(r.created_at) || 0, updatedAt: Number(r.updated_at) || 0,
     lastHitAt: Number(r.last_hit_at) || 0, hits: Number(r.hits) || 0, hitBonus: Number(r.hit_bonus) || 0,
     expiresAt: Number(r.expires_at) || 0, source: r.source || '', status: r.status || 'active',
@@ -167,11 +169,42 @@ function normalizeDoc(raw) {
   return doc
 }
 
+function ftsText(parts) {
+  const raw = parts.filter(Boolean).join(' ')
+  const extra = []
+  const cjk = raw.replace(/[^\u4e00-\u9fff]/g, '')
+  for (let i = 0; i + 1 < cjk.length && extra.length < 400; i += 1) {
+    extra.push(cjk.slice(i, i + 2))
+  }
+  return extra.length ? raw + ' ' + extra.join(' ') : raw
+}
+
+function ftsMatchQuery(query) {
+  const s = String(query || '').toLowerCase()
+  const terms = []
+  for (const w of s.match(/[a-z0-9_]{2,}/g) || []) terms.push(w)
+  const cjk = s.replace(/[^\u4e00-\u9fff]/g, '')
+  if (cjk.length === 1) terms.push(cjk)
+  for (let i = 0; i + 1 < cjk.length && terms.length < 24; i += 1) {
+    terms.push(cjk.slice(i, i + 2))
+  }
+  if (!terms.length) return ''
+  return [...new Set(terms)].map((t) => '"' + t.replace(/"/g, '') + '"').join(' OR ')
+}
+
+function ensureColumn(db, table, col, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all()
+  if (!cols.some((c) => c.name === col)) {
+    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`).run()
+  }
+}
+
 class SqliteBackend {
   constructor(file) {
     ensureDir(file)
     this.file = file
     this.kind = 'sqlite'
+    this.hasFts5 = false
     try {
       const db = this.open()
       db.close()
@@ -192,6 +225,20 @@ class SqliteBackend {
       db.prepare('PRAGMA journal_mode = WAL').run()
       db.prepare('PRAGMA synchronous = NORMAL').run()
       for (const sql of DDL) db.prepare(sql).run()
+      ensureColumn(db, 'facts', 'triggers', 'TEXT')
+      ensureColumn(db, 'facts', 'scene_tags', 'TEXT')
+      ensureColumn(db, 'episodes', 'scene_tags', 'TEXT')
+      try {
+        db.prepare(
+          "CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(id UNINDEXED, scope UNINDEXED, body, tokenize='unicode61')",
+        ).run()
+        db.prepare(
+          "CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(id UNINDEXED, scope UNINDEXED, body, tokenize='unicode61')",
+        ).run()
+        this.hasFts5 = true
+      } catch {
+        this.hasFts5 = false
+      }
       db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)').run('schema', String(SCHEMA_VERSION))
       return db
     } catch (error) {
@@ -207,7 +254,8 @@ class SqliteBackend {
       doc.facts = db.prepare('SELECT * FROM facts').all().map(fromFactRow)
       doc.topics = db.prepare('SELECT * FROM topics').all().map(fromTopicRow)
       doc.episodes = db.prepare('SELECT * FROM episodes').all().map((r) => ({
-        id: r.id, scope: r.scope, text: r.text, tags: parseTags(r.tags), at: Number(r.at) || 0,
+        id: r.id, scope: r.scope, text: r.text, tags: parseTags(r.tags),
+        sceneTags: parseTags(r.scene_tags), at: Number(r.at) || 0,
       }))
       doc.tombstones = db.prepare('SELECT * FROM tombstones').all().map((r) => ({
         id: r.id, scope: r.scope, kind: r.kind || 'fact', refId: r.ref_id || '',
@@ -228,12 +276,26 @@ class SqliteBackend {
       db.prepare('BEGIN IMMEDIATE').run()
       try {
         for (const sql of CLEAR_ALL) db.prepare(sql).run()
+        if (this.hasFts5) {
+          db.prepare('DELETE FROM facts_fts').run()
+          db.prepare('DELETE FROM episodes_fts').run()
+        }
         const factStmt = db.prepare(INSERT_FACT)
-        for (const f of doc.facts) factStmt.run(...factRow(f))
+        const factFtsStmt = this.hasFts5 ? db.prepare('INSERT INTO facts_fts (id, scope, body) VALUES (?, ?, ?)') : null
+        for (const f of doc.facts) {
+          factStmt.run(...factRow(f))
+          if (factFtsStmt && f.status === 'active') {
+            factFtsStmt.run(f.id, f.scope, ftsText([f.text, ...(f.tags || []), ...(f.triggers || []), ...(f.sceneTags || [])]))
+          }
+        }
         const topicStmt = db.prepare(INSERT_TOPIC)
         for (const t of doc.topics) topicStmt.run(...topicRow(t))
-        const epStmt = db.prepare('INSERT INTO episodes (id, scope, text, tags, at) VALUES (?, ?, ?, ?, ?)')
-        for (const e of doc.episodes) epStmt.run(e.id, e.scope, e.text, JSON.stringify(e.tags || []), num(e.at))
+        const epStmt = db.prepare('INSERT INTO episodes (id, scope, text, tags, scene_tags, at) VALUES (?, ?, ?, ?, ?, ?)')
+        const epFtsStmt = this.hasFts5 ? db.prepare('INSERT INTO episodes_fts (id, scope, body) VALUES (?, ?, ?)') : null
+        for (const e of doc.episodes) {
+          epStmt.run(e.id, e.scope, e.text, JSON.stringify(e.tags || []), JSON.stringify(e.sceneTags || []), num(e.at))
+          if (epFtsStmt) epFtsStmt.run(e.id, e.scope, ftsText([e.text, ...(e.tags || []), ...(e.sceneTags || [])]))
+        }
         const tombStmt = db.prepare('INSERT INTO tombstones (id, scope, kind, ref_id, text_hash, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         for (const t of doc.tombstones) tombStmt.run(t.id, t.scope, t.kind || 'fact', t.refId || '', t.textHash || '', t.reason || '', num(t.at))
         const hitStmt = db.prepare('INSERT INTO hits (id, fact_id, at, query) VALUES (?, ?, ?, ?)')
@@ -245,6 +307,28 @@ class SqliteBackend {
       }
     } finally {
       db.close()
+    }
+  }
+
+  ftsSearch(query, { scopes = null, limit = 20 } = {}) {
+    if (!this.hasFts5) return []
+    const match = ftsMatchQuery(query)
+    if (!match) return []
+    const cap = Math.max(1, Math.min(50, Number(limit) || 20))
+    let db = null
+    try {
+      db = this.open()
+      const rows = db.prepare(
+        'SELECT id, scope, bm25(facts_fts) AS rank FROM facts_fts WHERE facts_fts MATCH ? ORDER BY rank LIMIT ?',
+      ).all(match, cap * 2)
+      return rows
+        .filter((r) => !scopes || scopes.includes(r.scope))
+        .slice(0, cap)
+        .map((r) => ({ id: String(r.id), rank: Number(r.rank) || 0 }))
+    } catch {
+      return []
+    } finally {
+      try { db?.close?.() } catch {}
     }
   }
 
@@ -335,6 +419,11 @@ export class MemoryStore {
       this.lastError = String((error && error.message) || error)
       return false
     }
+  }
+
+  ftsSearch(query, opts) {
+    if (typeof this.backend.ftsSearch === 'function') return this.backend.ftsSearch(query, opts)
+    return []
   }
 
   close() {

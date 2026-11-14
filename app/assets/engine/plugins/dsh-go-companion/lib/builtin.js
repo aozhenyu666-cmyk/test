@@ -36,11 +36,14 @@ export function builtinProtocols() {
   return cache
 }
 
-/** 按 id 取一个校验过的内置协议；取不到返回 null。 */
+/** 按 id 取一个校验过的内置协议（兼容下划线/连字符别名）；取不到返回 null。 */
 export function builtinProtocolOf(id) {
-  const want = String(id)
-  for (const item of builtinProtocols()) {
-    if (item.ok && item.protocol.id === want) return item.protocol
+  const want = String(id || '').trim()
+  if (!want) return null
+  const kebab = want.replace(/_/g, '-')
+  const all = builtinProtocols()
+  for (const item of all) {
+    if (item.ok && (item.protocol.id === want || item.protocol.id === kebab)) return item.protocol
   }
   return null
 }

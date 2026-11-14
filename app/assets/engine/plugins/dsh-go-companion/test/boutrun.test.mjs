@@ -17,7 +17,10 @@ import { openBoutsDb, listBeats, listVerdicts, runningBout } from '../lib/bouts.
 import { createOfficial, judgeReply, checkPhrase, hisLimitOf, RETRY_LIMIT, OUTING_LIMIT, HIS_LIMIT, OFFICIAL_LIMIT, NUDGE_LEAD_SEC } from '../lib/boutrun.js'
 import { loadProtocol } from '../lib/protocol.js'
 
-const BUILTIN_IDS = ['execute', 'study', 'outing', 'design', 'rest']
+const BUILTIN_IDS = [
+  'execute', 'study', 'outing', 'design', 'rest',
+  'video-slice-dice', 'commute-anti-daydream', 'micro-landing-3m',
+]
 
 function withDb(fn) {
   const home = mkdtempSync(join(tmpdir(), 'companion-boutrun-'))
@@ -49,12 +52,20 @@ const GOOD = {
   推进: '推到表结构和账本重建了',
   结论: '结论是分开两张表',
   提议: '已写进提议目录那一段',
+  立标: '拿走分布式锁租约续期这一招',
+  反例检验: '因为时钟漂移导致租约失效，所以需要单调时钟防御',
+  入卡挂载: '可以直接改掉今天账本模块的状态校验步骤',
+  锁题: '锁死数据库索引迁移这一个真问题',
+  语音复盘: '这一趟理清楚了，结论是先建双向索引再迁移表',
+  切开: '先打开终端跑一遍单测',
+  落地交件: '三分钟跑完并且修好了第一个报错',
 }
 
 function goodFor(stepId, turn = 0) {
-  // 盖屏那一拍要求「不与前次重复」：同一个人照理也不会每次说一模一样的话，
-  // 所以这里带上第几次，模拟「每 6 分钟说一句不一样的」。
+  // 盖屏/切片填空/唤起串讲要求「不与前次重复」，所以带上轮次避免连续两条完全一样。
   if (stepId === '盖屏') return '讲到哈希表的冲突第' + turn + '次'
+  if (stepId === '切片填空') return '这段视频讲了分布式锁，条件是租约续期第' + turn + '段'
+  if (stepId === '唤起串讲') return '已经拆完索引结构，结论是先做增量迁移第' + turn + '轮'
   return GOOD[stepId] || '这一步说清楚了'
 }
 

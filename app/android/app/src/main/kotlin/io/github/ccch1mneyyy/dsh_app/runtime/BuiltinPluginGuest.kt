@@ -87,6 +87,7 @@ object BuiltinPluginGuest {
                 "cordis.patch.yml",
                 "lib/index.js",
                 "lib/model.js",
+                "lib/lorebook.js",
                 "lib/store.js",
                 "lib/migrate.js",
                 "lib/view.js",
@@ -170,6 +171,9 @@ object BuiltinPluginGuest {
                 "lib/protocols/outing.json",
                 "lib/protocols/design.json",
                 "lib/protocols/rest.json",
+                "lib/protocols/video_slice_dice.json",
+                "lib/protocols/commute_anti_daydream.json",
+                "lib/protocols/micro_landing_3m.json",
                 // R8 W4：设定（作息模板 / 最少局数 / 局型预算 / 升级阈值）。改紧立即生效，
                 // 改松走 24 小时冷却期——P1 排局、P4 升级都从这里读阈值。
                 "lib/settings.js",
@@ -214,6 +218,15 @@ object BuiltinPluginGuest {
                 "lib/thinking.js",
                 // R8 P4：升级阶梯的接线（分类 → 记敷衍 → 判升级 → 落手机）。
                 "lib/ladder.js",
+                // Phase 1 Cognitive Autonomy v2.0 modules.
+                "lib/memory_blocks.js",
+                "lib/withdrawal.js",
+                "lib/strategist_audit.js",
+                "lib/six_dice.js",
+                "lib/departments.js",
+                // Phase 2 Cognitive Autonomy v2.0 modules.
+                "lib/app_governance.js",
+                "lib/external_agents.js",
             ),
         ),
     )

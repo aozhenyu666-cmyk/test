@@ -153,7 +153,13 @@ export function createOfficial(options = {}) {
 
     /** 开局。已经有一局在跑（bouts 的唯一索引）就返回 busy，不硬开。 */
     start() {
-      const opened = openBout(db, { protocolId: protocol.id, openedBy: String(options.openedBy || 'engine'), home, now: now() })
+      const opened = openBout(db, {
+        protocolId: protocol.id,
+        openedBy: String(options.openedBy || 'engine'),
+        department: String(options.department || ''),
+        home,
+        now: now(),
+      })
       if (!opened.ok) return { ok: false, error: opened.error }
       boutId = opened.id
       return { ok: true, boutId, say: sayNow() }

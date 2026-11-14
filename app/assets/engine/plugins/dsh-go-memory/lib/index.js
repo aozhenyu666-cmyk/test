@@ -145,6 +145,8 @@ export function apply(ctx) {
             key: { type: 'string', description: '同一件会变的事用同一个键，如「她.身高」「约定.复盘」。键里不要写具体值。' },
             tags: { type: 'array', items: { type: 'string' }, description: '几个关键词，方便以后检索。' },
             pinned: { type: 'boolean', description: '钉住：永不淡忘（称呼忌讳、承诺、身体禁忌才用）。' },
+            triggers: { type: 'array', items: { type: 'string' }, description: '可选，Lorebook 触发词或 /regex/flags，命中对话时按需召回。' },
+            sceneTags: { type: 'array', items: { type: 'string' }, description: '可选，场景标签，如 scene:video_learning / scene:commute。' },
             share: { type: 'boolean', description: 'true = 所有会话可见（默认只在本会话可见）。' },
             expiresInDays: { type: 'integer', description: '可选，多少天后自动过期（临时状态用）。' },
             replaces: { type: 'string', description: '可选，指认被更新的旧条目（id 或原文片段）。' },
@@ -164,6 +166,8 @@ export function apply(ctx) {
             importance: args.importance,
             key: args.key,
             tags: args.tags,
+            triggers: args.triggers,
+            sceneTags: args.sceneTags,
             pinned: args.pinned,
             replaces: args.replaces,
             force: args.force,
@@ -348,9 +352,15 @@ export function apply(ctx) {
       // 同一次请求里 text() 会被调好几遍（宿主在装配阶段会重复求值）：
       // 1.5 秒内且线索没变就复用，避免重复检索和重复落盘。
       if (cached && cached.query === query && Date.now() - cached.at < 1500) return cached.text
-      const picked = recall(s.doc, { scope: scopeOfSession(sid), query, limit: 6 }, Date.now())
+      const ftsHits = query ? s.ftsSearch(query, { scopes: [scopeOfSession(sid), 'global'], limit: 12 }) : []
+      const picked = recall(s.doc, {
+        scope: scopeOfSession(sid),
+        query,
+        limit: 6,
+        ftsIds: ftsHits.map((h) => h.id),
+      }, Date.now())
       // 召回命中会累加 hits —— 只在真的有内容时顺手落盘，避免每轮空写。
-      if (picked.facts.length) s.save()
+      if (picked.facts.length || picked.lorebook?.length) s.save()
       recallCache.set(sid, { at: Date.now(), query, text: picked.text })
       return picked.text
     } catch (error) {

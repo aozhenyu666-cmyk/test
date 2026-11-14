@@ -625,3 +625,109 @@ export function createRunner(protocol, options = {}) {
     },
   }
 }
+
+/**
+ * M4.2: 鲸澜受控动态造局器（compose_bout_protocol）。
+ * 接收高层目标/弱点描述或原始协议 JSON，统一强制通过 validateProtocol 四条静态安全校验
+ * （有限时与确定出口、无死循环、只调用已注册能力、严禁声明墙能力）后方能装载使用。
+ */
+export function composeBoutProtocol(input = {}, options = {}) {
+  const role = String(options.role || 'strategist')
+  if (role !== 'strategist') {
+    return {
+      ok: false,
+      error: 'only-strategist-can-compose',
+      errors: [{ code: 'unauthorized-role', where: 'role', message: '只有鲸澜（strategist）有权动态造局' }],
+    }
+  }
+  if (typeof input === 'string') return loadProtocol(input)
+  if (input && typeof input === 'object' && input['协议版本'] !== undefined) {
+    return loadProtocol(input)
+  }
+  const src = input && typeof input === 'object' ? input : {}
+  const nowTs = Number(options.now) || Date.now()
+  const rawId = String(src.id || ('dyn-bout-' + (nowTs % 1_000_000)))
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'dyn-bout'
+  const minutes = Math.max(3, Math.min(180, Number(src.minutes) || 25))
+  const turns = Math.max(2, Math.min(30, Number(src.turns) || 8))
+  const name = String(src.name || '动态定制局').trim()
+  const needs = new Set(['计时', '语音问', '文字', '度量判定'])
+  if (Array.isArray(src.needs)) {
+    for (const c of src.needs) {
+      if (String(c || '').trim()) needs.add(String(c).trim())
+    }
+  }
+  const rawSteps = Array.isArray(src.steps) && src.steps.length
+    ? src.steps
+    : [
+        {
+          id: '破冰',
+          ask: src.goal ? `针对「${String(src.goal).slice(0, 14)}」先做哪一步？` : '现在只动手做哪一小步？',
+          limit: '2m',
+          pass: { 字数: 8 },
+          trigger: '语音问',
+          answer: '文字',
+        },
+        {
+          id: '交付',
+          ask: '这一段做到哪了？交一条具体产出。',
+          limit: `${Math.min(15, Math.max(3, Math.floor(minutes / 2)))}m`,
+          pass: { 字数: 10 },
+          timeout: '收局',
+          trigger: '语音问',
+          answer: '文字',
+        },
+      ]
+  const steps = rawSteps.map((s, i) => {
+    const stepSrc = s && typeof s === 'object' ? s : {}
+    const isLast = i === rawSteps.length - 1
+    const trigger = stepSrc.trigger || stepSrc['触发'] || '语音问'
+    const answer = stepSrc.answer || stepSrc['应答'] || '文字'
+    for (const c of Array.isArray(trigger) ? trigger : [trigger]) {
+      if (String(c || '').trim()) needs.add(String(c).trim())
+    }
+    for (const c of Array.isArray(answer) ? answer : [answer]) {
+      if (String(c || '').trim()) needs.add(String(c).trim())
+    }
+    const step = {
+      id: String(stepSrc.id || `步骤${i + 1}`).trim(),
+      问: String(stepSrc.ask || stepSrc['问'] || '这一步交什么结果？').trim(),
+      ...(stepSrc.every || stepSrc['每']
+        ? {
+            每: String(stepSrc.every || stepSrc['每']),
+            重复至: stepSrc.repeatUntil || stepSrc['重复至'] || '1/3',
+          }
+        : { 限时: String(stepSrc.limit || stepSrc['限时'] || '3m') }),
+      过关: (stepSrc.pass || stepSrc['过关']) && typeof (stepSrc.pass || stepSrc['过关']) === 'object'
+        ? (stepSrc.pass || stepSrc['过关'])
+        : { 字数: 8 },
+      超时: String(stepSrc.timeout || stepSrc['超时'] || (isLast ? '收局' : '下一步')),
+      不过: String(stepSrc.fail || stepSrc['不过'] || '重打'),
+      触发: trigger,
+      应答: answer,
+    }
+    if (stepSrc.form || stepSrc['形态']) step['形态'] = String(stepSrc.form || stepSrc['形态'])
+    if (stepSrc.pace || stepSrc['变速']) {
+      step['变速'] = String(stepSrc.pace || stepSrc['变速'])
+      needs.add(step['变速'])
+    }
+    return step
+  })
+  const draft = {
+    协议版本: 1,
+    id: rawId,
+    名称: name,
+    类型: String(src.type || src['类型'] || '行为'),
+    需要能力: [...needs],
+    预算: { 分钟: minutes, 来回: turns },
+    步骤: steps,
+    收局: {
+      交: Array.isArray(src.hand) && src.hand.length ? src.hand.map(String) : [steps[steps.length - 1].id],
+      判定: String(src.closeStandard || '动态定制局必须交出可验证产出；否则记空局'),
+    },
+  }
+  return validateProtocol(draft)
+}
+

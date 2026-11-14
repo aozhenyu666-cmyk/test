@@ -98,6 +98,8 @@ export function cleanPhone(raw) {
     fun: app ? funOf(app, raw.fun) : false,
     screenOn: raw.screenOn !== false,
     charging: raw.charging === true,
+    mediaPlaying: raw.mediaPlaying === true,
+    screenText: typeof raw.screenText === 'string' && raw.screenText.trim() ? raw.screenText.trim().slice(0, 1500) : '',
     local,
     today,
     switches: cleanSwitches(raw.switches),
@@ -106,22 +108,33 @@ export function cleanPhone(raw) {
   return out
 }
 
-/** 走神前兆：90 秒 / 15 分钟里切了几次 App（手机每次切前台都记）。 */
+/** 走神前兆：90 秒 / 15 分钟 / 60 分钟里切了几次 App（手机每次切前台都记）。 */
 function cleanSwitches(raw) {
   if (!raw || typeof raw !== 'object') return null
   const n = (v) => Math.max(0, Math.min(500, Math.round(Number(v) || 0)))
   const apps = Array.isArray(raw.apps90s) ? raw.apps90s.map((a) => String(a).slice(0, 30)).filter(Boolean).slice(0, 8) : []
-  // 第九轮：包名序列。apps90s 是给人和模型看的名字，数「切出」必须用包名——
-  // 两次 /plan 之间切走又切回来的那些，只靠前台差集是数不到的。
-  const recent = Array.isArray(raw.recent)
-    ? raw.recent.map((r) => {
+  const normList = (arr, maxAge, cap) => (Array.isArray(arr)
+    ? arr.map((r) => {
       if (!r || typeof r !== 'object') return null
       const app = String(r.pkg || '').slice(0, 80)
       if (!/^[A-Za-z0-9_.]+$/.test(app)) return null
-      return { app, agoMs: Math.max(0, Math.min(15 * 60_000, Math.round(Number(r.agoMs) || 0))) }
-    }).filter(Boolean).slice(0, 20)
-    : []
-  return { in90s: n(raw.in90s), apps90s: apps, in15m: n(raw.in15m), distinct15m: n(raw.distinct15m), recent }
+      return { app, agoMs: Math.max(0, Math.min(maxAge, Math.round(Number(r.agoMs) || 0))) }
+    }).filter(Boolean).slice(0, cap)
+    : [])
+  // 第九轮：包名序列。apps90s 是给人和模型看的名字，数「切出」必须用包名——
+  // 两次 /plan 之间切走又切回来的那些，只靠前台差集是数不到的。
+  const recent = normList(raw.recent, 15 * 60_000, 20)
+  const recent60m = normList(raw.recent60m, 60 * 60_000, 60)
+  return {
+    in90s: n(raw.in90s),
+    apps90s: apps,
+    in15m: n(raw.in15m),
+    distinct15m: n(raw.distinct15m),
+    in60m: n(raw.in60m),
+    distinct60m: n(raw.distinct60m),
+    recent,
+    recent60m,
+  }
 }
 
 /** 今天娱乐类一共多少分钟。 */

@@ -51,7 +51,7 @@ import {
 import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
 // 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
-import { blockDuringLock, cleanApps, declaredFun, remark, roleOf } from './apps.js'
+import { blockDuringLock, cleanApps, declaredFun, emergencyPackages, remark, roleOf } from './apps.js'
 import { NOTES_CANDIDATES, agendaLines, capabilityLines, companionChatText, roleNames, strategistChatText } from './roles.js'
 import { fitBudget, stripInjection } from './budget.js'
 // B3：素材池（例句池 / 关键词卡 / depth 预算系数）。文件在用户笔记库里，缺了用内置种子。
@@ -105,11 +105,11 @@ import { builtinProtocolOf, builtinProtocols } from './builtin.js'
 // 第八轮 P4 的第二条：思维局开局时摊成普通步骤，执行器一行不改。
 import { parseBank } from './bank.js'
 import { expandThinking } from './thinking.js'
-import { loadProtocol } from './protocol.js'
+import { composeBoutProtocol, loadProtocol } from './protocol.js'
 import { createOfficial } from './boutrun.js'
 // 第八轮 P5：排一段专注之前的必答项。规则在 autobout.js，这里只接线。
 import { answerPrompt, missingAnswers } from './autobout.js'
-import { listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, runningBout, startEscalation } from './bouts.js'
+import { getDayPlan, listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, runningBout, saveDayPlan, startEscalation, upsertProtocol } from './bouts.js'
 // 第八轮 P4 接线：一条回答 → 分类 → 记敷衍 → 判升级 → 落手机。全部在 ladder.js 里，
 // 这里只负责把状态读写、数据库、手机快照喂给它。
 import { ALL_LOCK, CELL, funStep, landing, rowOf, step as ladderStep } from './ladder.js'
@@ -127,6 +127,12 @@ import {
   funBlockedBy, lockActive, lockExpired, obligationOf, obligationsView, openLock, standbyDue, takeReask,
 } from './followup.js'
 import { BRAIN_MIN_MS, SPRINT_LONG_MIN, SPRINT_MIN, resolveState, toolsElsewhere, toolsFor } from './machine.js'
+import { buildTelemetrySnapshot } from './memory_blocks.js'
+import { checkWithdrawalRelease, cleanWithdrawalState, isInWithdrawal, recordReplyOutcome, withdrawalReply } from './withdrawal.js'
+import { STRATEGIST_AUDIT_DIRECTIVE, antiSycophancyRewriteHint, detectSycophancy, stripStrategistAudit } from './strategist_audit.js'
+import { inferDepartment, isValidDepartment } from './departments.js'
+import { TIER_AMBIGUOUS, TIER_CONTEXTUAL, TIER_EXEMPT, classifyAppTier, detectDegradedEscape, evaluateContextualExemption } from './app_governance.js'
+import { activeAppLease, cleanExternalState, evaluateElasticBuffer, grantEmergencyPass, isEmergencyPassActive, issueAppLease, revokeAppLease } from './external_agents.js'
 
 /**
  * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
@@ -603,6 +609,15 @@ export function apply(ctx) {
   const GRACE_MS = 20 * 60_000
   const loadBrain = () => cleanBrain(readState(stateFile('brain.json'), null))
   const saveBrain = (b) => writeJson(stateFile('brain.json'), b)
+  const loadWithdrawal = () => cleanWithdrawalState(readState(stateFile('withdrawal.json'), null))
+  const saveWithdrawal = (w) => writeJson(stateFile('withdrawal.json'), w)
+  const loadAppGov = () => {
+    const raw = readState(stateFile('app-gov.json'), null)
+    return raw && typeof raw === 'object' ? { ...raw } : { contextExempt: {}, escape: {}, recentWorkAt: 0, recentScreenshotAt: 0, recentShareAt: 0 }
+  }
+  const saveAppGov = (g) => writeJson(stateFile('app-gov.json'), g)
+  const loadExternal = () => cleanExternalState(readState(stateFile('external.json'), null))
+  const saveExternal = (e) => writeJson(stateFile('external.json'), e)
   // 预判账本：模型只写 claim，verdict 由墙的遥测填（predict.js 里 settle 是唯一出口）。
   const loadPredict = () => cleanLedger(readState(stateFile('predict.json'), null))
   const savePredict = (p) => writeJson(stateFile('predict.json'), p)
@@ -752,18 +767,32 @@ export function apply(ctx) {
     const served = servedContext.get(String(r.requestId))
     const tries = [...(gateTries.get(sid) || [])]
     const own = readLedger(home(), 60).filter((e) => e.sessionId === sid)
+    const speaker = speakerOf(sid)
+    const cleanText = speaker === 'strategist' ? stripStrategistAudit(r.text).cleanText : String(r.text || '')
     // R9 第五项：妹妹的两条线，先于套话守卫判——她话说得再新，「该去做事了」也不能发。
     // 一次重写机会；第二遍还犯就这一轮不发，账本各记一条。姐姐不走这两条（她本来就该谈进度）。
-    if (speakerOf(sid) === 'companion') {
-      const cg = companionGate(r.text, tries)
+    if (speaker === 'companion') {
+      const cg = companionGate(cleanText, tries)
       if (cg.action !== 'send') {
         tries.push({ pass: false, code: cg.code })
         if (cg.action === 'rewrite') gateTries.set(sid, tries.slice(-1))
         else gateTries.delete(sid)
         return { action: cg.action, state: cg.state, code: cg.code }
       }
+    } else if (speaker === 'strategist') {
+      const syc = detectSycophancy(cleanText)
+      if (syc.sycophantic) {
+        const prevSyc = tries.filter((t) => t?.code === 'sycophancy').length
+        if (prevSyc === 0) {
+          tries.push({ pass: false, code: 'sycophancy' })
+          gateTries.set(sid, tries.slice(-1))
+          return { action: 'rewrite', state: 'stock-rewrite', code: 'sycophancy', hint: antiSycophancyRewriteHint(syc) }
+        }
+        gateTries.delete(sid)
+        return { action: 'skip', state: 'skip-sycophancy', code: 'sycophancy' }
+      }
     }
-    const verdict = contentGate(r.text, { recent: recentOwnTexts(own, RECENT_WINDOW), nouns: served?.nouns })
+    const verdict = contentGate(cleanText, { recent: recentOwnTexts(own, RECENT_WINDOW), nouns: served?.nouns })
     tries.push(verdict)
     const round = gateRound(tries)
     // 只有"还要重写"的那一遍留在 gateTries 里；放行或收摊都清掉，下一轮重新算。
@@ -1006,9 +1035,15 @@ export function apply(ctx) {
       const key = String(r.requestId)
       const began = startedAt.get(key)
       if (r.state === 'accepted') startedAt.set(key, now)
+      const stripped = r.state === 'generated' && r.text && speakerOf(r.sessionId) === 'strategist'
+        ? stripStrategistAudit(r.text)
+        : { cleanText: r.text ?? '', hadAudit: false, audit: null }
+      if (stripped.hadAudit && stripped.audit) {
+        record({ requestId: r.requestId, sessionId: r.sessionId, state: 'strategist-audit', at: now, ...stripped.audit })
+      }
       if (state) record({ requestId: r.requestId, sessionId: r.sessionId, state, at: now, ms: began ? now - began : undefined, failure: r.failure ?? undefined,
         // 家庭群要看得到她回了什么（只留一段）。
-        text: r.state === 'generated' && r.text ? String(r.text).slice(0, 400) : undefined })
+        text: r.state === 'generated' && stripped.cleanText ? String(stripped.cleanText).slice(0, 400) : undefined })
       if (r.state === 'generated' || r.state === 'failed') refreshPanels()
       if (r.state !== 'accepted') startedAt.delete(key)
     },
@@ -1026,8 +1061,15 @@ export function apply(ctx) {
       const key = String(r.requestId)
       const began = startedAt.get(key)
       if (r.state === 'accepted') startedAt.set(key, now)
+      const stripped = r.state === 'generated' && r.text && speakerOf(r.sessionId) === 'strategist'
+        ? stripStrategistAudit(r.text)
+        : { cleanText: r.text ?? '', hadAudit: false, audit: null }
+      const cleanText = r.state === 'generated' ? stripped.cleanText : r.text
+      if (stripped.hadAudit && stripped.audit) {
+        record({ requestId: r.requestId, sessionId: r.sessionId, state: 'strategist-audit', at: now, ...stripped.audit })
+      }
       // B1：生成出来的这一句先过信息增量守卫，再决定算不算"发出去了"。
-      const ball = r.state === 'generated' ? gateBall(r) : null
+      const ball = r.state === 'generated' ? gateBall({ ...r, text: cleanText }) : null
       record({
         requestId: r.requestId,
         eventId: r.eventId,
@@ -1043,10 +1085,10 @@ export function apply(ctx) {
         state: ball ? ball.state : r.state,
         at: now,
         ms: began ? now - began : undefined,
-        text: r.text ?? undefined,
+        text: cleanText ?? undefined,
         // 套话只在生成时判：谁都能说的模板不算开口。判出来就记进账本，
         // 下一球把它打回去，P5 的评测也靠这个数。
-        stock: isStock(r.text) || undefined,
+        stock: isStock(cleanText) || undefined,
         skip: ball && ball.action !== 'send' ? ball.code : undefined,
         // 软判据（不沾具体名词）不拦，只记账：P5 的评测靠这个数看"有多少句没信息量"。
         soft: ball ? ball.soft : undefined,
@@ -1080,10 +1122,10 @@ export function apply(ctx) {
           if (prev && his) {
             const turns = loadYieldTurns()
             // 回避/拒绝触发的退让按规则就是没有新证据（「他说不想做」不是事实），这里如实记。
-            turns.push({ yielded: isYield({ verdict: his.verdict, before: prev.text, after: r.text || '' }), hasEvidence: false })
+            turns.push({ yielded: isYield({ verdict: his.verdict, before: prev.text, after: cleanText || '' }), hasEvidence: false })
             saveYieldTurns(turns)
           }
-          lastServeOf.set(String(r.sessionId || ''), { text: String(r.text || '').slice(0, 400), at: Date.now() })
+          lastServeOf.set(String(r.sessionId || ''), { text: String(cleanText || '').slice(0, 400), at: Date.now() })
         } catch {
           // 检测坏了不能拦发球
         }
@@ -1096,11 +1138,11 @@ export function apply(ctx) {
           drill: r.extra?.drill,
           // C2：这一球是四操作里的哪一个。回球时要按它判，不能等到回球才发现不知道练的是什么。
           drillOp: r.extra?.drillOp,
-          serve: r.text || '',
+          serve: cleanText || '',
           at: Date.now(),
         })
         if (r.topicId) {
-          markGenerated(garden, r.topicId, r.text, Date.now())
+          markGenerated(garden, r.topicId, cleanText, Date.now())
           persistGarden()
         }
       }
@@ -1241,6 +1283,14 @@ export function apply(ctx) {
             }
             revise(b, now)
             saveBrain(b)
+          }
+          // M1.3 反敷衍冷处理：连续 2 次 brief/evasive/stock 进入 45 分钟撤回期，实质回复立即解除。
+          {
+            const usedTarget = Boolean(lastPhone?.app && !lastPhone.fun && !lastPhone.idle && roleOf(appsOf(), lastPhone.app) === 'work')
+            const wr = recordReplyOutcome(loadWithdrawal(), { verdict: judged.verdict, hadTargetAppUse: usedTarget, now })
+            saveWithdrawal(wr.state)
+            if (wr.entered) record({ state: 'withdrawal-enter', at: now, until: wr.state.personaCooldownUntil, streak: wr.state.streak })
+            if (wr.released) record({ state: 'withdrawal-release', at: now, reason: wr.reason })
           }
           // 话题花园跟着人的反应走：认真答就继续，敷衍就换轻的，拒绝就停。
           if (pending.topicId) {
@@ -1762,8 +1812,19 @@ export function apply(ctx) {
   })
   /** 墙的默认锁归「全天默认锁」这条预案管：它没生效，墙就不上默认锁（收紧、深夜锁照旧）。 */
   const wallCfgNow = () => (presetRt.isActive('default-lock') ? config : { ...config, wall: { ...(config.wall || {}), defaultLock: false } })
-  /** 手机的 session 槽：连麦舱 / 升级舱优先，其次是预案的严格模式。 */
-  const sessionNow = (now) => geminiSessionView(now) || presetRt.sessionView(now)
+  const leaseSessionView = (now) => {
+    const l = activeAppLease(loadExternal(), now)
+    if (!l) return null
+    return {
+      allow: [...new Set([...l.packages, ...emergencyPackages(appsOf())])],
+      until: l.expiresAt,
+      topic: l.topic,
+      mode: 'lease',
+      agentId: l.agentId,
+    }
+  }
+  /** 手机的 session 槽：连麦舱 / 外部 Agent 租约优先，其次是预案的严格模式。 */
+  const sessionNow = (now) => geminiSessionView(now) || leaseSessionView(now) || presetRt.sessionView(now)
   // 行为大脑：片段与日摘要、模式卡。只看见、只记住；不自动立规则（K4 以后再接）。
   const brainRt = createBrainRuntime({
     loadEpisodes: () => readState(stateFile('episodes.json'), null),
@@ -3297,6 +3358,127 @@ export function apply(ctx) {
     }
   }
 
+  function customProtocolFile(id) {
+    const safe = String(id || '').trim().replace(/_/g, '-').replace(/[^a-z0-9-]/g, '')
+    return safe ? join(home(), 'companion', 'composed-protocols', `${safe}.json`) : ''
+  }
+
+  function customProtocolOf(id) {
+    const file = customProtocolFile(id)
+    if (!file || !existsSync(file)) return null
+    try {
+      const loaded = loadProtocol(readFileSync(file, 'utf8'))
+      return loaded.ok ? loaded.protocol : null
+    } catch {
+      return null
+    }
+  }
+
+  function composeAndEnqueueBout(spec = {}, role = 'strategist') {
+    const now = Date.now()
+    const composed = composeBoutProtocol(spec, { role, now })
+    if (!composed.ok) {
+      return {
+        ok: false,
+        code: composed.error || composed.errors?.[0]?.code || 'invalid-protocol',
+        errors: composed.errors || [],
+        proposal: composed.proposal || null,
+        text: (composed.errors || []).map((e) => `${e.where}: ${e.message}`).join('；') || '协议校验未通过',
+      }
+    }
+    const protocol = composed.protocol
+    const file = customProtocolFile(protocol.id)
+    mkdirSync(join(home(), 'companion', 'composed-protocols'), { recursive: true })
+    writeJson(file, protocol.raw)
+
+    const tz = zoneOr(config.timeZone)
+    const day = startOfDay(now, tz)
+    const dayStr = dayString(now, tz)
+    const stored = planOf(readState(stateFile('plan.json'), null), day)
+    const dept = isValidDepartment(spec?.department) ? String(spec.department) : inferDepartment({
+      mainState: 'plan',
+      text: `${protocol.name} ${spec?.goal || ''} ${spec?.weakness || ''}`,
+    }).department
+    const entry = {
+      protocolId: protocol.id,
+      title: protocol.name,
+      minute: Number(spec?.minute) > 0 ? Number(spec.minute) : zoneMinuteOfDay(now, tz) + 15,
+      minutes: protocol.budget?.minutes || 25,
+      department: dept,
+    }
+    const nextPlan = planOf({
+      ...stored,
+      day,
+      items: [...(stored.items || []), entry],
+      accepted: spec?.enqueueAccepted === true ? true : stored.accepted,
+      at: now,
+    }, day)
+    writeJson(stateFile('plan.json'), nextPlan)
+
+    let db = null
+    try {
+      db = openBoutsDb(memoryPath())
+      upsertProtocol(db, {
+        id: protocol.id,
+        version: protocol.version,
+        source: file,
+        status: 'trial',
+        home: home(),
+        now,
+      })
+      const existing = getDayPlan(db, dayStr)
+      const queue = [...(existing?.queue || []), entry]
+      saveDayPlan(db, {
+        id: existing?.id || ('plan:' + dayStr),
+        day: dayStr,
+        template: existing?.template || 'composed',
+        queue,
+        edits: [...(existing?.edits || []), { at: now, by: role, composeProtocolId: protocol.id }],
+        activation: existing?.activation || 'auto',
+        home: home(),
+        now,
+      })
+    } finally {
+      try {
+        db?.close?.()
+      } catch {
+        // ignore
+      }
+    }
+
+    record({ state: 'protocol-compose', at: now, protocolId: protocol.id, department: dept, role })
+    return {
+      ok: true,
+      protocol,
+      department: dept,
+      day: dayStr,
+      queuedItems: nextPlan.items.length,
+      text: `已校验并生成动态局「${protocol.name}」（${protocol.id}），已挂载至今日队列（${dept}）。`,
+    }
+  }
+
+  function composeBoutTool(role) {
+    return {
+      name: 'compose_bout_protocol',
+      description: 'M4.2 鲸澜受控动态造局：根据长期目标与 判断.md 弱点生成 JSON 局协议。必须强制通过 protocol.js 静态校验（有限时与确定出口、无死循环、只用已注册能力、严禁声明墙能力），通过后装入今日 day_plans 队列。仅鲸澜（strategist）可写入。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '协议英文 id（小写字母/数字/连字符）' },
+          name: { type: 'string', description: '局名称' },
+          goal: { type: 'string', description: '本局要攻克的长期目标或弱点' },
+          minutes: { type: 'number', description: '总时长预算（分钟）' },
+          department: { type: 'string', description: '所属部门（ops_execute/dev_research/health_sleep/life_commute）' },
+          steps: { type: 'array', description: '步骤数组（含 id/ask/limit/pass/timeout/fail）' },
+          protocol: { type: 'object', description: '或直接提供完整 J2 协议 JSON 对象' },
+        },
+        additionalProperties: true,
+      },
+      output: toolOutput,
+      execute: (args = {}) => composeAndEnqueueBout(args.protocol || args, role),
+    }
+  }
+
   function workflowTool(role) {
     return {
       name: 'workflow_propose',
@@ -4448,6 +4630,23 @@ export function apply(ctx) {
       ? personaLines(mergePersona(readCorePersona(home()), {}), mode).filter((l) => !/^现在是(伙伴|教练)模式/.test(l))
       : []
     const modeLines = mode === 'coach' ? ['他现在开了严格模式：你可以更凶、更不依不饶，但还是你自己的样子。'] : []
+    const nowMs = Date.now()
+    const wNow = loadWithdrawal()
+    const extNow = loadExternal()
+    const govNow = loadAppGov()
+    const leaseNow = activeAppLease(extNow, nowMs)
+    const telemetryText = buildTelemetrySnapshot({
+      state: mainState?.id || 'standby',
+      department: live?.department || '',
+      bout: live?.protocol ? { protocolId: live.protocol.id, department: live.department || '' } : null,
+      phone: lastPhone,
+      withdrawalUntil: wNow.personaCooldownUntil,
+      leaseApp: leaseNow?.agentId || '',
+      emergencyPassUntil: extNow.emergencyPass?.until || 0,
+      contextExempt: Number(govNow.contextExempt?.until) > nowMs ? govNow.contextExempt?.reason || 'tier1' : '',
+      credit: trustNow()?.score,
+      timeZone: zoneOr(config.timeZone),
+    }, nowMs).join('\n')
     const blocks = [
       {
         id: 'persona',
@@ -4460,6 +4659,13 @@ export function apply(ctx) {
       { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
       { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
+      { id: 'telemetry', layer: 'content', priority: 9, text: telemetryText },
+      ...(role === 'companion' && isInWithdrawal(wNow, nowMs)
+        ? [{ id: 'withdrawal', layer: 'state', priority: 70, text: '当前处于冷静撤回期：停止哄人、追问或情绪安抚，仅简短回应等待实质行动。' }]
+        : []),
+      ...(role === 'strategist'
+        ? [{ id: 'audit-cot', layer: 'content', priority: 8, text: STRATEGIST_AUDIT_DIRECTIVE }]
+        : []),
       // C1：挂载卡是状态层最高优先级——卡一断这轮就白聊，别的都能让一让。
       { id: 'mount', layer: 'state', priority: 65, text: mountText() },
       { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
@@ -4535,7 +4741,7 @@ export function apply(ctx) {
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
         takeStanceTool(role), reviseStanceTool(role),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
-        fishIndexTool(), presetTool(role), brainTool(role),
+        fishIndexTool(), presetTool(role), brainTool(role), composeBoutTool(role),
       ].filter(Boolean)
       const list = all.filter((tool) => sub.has(tool.name))
       toolBag.set(role, { sid, all, state })
@@ -5009,7 +5215,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -5082,6 +5288,64 @@ export function apply(ctx) {
         if (path === '/plan/day') return send(res, 200, planDayRoute(body.value))
         if (path === '/brain') return send(res, 200, brainRoute(body.value))
         if (path === '/drill-op') return send(res, 200, drillOpRoute(body.value))
+        if (path === '/emergency-pass') {
+          const now = Date.now()
+          const resEp = grantEmergencyPass(loadExternal(), {
+            reason: body.value?.reason,
+            day: dayString(now, zoneOr(config.timeZone)),
+            now,
+          })
+          if (resEp.ok) {
+            saveExternal(resEp.state)
+            record({ state: 'emergency-pass-grant', at: now, until: resEp.until, reason: body.value?.reason || '', countToday: resEp.countToday })
+          }
+          return send(res, resEp.ok ? 200 : 400, { v: 1, ...resEp })
+        }
+        if (path === '/lease') {
+          const now = Date.now()
+          const act = String(body.value?.action || 'status')
+          const cur = loadExternal()
+          if (act === 'issue') {
+            const issued = issueAppLease(cur, {
+              agentId: body.value?.agentId || 'gemini_live',
+              packages: body.value?.packages,
+              ttlMs: body.value?.ttlMs,
+              topic: body.value?.topic,
+              now,
+              customConfigs: config.externalAgents,
+            })
+            if (issued.ok) {
+              saveExternal(issued.state)
+              record({ state: 'external-lease-issue', at: now, agentId: issued.lease.agentId, until: issued.lease.expiresAt })
+            }
+            return send(res, issued.ok ? 200 : 400, { v: 1, ok: issued.ok, lease: issued.lease || null, error: issued.error })
+          }
+          if (act === 'revoke') {
+            const rev = revokeAppLease(cur, String(body.value?.reason || 'manual-revoke'))
+            saveExternal(rev.state)
+            if (rev.hadLease) record({ state: 'external-lease-revoke', at: now, reason: rev.reason })
+            return send(res, 200, { v: 1, ok: true, hadLease: rev.hadLease })
+          }
+          return send(res, 200, { v: 1, ok: true, lease: activeAppLease(cur, now), emergencyPass: isEmergencyPassActive(cur, now) ? cur.emergencyPass : null })
+        }
+        if (path === '/elastic-check') {
+          const now = Date.now()
+          const resBuf = evaluateElasticBuffer({
+            plannedAt: body.value?.plannedAt,
+            startedAt: body.value?.startedAt,
+            bufferMin: body.value?.bufferMin,
+            now,
+          })
+          if (resBuf.exceeded) {
+            record({ state: 'scheduling-failure', at: now, overdueMin: resBuf.overdueMin, protocolId: resBuf.fallbackBout?.protocolId })
+          }
+          return send(res, 200, { v: 1, ...resBuf })
+        }
+        if (path === '/protocols/compose') {
+          const role = String(body.value?.role || 'strategist')
+          const out = composeAndEnqueueBout(body.value?.protocol || body.value || {}, role)
+          return send(res, out.ok ? 200 : 400, { v: 1, ...out })
+        }
         config = mergeConfig(config, body.value)
         writeConfig(config)
         // 换了会话 / 名字 / 人设：马上重挂，不等下一次定时检查。
@@ -5101,10 +5365,16 @@ export function apply(ctx) {
           return send(res, 409, { v: 1, error: { code: 'skip-no-content', message: '这一轮不发：句子没有信息增量' } })
         }
         const r = await (chat.records.has(id) ? chat : desk).wait(id, waitMs)
-        // 双人格：话前面标上是谁说的（〔鱼丸〕/〔鲸澜〕），浮层据此显示名字。
-        if (config.dual !== false && r?.body?.state === 'generated' && typeof r.body.text === 'string') {
+        if (r?.body?.state === 'generated' && typeof r.body.text === 'string') {
+          const sp = speakerOf(r.body.sessionId)
+          let outText = sp === 'strategist' ? stripStrategistAudit(r.body.text).cleanText : r.body.text
+          if (sp === 'companion' && isInWithdrawal(loadWithdrawal(), Date.now())) {
+            outText = withdrawalReply(roleNames(config))
+          }
           const n = roleNames(config)
-          r.body = { ...r.body, speaker: speakerOf(r.body.sessionId), text: '〔' + (speakerOf(r.body.sessionId) === 'strategist' ? n.strategist : n.companion) + '〕' + r.body.text }
+          // 双人格：话前面标上是谁说的（〔鱼丸〕/〔鲸澜〕），浮层据此显示名字。
+          const prefix = config.dual !== false ? '〔' + (sp === 'strategist' ? n.strategist : n.companion) + '〕' : ''
+          r.body = { ...r.body, ...(config.dual !== false ? { speaker: sp } : {}), text: prefix + outText }
         }
         return send(res, r.status, r.body)
       }
@@ -5239,6 +5509,56 @@ export function apply(ctx) {
     const phone = phoneOf(body?.phone)
     // 临时封禁名单里的 App 也算娱乐。
     if (phone?.app && blockedNow(now).includes(phone.app)) phone.fun = true
+    const appGov = loadAppGov()
+    const tierInfo = classifyAppTier(phone?.app, appsOf())
+    if (tierInfo.tier === TIER_EXEMPT && phone) phone.fun = false
+    if (tierInfo.tier === TIER_CONTEXTUAL && phone?.app && roleOf(appsOf(), phone.app) === 'work') {
+      appGov.recentWorkAt = now
+    }
+    if (body?.recentScreenshotAt) appGov.recentScreenshotAt = Number(body.recentScreenshotAt) || appGov.recentScreenshotAt
+    if (body?.recentShareAt) appGov.recentShareAt = Number(body.recentShareAt) || appGov.recentShareAt
+    const exemptRes = evaluateContextualExemption(appGov.contextExempt, {
+      pkg: phone?.app,
+      phone,
+      recentWorkAt: appGov.recentWorkAt,
+      recentScreenshotAt: appGov.recentScreenshotAt,
+      recentShareAt: appGov.recentShareAt,
+      declaredApps: appsOf(),
+    }, now)
+    appGov.contextExempt = exemptRes.state
+    if (exemptRes.exempt && phone) phone.fun = false
+    const escapeRes = detectDegradedEscape(appGov.escape, { phone, declaredApps: appsOf(), now })
+    const prevEscapeLogAt = Number(appGov.escape?.lastTriggerAt) || 0
+    appGov.escape = escapeRes.nextState
+    if (escapeRes.degraded && now - prevEscapeLogAt >= 2 * 60_000) {
+      record({
+        state: 'degraded-escape',
+        at: now,
+        app: phone?.app || '',
+        reason: escapeRes.reason,
+        distinctApps: escapeRes.distinctApps,
+        dwellSeconds: escapeRes.dwellSeconds,
+      })
+    }
+    saveAppGov(appGov)
+    const extState = loadExternal()
+    const leaseNow = activeAppLease(extState, now)
+    const emergencyActive = isEmergencyPassActive(extState, now)
+    const elasticRes = body?.elasticPlan ? evaluateElasticBuffer({ ...body.elasticPlan, now }) : null
+    if (elasticRes?.exceeded) {
+      record({ state: 'scheduling-failure', at: now, overdueMin: elasticRes.overdueMin, protocolId: elasticRes.fallbackBout?.protocolId })
+    }
+    {
+      const boutApps = [...(Array.isArray(live?.apps?.need) ? live.apps.need : []), ...(Array.isArray(live?.apps?.allow) ? live.apps.allow : [])]
+      const inTargetApp = Boolean(phone?.app && !phone.fun && !phone.idle && (roleOf(appsOf(), phone.app) === 'work' || boutApps.includes(phone.app)))
+      const wr = checkWithdrawalRelease(loadWithdrawal(), { isTargetApp: inTargetApp, now })
+      if (wr.released) {
+        saveWithdrawal(wr.state)
+        record({ state: 'withdrawal-release', at: now, reason: wr.reason, app: phone?.app || undefined })
+      } else if (inTargetApp && wr.state.streak === 0) {
+        saveWithdrawal(wr.state)
+      }
+    }
     // 第六轮 C：暗思考。他不在、没发消息也照样按客观变化整理一次；只写账本，不产生任何要发出去的话。
     // 挂在这里是因为手机闹钟问 /plan 是唯一的“后台”触发面（见 features_api.dart）：不问就不跑，和 anchorSweep 同一限制。
     try {
@@ -5495,14 +5815,36 @@ export function apply(ctx) {
     if (!backoff && presetRt.list(now).presets.some((p) => p.status === '生效')) {
       out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now, now + IDLE_POLL_MS)
     }
+    {
+      const wNow = loadWithdrawal()
+      const speakerRole = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
+      if (out.speak && speakerRole === 'companion' && isInWithdrawal(wNow, now)) {
+        nextSpeaker = null
+        Object.assign(out, {
+          speak: false,
+          reason: 'withdrawal',
+          nextCheckAt: Math.min(Number(wNow.personaCooldownUntil) || (now + 5 * 60_000), now + 5 * 60_000),
+        })
+      }
+    }
     if (!out.speak) nextSpeaker = null
+    const epUntil = emergencyActive ? extState.emergencyPass.until : 0
+    const effectiveForceLevel = emergencyActive ? 0 : force.level
+    const effectiveForceRelease = emergencyActive || onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)
+    const mediaAction = !emergencyActive && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     return {
       v: 1, ...out, silence, sessionId, speaker: nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion',
       tide: { level: water.level, band: water.band, why: water.why },
-      // release：只有他讲通了（宽限期内）才放行大肥鱼加的锁。力度掉到 3 以下不等于放行——
-      // 锁屏页一弹，前台就是 DSH 自己；赶回桌面后前台是桌面，这时力度本来就是 0。
-      force: { level: force.level, name: force.name, why: force.why, app: phone?.app || undefined,
-        release: onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now) },
+      // release：只有他讲通了（宽限期内）或 3 分钟应急放行期间才放行大肥鱼加的锁。
+      force: { level: effectiveForceLevel, name: force.name, why: force.why, app: phone?.app || undefined,
+        release: effectiveForceRelease },
+      ...(mediaAction ? { media: mediaAction } : {}),
+      appTier: tierInfo,
+      contextExempt: exemptRes.exempt ? { active: true, until: exemptRes.until, reason: exemptRes.reason } : null,
+      degradedEscape: escapeRes.degraded ? { active: true, reason: escapeRes.reason, distinctApps: escapeRes.distinctApps, dwellSeconds: escapeRes.dwellSeconds } : null,
+      lease: leaseNow,
+      emergencyPass: emergencyActive ? { active: true, until: epUntil, reason: extState.emergencyPass.reason } : null,
+      ...(elasticRes ? { elasticBuffer: elasticRes } : {}),
       trust: { score: trust.score, band: trust.band },
       // 临时封禁名单：手机把这些也当娱乐 App 管。
       block: blockedNow(now),
@@ -5513,13 +5855,12 @@ export function apply(ctx) {
       // 第九轮 B1：今天还没有计划 → 手机的浮层/首页挂一张「去定计划」，三个角色谁在场都同一张。
       planGate: planGateNow(now, tz),
       // 通知防波堤：忙时 / 任务模式期间，非白名单通知收进缓存（手机端 NotificationShield）。
-      shield: effectiveGear(config, now) === 'busy' || aiTask(config, now) ? { until: Math.max(Number(config.gearUntil) || 0, now + ROLL_MS) } : null,
+      shield: !emergencyActive && (effectiveGear(config, now) === 'busy' || aiTask(config, now)) ? { until: Math.max(Number(config.gearUntil) || 0, now + ROLL_MS) } : null,
       // 拒绝模式：手机记住到期时间，自己在每次切到娱乐 App 的那一刻就锁，不等这一问。
-      refuse: refuseUntilAt(now) > now ? { until: refuseUntilAt(now) } : null,
+      refuse: !emergencyActive && refuseUntilAt(now) > now ? { until: refuseUntilAt(now) } : null,
       gear: effectiveGear(config, now),
-      // Gemini 互动舱：这段时间只许 Gemini（allow 里的包名），其余 App 由手机直接锁。
-      // 第九轮：没有舱时，预案的严格模式占这个槽（放行本局应用，0 宽限）。
-      session: sessionNow(now),
+      // Gemini / 外部 Agent 租约互动舱：这段时间只许白名单包，其余 App 由手机直接锁；应急通行时让路。
+      session: emergencyActive ? null : sessionNow(now),
       // D4：预约的下一场连麦（手机据此 arm 闹钟；到点调 /gemini/due 取 launch）。
       geminiSchedule: (() => {
         const s = loadGeminiSchedule()
@@ -5535,7 +5876,7 @@ export function apply(ctx) {
       wall: (() => {
         const wd = wallDecision(wallCfgNow(), now, tz)
         return {
-          locked: wd.locked, kind: wd.kind || null, openUntil: wd.openUntil || 0,
+          locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null), openUntil: wd.openUntil || 0,
           applyWindowOpen: applyWindowOpen(config.applyWindow, now),
           applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
           relaxRemaining: relaxRemainingNow(now, tz),
@@ -6041,6 +6382,7 @@ export function apply(ctx) {
 
   function startBout(protocolId, opts = {}) {
     const protocol = builtinProtocolOf(protocolId) ||
+      customProtocolOf(protocolId) ||
       (String(protocolId) === 'thinking' ? thinkingProtocol() : null)
     if (!protocol) return { ok: false, toast: '没有这个协议：' + String(protocolId || '') }
     if (live && !live.official.view().closed) return { ok: false, toast: '已经有一局在跑，先收局。' }
@@ -6048,8 +6390,15 @@ export function apply(ctx) {
     // 第九轮第三项：工作包先洗一遍再进局。不合格的不进——但开局本身不因此失败，
     // 计划里那一局的字段校验在提交那一步已经挡过一次了。
     const pkt = normPacket(opts.packet).ok ? normPacket(opts.packet).packet : null
+    const dept = isValidDepartment(opts.department)
+      ? String(opts.department)
+      : inferDepartment({
+          mainState: opts.mainState || 'sprint',
+          text: `${protocol.name || ''} ${pkt?.goal || ''} ${opts.goal || ''}`,
+          runningBout: true,
+        }).department
     const db = openBoutsDb(memoryPath())
-    const official = createOfficial({ protocol, db, home: home(), packet: pkt })
+    const official = createOfficial({ protocol, db, home: home(), packet: pkt, department: dept })
     const started = official.start()
     if (!started.ok) {
       try {
@@ -6060,15 +6409,23 @@ export function apply(ctx) {
       const why = started.error === 'busy' ? '库里已经有一局在跑。' : '开局失败：' + started.error
       return { ok: false, toast: why }
     }
-    live = { official, db, protocol, packet: pkt, openedAt: Date.now() }
-    record({ state: 'bout-open', at: Date.now(), protocolId: protocol.id, via: 'panel' })
+    const now = Date.now()
+    live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, openedAt: now }
+    record({ state: 'bout-open', at: now, protocolId: protocol.id, department: dept, via: 'panel' })
+    {
+      const wr = checkWithdrawalRelease(loadWithdrawal(), { actionHappened: true, now })
+      if (wr.released) {
+        saveWithdrawal(wr.state)
+        record({ state: 'withdrawal-release', at: now, reason: wr.reason })
+      }
+    }
     // 行为大脑：谁开的局。计划到点自动开的不算他自己开（主动开局比的分母和分子）。
-    brainRt.noteBout({ protocolId: protocol.id, outcome: 'open', self: opts.by !== 'plan' }, Date.now())
+    brainRt.noteBout({ protocolId: protocol.id, outcome: 'open', self: opts.by !== 'plan' }, now)
     // 第九轮：开局时带了 App 要求就记下（严格模式和「切出」都按它判）。
-    if (opts.apps && typeof opts.apps === 'object') presetRt.setApps('current', opts.apps, Date.now(), String(opts.by || 'panel'))
+    if (opts.apps && typeof opts.apps === 'object') presetRt.setApps('current', opts.apps, now, String(opts.by || 'panel'))
     // 第三项：局官的第一句必须是工作包的第一步（施工书总验收第 4 条）。
     const head = openSay(pkt)
-    return { ok: true, toast: '开局：' + protocol.name + '。' + (head || String(started.say || '')), say: head || String(started.say || '') }
+    return { ok: true, department: dept, toast: '开局：' + protocol.name + '。' + (head || String(started.say || '')), say: head || String(started.say || '') }
   }
 
   function answerBout(text, form = 'text', channel = 'text', hold = false) {
@@ -6180,7 +6537,7 @@ export function apply(ctx) {
     // 第九轮：计划界面开局时一并带上这一局的必需 / 允许应用（严格模式和「切出」按它判）；
     // 第三项起再带工作包（局官第一句就念第一步）。
     if (action === 'open') {
-      const r = startBout(String(body?.protocolId || ''), { apps: body?.apps, packet: body?.packet, by: 'panel' })
+      const r = startBout(String(body?.protocolId || ''), { apps: body?.apps, packet: body?.packet, department: body?.department, by: 'panel' })
       return { v: 1, ...r }
     }
     if (!['ask', 'spoken', 'answer', 'fallback'].includes(action)) {

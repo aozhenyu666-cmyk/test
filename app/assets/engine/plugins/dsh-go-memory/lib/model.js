@@ -10,6 +10,7 @@
 //     scope 隔离、主动介入要受冷却和额度约束。
 
 import { createHash, randomUUID } from 'node:crypto'
+import { matchLorebook, normalizeSceneTags, normalizeTriggers } from './lorebook.js'
 
 export const SCHEMA_VERSION = 1
 export const KINDS = ['fact', 'preference', 'promise', 'event']
@@ -161,6 +162,8 @@ export function remember(doc, input, now = Date.now()) {
   const tags = Array.isArray(input && input.tags)
     ? [...new Set(input.tags.map((t) => normalizeText(t).slice(0, 24)).filter(Boolean))].slice(0, 8)
     : []
+  const triggers = normalizeTriggers(input && input.triggers)
+  const sceneTags = normalizeSceneTags(input && input.sceneTags)
   const expiresAt = input && Number.isFinite(Number(input.expiresAt)) && Number(input.expiresAt) > now
     ? Number(input.expiresAt)
     : 0
@@ -178,6 +181,8 @@ export function remember(doc, input, now = Date.now()) {
     sameText.updatedAt = now
     if (importance > (sameText.importance ?? 1)) sameText.importance = importance
     if (input && input.pinned === true) sameText.pinned = true
+    if (triggers.length) sameText.triggers = normalizeTriggers([...(sameText.triggers || []), ...triggers])
+    if (sceneTags.length) sameText.sceneTags = normalizeSceneTags([...(sameText.sceneTags || []), ...sceneTags])
     if (tomb) doc.tombstones = doc.tombstones.filter((t) => t !== tomb)
     return { ok: true, text: '这条已经记过，已刷新。', fact: publicFact(sameText), duplicate: true }
   }
@@ -191,6 +196,8 @@ export function remember(doc, input, now = Date.now()) {
     pinned: Boolean(input && input.pinned === true),
     key,
     tags,
+    triggers,
+    sceneTags,
     createdAt: now,
     updatedAt: now,
     lastHitAt: 0,
@@ -228,7 +235,7 @@ export function remember(doc, input, now = Date.now()) {
   if (doc.facts.length > MAX_FACTS) pruneFacts(doc, now)
 
   if (kind === 'event') {
-    doc.episodes.push({ id: newId('ep'), scope, text, tags, at: now })
+    doc.episodes.push({ id: newId('ep'), scope, text, tags, sceneTags, at: now })
     if (doc.episodes.length > 2000) doc.episodes.splice(0, doc.episodes.length - 2000)
   }
 
@@ -353,6 +360,8 @@ export function publicFact(f) {
     pinned: Boolean(f.pinned),
     key: f.key || '',
     tags: f.tags || [],
+    triggers: f.triggers || [],
+    sceneTags: f.sceneTags || [],
     status: f.status,
     createdAt: f.createdAt,
     updatedAt: f.updatedAt,
@@ -479,11 +488,16 @@ export function recall(doc, input = {}, now = Date.now()) {
   const query = normalizeText(input.query)
   const limit = clampInt(input.limit, 1, 12, 6)
   const scopes = visibleScopes(scope)
+  const ftsIds = new Set(Array.isArray(input.ftsIds) ? input.ftsIds : [])
 
   let facts = activeFacts(doc, scopes).filter((f) => !isExpired(f, now))
   if (query) {
     facts = facts
-      .map((f) => ({ f, s: scoreFact(f, query, now) }))
+      .map((f) => {
+        const base = scoreFact(f, query, now)
+        const boost = ftsIds.has(f.id) ? 0.35 : 0
+        return { f, s: base > 0 ? base + boost : boost }
+      })
       .filter((x) => x.s >= 0.18)
       .sort((a, b) => b.s - a.s)
       .map((x) => x.f)
@@ -492,7 +506,19 @@ export function recall(doc, input = {}, now = Date.now()) {
       (b.updatedAt || 0) - (a.updatedAt || 0))
   }
   const picked = facts.slice(0, limit)
-  touchHits(doc, picked.map((f) => f.id), query, now)
+  const lorebookLimit = clampInt(input.lorebookLimit, 0, 5, 3)
+  const lore = lorebookLimit > 0
+    ? matchLorebook(doc, {
+      scope,
+      query,
+      historyText: input.historyText,
+      sceneTags: input.sceneTags,
+      limit: lorebookLimit,
+      excludeIds: picked.map((f) => f.id),
+    }, now)
+    : { items: [], matchedIds: [], reasons: {} }
+  const allPicked = [...picked, ...lore.items]
+  touchHits(doc, allPicked.map((f) => f.id), query, now)
 
   const topics = doc.topics
     .filter((t) => t.status === 'open' && scopes.includes(t.scope))
@@ -515,6 +541,13 @@ export function recall(doc, input = {}, now = Date.now()) {
       lines.push(`- ${bits.join(' ')} ${f.text}`)
     }
   }
+  if (lore.items.length) {
+    lines.push('【情境触发规则 / Lorebook】当前语境或场景命中以下条目（最多 3 条）：')
+    for (const f of lore.items) {
+      const why = (lore.reasons[f.id] || []).slice(0, 2).join(', ')
+      lines.push(`- [触发${why ? ': ' + why : ''}] ${f.text}`)
+    }
+  }
   if (topics.length) {
     lines.push('【还没聊完的话题】')
     for (const t of topics) {
@@ -529,7 +562,13 @@ export function recall(doc, input = {}, now = Date.now()) {
   if (lines.length) {
     lines.push('只提相关的，不要逐条复述，也不要说“我记得你说过”；不确定的就先问。')
   }
-  return { text: lines.join('\n'), facts: picked.map(publicFact), topics: topics.map(publicTopic), episodes }
+  return {
+    text: lines.join('\n'),
+    facts: picked.map(publicFact),
+    lorebook: lore.items,
+    topics: topics.map(publicTopic),
+    episodes,
+  }
 }
 
 export function startOfDay(ts) {

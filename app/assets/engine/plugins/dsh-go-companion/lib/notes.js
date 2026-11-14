@@ -325,6 +325,63 @@ export function appendLongTerm(kb, now, tz, v) {
   }
 }
 
+/** 构造标准 Obsidian YAML frontmatter。 */
+export function renderFrontmatter(meta = {}) {
+  const lines = ['---']
+  for (const [k, v] of Object.entries(meta || {})) {
+    if (v === undefined || v === null || v === '') continue
+    if (Array.isArray(v)) {
+      lines.push(`${k}: [${v.map((x) => `"${String(x).replace(/"/g, '\\"')}"`).join(', ')}]`)
+    } else if (typeof v === 'boolean' || typeof v === 'number') {
+      lines.push(`${k}: ${v}`)
+    } else {
+      lines.push(`${k}: "${String(v).replace(/"/g, '\\"')}"`)
+    }
+  }
+  lines.push('---', '')
+  return lines.join('\n')
+}
+
+/** 构造 Obsidian [[WikiLink]]，必要时带显示别名。 */
+export function wikiLink(target, alias = '') {
+  const t = String(target || '').trim().replace(/\.md$/i, '')
+  if (!t) return ''
+  const a = String(alias || '').trim()
+  return a && a !== t ? `[[${t}|${a}]]` : `[[${t}]]`
+}
+
+/**
+ * 写入一张标准 Obsidian 认知/裁决卡片（带 YAML frontmatter + [[WikiLinks]]），
+ * 并把链接追加进当日日志里，保证图谱不断链。
+ */
+export function writeObsidianCard({ kb, folder = 'cards', slug, title, tags = [], department = '', links = [], body = '', at = Date.now(), tz = 'Asia/Shanghai' } = {}) {
+  if (!kb || !title) return ''
+  const day = dayString(at, tz)
+  const safeSlug = String(slug || `${day}-${String(title)}`).replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || day
+  const dir = join(kb, folder)
+  const file = join(dir, `${safeSlug}.md`)
+  const frontmatter = renderFrontmatter({
+    title,
+    date: day,
+    department: department || undefined,
+    tags: tags.length ? tags : ['dafeiyu'],
+  })
+  const linkLine = links.length ? `\n关联：${links.map((l) => wikiLink(l)).filter(Boolean).join(' · ')}\n` : ''
+  const content = `${frontmatter}# ${title}\n\n${String(body || '').trim()}\n${linkLine}`
+  try {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(file, content, 'utf8')
+    const daily = join(kb, `${day}.md`)
+    if (!existsSync(daily)) writeFileSync(daily, `# ${day}\n\n`, 'utf8')
+    const ref = wikiLink(`${folder}/${safeSlug}`, title)
+    const cur = readFileSync(daily, 'utf8')
+    if (ref && !cur.includes(ref)) appendFileSync(daily, `- 卡片：${ref}\n`, 'utf8')
+    return file
+  } catch {
+    return ''
+  }
+}
+
 /**
  * 账本增量同步：只处理 state=verdict 且 at 比上次新的条目。
  * @returns {{state:{lastVerdictAt:number}, count:number}}
@@ -340,6 +397,21 @@ export function syncVerdicts({ kb, entries, now = Date.now(), tz = 'Asia/Shangha
     appendVerdictDaily(kb, Number(v.at) || now, tz, v)
     const long = v.longTerm === true || verdictTasks(v).some((t) => t.longTerm)
     if (long) appendLongTerm(kb, Number(v.at) || now, tz, v)
+    const summary = clean(v?.summary, 120)
+    if (summary) {
+      writeObsidianCard({
+        kb,
+        folder: 'verdicts',
+        slug: `${dayString(Number(v.at) || now, tz)}-${String(v?.boutId || v?.id || rows.indexOf(v))}`,
+        title: `${String(v?.kind || '裁决')} · ${summary.slice(0, 40)}`,
+        tags: ['verdict', long ? 'long-term' : 'daily'],
+        department: String(v?.department || ''),
+        links: ['长期规划', dayString(Number(v.at) || now, tz)],
+        body: summary + (v?.nextStep || v?.next_step ? `\n\n- 下一步：${clean(v?.nextStep ?? v?.next_step, 300)}` : ''),
+        at: Number(v.at) || now,
+        tz,
+      })
+    }
   }
   next.lastVerdictAt = Number(rows[rows.length - 1].at) || last
   return { state: next, count: rows.length }

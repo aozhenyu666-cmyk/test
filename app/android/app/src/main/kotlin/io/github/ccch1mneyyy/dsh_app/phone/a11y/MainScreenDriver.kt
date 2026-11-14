@@ -93,6 +93,34 @@ internal class MainScreenDriver(private val service: PhoneA11yService, private v
 
     override fun foregroundPackage(): String? = TreeCapture.foregroundPackage(service, screenBox())
 
+    override fun maskedSummary(maxChars: Int): String? = synchronized(lock) {
+        if (!availability().ok) return null
+        val cap = capture()
+        try {
+            if (cap.hiddenWindowTitle != null || cap.windows.isEmpty() || cap.ownAppInFront) return null
+            val pkg = cap.packageName
+            val titles = cap.windows.mapNotNull { it.title } + ProtectedPages.titleTexts(cap.windows.firstOrNull()?.root, cap.screen.height)
+            if (ProtectedPages.isProtected(pkg, titles)) return null
+            val budget = maxChars.coerceIn(200, 1500)
+            val formatted = ScreenFormat.format(
+                ScreenInput(
+                    screenId = "summary",
+                    appLabel = label(pkg),
+                    packageName = pkg,
+                    screenWidth = cap.screen.width,
+                    screenHeight = cap.screen.height,
+                    keyboardShown = cap.keyboardShown,
+                    windows = cap.windows,
+                    detail = false,
+                    charBudget = budget,
+                ),
+            )
+            return formatted.text.take(budget).ifBlank { null }
+        } finally {
+            cap.recycle()
+        }
+    }
+
     override fun observe(detail: Boolean, image: Boolean): ScreenSnapshot = synchronized(lock) {
         val start = SystemClock.uptimeMillis()
         availability().let { if (!it.ok) return blank(it.reason!!) }

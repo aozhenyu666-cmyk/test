@@ -949,7 +949,7 @@ object ProactiveRuntime {
         val tNow = SystemClock.elapsedRealtime()
         synchronized(switches) {
             switches.addLast(tNow to packageName)
-            while (switches.isNotEmpty() && tNow - switches.first().first > 15 * 60_000L) switches.removeFirst()
+            while (switches.isNotEmpty() && tNow - switches.first().first > 60 * 60_000L) switches.removeFirst()
         }
         if (coordinator == null) return
         // App switches come in bursts; 15 s is enough to not hammer the plugin and still feel immediate.
@@ -1180,6 +1180,7 @@ object ProactiveRuntime {
         // 赶回桌面后前台是桌面，插件看到的力度本来就是 0——那时解锁等于锁几秒就自己打开游戏。
         if (level < 3 && f?.get("release") == true) releaseCompanionLock()
         force?.let { enforce(it) }
+        (map["media"] as? String)?.takeIf { it == "pause" || it == "resume" }?.let { PhoneMediaControl.control(app, it) }
         // 连麦舱：同一份分级判定（sessionFront），不再各写一份"非白名单就锁"。
         if (sessionActive()) sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app)
         val at = (map["nextCheckAt"] as? Number)?.toLong() ?: 0L
@@ -1584,6 +1585,11 @@ object ProactiveRuntime {
                 "opens" to opens?.get(pkg))
         }
         val front = s.app
+        val mediaPlaying = PhoneMediaControl.isPlaying(app)
+        val screenText = runCatching {
+            io.github.ccch1mneyyy.dsh_app.phone.PhoneRegistry.mainDriver?.maskedSummary(1500)
+        }.getOrNull()
+        val usage60m = usageRecent60m(wall)
         linkedMapOf<String, Any?>(
             "app" to front,
             "label" to front?.let { label(it) },
@@ -1591,24 +1597,62 @@ object ProactiveRuntime {
             "fun" to (front != null && (front in funApps || front in blockedNow())),
             "screenOn" to s.screenOn,
             "charging" to s.charging,
+            "mediaPlaying" to mediaPlaying,
+            "screenText" to screenText,
+            "foregroundDebugOn" to io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(app),
             "local" to String.format(java.util.Locale.US, "%02d:%02d", minuteOfDay(wall) / 60, minuteOfDay(wall) % 60),
             "today" to today,
-            // 走神前兆：90 秒 / 15 分钟里切了几次 App、切过哪些。
+            // 走神前兆：90 秒 / 15 分钟 / 60 分钟内切了几次 App、切过哪些。
             "switches" to synchronized(switches) {
-                val recent = switches.filter { now - it.first <= 90_000L }
+                val recent90 = switches.filter { now - it.first <= 90_000L }
+                val win15 = switches.filter { now - it.first <= 15 * 60_000L }
+                val recentList = switches.reversed().take(20).map {
+                    linkedMapOf<String, Any?>("pkg" to it.second, "agoMs" to (now - it.first).coerceAtLeast(0L))
+                }
+                val stream60 = if (switches.isNotEmpty()) {
+                    switches.reversed().take(60).map {
+                        linkedMapOf<String, Any?>("pkg" to it.second, "agoMs" to (now - it.first).coerceAtLeast(0L))
+                    }
+                } else usage60m.orEmpty()
                 linkedMapOf<String, Any?>(
-                    "in90s" to recent.size,
-                    "apps90s" to recent.map { it.second }.distinct().take(8).map { label(it) ?: it },
-                    "in15m" to switches.size,
-                    "distinct15m" to switches.map { it.second }.distinct().size,
+                    "in90s" to recent90.size,
+                    "apps90s" to recent90.map { it.second }.distinct().take(8).map { label(it) ?: it },
+                    "in15m" to win15.size,
+                    "distinct15m" to win15.map { it.second }.distinct().size,
+                    "in60m" to maxOf(switches.size, usage60m?.size ?: 0),
+                    "distinct60m" to (if (switches.isNotEmpty()) switches.map { it.second }.distinct().size else usage60m?.map { it["pkg"] }?.distinct()?.size ?: 0),
                     // 第九轮：包名序列（新的在前）。apps90s 是给人看的中文名，数「切出」必须用包名——
                     // 两次 /plan 之间切走又切回来的那些，插件只靠前台差集是数不到的。
-                    "recent" to switches.reversed().take(20).map {
-                        linkedMapOf<String, Any?>("pkg" to it.second, "agoMs" to (now - it.first).coerceAtLeast(0L))
-                    },
+                    "recent" to recentList,
+                    "recent60m" to stream60,
                 )
             },
         )
+    }.getOrNull()
+
+    /** 近 60 分钟 UsageEvents 应用切换流（"使用情况访问"授权后可读，供 ForegroundRecorder 之外补齐历史）。 */
+    private var usage60Cache: Pair<Long, List<Map<String, Any?>>>? = null
+    private fun usageRecent60m(wall: Long): List<Map<String, Any?>>? = runCatching {
+        usage60Cache?.let { if (wall - it.first < 30_000L) return@runCatching it.second }
+        val ops = app.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+        @Suppress("DEPRECATION")
+        val mode = ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), app.packageName)
+        if (mode != android.app.AppOpsManager.MODE_ALLOWED) return@runCatching null
+        val usm = app.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+        val events = usm.queryEvents((wall - 60 * 60_000L).coerceAtLeast(0L), wall)
+        val e = android.app.usage.UsageEvents.Event()
+        val list = ArrayList<Map<String, Any?>>(32)
+        var last: String? = null
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            if (e.eventType == 1 && !e.packageName.isNullOrBlank() && e.packageName != last) {
+                last = e.packageName
+                list.add(linkedMapOf<String, Any?>("pkg" to e.packageName, "agoMs" to (wall - e.timeStamp).coerceAtLeast(0L)))
+            }
+        }
+        val reversed = list.asReversed().take(60)
+        usage60Cache = wall to reversed
+        reversed
     }.getOrNull()
 
     /**

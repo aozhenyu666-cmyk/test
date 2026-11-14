@@ -143,6 +143,9 @@ interface PhoneDriver {
 
     /** Package of the app in front on this screen, if known (for per-app approval and deny lists). */
     fun foregroundPackage(): String?
+
+    /** PII-masked plain-text screen summary (<= maxChars), or null when unavailable or sensitive. */
+    fun maskedSummary(maxChars: Int = 1500): String? = null
 }
 
 data class ConfirmRequest(

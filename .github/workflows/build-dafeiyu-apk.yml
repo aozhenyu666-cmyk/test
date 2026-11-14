@@ -1,7 +1,7 @@
 name: Build 大肥鱼 Android APK (phone test)
 on:
   push:
-    branches: [dafeiyu-apk, ccr-5d2829ec-e6vr54, deepseek/round4, deepseek/round7, deepseek/round8, deepseek/round9]
+    branches: [dafeiyu-apk, ccr-5d2829ec-e6vr54, deepseek/round4, deepseek/round7, deepseek/round8, deepseek/round9, feat/cognitive-autonomy-v2]
     paths:
       - ".github/workflows/build-dafeiyu-apk.yml"
       - "app/**"
@@ -38,8 +38,9 @@ jobs:
           node-version: '22'
       - name: Companion plugin tests (fail fast, before the long build)
         run: |
-          cd app/assets/engine/plugins/dsh-go-companion && node --test test/*.test.mjs
-          cd ../dsh-go-memory && node --test test/*.test.mjs
+          (cd app/assets/engine/plugins/dsh-go-companion && node --test test/*.test.mjs)
+          (cd app/assets/engine/plugins/dsh-go-memory && node --test test/*.test.mjs)
+          (cd tooling/pc-companion-sync && node --test test/*.test.mjs)
       - name: End-to-end on the real DSH engine (warm, cold, 40 feature checks)
         run: bash tooling/companion-e2e/run.sh
       - uses: subosito/flutter-action@v2
