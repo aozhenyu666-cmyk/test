@@ -22,6 +22,10 @@ import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 
 /// 一局的草稿。字段名和插件 `planwire.js` 的 item 一致：多发一个键就是多一处要同步的地方。
+///
+/// 工作包（第九轮第三项）也是同一张表：目标 / 第一步 / 后续步骤 / 交付物 / 验收方式 / 卡住时。
+/// 判合格不合格仍然只有插件一处（`packet.js`）；这里只做一件插件做不到的事——
+/// 已经写了一半的包当场标出来，免得他点了「就按这一份来」才看到退回。
 class PlanRow {
   PlanRow({
     required this.protocolId,
@@ -30,8 +34,16 @@ class PlanRow {
     required this.budget,
     List<String>? need,
     List<String>? allow,
+    this.goal = '',
+    this.first = '',
+    List<String>? steps,
+    this.deliverable = '',
+    this.acceptKind = '',
+    this.acceptWhat = '',
+    this.stuck = '',
   })  : need = need ?? <String>[],
-        allow = allow ?? <String>[];
+        allow = allow ?? <String>[],
+        steps = steps ?? <String>[];
 
   String protocolId;
   String title;
@@ -40,6 +52,42 @@ class PlanRow {
   final List<String> need;
   final List<String> allow;
 
+  String goal;
+  String first;
+  final List<String> steps;
+  String deliverable;
+
+  /// 三类之一：`evidence` 证据 / `basis` 依据 / `judge` 判断。空串表示还没选。
+  String acceptKind;
+  String acceptWhat;
+  String stuck;
+
+  /// 一格都没填就没有工作包：草案本来就没有，不拦。
+  bool get hasPacket =>
+      goal.isNotEmpty ||
+      first.isNotEmpty ||
+      steps.isNotEmpty ||
+      deliverable.isNotEmpty ||
+      acceptKind.isNotEmpty ||
+      acceptWhat.isNotEmpty ||
+      stuck.isNotEmpty;
+
+  /// 写得半半拉拉的包：只报插件一定会退回的那几条，动词那条由插件判（判断规则不在手机里复制）。
+  String get packetProblem {
+    if (!hasPacket) return '';
+    if (first.isEmpty) return '缺第一步';
+    if (deliverable.isEmpty) return '缺交付物';
+    if (acceptKind.isEmpty) return '缺验收方式';
+    if (acceptWhat.isEmpty) return '验收方式没写清怎么验';
+    return '';
+  }
+
+  static const acceptNames = <String, String>{
+    'evidence': '证据（截图、文件变化、时长、外部提交）',
+    'basis': '依据（对照答案、原文、他之前的记录）',
+    'judge': '判断（按事先写好的标准打分，每天最多 2 个）',
+  };
+
   Map<String, Object?> toWire() => {
         'protocolId': protocolId,
         'title': title,
@@ -47,6 +95,15 @@ class PlanRow {
         'budget': budget,
         'need': need,
         'allow': allow,
+        if (hasPacket)
+          'packet': {
+            'goal': goal,
+            'first': first,
+            'steps': steps,
+            'deliverable': deliverable,
+            'accept': {'kind': acceptKind, 'what': acceptWhat},
+            if (stuck.isNotEmpty) 'stuck': stuck,
+          },
       };
 }
 
@@ -86,6 +143,10 @@ class _PlanPageState extends State<PlanPage> {
   /// 比率算不出时插件给 null——显示「—」，不显示 0%，那是两回事。
   Map<String, Object?> _numbers = const {};
 
+  /// 十分钟倒计时还剩多少毫秒（插件按主机时钟算好给），和计划那一句话。
+  int _acceptLeftMs = 0;
+  String _sentence = '';
+
   @override
   void initState() {
     super.initState();
@@ -106,6 +167,8 @@ class _PlanPageState extends State<PlanPage> {
       _protocols = _protocolList(day?['protocols']);
       _min = day?['min'] is int ? day!['min'] as int : 0;
       _numbers = day?['numbers'] is Map ? Map<String, Object?>.from(day!['numbers'] as Map) : const {};
+      _acceptLeftMs = day?['acceptLeftMs'] is int ? day!['acceptLeftMs'] as int : 0;
+      _sentence = day?['sentence'] is String ? day!['sentence'] as String : '';
       _rows = _rowsOf(day?['plan']);
       if (_rows.isEmpty) _rows = [_blank()];
     });
@@ -124,9 +187,25 @@ class _PlanPageState extends State<PlanPage> {
             budget: i['budget'] is int ? i['budget'] as int : 30,
             need: _strings(i['need']),
             allow: _strings(i['allow']),
+            goal: _str(_packetOf(i)?['goal']),
+            first: _str(_packetOf(i)?['first']),
+            steps: _strings(_packetOf(i)?['steps']),
+            deliverable: _str(_packetOf(i)?['deliverable']),
+            acceptKind: _str(_acceptOf(i)?['kind']),
+            acceptWhat: _str(_acceptOf(i)?['what']),
+            stuck: _str(_packetOf(i)?['stuck']),
           ),
     ];
   }
+
+  static Map? _packetOf(Map i) => i['packet'] is Map ? i['packet'] as Map : null;
+
+  static Map? _acceptOf(Map i) {
+    final p = _packetOf(i);
+    return p != null && p['accept'] is Map ? p['accept'] as Map : null;
+  }
+
+  static String _str(Object? raw) => raw is String ? raw : '';
 
   static List<String> _strings(Object? raw) =>
       raw is List ? [for (final x in raw) if (x is String && x.isNotEmpty) x] : const [];
@@ -212,12 +291,78 @@ class _PlanPageState extends State<PlanPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  /// 改工作包里的一行字。空着交回来就是清空——他有权把这一局的工作包整个撤掉。
+  Future<void> _editText(int index, String which, {String hint = ''}) async {
+    final row = _rows[index];
+    final now = switch (which) {
+      'goal' => row.goal,
+      'first' => row.first,
+      'deliverable' => row.deliverable,
+      'acceptWhat' => row.acceptWhat,
+      'stuck' => row.stuck,
+      'steps' => row.steps.join('、'),
+      _ => '',
+    };
+    final text = await showAppSheet<String>(
+      context,
+      isScrollControlled: true,
+      builder: (_) => _TextSheet(title: _fieldTitle(which), hint: hint, initial: now),
+    );
+    if (text == null || !mounted) return;
+    final v = text.trim();
+    setState(() {
+      if (which == 'goal') row.goal = v;
+      if (which == 'first') row.first = v;
+      if (which == 'deliverable') row.deliverable = v;
+      if (which == 'acceptWhat') row.acceptWhat = v;
+      if (which == 'stuck') row.stuck = v;
+      if (which == 'steps') {
+        row.steps
+          ..clear()
+          ..addAll(v.split(RegExp(r'[、,，>→]')).map((s) => s.trim()).where((s) => s.isNotEmpty).take(5));
+      }
+    });
+  }
+
+  static String _fieldTitle(String which) => switch (which) {
+        'goal' => '这一局要达成什么',
+        'first' => '第一步（2 分钟内能开始的一个动作）',
+        'deliverable' => '交付物（做成什么算做成）',
+        'acceptWhat' => '怎么验（说清看到什么算过）',
+        'stuck' => '卡住时怎么办（可以不写）',
+        'steps' => '后续步骤（用、隔开，最多 5 步）',
+        _ => '这一行',
+      };
+
+  Future<void> _pickAccept(int index) async {
+    final row = _rows[index];
+    final picked = await showAppSheet<String>(
+      context,
+      builder: (_) => _PickerSheet<String>(
+        title: '这一局怎么验',
+        rows: [
+          for (final e in PlanRow.acceptNames.entries) (label: e.value, value: e.key),
+        ],
+        selected: row.acceptKind,
+        keyOf: (k) => k,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => row.acceptKind = picked);
+  }
+
   Future<void> _submit() async {
     if (_saving) return;
     // 没选局型的行不算一局：插件那边会把它当坏条目丢掉，交上去就成了「0 局」的计划。
     // 这条不是替插件校验应用——应用还是插件说了算——它只挡住「这一行根本没填完」。
     if (_rows.any((r) => r.protocolId.isEmpty)) {
       _say('每一局都要先选是哪种局。');
+      return;
+    }
+    // 写了一半的工作包当场拦住：插件一定会退回，不如先在眼前标出来。
+    final bad = _rows.where((r) => r.packetProblem.isNotEmpty).toList();
+    if (bad.isNotEmpty) {
+      _say('${bad.first.title}：${bad.first.packetProblem}。');
       return;
     }
     setState(() {
@@ -262,6 +407,7 @@ class _PlanPageState extends State<PlanPage> {
           )
         else ...[
           if (_numbers.isNotEmpty) ...[_numbersCard(), const SizedBox(height: 12)],
+          if (_sentence.isNotEmpty || _acceptLeftMs > 0) ...[_planCard(), const SizedBox(height: 12)],
           for (var i = 0; i < _rows.length; i += 1) _card(i),
           const SizedBox(height: 12),
           ListPageCard(
@@ -323,6 +469,30 @@ class _PlanPageState extends State<PlanPage> {
             title: topText,
             subtitle: '这些分钟花在这一局不允许的 App 上',
             subtitleMaxLines: 2,
+          ),
+      ],
+    );
+  }
+
+  /// 计划本身那一张：十分钟倒计时 + 计划全文。
+  /// 倒计时是插件按主机时钟算的（手机的钟可能不准），这里只负责显示，不自己减。
+  Widget _planCard() {
+    final leftMin = (_acceptLeftMs / 60_000).ceil();
+    return ListPageCard(
+      children: [
+        if (_acceptLeftMs > 0)
+          ListPageRow(
+            icon: AppIcons.time,
+            title: '还有 $leftMin 分钟就按这一份生效',
+            subtitle: '十分钟内随便改；不改也会自动生效',
+            subtitleMaxLines: 2,
+          ),
+        if (_sentence.isNotEmpty)
+          ListPageRow(
+            icon: AppIcons.calendar,
+            title: _sentence,
+            subtitle: '这一份已经定了就这样跑，不要再问今天想做什么',
+            subtitleMaxLines: 3,
           ),
       ],
     );
@@ -394,9 +564,70 @@ class _PlanPageState extends State<PlanPage> {
             subtitleColor: row.allow.isEmpty ? DshColors.of(context).danger : null,
             onTap: () => unawaited(_pickApps(index, need: false)),
           ),
+          // 工作包：做成什么算做成。缺哪一格就红哪一格，交不上去。
+          ListPageRow(
+            icon: AppIcons.edit,
+            title: '目标',
+            subtitle: row.goal.isEmpty ? '这一局要达成什么' : row.goal,
+            subtitleMaxLines: 2,
+            subtitleColor: row.goal.isEmpty ? DshColors.of(context).textTertiary : null,
+            onTap: () => unawaited(_editText(index, 'goal', hint: '例：投出 3 份简历')),
+          ),
+          ListPageRow(
+            icon: AppIcons.play,
+            title: '第一步',
+            subtitle: row.first.isEmpty ? '2 分钟内能开始的一个动作，含一个动词和应用或物件，≤ 40 字' : row.first,
+            subtitleMaxLines: 2,
+            subtitleColor: _bad(row, 'first') ? DshColors.of(context).danger : null,
+            onTap: () => unawaited(_editText(index, 'first', hint: '例：打开 Boss 直聘，筛选上海后端，看前 10 个')),
+          ),
+          ListPageRow(
+            icon: AppIcons.todo,
+            title: '后续步骤',
+            subtitle: row.steps.isEmpty ? '可以不写，最多 5 步' : row.steps.join(' → '),
+            subtitleMaxLines: 2,
+            onTap: () => unawaited(_editText(index, 'steps', hint: '选 3 个、改简历第二段、投、截图')),
+          ),
+          ListPageRow(
+            icon: AppIcons.done,
+            title: '交付物',
+            subtitle: row.deliverable.isEmpty ? '做成什么算做成（必须写）' : row.deliverable,
+            subtitleMaxLines: 2,
+            subtitleColor: _bad(row, 'deliverable') ? DshColors.of(context).danger : null,
+            onTap: () => unawaited(_editText(index, 'deliverable', hint: '例：3 张投递成功截图')),
+          ),
+          ListPageRow(
+            icon: AppIcons.verified,
+            title: '验收方式',
+            subtitle: row.acceptKind.isEmpty
+                ? '必须选一类：证据 / 依据 / 判断'
+                : (PlanRow.acceptNames[row.acceptKind] ?? row.acceptKind) +
+                    (row.acceptWhat.isEmpty ? '（怎么验还没写）' : '：${row.acceptWhat}'),
+            subtitleMaxLines: 2,
+            subtitleColor: _bad(row, 'accept') ? DshColors.of(context).danger : null,
+            onTap: () => unawaited(_pickAccept(index)),
+          ),
+          ListPageRow(
+            icon: AppIcons.question,
+            title: '卡住时',
+            subtitle: row.stuck.isEmpty ? '可以不写（例：20 分钟无进展就喊卡在哪）' : row.stuck,
+            subtitleMaxLines: 2,
+            onTap: () => unawaited(_editText(index, 'stuck')),
+          ),
         ],
       ),
     );
+  }
+
+  /// 哪一格标红：插件退回来的那一局整张卡红，或者这一格本来就缺。
+  bool _bad(PlanRow row, String field) {
+    if (_missing.contains(row.title)) return true;
+    return switch (field) {
+      'first' => row.hasPacket && row.first.isEmpty,
+      'deliverable' => row.hasPacket && row.deliverable.isEmpty,
+      'accept' => row.hasPacket && (row.acceptKind.isEmpty || row.acceptWhat.isEmpty),
+      _ => false,
+    };
   }
 
   String _label(String pkg) {
@@ -408,6 +639,65 @@ class _PlanPageState extends State<PlanPage> {
 
   static String _clock(int minute) =>
       '${(minute ~/ 60).toString().padLeft(2, '0')}:${(minute % 60).toString().padLeft(2, '0')}';
+}
+
+/// 改一行字用的小抄：工作包的每一格都是一句话，没必要为它开一整个编辑页。
+class _TextSheet extends StatefulWidget {
+  const _TextSheet({required this.title, required this.initial, this.hint = ''});
+
+  final String title;
+  final String initial;
+  final String hint;
+
+  @override
+  State<_TextSheet> createState() => _TextSheetState();
+}
+
+class _TextSheetState extends State<_TextSheet> {
+  late final TextEditingController _ctrl = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SheetTitleBar(widget.title),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(SheetTitleBar.inset, 4, SheetTitleBar.inset, 8),
+              child: TextField(
+                controller: _ctrl,
+                autofocus: true,
+                minLines: 1,
+                maxLines: 4,
+                maxLength: 120,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(hintText: widget.hint.isEmpty ? null : widget.hint),
+                onSubmitted: (v) => Navigator.of(context).pop(v),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(SheetTitleBar.inset, 4, SheetTitleBar.inset, 16),
+              child: FilledButton(
+                onPressed: () => Navigator.of(context).pop(_ctrl.text),
+                child: Text(context.l10n.commonDone),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _Protocol {

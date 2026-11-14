@@ -193,6 +193,8 @@ object BuiltinPluginGuest {
                 "lib/escalate.js",
                 // R8 P1/P2 接线：计划的节拍。引擎停过之后过点的局记空局、不补开。
                 "lib/planwire.js",
+                // R9 第三项：工作包。计划里每一局的目标/第一步/交付物/验收方式，局官按它问。
+                "lib/packet.js",
                 // R8 W2：墙的面板。数据只读 machine/wall_voice/settings 的现成结论。
                 "lib/wall_panel.js",
                 // R8 W2：墙与审查两个页面的视图。

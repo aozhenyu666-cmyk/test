@@ -89,6 +89,8 @@ import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from
 import { boutsTileStatus, buildBoutsSnapshot } from './bouts_panel.js'
 // 第八轮 P1/P2：计划的节拍。草案、到点开局、过点记空局的规则全在 planwire.js，这里只接线。
 import { appPrompt, missingApps, planLines, planOf, tick } from './planwire.js'
+import { planSentence, PLAN_CONFIRM_MS } from './dayplan.js'
+import { badPackets, judgeOver, normPacket, openSay, packetPrompt } from './packet.js'
 // 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
 import { buildWallSnapshot } from './wall_panel.js'
 import { wallAuditView, wallView } from './wall_view.js'
@@ -3145,12 +3147,28 @@ export function apply(ctx) {
         bad: Number(dg.bouts?.bad) || 0,
         self: Number(dg.bouts?.self) || 0,
       }
-      return { v: 1, ok: true, plan: stored, min: zoneMinuteOfDay(now, tz), recent, protocols, numbers }
+      // 第三项：十分钟倒计时按主机时钟算（手机的钟可能不准），只剩毫秒数给手机显示。
+      const leftMs = stored.accepted ? 0 : Math.max(0, (Number(stored.at) || 0) + PLAN_CONFIRM_MS - now)
+      return {
+        v: 1, ok: true, plan: stored, min: zoneMinuteOfDay(now, tz), recent, protocols, numbers,
+        acceptLeftMs: leftMs, sentence: planSentence(stored),
+      }
     }
     const raw = Array.isArray(body?.items) ? body.items : []
     const plan = { ...stored, items: raw.map((i) => ({ ...(i || {}) })).filter((i) => i && i.protocolId) }
     const miss = missingApps(plan)
     if (miss.length) return { v: 1, ok: false, code: 'apps-missing', missing: miss, text: appPrompt(plan) }
+    // 第三项：缺交付物或验收方式的工作包进不了计划（工作包压根没写的不挡——草案本来就没有）。
+    const apps = Array.isArray(config.apps) ? config.apps : []
+    const bad = badPackets(plan, { apps })
+    if (bad.length) {
+      return {
+        v: 1, ok: false, code: 'packet-missing', missing: bad.map((b) => b.title),
+        text: packetPrompt(plan, { apps }),
+      }
+    }
+    const over = judgeOver(plan)
+    if (over) return { v: 1, ok: false, code: 'judge-over', text: over }
     // 写之前过一遍 normItem（planOf 会做），坏条目直接丢掉，不留半张计划。
     const next = planOf({ ...plan, day, edits: (Number(stored.edits) || 0) + 1, accepted: true, at: now }, day)
     writeJson(stateFile('plan.json'), next)
@@ -4849,7 +4867,7 @@ export function apply(ctx) {
     if (r.action === 'draft' || r.action === 'confirm') record({ state: 'plan-' + r.action, at: now, items: r.plan.items.length })
     if (r.action === 'skip') record({ state: 'plan-skip', at: now, why: r.why })
     if (!r.start) return r
-    const started = startBout(r.start, { apps: r.apps, by: 'plan' })
+    const started = startBout(r.start, { apps: r.apps, packet: r.packet, by: 'plan' })
     record({ state: 'plan-open', at: now, protocolId: r.start, ok: started.ok })
     // 局开了＝他已经回到轨道上：L1 压下来的计划模态到这里结束（施工书 P1「只能以一份计划生效结束」）。
     if (started.ok) {
@@ -5921,8 +5939,11 @@ export function apply(ctx) {
     if (!protocol) return { ok: false, toast: '没有这个协议：' + String(protocolId || '') }
     if (live && !live.official.view().closed) return { ok: false, toast: '已经有一局在跑，先收局。' }
     dropLive()
+    // 第九轮第三项：工作包先洗一遍再进局。不合格的不进——但开局本身不因此失败，
+    // 计划里那一局的字段校验在提交那一步已经挡过一次了。
+    const pkt = normPacket(opts.packet).ok ? normPacket(opts.packet).packet : null
     const db = openBoutsDb(memoryPath())
-    const official = createOfficial({ protocol, db, home: home() })
+    const official = createOfficial({ protocol, db, home: home(), packet: pkt })
     const started = official.start()
     if (!started.ok) {
       try {
@@ -5933,13 +5954,15 @@ export function apply(ctx) {
       const why = started.error === 'busy' ? '库里已经有一局在跑。' : '开局失败：' + started.error
       return { ok: false, toast: why }
     }
-    live = { official, db, protocol, openedAt: Date.now() }
+    live = { official, db, protocol, packet: pkt, openedAt: Date.now() }
     record({ state: 'bout-open', at: Date.now(), protocolId: protocol.id, via: 'panel' })
     // 行为大脑：谁开的局。计划到点自动开的不算他自己开（主动开局比的分母和分子）。
     brainRt.noteBout({ protocolId: protocol.id, outcome: 'open', self: opts.by !== 'plan' }, Date.now())
     // 第九轮：开局时带了 App 要求就记下（严格模式和「切出」都按它判）。
     if (opts.apps && typeof opts.apps === 'object') presetRt.setApps('current', opts.apps, Date.now(), String(opts.by || 'panel'))
-    return { ok: true, toast: '开局：' + protocol.name + '。' + String(started.say || '') }
+    // 第三项：局官的第一句必须是工作包的第一步（施工书总验收第 4 条）。
+    const head = openSay(pkt)
+    return { ok: true, toast: '开局：' + protocol.name + '。' + (head || String(started.say || '')), say: head || String(started.say || '') }
   }
 
   function answerBout(text, form = 'text', channel = 'text', hold = false) {
@@ -6031,9 +6054,10 @@ export function apply(ctx) {
   function boutsRoute(body) {
     const action = String(body?.action || '')
     if (!action) return boutsShareRoute(body)
-    // 第九轮：计划界面开局时一并带上这一局的必需 / 允许应用（严格模式和「切出」按它判）。
+    // 第九轮：计划界面开局时一并带上这一局的必需 / 允许应用（严格模式和「切出」按它判）；
+    // 第三项起再带工作包（局官第一句就念第一步）。
     if (action === 'open') {
-      const r = startBout(String(body?.protocolId || ''), { apps: body?.apps, by: 'panel' })
+      const r = startBout(String(body?.protocolId || ''), { apps: body?.apps, packet: body?.packet, by: 'panel' })
       return { v: 1, ...r }
     }
     if (!['ask', 'spoken', 'answer', 'fallback'].includes(action)) {

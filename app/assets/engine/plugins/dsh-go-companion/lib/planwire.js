@@ -13,6 +13,7 @@
 import { draftOf, planSentence, planTimeout } from './dayplan.js'
 import { nextDue } from './autobout.js'
 import { dayKindOf, settingsOf } from './settings.js'
+import { normPacket, packetLines } from './packet.js'
 
 /** 过点这么久就记空局，不补开。 */
 export const LATE_SKIP_MIN = 20
@@ -48,6 +49,10 @@ function normItem(raw) {
   // 第九轮 B1：每局带「必需 / 允许」应用。开局时跟着 startBout 一起交给严格模式（施工书 §5）。
   if (Array.isArray(raw.need)) item.need = pkgsOf(raw.need)
   if (Array.isArray(raw.allow)) item.allow = pkgsOf(raw.allow)
+  // 第九轮第三项：这一局的工作包。存的是洗过的字段，判合不合格在提交那一步
+  // （packet.badPackets）——这里只是不让脏字段进文件。
+  const pkt = normPacket(raw.packet)
+  if (pkt.ok) item.packet = pkt.packet
   if (raw.why) item.why = String(raw.why).slice(0, 60)
   if (Number(raw.openedAt) > 0) item.openedAt = Number(raw.openedAt)
   if (raw.missed) item.missed = String(raw.missed).slice(0, 60)
@@ -104,7 +109,7 @@ export function tick(input) {
   const day = Number(input.day) || 0
   const min = Number(input.min) || 0
   const plan = planOf(input.stored, day)
-  const out = { plan, action: 'hold', start: '', apps: null, sentence: '', why: '', nextAt: now + 60_000 }
+  const out = { plan, action: 'hold', start: '', apps: null, packet: null, item: '', sentence: '', why: '', nextAt: now + 60_000 }
 
   // 1. 换天了还没有草案：出草案。刚出还不算数（10 分钟内他可以改，也可以不理）。
   if (plan.rolled) {
@@ -168,6 +173,9 @@ export function tick(input) {
     out.action = 'open'
     out.start = next.protocolId
     out.apps = { need: [...(next.need || [])], allow: [...(next.allow || [])] }
+    // 第九轮第三项：到点自动开局也要把工作包带上（以前只带 apps，局官开局无从问起）。
+    out.packet = next.packet || null
+    out.item = next.title || ''
     out.sentence = next.title + '，' + next.budget + ' 分钟，开始。'
     steps += 1
     break
@@ -210,7 +218,12 @@ export function planLines(plan, { now = 0, min = 0 } = {}) {
     ? '今天的局已经定了（' + items.length + ' 局，还差 ' + left.length + ' 局没开）。不要再问他今天想做什么，也不要提议换一批。'
     : '今天的草案（十分钟没改就按它生效）：'
   const lines = [head]
-  for (const i of items) lines.push('- ' + mark(i) + (i.why ? '：' + i.why : ''))
+  for (const i of items) {
+    lines.push('- ' + mark(i) + (i.why ? '：' + i.why : ''))
+    // 第三项：工作包跟着那一行走，鲸澜备计划时看得见已经写了什么、还缺什么。
+    for (const l of packetLines(i.packet)) lines.push('    ' + l)
+    if (!i.packet) lines.push('    （这一局还没有工作包：目标、第一步、交付物、验收方式都还没写）')
+  }
   if (done.length) lines.push('已经开过 ' + done.length + ' 局。')
   if (skipped.length) lines.push('记了 ' + skipped.length + ' 个空局——空局是账，不是惩罚，别在现场给他补一局。')
   return lines

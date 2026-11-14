@@ -18,6 +18,7 @@ import {
   concreteNouns, countChars, countConcreteNouns, countQuestions, countTopics, fillerRatio, hasConclusion,
 } from './capabilities.js'
 import { createRunner } from './protocol.js'
+import { askOf } from './packet.js'
 
 /** 局官单条上限（字）。 */
 export const OFFICIAL_LIMIT = 40
@@ -125,7 +126,10 @@ export function createOfficial(options = {}) {
 
   function sayNow() {
     const step = runner.current()
-    return step ? step.ask : ''
+    if (!step) return ''
+    // 第九轮第三项：有工作包就对着工作包问——第一拍问「第一步做了吗」，之后问「在第几步」
+    // 并一直追「交付物几张了」。没有工作包就原样返回协议的问句（第十轮之前的局全是这一路）。
+    return askOf(options.packet, { first: Number(runner.index) === 0, stepAsk: step.ask })
   }
 
   function finish(reason) {
@@ -322,7 +326,8 @@ export function createOfficial(options = {}) {
         closed,
         index: runner.index,
         stepId: step ? step.id : '',
-        ask: step ? step.ask : '',
+        // 走 sayNow，不要重新拼一遍：工作包的问句只该有一个来源，两处拼迟早不一致。
+        ask: step ? sayNow() : '',
         limitSec: step ? step.limitSec : 0,
         askedAt: runner.askedAt(),
         remaining: Number(remaining().toFixed(3)),
