@@ -175,13 +175,13 @@ test('M1.3: withdrawal 状态机与 /plan 冷却抑制及目标 App / 实操解�
     const big = agentOf('session-big')
     const h = host({ 'session-sis': sis, 'session-big': big }, 'free')
     const paused = await call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', {
-      roll: 100, timeZone: 'Asia/Shanghai', phone: { app: 'com.ss.android.ugc.aweme', fun: true, screenOn: true },
+      roll: 100, timeZone: 'Asia/Shanghai', phone: { app: 'com.ss.android.ugc.aweme', fun: true, screenOn: true, local: '14:00' },
     })
     assert.equal(paused.body.speak, false)
     assert.equal(paused.body.reason, 'withdrawal')
 
     const released = await call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', {
-      roll: 100, timeZone: 'Asia/Shanghai', phone: { app: 'md.obsidian', label: 'Obsidian', screenOn: true },
+      roll: 100, timeZone: 'Asia/Shanghai', phone: { app: 'md.obsidian', label: 'Obsidian', screenOn: true, local: '14:00' },
     })
     assert.notEqual(released.body.reason, 'withdrawal')
   })
