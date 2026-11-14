@@ -172,6 +172,8 @@ object BuiltinPluginGuest {
                 "lib/protocols/design.json",
                 "lib/protocols/rest.json",
                 "lib/protocols/video_slice_dice.json",
+                "lib/protocols/video_slice_standard.json",
+                "lib/protocols/multi_shuttle_drill.json",
                 "lib/protocols/commute_anti_daydream.json",
                 "lib/protocols/micro_landing_3m.json",
                 // R8 W4：设定（作息模板 / 最少局数 / 局型预算 / 升级阈值）。改紧立即生效，

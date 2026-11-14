@@ -15,10 +15,10 @@ import org.junit.Test
  */
 class PhoneUsageFocusTest {
     private val apps = listOf(
-        AppEntry("微信", "com.tencent.mm"),
-        AppEntry("哔哩哔哩", "tv.danmaku.bili"),
-        AppEntry("Notion", "notion.id"),
-        AppEntry("Notion 日历", "notion.calendar"),
+        AppEntry("微信", PhoneAppIdentity("com.tencent.mm", 10001)),
+        AppEntry("哔哩哔哩", PhoneAppIdentity("tv.danmaku.bili", 10002)),
+        AppEntry("Notion", PhoneAppIdentity("notion.id", 10003)),
+        AppEntry("Notion 日历", PhoneAppIdentity("notion.calendar", 10004)),
     )
 
     private var report: UsageReport? = UsageReport(emptyList(), emptyList())
@@ -40,10 +40,10 @@ class PhoneUsageFocusTest {
         override fun system() = object : SystemApi {
             override fun apps() = apps
             override fun isInstalled(pkg: String) = true
-            override fun launch(app: AppEntry) = error("unexpected launch")
-            override fun urlTarget(url: String) = error("unexpected URL")
-            override fun openUrl(url: String, target: UrlTarget) = error("unexpected URL open")
-            override fun intent(spec: IntentSpec, shareTo: AppEntry?) = error("unexpected intent")
+            override fun prepareLaunch(app: AppEntry) = error("unexpected launch")
+            override fun prepareUrl(url: String) = error("unexpected URL")
+            override fun prepareIntent(spec: IntentSpec, selectedApp: AppEntry?) = error("unexpected intent")
+            override fun launch(plan: SystemLaunch, dispatch: PhoneTasks.SystemDispatch) = error("unexpected launch")
             override fun notify(title: String, text: String) = error("unexpected notify")
             override fun clipboardSet(text: String) = error("unexpected clipboard")
             override fun clipboardGet() = error("unexpected clipboard")
@@ -119,7 +119,7 @@ class PhoneUsageFocusTest {
     @Test
     fun `usage says how to grant the permission instead of guessing`() {
         report = null
-        val out = core.call(PhoneToolCatalog.USAGE, emptyMap())
+        val out = core.call(DafeiyuPhoneTools.USAGE, emptyMap())
         assertTrue(out.isError)
         assertTrue(out.text.contains("使用情况访问"))
     }

@@ -117,8 +117,17 @@ test('M4.2: 新增三套标杆/兜底协议通过 J2 校验、支持别名查询
     'utf8',
   )
   assert.ok(manifestKt.includes('"lib/protocols/video_slice_dice.json"'))
+  assert.ok(manifestKt.includes('"lib/protocols/video_slice_standard.json"'))
+  assert.ok(manifestKt.includes('"lib/protocols/multi_shuttle_drill.json"'))
   assert.ok(manifestKt.includes('"lib/protocols/commute_anti_daydream.json"'))
   assert.ok(manifestKt.includes('"lib/protocols/micro_landing_3m.json"'))
+
+  const multi = builtinProtocolOf('multi_shuttle_drill')
+  const sliceStd = builtinProtocolOf('video_slice_standard')
+  assert.equal(multi?.id, 'multi-shuttle-drill')
+  assert.equal(multi?.type, '思维')
+  assert.equal(sliceStd?.id, 'video-slice-standard')
+  assert.ok(sliceStd.needs.includes('留空填词'))
 })
 
 test('M4.2: composeBoutProtocol 强制执行权限隔离、能力白名单、禁止墙越权及防死循环检查', () => {

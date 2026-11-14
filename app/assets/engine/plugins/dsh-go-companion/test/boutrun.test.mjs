@@ -19,7 +19,8 @@ import { loadProtocol } from '../lib/protocol.js'
 
 const BUILTIN_IDS = [
   'execute', 'study', 'outing', 'design', 'rest',
-  'video-slice-dice', 'commute-anti-daydream', 'micro-landing-3m',
+  'video-slice-dice', 'video-slice-standard', 'multi-shuttle-drill',
+  'commute-anti-daydream', 'micro-landing-3m',
 ]
 
 function withDb(fn) {
@@ -59,12 +60,20 @@ const GOOD = {
   语音复盘: '这一趟理清楚了，结论是先建双向索引再迁移表',
   切开: '先打开终端跑一遍单测',
   落地交件: '三分钟跑完并且修好了第一个报错',
+  '第一球-锚定靶面': '只解决布隆过滤器误判率阈值校准这一个卡点，失败信号是假阴性',
+  '第二球-机制重述': '输入键经多组哈希映射到位数组，只有全置位才可能存在',
+  '第三球-判因对比': '相比哈希表，因为不存原始键，导致无法直接删除，但内存省十倍',
+  '第四球-反例证伪': '当哈希函数高度相关或插入超容时误判率暴涨，因此必须重建扩容',
+  '第五球-盲演迁移': '第一步算误判率、第二步定比特位宽、第三步加计数删除，结论是先压测再上线',
+  开片锚点: '拿走单调时钟防分布式锁租约漂移这一招',
+  边界与反例拆解: '因为NTP跳变导致墙钟倒流，所以必须改用单调时间源',
 }
 
 function goodFor(stepId, turn = 0) {
   // 盖屏/切片填空/唤起串讲要求「不与前次重复」，所以带上轮次避免连续两条完全一样。
   if (stepId === '盖屏') return '讲到哈希表的冲突第' + turn + '次'
   if (stepId === '切片填空') return '这段视频讲了分布式锁，条件是租约续期第' + turn + '段'
+  if (stepId === '每180秒停播填空') return '核心机制是单调时钟租约保护，条件是节点间隔离第' + turn + '段'
   if (stepId === '唤起串讲') return '已经拆完索引结构，结论是先做增量迁移第' + turn + '轮'
   return GOOD[stepId] || '这一步说清楚了'
 }
