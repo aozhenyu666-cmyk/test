@@ -5564,6 +5564,18 @@ abstract class L10n {
   /// **'输入框里的麦克风'**
   String get catalogVoiceInputSummary;
 
+  /// No description provided for @catalogBoutVoice.
+  ///
+  /// In zh, this message translates to:
+  /// **'局 · 语音'**
+  String get catalogBoutVoice;
+
+  /// No description provided for @catalogBoutVoiceSummary.
+  ///
+  /// In zh, this message translates to:
+  /// **'局官念题，你出声答'**
+  String get catalogBoutVoiceSummary;
+
   /// No description provided for @catalogCommunitySharingSection.
   ///
   /// In zh, this message translates to:
@@ -13331,49 +13343,49 @@ abstract class L10n {
   /// No description provided for @interceptTitle.
   ///
   /// In zh, this message translates to:
-  /// **'娱乐拦截'**
+  /// **'娱乐锁机'**
   String get interceptTitle;
 
   /// No description provided for @interceptSubtitle.
   ///
   /// In zh, this message translates to:
-  /// **'你打开自己标记的娱乐 APP 时，DSH 会先拦一下：做完一道小题，或者选一条授权规则，才能进去。拦截和主动搭话各记一本账。'**
+  /// **'进入已标记的娱乐 APP 时强制锁屏：支持严格锁机、专注联动与冷静训练，避免误放行后锁不住。'**
   String get interceptSubtitle;
 
   /// No description provided for @interceptEnabled.
   ///
   /// In zh, this message translates to:
-  /// **'开启娱乐拦截'**
+  /// **'开启娱乐锁机'**
   String get interceptEnabled;
 
   /// No description provided for @interceptEnabledHint.
   ///
   /// In zh, this message translates to:
-  /// **'默认关闭。开启后每次打开下面这些 APP 都会被拦一次；冷却期内不会连着拦。'**
+  /// **'开启后每次打开下面清单里的娱乐 APP 都会进入锁屏；冷却期内不会重复弹窗。'**
   String get interceptEnabledHint;
 
   /// No description provided for @interceptTargets.
   ///
   /// In zh, this message translates to:
-  /// **'要拦的 APP'**
+  /// **'受控娱乐应用'**
   String get interceptTargets;
 
   /// No description provided for @interceptTargetsHint.
   ///
   /// In zh, this message translates to:
-  /// **'这些包名是你自己选的，不是内置的。删掉一个就立刻不拦。'**
+  /// **'支持一键勾选常用视频/游戏或从本机已安装应用中多选；移出后立即停止锁机。'**
   String get interceptTargetsHint;
 
   /// No description provided for @interceptNoTargets.
   ///
   /// In zh, this message translates to:
-  /// **'还没设任何目标 APP'**
+  /// **'尚未添加任何娱乐应用'**
   String get interceptNoTargets;
 
   /// No description provided for @interceptAddTarget.
   ///
   /// In zh, this message translates to:
-  /// **'加一个包名'**
+  /// **'添加娱乐应用'**
   String get interceptAddTarget;
 
   /// No description provided for @interceptAddTargetHint.
@@ -15079,6 +15091,360 @@ abstract class L10n {
   /// In zh, this message translates to:
   /// **'生图,画图,文生图,视频生成,AI 绘画,生成图片,生成视频'**
   String get searchKwMediaGeneration;
+
+  /// No description provided for @mountTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'挂载卡'**
+  String get mountTitle;
+
+  /// No description provided for @mountSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'推导到一半别断。目标 / 已知 / 推到哪，都放他自己的话。'**
+  String get mountSubtitle;
+
+  /// No description provided for @mountRefresh.
+  ///
+  /// In zh, this message translates to:
+  /// **'刷新'**
+  String get mountRefresh;
+
+  /// No description provided for @mountLoading.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在读挂载卡…'**
+  String get mountLoading;
+
+  /// No description provided for @mountFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'读不到挂载卡，稍后再试'**
+  String get mountFailed;
+
+  /// No description provided for @mountStatusOpen.
+  ///
+  /// In zh, this message translates to:
+  /// **'开着的卡'**
+  String get mountStatusOpen;
+
+  /// No description provided for @mountStatusParked.
+  ///
+  /// In zh, this message translates to:
+  /// **'停着的卡'**
+  String get mountStatusParked;
+
+  /// No description provided for @mountStatusClosed.
+  ///
+  /// In zh, this message translates to:
+  /// **'已关掉的卡'**
+  String get mountStatusClosed;
+
+  /// No description provided for @mountStatusNone.
+  ///
+  /// In zh, this message translates to:
+  /// **'还没有卡'**
+  String get mountStatusNone;
+
+  /// No description provided for @mountParkedWhy.
+  ///
+  /// In zh, this message translates to:
+  /// **'停在哪：{why}'**
+  String get mountParkedWhy;
+
+  /// No description provided for @mountEmptyHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'开始推一件事的时候开一张，回头就不用重新问「我在解决什么」。'**
+  String get mountEmptyHint;
+
+  /// No description provided for @mountGoal.
+  ///
+  /// In zh, this message translates to:
+  /// **'目标'**
+  String get mountGoal;
+
+  /// No description provided for @mountGivens.
+  ///
+  /// In zh, this message translates to:
+  /// **'已知条件'**
+  String get mountGivens;
+
+  /// No description provided for @mountGivensEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'还没有已知条件。他手上已经确认的事实，一条条挂上来。'**
+  String get mountGivensEmpty;
+
+  /// No description provided for @mountHandWritten.
+  ///
+  /// In zh, this message translates to:
+  /// **'他手写的'**
+  String get mountHandWritten;
+
+  /// No description provided for @mountFromSource.
+  ///
+  /// In zh, this message translates to:
+  /// **'出处：账本第 {src} 行'**
+  String get mountFromSource;
+
+  /// No description provided for @mountAddGiven.
+  ///
+  /// In zh, this message translates to:
+  /// **'补一条已知条件'**
+  String get mountAddGiven;
+
+  /// No description provided for @mountGivensFull.
+  ///
+  /// In zh, this message translates to:
+  /// **'已知条件满了（最多 5 条），先删一条再来。'**
+  String get mountGivensFull;
+
+  /// No description provided for @mountSteps.
+  ///
+  /// In zh, this message translates to:
+  /// **'中间结论'**
+  String get mountSteps;
+
+  /// No description provided for @mountStepsEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'还没有结论。结论要写清由哪几条已知推出来。'**
+  String get mountStepsEmpty;
+
+  /// No description provided for @mountFromGivens.
+  ///
+  /// In zh, this message translates to:
+  /// **'由第 {from} 条已知推出'**
+  String get mountFromGivens;
+
+  /// No description provided for @mountAddStep.
+  ///
+  /// In zh, this message translates to:
+  /// **'补一条结论'**
+  String get mountAddStep;
+
+  /// No description provided for @mountStepNeedsGiven.
+  ///
+  /// In zh, this message translates to:
+  /// **'卡上还没有已知条件，结论无从推起。'**
+  String get mountStepNeedsGiven;
+
+  /// No description provided for @mountStepsFull.
+  ///
+  /// In zh, this message translates to:
+  /// **'结论满了（最多 5 条），先删一条再来。'**
+  String get mountStepsFull;
+
+  /// No description provided for @mountPending.
+  ///
+  /// In zh, this message translates to:
+  /// **'她提议挂一条'**
+  String get mountPending;
+
+  /// No description provided for @mountPendingStep.
+  ///
+  /// In zh, this message translates to:
+  /// **'中间结论：点头之后还要指明由哪几条已知推出'**
+  String get mountPendingStep;
+
+  /// No description provided for @mountPendingGiven.
+  ///
+  /// In zh, this message translates to:
+  /// **'已知条件'**
+  String get mountPendingGiven;
+
+  /// No description provided for @mountAccept.
+  ///
+  /// In zh, this message translates to:
+  /// **'点头，挂上去'**
+  String get mountAccept;
+
+  /// No description provided for @mountAccepted.
+  ///
+  /// In zh, this message translates to:
+  /// **'挂上了'**
+  String get mountAccepted;
+
+  /// No description provided for @mountDrop.
+  ///
+  /// In zh, this message translates to:
+  /// **'不要这条'**
+  String get mountDrop;
+
+  /// No description provided for @mountDropped.
+  ///
+  /// In zh, this message translates to:
+  /// **'不要了'**
+  String get mountDropped;
+
+  /// No description provided for @mountActions.
+  ///
+  /// In zh, this message translates to:
+  /// **'接下来'**
+  String get mountActions;
+
+  /// No description provided for @mountOpen.
+  ///
+  /// In zh, this message translates to:
+  /// **'开一张新卡'**
+  String get mountOpen;
+
+  /// No description provided for @mountOpenHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'一句话说清这次要解决什么。他原话最好。'**
+  String get mountOpenHint;
+
+  /// No description provided for @mountPark.
+  ///
+  /// In zh, this message translates to:
+  /// **'先停起来'**
+  String get mountPark;
+
+  /// No description provided for @mountParkHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'说一句停在哪，下次回来从这儿接。'**
+  String get mountParkHint;
+
+  /// No description provided for @mountResume.
+  ///
+  /// In zh, this message translates to:
+  /// **'接着推这张'**
+  String get mountResume;
+
+  /// No description provided for @mountResumeHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'回到停下的地方，目标和已知都还在。'**
+  String get mountResumeHint;
+
+  /// No description provided for @mountClose.
+  ///
+  /// In zh, this message translates to:
+  /// **'关掉这张卡'**
+  String get mountClose;
+
+  /// No description provided for @mountCloseHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'关掉之后只读，卡还在但不再进每轮注入。'**
+  String get mountCloseHint;
+
+  /// No description provided for @mountClosed.
+  ///
+  /// In zh, this message translates to:
+  /// **'关掉了'**
+  String get mountClosed;
+
+  /// No description provided for @mountOtherCards.
+  ///
+  /// In zh, this message translates to:
+  /// **'别的卡'**
+  String get mountOtherCards;
+
+  /// No description provided for @mountGoalPrompt.
+  ///
+  /// In zh, this message translates to:
+  /// **'这次要解决什么（尽量用他原话）'**
+  String get mountGoalPrompt;
+
+  /// No description provided for @mountGivenPrompt.
+  ///
+  /// In zh, this message translates to:
+  /// **'他已经确认的一条事实'**
+  String get mountGivenPrompt;
+
+  /// No description provided for @mountStepPrompt.
+  ///
+  /// In zh, this message translates to:
+  /// **'推到哪儿了（一句话）'**
+  String get mountStepPrompt;
+
+  /// No description provided for @mountStepPick.
+  ///
+  /// In zh, this message translates to:
+  /// **'这条结论由哪几条已知推出'**
+  String get mountStepPick;
+
+  /// No description provided for @mountParkPrompt.
+  ///
+  /// In zh, this message translates to:
+  /// **'停在哪：推到哪一步、回来从哪接'**
+  String get mountParkPrompt;
+
+  /// No description provided for @mountOpened.
+  ///
+  /// In zh, this message translates to:
+  /// **'开卡了'**
+  String get mountOpened;
+
+  /// No description provided for @mountAdded.
+  ///
+  /// In zh, this message translates to:
+  /// **'挂上了'**
+  String get mountAdded;
+
+  /// No description provided for @mountParked.
+  ///
+  /// In zh, this message translates to:
+  /// **'停好了'**
+  String get mountParked;
+
+  /// No description provided for @mountResumed.
+  ///
+  /// In zh, this message translates to:
+  /// **'接着推'**
+  String get mountResumed;
+
+  /// No description provided for @mountGoalEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'开卡要先有一句目标。'**
+  String get mountGoalEmpty;
+
+  /// No description provided for @mountCardOpen.
+  ///
+  /// In zh, this message translates to:
+  /// **'已经有一张开着的卡，先停放或关掉它。'**
+  String get mountCardOpen;
+
+  /// No description provided for @mountNoCard.
+  ///
+  /// In zh, this message translates to:
+  /// **'现在没有开着的卡。'**
+  String get mountNoCard;
+
+  /// No description provided for @mountNotUserText.
+  ///
+  /// In zh, this message translates to:
+  /// **'卡上只能放他自己的原话，不能放总结。'**
+  String get mountNotUserText;
+
+  /// No description provided for @mountParkNeedsWhy.
+  ///
+  /// In zh, this message translates to:
+  /// **'停放要说一句停在哪。'**
+  String get mountParkNeedsWhy;
+
+  /// No description provided for @mountNeedsSource.
+  ///
+  /// In zh, this message translates to:
+  /// **'提议要带账本行号，没有出处的不提议。'**
+  String get mountNeedsSource;
+
+  /// No description provided for @mountMiniCounts.
+  ///
+  /// In zh, this message translates to:
+  /// **'已知 {givens}/{maxGivens} · 推到 {steps}/{maxSteps}'**
+  String get mountMiniCounts;
+
+  /// No description provided for @mountMiniAsk.
+  ///
+  /// In zh, this message translates to:
+  /// **'他说的和卡上对不上：继续这张，还是先停放？'**
+  String get mountMiniAsk;
 
   /// No description provided for @nearbyThisChat.
   ///
@@ -32234,6 +32600,186 @@ abstract class L10n {
   /// **'语音模型下载失败，打开 App 重试'**
   String get voiceModelNoticeFailed;
 
+  /// No description provided for @voiceOutSection.
+  ///
+  /// In zh, this message translates to:
+  /// **'声音输出'**
+  String get voiceOutSection;
+
+  /// No description provided for @voiceOutFooter.
+  ///
+  /// In zh, this message translates to:
+  /// **'念出来的文字会发给你选的服务。关掉就只用手机自带语音，文字不出手机。'**
+  String get voiceOutFooter;
+
+  /// No description provided for @voiceOutEnable.
+  ///
+  /// In zh, this message translates to:
+  /// **'外接语音'**
+  String get voiceOutEnable;
+
+  /// No description provided for @voiceOutEnableHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'局官、大鱼、小鱼共用这一档声音'**
+  String get voiceOutEnableHint;
+
+  /// No description provided for @voiceOutService.
+  ///
+  /// In zh, this message translates to:
+  /// **'服务'**
+  String get voiceOutService;
+
+  /// No description provided for @voiceOutKey.
+  ///
+  /// In zh, this message translates to:
+  /// **'密钥'**
+  String get voiceOutKey;
+
+  /// No description provided for @voiceOutKeySet.
+  ///
+  /// In zh, this message translates to:
+  /// **'已填写'**
+  String get voiceOutKeySet;
+
+  /// No description provided for @voiceOutKeyUnset.
+  ///
+  /// In zh, this message translates to:
+  /// **'未填写'**
+  String get voiceOutKeyUnset;
+
+  /// No description provided for @voiceOutOfficial.
+  ///
+  /// In zh, this message translates to:
+  /// **'局官音色'**
+  String get voiceOutOfficial;
+
+  /// No description provided for @voiceOutStrategist.
+  ///
+  /// In zh, this message translates to:
+  /// **'大鱼音色'**
+  String get voiceOutStrategist;
+
+  /// No description provided for @voiceOutCompanion.
+  ///
+  /// In zh, this message translates to:
+  /// **'小鱼音色'**
+  String get voiceOutCompanion;
+
+  /// No description provided for @voiceOutVoiceFollow.
+  ///
+  /// In zh, this message translates to:
+  /// **'跟随服务默认'**
+  String get voiceOutVoiceFollow;
+
+  /// No description provided for @voiceOutPreview.
+  ///
+  /// In zh, this message translates to:
+  /// **'试听'**
+  String get voiceOutPreview;
+
+  /// No description provided for @voiceOutPreviewText.
+  ///
+  /// In zh, this message translates to:
+  /// **'这一局，我记下了。'**
+  String get voiceOutPreviewText;
+
+  /// No description provided for @voiceOutPreviewFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'没能念出来，换个服务或音色再试'**
+  String get voiceOutPreviewFailed;
+
+  /// No description provided for @boutVoiceIntro.
+  ///
+  /// In zh, this message translates to:
+  /// **'局官念一句，你出声答一句。念的时候不算你的时间，念完才开始计时。'**
+  String get boutVoiceIntro;
+
+  /// No description provided for @boutVoiceStart.
+  ///
+  /// In zh, this message translates to:
+  /// **'开始'**
+  String get boutVoiceStart;
+
+  /// No description provided for @boutVoiceStop.
+  ///
+  /// In zh, this message translates to:
+  /// **'停'**
+  String get boutVoiceStop;
+
+  /// No description provided for @boutVoiceSpeaking.
+  ///
+  /// In zh, this message translates to:
+  /// **'局官在念'**
+  String get boutVoiceSpeaking;
+
+  /// No description provided for @boutVoiceListening.
+  ///
+  /// In zh, this message translates to:
+  /// **'在听你说'**
+  String get boutVoiceListening;
+
+  /// No description provided for @boutVoiceJudging.
+  ///
+  /// In zh, this message translates to:
+  /// **'在判这一句'**
+  String get boutVoiceJudging;
+
+  /// No description provided for @boutVoiceWaitAsk.
+  ///
+  /// In zh, this message translates to:
+  /// **'等下一拍'**
+  String get boutVoiceWaitAsk;
+
+  /// No description provided for @boutVoiceWaitText.
+  ///
+  /// In zh, this message translates to:
+  /// **'没听见。打一句也行，或者按停。'**
+  String get boutVoiceWaitText;
+
+  /// No description provided for @boutVoiceDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'这一局结束了。'**
+  String get boutVoiceDone;
+
+  /// No description provided for @boutVoiceFallbackOut.
+  ///
+  /// In zh, this message translates to:
+  /// **'声音用不了，这一句改成文字。'**
+  String get boutVoiceFallbackOut;
+
+  /// No description provided for @boutVoiceFallbackIn.
+  ///
+  /// In zh, this message translates to:
+  /// **'这次没听清，改成打字。'**
+  String get boutVoiceFallbackIn;
+
+  /// No description provided for @boutVoiceSayLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'局官'**
+  String get boutVoiceSayLabel;
+
+  /// No description provided for @boutVoiceHeardLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'你刚才说'**
+  String get boutVoiceHeardLabel;
+
+  /// No description provided for @boutVoiceSubmit.
+  ///
+  /// In zh, this message translates to:
+  /// **'交这句'**
+  String get boutVoiceSubmit;
+
+  /// No description provided for @boutVoiceNoBout.
+  ///
+  /// In zh, this message translates to:
+  /// **'现在没有在跑的局。先在局里开一局，再回来按开始。'**
+  String get boutVoiceNoBout;
+
   /// No description provided for @voiceScribeReadFailed.
   ///
   /// In zh, this message translates to:
@@ -32329,6 +32875,138 @@ abstract class L10n {
   /// In zh, this message translates to:
   /// **'{count} 条规则'**
   String voiceScribeHotwordRules(int count);
+
+  /// No description provided for @wallTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'墙'**
+  String get wallTitle;
+
+  /// No description provided for @wallRefresh.
+  ///
+  /// In zh, this message translates to:
+  /// **'刷新'**
+  String get wallRefresh;
+
+  /// No description provided for @wallThreadEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'还没有审查记录。交一份完成物，墙才会说话。'**
+  String get wallThreadEmpty;
+
+  /// No description provided for @wallThreadFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'读不到墙的记录：{reason}'**
+  String get wallThreadFailed;
+
+  /// No description provided for @wallStatusLocked.
+  ///
+  /// In zh, this message translates to:
+  /// **'锁着'**
+  String get wallStatusLocked;
+
+  /// No description provided for @wallStatusOpen.
+  ///
+  /// In zh, this message translates to:
+  /// **'开着'**
+  String get wallStatusOpen;
+
+  /// No description provided for @wallStatusUntil.
+  ///
+  /// In zh, this message translates to:
+  /// **'锁到 {time}'**
+  String get wallStatusUntil;
+
+  /// No description provided for @wallStatusWhy.
+  ///
+  /// In zh, this message translates to:
+  /// **'原因：{why}'**
+  String get wallStatusWhy;
+
+  /// No description provided for @wallStatusUnknown.
+  ///
+  /// In zh, this message translates to:
+  /// **'读不到墙的状态'**
+  String get wallStatusUnknown;
+
+  /// No description provided for @wallBubbleSubmit.
+  ///
+  /// In zh, this message translates to:
+  /// **'提交'**
+  String get wallBubbleSubmit;
+
+  /// No description provided for @wallBubbleVerdict.
+  ///
+  /// In zh, this message translates to:
+  /// **'判定'**
+  String get wallBubbleVerdict;
+
+  /// No description provided for @wallBubbleRule.
+  ///
+  /// In zh, this message translates to:
+  /// **'规则变更'**
+  String get wallBubbleRule;
+
+  /// No description provided for @wallActionSubmit.
+  ///
+  /// In zh, this message translates to:
+  /// **'提交证据'**
+  String get wallActionSubmit;
+
+  /// No description provided for @wallActionAppeal.
+  ///
+  /// In zh, this message translates to:
+  /// **'申诉'**
+  String get wallActionAppeal;
+
+  /// No description provided for @wallAppealLeft.
+  ///
+  /// In zh, this message translates to:
+  /// **'今天还能申诉 {left} 次'**
+  String get wallAppealLeft;
+
+  /// No description provided for @wallAppealNone.
+  ///
+  /// In zh, this message translates to:
+  /// **'今天的申诉用完了'**
+  String get wallAppealNone;
+
+  /// No description provided for @wallAppealTarget.
+  ///
+  /// In zh, this message translates to:
+  /// **'申诉哪一条判定'**
+  String get wallAppealTarget;
+
+  /// No description provided for @wallAppealEvidence.
+  ///
+  /// In zh, this message translates to:
+  /// **'新的物理证据'**
+  String get wallAppealEvidence;
+
+  /// No description provided for @wallAppealEvidenceHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'文件路径、「截图」，或「某 App N 分钟」。上次交过的那份不算新的。'**
+  String get wallAppealEvidenceHint;
+
+  /// No description provided for @wallAppealSend.
+  ///
+  /// In zh, this message translates to:
+  /// **'提交申诉'**
+  String get wallAppealSend;
+
+  /// No description provided for @wallAppealNoTarget.
+  ///
+  /// In zh, this message translates to:
+  /// **'先选一条判定，再申诉。'**
+  String get wallAppealNoTarget;
+
+  /// No description provided for @wallAppealNoEvidence.
+  ///
+  /// In zh, this message translates to:
+  /// **'申诉必须附一份新的物理证据。'**
+  String get wallAppealNoEvidence;
 
   /// No description provided for @wallpaperTitle.
   ///

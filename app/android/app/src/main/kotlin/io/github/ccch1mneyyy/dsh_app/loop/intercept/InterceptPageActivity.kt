@@ -27,38 +27,33 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import io.github.ccch1mneyyy.dsh_app.R
+import io.github.ccch1mneyyy.dsh_app.MainActivity
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptDrill
+import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptRules
+import io.github.ccch1mneyyy.dsh_app.loop.focus.FocusRuntime
 import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveOverlay
 import io.github.ccch1mneyyy.dsh_app.loop.proactive.ProactiveRuntime
 import io.github.ccch1mneyyy.dsh_app.i18n.AppStrings
 import io.github.ccch1mneyyy.dsh_app.pet.OverlayPalette
 
 /**
- * 濞变箰 APP 鎷︽埅椤?(round 4, M1). One page per interception, bound to the eventId the guard minted
- * when the rule matched 鈥?the same discipline as ProactivePageActivity: the page never invents an id
- * or a timestamp, and every report names the interception it belongs to.
- *
- * **onResume alone is not "the page is on screen".** The intercept ledger counts a *block* only
- * when this page proves it is really in front of the person (decor attached + shown + laid out +
- * focused), because "we showed a blocking page" is a claim about the person's attention. A page
- * started behind the lock screen, or covered at once, must not be recorded as a block.
- *
- * The five ways out, all reported to the guard (which owns the policy and the receipt):
- *
- *   training passed  -> Released("training")   the training page stayed up long enough
- *   authorization    -> Released("rule")       passage for InterceptConfig.releaseMs
- *   whitelist        -> Released("whitelist")  a standing decision, not a timer
- *   pause            -> Paused                 every target let through for a while
- *   emergency exit   -> Exited                 leave at once; never a release
+ * 娱乐 APP 锁机页 (entertainment lock). Bound to the guard-minted eventId; in strict/focus-linked
+ * modes it disables digit drills and whitelist bypasses entirely, and in training mode it enforces
+ * a real calm reflection countdown before the 4-digit drill can unlock a temporary release.
  */
 class InterceptPageActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private var eventId: String? = null
     private var packageName: String? = null
     private var why: String? = null
+    private var lockMode: String = InterceptRules.MODE_TRAINING
+    private var todayCount: Int = 1
+    private var reflectionWaitMs: Long = 15_000L
+    private var reflectionEndWall: Long = 0L
     private var reported = false
 
     /** The block was proven on screen and reported; the page may now offer its ways out. */
@@ -73,6 +68,9 @@ class InterceptPageActivity : Activity() {
      */
     private var drill: InterceptDrill? = null
     private var trainingButton: Button? = null
+    private var reflectionLabel: TextView? = null
+    private var reflectionBar: ProgressBar? = null
+    private var drillPromptView: TextView? = null
     private var drillStatus: TextView? = null
     private val drillButtons = LinkedHashMap<Int, Button>()
 
@@ -93,7 +91,7 @@ class InterceptPageActivity : Activity() {
     /** D7 只读面板：主状态 / 义务 / 额度，全部取插件最后一次 `/plan` 的快照。 */
     private var panelLabel: TextView? = null
 
-    /** 一秒一格：面板重读快照，追问锁那行自己倒数；页面还在就一直排下一格。 */
+    /** 一秒一格：面板重读快照，追问锁与冷静倒计时自己倒数；页面还在就一直排下一格。 */
     private val tick = object : Runnable {
         override fun run() {
             panelLabel?.text = ProactiveRuntime.panelText()
@@ -102,6 +100,7 @@ class InterceptPageActivity : Activity() {
             if (until > 0 && until - System.currentTimeMillis() <= 0) followupUntil = 0L
             if (followupUntil <= 0) followupLabel?.visibility = android.view.View.GONE
             else followupLabel?.text = followupCopy(followupUntil)
+            if (lockMode != InterceptRules.MODE_STRICT) render()
             main.postDelayed(this, 1_000L)
         }
     }
@@ -166,6 +165,14 @@ class InterceptPageActivity : Activity() {
         eventId = id
         packageName = start.getStringExtra(EXTRA_PACKAGE)
         why = start.getStringExtra(EXTRA_WHY)
+        lockMode = InterceptRules.normalizeLockMode(
+            start.getStringExtra(EXTRA_LOCK_MODE) ?: InterceptRuntime.effectiveLockMode(),
+        )
+        todayCount = start.getIntExtra(EXTRA_TODAY_COUNT, InterceptRuntime.guardOrNull()?.state?.countToday ?: 1)
+        reflectionWaitMs = start.getLongExtra(EXTRA_TRAINING_MS, InterceptRuntime.config().trainingMs).coerceAtLeast(15_000L)
+        val openSince = start.getLongExtra(EXTRA_OPEN_SINCE, 0L)
+        val baseWall = if (openSince > 0L) openSince else System.currentTimeMillis()
+        reflectionEndWall = baseWall + reflectionWaitMs
         // 追问锁（接口约定 §5）：active 期间窗口不可划走，到 `until` 自己结束，问完按 `backTo` 回主状态。
         followupUntil = ProactiveRuntime.followupUntil()
         followupBackTo = ProactiveRuntime.followupBackTo()
@@ -173,6 +180,7 @@ class InterceptPageActivity : Activity() {
         drill = InterceptRuntime.drill(id)
         live[id] = this
         setContentView(content(label))
+        render()
         awaitVisible()
     }
 
@@ -246,9 +254,14 @@ class InterceptPageActivity : Activity() {
     }
 
 
+    private fun reflectionRemainingMs(now: Long = System.currentTimeMillis()): Long =
+        (reflectionEndWall - now).coerceAtLeast(0L)
+
     private fun release(how: String) {
         val id = eventId ?: return
         if (reported) return
+        if (lockMode == InterceptRules.MODE_STRICT) return
+        if (how == InterceptRuntime.RELEASE_TRAINING && reflectionRemainingMs() > 0L) return
         reported = true
         main.removeCallbacks(proof)
         val opened = InterceptRuntime.onReleased(id, how)
@@ -273,15 +286,25 @@ class InterceptPageActivity : Activity() {
         }
     }
 
-    private fun pause() {
+    private fun returnToTaskOrDsh() {
         val id = eventId ?: return
         if (reported) return
         reported = true
         main.removeCallbacks(proof)
-        InterceptRuntime.onPaused(id)
-        val pkg = packageName
+        InterceptRuntime.onExited(id)
         if (!isFinishing) finish()
-        if (pkg != null) InterceptRuntime.openTarget(this, pkg)
+        val taskPkg = if (FocusRuntime.isActive()) FocusRuntime.taskPackage() else ""
+        val launch = if (taskPkg.isNotBlank()) packageManager.getLaunchIntentForPackage(taskPkg) else null
+        runCatching {
+            if (launch != null) {
+                startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } else {
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
     }
 
     /**
@@ -622,6 +645,7 @@ class InterceptPageActivity : Activity() {
 
     private fun appendChat(line: String) {
         val view = chatLog ?: return
+        chatScroll?.visibility = android.view.View.VISIBLE
         view.append(if (view.text.isNullOrEmpty()) line else "\n\n$line")
         chatScroll?.post { chatScroll?.fullScroll(ScrollView.FOCUS_DOWN) }
     }
@@ -662,41 +686,60 @@ class InterceptPageActivity : Activity() {
     private fun unregister() { eventId?.let { if (live[it] === this) live.remove(it) } }
 
     private fun render() {
+        if (lockMode == InterceptRules.MODE_STRICT) return
+        val remainingMs = reflectionRemainingMs()
+        val remainingSec = ((remainingMs + 999L) / 1000L).toInt()
+        val readyAfterCalm = remainingMs == 0L
+        val releaseMinutes = (InterceptRuntime.releaseMs() / 60_000L).coerceAtLeast(1L).toInt()
+
+        reflectionLabel?.text = if (readyAfterCalm) {
+            "冷静完成 · 请按顺序完成下方数字训练"
+        } else {
+            "先停下来冷静 $remainingSec 秒（倒计时结束前禁用数字解锁）"
+        }
+        reflectionBar?.let { bar ->
+            val maxMs = reflectionWaitMs.toInt().coerceAtLeast(1000)
+            if (bar.max != maxMs) bar.max = maxMs
+            bar.progress = (reflectionWaitMs - remainingMs).toInt().coerceIn(0, maxMs)
+        }
+
         val d = drill
         val solved = d?.solved == true
         trainingButton?.let { b ->
-            b.text = AppStrings.get(
-                this,
-                if (solved) R.string.intercept_training else R.string.intercept_training_locked,
-            )
-            // The button only ever offers what the guard will accept: a solved drill.
-            b.isEnabled = shown && solved
-            b.alpha = if (b.isEnabled) 1f else 0.5f
+            b.text = when {
+                !readyAfterCalm -> "先冷静 $remainingSec 秒"
+                solved -> "冷静训练通过 · 临时放行 $releaseMinutes 分钟"
+                else -> "完成上方数字训练后放行"
+            }
+            b.isEnabled = shown && readyAfterCalm && solved
+            b.alpha = if (b.isEnabled) 1f else 0.45f
         }
         drillStatus?.let { t ->
             t.text = when {
                 d == null -> ""
-                solved -> AppStrings.get(this, R.string.intercept_training)
+                !readyAfterCalm -> "等待冷静倒计时结束（$remainingSec 秒）…"
+                solved -> "训练通过，下方按钮已解锁"
                 d.wrongAttempts > 0 && d.cursor == 0 -> AppStrings.get(this, R.string.intercept_drill_wrong)
                 else -> AppStrings.get(this, R.string.intercept_drill_progress, d.cursor, d.candidates.size)
             }
         }
-        renderDrillButtons()
+        renderDrillButtons(readyAfterCalm)
     }
 
-    /** The candidate buttons: pressed ones go quiet, and the order is never hinted. */
-    private fun renderDrillButtons() {
+    /** The candidate buttons: locked during reflection countdown, pressed ones go quiet. */
+    private fun renderDrillButtons(readyAfterCalm: Boolean) {
         val d = drill ?: return
         val order = if (d.ascending) d.candidates.sorted() else d.candidates.sortedDescending()
         val done = order.take(d.cursor).toSet()
         drillButtons.forEach { (value, button) ->
-            button.isEnabled = shown && !d.solved && value !in done
-            button.alpha = if (button.isEnabled) 1f else 0.5f
+            button.isEnabled = shown && readyAfterCalm && !d.solved && value !in done
+            button.alpha = if (button.isEnabled) 1f else 0.4f
         }
     }
 
     /** One press: forwarded to the guard, which is the only thing that can accept a pass. */
     private fun tapDrill(value: Int) {
+        if (lockMode == InterceptRules.MODE_STRICT || reflectionRemainingMs() > 0L) return
         val id = eventId ?: return
         if (InterceptRuntime.tapDrill(id, value)) {
             drill = InterceptRuntime.drill(id)
@@ -710,47 +753,92 @@ class InterceptPageActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, dp(4))
         }
-        for (value in d.candidates) {
+        for ((idx, value) in d.candidates.withIndex()) {
             row.addView(pillButton(value.toString(), weight = 1f, onTap = { tapDrill(value) }).apply {
                 minimumWidth = dp(56)
                 drillButtons[value] = this
             }, LinearLayout.LayoutParams(0, dp(46), 1f).apply {
-                marginEnd = dp(6)
+                if (idx < d.candidates.lastIndex) marginEnd = dp(6)
             })
         }
         return row
     }
 
+    private fun modeChipText(): String = when {
+        lockMode == InterceptRules.MODE_STRICT && InterceptRuntime.config().lockMode == InterceptRules.MODE_LINKED -> "专注联动 · 严格锁"
+        lockMode == InterceptRules.MODE_STRICT -> "严格锁机"
+        else -> "冷静训练模式"
+    }
 
-    private fun content(label: String): LinearLayout {
+    private fun content(label: String): android.view.View {
         val ctx = this
-        val releaseMinutes = (InterceptRuntime.releaseMs() / 60_000L).coerceAtLeast(1L).toInt()
-        return LinearLayout(ctx).apply {
+        drillButtons.clear()
+        reflectionLabel = null
+        reflectionBar = null
+        trainingButton = null
+        drillStatus = null
+        val isStrict = lockMode == InterceptRules.MODE_STRICT
+        val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(18), dp(20), dp(16))
+            setPadding(dp(20), dp(18), dp(20), dp(18))
             background = GradientDrawable().apply {
                 cornerRadius = dp(24).toFloat()
                 setColor(palette.fill)
                 setStroke(dp(1).coerceAtLeast(1), palette.stroke)
             }
-            addView(TextView(ctx).apply {
-                text = "DSH Go · 专注守护"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                setTextColor(palette.accent)
-                setTypeface(typeface, Typeface.BOLD)
-                setPadding(0, 0, 0, dp(4))
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dp(8))
+                addView(TextView(ctx).apply {
+                    text = "DSH Go · 娱乐锁机"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                    setTextColor(palette.accent)
+                    setTypeface(typeface, Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(TextView(ctx).apply {
+                    text = modeChipText()
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setTextColor(if (isStrict) palette.onAccent else palette.onTonal)
+                    setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(9), dp(4), dp(9), dp(4))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(999).toFloat()
+                        setColor(if (isStrict) palette.accent else palette.tonal)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { marginEnd = dp(6) }
+                })
+                addView(TextView(ctx).apply {
+                    text = "今日第 ${todayCount.coerceAtLeast(1)} 次"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setTextColor(palette.muted)
+                    setPadding(dp(8), dp(4), dp(8), dp(4))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(999).toFloat()
+                        setColor(palette.pressed)
+                        setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                    }
+                })
             })
             addView(TextView(ctx).apply {
                 text = AppStrings.get(ctx, R.string.intercept_title, label)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 21f)
                 setTextColor(palette.ink)
                 setTypeface(typeface, Typeface.BOLD)
             })
             addView(TextView(ctx).apply {
-                text = AppStrings.get(ctx, R.string.intercept_body, label)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                text = if (isStrict) {
+                    "已锁定「$label」。当前处于严格锁机模式：已禁用数字放行、规则直通与加入白名单。先收手回到任务或 DSH。"
+                } else {
+                    "你打开了「$label」。必须先完成冷静倒计时，再完成序列训练才能临时放行（不会永久跳过）。"
+                }
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
                 setTextColor(palette.muted)
-                setLineSpacing(0f, 1.25f)
+                setLineSpacing(0f, 1.3f)
                 setPadding(0, dp(8), 0, dp(12))
             })
             // 大肥鱼自己的理由（/plan 的 force.why），不是一句固定的"娱乐拦截"。
@@ -842,8 +930,9 @@ class InterceptPageActivity : Activity() {
             chatLog = log
             addView(ScrollView(ctx).apply {
                 chatScroll = this
+                visibility = android.view.View.GONE
                 addView(log)
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(140)).apply {
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(112)).apply {
                 bottomMargin = dp(8)
             })
             addView(LinearLayout(ctx).apply {
@@ -892,52 +981,117 @@ class InterceptPageActivity : Activity() {
                 visibility = android.view.View.GONE
                 setPadding(0, dp(2), 0, dp(4))
             })
-            // The 训练题: the only door that does not spend money or time, and it has to be earned.
-            drill?.let { d ->
-                addView(TextView(ctx).apply {
-                    text = AppStrings.get(
-                        ctx, R.string.intercept_drill_prompt,
-                        AppStrings.get(
-                            ctx,
-                            if (d.ascending) R.string.intercept_drill_ascending else R.string.intercept_drill_descending,
-                        ),
-                    )
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    setTextColor(palette.muted)
-                    setPadding(0, dp(4), 0, dp(8))
+            if (isStrict) {
+                addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(16).toFloat()
+                        setColor(palette.tonal)
+                        setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                    }
+                    addView(TextView(ctx).apply {
+                        text = "严格锁机生效中"
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                        setTextColor(palette.ink)
+                        setTypeface(typeface, Typeface.BOLD)
+                    })
+                    addView(TextView(ctx).apply {
+                        text = "已彻底禁用数字放行、规则放行与白名单直通。如需调整锁机模式，请返回 DSH Go → 娱乐锁机。"
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                        setTextColor(palette.muted)
+                        setLineSpacing(0f, 1.3f)
+                        setPadding(0, dp(4), 0, 0)
+                    })
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(4)
+                    bottomMargin = dp(6)
                 })
-                addView(drillRow(ctx))
-                addView(TextView(ctx).apply {
-                    drillStatus = this
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                    setTextColor(palette.muted)
-                    setPadding(0, dp(2), 0, dp(4))
-                })
-            }
-            // Gemini 互动舱：主按钮是"回 Gemini"，不是回桌面。点它静默关页，不触发违抗复查。
-            if (ProactiveRuntime.sessionActive()) {
-                ProactiveRuntime.sessionApp()?.let { gem ->
-                    val label = if (ProactiveRuntime.sessionIsGemini()) R.string.intercept_return_gemini else R.string.intercept_return_session
-                    addView(pillButton(AppStrings.get(ctx, label), primary = true, onTap = {
-                        reported = true
-                        eventId?.let { InterceptRuntime.onDismissed(it, "gemini") }
-                        if (!isFinishing) finish()
-                        InterceptRuntime.openTarget(ctx, gem)
-                    }))
+                // Gemini 互动舱：主按钮是"回 Gemini"，否则一键回到任务 / DSH。
+                if (ProactiveRuntime.sessionActive()) {
+                    ProactiveRuntime.sessionApp()?.let { gem ->
+                        val gemLabel = if (ProactiveRuntime.sessionIsGemini()) R.string.intercept_return_gemini else R.string.intercept_return_session
+                        addView(pillButton(AppStrings.get(ctx, gemLabel), primary = true, onTap = {
+                            reported = true
+                            eventId?.let { InterceptRuntime.onDismissed(it, "gemini") }
+                            if (!isFinishing) finish()
+                            InterceptRuntime.openTarget(ctx, gem)
+                        }))
+                    }
+                } else {
+                    val backLabel = if (FocusRuntime.isActive() && FocusRuntime.taskPackage().isNotBlank()) {
+                        "回到当前任务"
+                    } else {
+                        "收手 · 回到 DSH Go"
+                    }
+                    addView(pillButton(backLabel, primary = true, onTap = { returnToTaskOrDsh() }))
                 }
+            } else {
+                addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(16).toFloat()
+                        setColor(palette.pressed)
+                        setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                    }
+                    addView(TextView(ctx).apply {
+                        reflectionLabel = this
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                        setTextColor(palette.ink)
+                        setTypeface(typeface, Typeface.BOLD)
+                        setPadding(0, 0, 0, dp(6))
+                    })
+                    addView(ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
+                        reflectionBar = this
+                        progressTintList = ColorStateList.valueOf(palette.accent)
+                        progressBackgroundTintList = ColorStateList.valueOf(palette.stroke)
+                    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)))
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(4)
+                    bottomMargin = dp(6)
+                })
+                // The 训练题: locked during reflection countdown, solved only via guard validation.
+                drill?.let { d ->
+                    addView(TextView(ctx).apply {
+                        drillPromptView = this
+                        text = AppStrings.get(
+                            ctx, R.string.intercept_drill_prompt,
+                            AppStrings.get(
+                                ctx,
+                                if (d.ascending) R.string.intercept_drill_ascending else R.string.intercept_drill_descending,
+                            ),
+                        )
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                        setTextColor(palette.muted)
+                        setPadding(0, dp(4), 0, dp(8))
+                    })
+                    addView(drillRow(ctx))
+                    addView(TextView(ctx).apply {
+                        drillStatus = this
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        setTextColor(palette.muted)
+                        setPadding(0, dp(2), 0, dp(4))
+                    })
+                }
+                if (ProactiveRuntime.sessionActive()) {
+                    ProactiveRuntime.sessionApp()?.let { gem ->
+                        val gemLabel = if (ProactiveRuntime.sessionIsGemini()) R.string.intercept_return_gemini else R.string.intercept_return_session
+                        addView(pillButton(AppStrings.get(ctx, gemLabel), primary = true, onTap = {
+                            reported = true
+                            eventId?.let { InterceptRuntime.onDismissed(it, "gemini") }
+                            if (!isFinishing) finish()
+                            InterceptRuntime.openTarget(ctx, gem)
+                        }))
+                    }
+                }
+                addView(pillButton("", primary = true, onTap = {
+                    if (drill?.solved == true && reflectionRemainingMs() == 0L) {
+                        release(InterceptRuntime.RELEASE_TRAINING)
+                    }
+                }).apply { trainingButton = this })
             }
-            // The ways out, in increasing order of commitment: the drill, timed pass, standing pass,
-            // pause everything, leave. Every button names this page's eventId, never a new one.
-            addView(pillButton("", primary = true, onTap = {
-                if (drill?.solved == true) release(InterceptRuntime.RELEASE_TRAINING)
-            }).apply { trainingButton = this })
-            addView(pillButton(AppStrings.get(ctx, R.string.intercept_rule, releaseMinutes), onTap = {
-                release(InterceptRuntime.RELEASE_RULE)
-            }))
-            addView(pillButton(AppStrings.get(ctx, R.string.intercept_whitelist), onTap = {
-                release(InterceptRuntime.RELEASE_WHITELIST)
-            }))
-            // 破窗与急事 3 分钟并排收纳，减少纵向按钮堆叠。
+            // 破窗与急事 3 分钟并排收纳，彻底移除一键白名单/授权放行/暂停。
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 addView(pillButton(AppStrings.get(ctx, R.string.intercept_break), weight = 1f, onTap = { showBreakglass() }),
@@ -952,19 +1106,17 @@ class InterceptPageActivity : Activity() {
                         })
                 }
             })
-            addView(LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.END
-                addView(pillButton(AppStrings.get(ctx, R.string.intercept_pause), secondary = true, weight = 1f, onTap = { pause() }), LinearLayout.LayoutParams(0, dp(46), 1f).apply {
-                    topMargin = dp(8); marginEnd = dp(6)
-                })
-                addView(pillButton(AppStrings.get(ctx, R.string.intercept_exit), secondary = true, weight = 1f, onTap = { exit() }), LinearLayout.LayoutParams(0, dp(46), 1f).apply {
-                    topMargin = dp(8)
-                })
-            })
+            if (!isStrict || ProactiveRuntime.sessionActive()) {
+                addView(pillButton(AppStrings.get(ctx, R.string.intercept_exit), secondary = true, onTap = { exit() }))
+            }
             // 急事底线：电话 / 短信 / 地图 / 支付永远从这里能打开。
             quickRow(ctx)?.let { addView(it) }
             refreshChatSend()
+        }
+        return ScrollView(ctx).apply {
+            isFillViewport = false
+            overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            addView(card)
         }
     }
 
@@ -1003,6 +1155,9 @@ class InterceptPageActivity : Activity() {
         private const val EXTRA_WHY = "intercept_why"
         private const val EXTRA_TRAINING_MS = "intercept_training_ms"
         private const val EXTRA_DEADLINE = "intercept_deadline"
+        private const val EXTRA_LOCK_MODE = "intercept_lock_mode"
+        private const val EXTRA_OPEN_SINCE = "intercept_open_since"
+        private const val EXTRA_TODAY_COUNT = "intercept_today_count"
 
         /** ~2 s of retries for the visibility proof, like the proactive page. */
         private const val PROOF_STEP_MS = 100L
@@ -1023,12 +1178,26 @@ class InterceptPageActivity : Activity() {
         fun isOnScreen(eventId: String): Boolean = onScreenId == eventId && live[eventId] != null
 
         /** Started from DSH's own process; false if the system refused at once. */
-        fun start(context: Context, eventId: String, pkg: String, label: String, trainingMs: Long, deadline: Long, why: String? = null): Boolean = runCatching {
+        fun start(
+            context: Context,
+            eventId: String,
+            pkg: String,
+            label: String,
+            trainingMs: Long,
+            deadline: Long,
+            why: String? = null,
+            lockMode: String = InterceptRules.MODE_TRAINING,
+            openSinceWall: Long = System.currentTimeMillis(),
+            todayCount: Int = 1,
+        ): Boolean = runCatching {
             context.startActivity(
                 Intent(context, InterceptPageActivity::class.java)
                     .putExtra(EXTRA_EVENT_ID, eventId).putExtra(EXTRA_PACKAGE, pkg)
                     .putExtra(EXTRA_LABEL, label.take(64)).putExtra(EXTRA_TRAINING_MS, trainingMs)
                     .putExtra(EXTRA_DEADLINE, deadline).putExtra(EXTRA_WHY, why?.take(200))
+                    .putExtra(EXTRA_LOCK_MODE, InterceptRules.normalizeLockMode(lockMode))
+                    .putExtra(EXTRA_OPEN_SINCE, openSinceWall)
+                    .putExtra(EXTRA_TODAY_COUNT, todayCount)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or Intent.FLAG_ACTIVITY_NO_ANIMATION),
             )
         }.isSuccess

@@ -206,20 +206,52 @@ class MainActivity : Activity() {
         modalCheck = CheckBox(this).apply {
             text = "引擎异常或失联时弹出最高优先级拦截模态"
             setTextColor(GuardianTheme.textPrimary(darkMode))
-            setOnCheckedChangeListener { _, checked ->
+            setOnCheckedChangeListener { box, checked ->
                 if (suppressCheckEvents) return@setOnCheckedChangeListener
-                cachedModal = checked
+                if (!checked) {
+                    suppressCheckEvents = true
+                    box.isChecked = true
+                    suppressCheckEvents = false
+                    confirmDisableSafeguard(
+                        title = "确认关闭拦截模态保险",
+                        warning = "关闭后，当 DSH Go 引擎退出或无障碍被关掉时，哨兵将不再弹出强拦截模态。为防止冲动关闭，请持续按住 3.5 秒确认。",
+                    ) {
+                        suppressCheckEvents = true
+                        modalCheck.isChecked = false
+                        suppressCheckEvents = false
+                        cachedModal = false
+                        pushSettings()
+                    }
+                    return@setOnCheckedChangeListener
+                }
+                cachedModal = true
                 pushSettings()
             }
         }
         lockCheck = CheckBox(this).apply {
             text = "引擎彻底失联且唤醒冷却失效时尝试锁屏（可选）"
             setTextColor(GuardianTheme.textPrimary(darkMode))
-            setOnCheckedChangeListener { _, checked ->
+            setOnCheckedChangeListener { box, checked ->
                 if (suppressCheckEvents) return@setOnCheckedChangeListener
-                cachedLock = checked
+                if (!checked) {
+                    suppressCheckEvents = true
+                    box.isChecked = true
+                    suppressCheckEvents = false
+                    confirmDisableSafeguard(
+                        title = "确认关闭失联锁屏保险",
+                        warning = "关闭后，引擎失联且唤醒失败时不再触发系统锁屏。请持续按住 3.5 秒确认。",
+                    ) {
+                        suppressCheckEvents = true
+                        lockCheck.isChecked = false
+                        suppressCheckEvents = false
+                        cachedLock = false
+                        pushSettings()
+                    }
+                    return@setOnCheckedChangeListener
+                }
+                cachedLock = true
                 pushSettings()
-                if (checked && !LockExecutor(this@MainActivity).adminActive()) {
+                if (!LockExecutor(this@MainActivity).adminActive()) {
                     requestDeviceAdmin()
                 }
             }
@@ -227,9 +259,25 @@ class MainActivity : Activity() {
         rebindCheck = CheckBox(this).apply {
             text = "授权 WRITE_SECURE_SETTINGS 时自动拉起大肥鱼无障碍"
             setTextColor(GuardianTheme.textPrimary(darkMode))
-            setOnCheckedChangeListener { _, checked ->
+            setOnCheckedChangeListener { box, checked ->
                 if (suppressCheckEvents) return@setOnCheckedChangeListener
-                cachedRebind = checked
+                if (!checked) {
+                    suppressCheckEvents = true
+                    box.isChecked = true
+                    suppressCheckEvents = false
+                    confirmDisableSafeguard(
+                        title = "确认关闭无障碍自动拉起",
+                        warning = "关闭后，大肥鱼无障碍意外断开时哨兵不再自动恢复。请持续按住 3.5 秒确认。",
+                    ) {
+                        suppressCheckEvents = true
+                        rebindCheck.isChecked = false
+                        suppressCheckEvents = false
+                        cachedRebind = false
+                        pushSettings()
+                    }
+                    return@setOnCheckedChangeListener
+                }
+                cachedRebind = true
                 pushSettings()
             }
         }
@@ -413,6 +461,66 @@ class MainActivity : Activity() {
                 refreshStatus()
             }
         }
+    }
+
+    private fun confirmDisableSafeguard(title: String, warning: String, onConfirmed: () -> Unit) {
+        val dp = { v: Int -> GuardianTheme.dp(this, v) }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(8))
+        }
+        val msgView = GuardianTheme.makeBodyText(this, darkMode, warning).apply {
+            setPadding(0, 0, 0, dp(14))
+        }
+        val baseHoldText = "按住 3.5 秒确认关闭"
+        var dialogRef: android.app.AlertDialog? = null
+        val holdBtn = GuardianTheme.makePrimaryButton(this, baseHoldText, GuardianTheme.errColor()).apply {
+            var downAt = 0L
+            var ticker: Runnable? = null
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        downAt = android.os.SystemClock.elapsedRealtime()
+                        val r = object : Runnable {
+                            override fun run() {
+                                if (downAt == 0L) return
+                                val leftMs = (3_500L - (android.os.SystemClock.elapsedRealtime() - downAt)).coerceAtLeast(0L)
+                                if (leftMs <= 0L) {
+                                    downAt = 0L
+                                    text = baseHoldText
+                                    dialogRef?.dismiss()
+                                    onConfirmed()
+                                } else {
+                                    text = String.format(java.util.Locale.US, "继续按住 %.1f 秒确认关闭…", leftMs / 1000f)
+                                    handler.postDelayed(this, 100L)
+                                }
+                            }
+                        }
+                        ticker = r
+                        handler.post(r)
+                        v.isPressed = true
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        downAt = 0L
+                        ticker?.let { handler.removeCallbacks(it) }
+                        ticker = null
+                        text = baseHoldText
+                        v.isPressed = false
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+        container.addView(msgView)
+        container.addView(holdBtn)
+        dialogRef = android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(container)
+            .setNegativeButton("保持开启", null)
+            .create()
+        dialogRef.show()
     }
 
     private fun pushSettings() {

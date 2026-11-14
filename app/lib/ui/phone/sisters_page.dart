@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../proactive/proactive_state.dart';
 import '../common/list_page_row.dart';
 import '../common/segmented_pill.dart';
+import '../common/status_chip.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
@@ -43,6 +44,7 @@ class _SistersPageState extends State<SistersPage> {
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
   SistersView? _view;
   DepositView? _deposit;
+  bool _loading = true;
   int _index = 0;
 
   @override
@@ -52,15 +54,20 @@ class _SistersPageState extends State<SistersPage> {
   }
 
   Future<void> _refresh() async {
-    final view = await _channel.sisters();
-    final deposit = await _channel.deposit();
-    if (!mounted) return;
-    setState(() {
-      _view = view;
-      _deposit = deposit;
-      // 刷新后当前这张可能已经不存在（比如双人格被关掉），回到第一张。
-      if (_index >= (view?.cards.length ?? 0)) _index = 0;
-    });
+    if (mounted) setState(() => _loading = true);
+    try {
+      final view = await _channel.sisters();
+      final deposit = await _channel.deposit();
+      if (!mounted) return;
+      setState(() {
+        _view = view;
+        _deposit = deposit;
+        // 刷新后当前这张可能已经不存在（比如双人格被关掉），回到第一张。
+        if (_index >= (view?.cards.length ?? 0)) _index = 0;
+      });
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
@@ -95,17 +102,60 @@ class _SistersPageState extends State<SistersPage> {
           const SizedBox(height: 12),
         ],
         if (view == null)
-          const ListPageCard(
-            children: [ListPageRow(icon: AppIcons.info, title: '连不上大肥鱼，稍后再试', titleMaxLines: 2)],
+          ListPageCard(
+            children: _loading
+                ? const [
+                    ListPageRow(
+                      icon: AppIcons.refresh,
+                      title: '正在连接大肥鱼…',
+                      subtitle: '正在读取姐妹角色卡、近期记忆与墙的审计记录',
+                      subtitleMaxLines: 2,
+                    ),
+                  ]
+                : [
+                    const ListPageRow(
+                      icon: AppIcons.info,
+                      title: '连不上大肥鱼，稍后再试',
+                      subtitle: '请先确认大肥鱼引擎与伴侣插件已经启动，然后点击下方重试',
+                      titleMaxLines: 2,
+                      subtitleMaxLines: 2,
+                    ),
+                    ListPageRow(
+                      icon: AppIcons.refresh,
+                      iconColor: DshColors.of(context).info,
+                      title: '重新连接并读取',
+                      onTap: () => unawaited(_refresh()),
+                    ),
+                  ],
           )
         else if (!view.ok)
           ListPageCard(
-            children: [ListPageRow(icon: AppIcons.info, title: _errorText(view.error), titleMaxLines: 2)],
+            children: [
+              ListPageRow(icon: AppIcons.info, title: _errorText(view.error), titleMaxLines: 2),
+              ListPageRow(
+                icon: AppIcons.refresh,
+                iconColor: DshColors.of(context).info,
+                title: '重新连接并读取',
+                onTap: () => unawaited(_refresh()),
+              ),
+            ],
           )
         else if (view.cards.isEmpty)
-          const ListPageCard(
+          ListPageCard(
             children: [
-              ListPageRow(icon: AppIcons.info, title: '还没有角色卡', subtitle: '双人格可能关着', titleMaxLines: 2),
+              const ListPageRow(
+                icon: AppIcons.info,
+                title: '还没有角色卡',
+                subtitle: '双人格可能暂未开启，或伴侣引擎尚未完成初始化',
+                titleMaxLines: 2,
+                subtitleMaxLines: 2,
+              ),
+              ListPageRow(
+                icon: AppIcons.refresh,
+                iconColor: DshColors.of(context).info,
+                title: '重新读取角色卡',
+                onTap: () => unawaited(_refresh()),
+              ),
             ],
           )
         else ...[
@@ -145,17 +195,23 @@ class _SistersPageState extends State<SistersPage> {
     );
   }
 
-  /// 当前这张：名字 + 一句话定位，人设单独一块。
+  /// 当前这张：名字 + 角色徽章 + 一句话定位，人设单独一块。
   List<Widget> _sisterSection(SistersCard card) {
-    final tint = card.role == 'strategist' ? DshColors.of(context).info : DshColors.of(context).warning;
+    final isStrategist = card.role == 'strategist';
+    final tint = isStrategist ? DshColors.of(context).info : DshColors.of(context).warning;
     return [
       ListPageCard(
+        title: isStrategist ? '谋士姐姐 · 角色卡' : '陪伴妹妹 · 角色卡',
         children: [
           ListPageRow(
-            icon: AppIcons.chat,
+            icon: isStrategist ? AppIcons.calendar : AppIcons.chat,
             iconColor: tint,
             title: card.name,
             titleMaxLines: 2,
+            badge: StatusChip(
+              tone: isStrategist ? StatusTone.ok : StatusTone.warn,
+              label: isStrategist ? '正事 / 推演' : '陪伴 / 在场',
+            ),
             subtitle: card.line.isEmpty ? null : card.line,
             subtitleMaxLines: 3,
           ),
@@ -164,8 +220,8 @@ class _SistersPageState extends State<SistersPage> {
       if (card.persona.isNotEmpty) ...[
         const SizedBox(height: 12),
         ListPageCard(
-          title: '人设',
-          children: [ListPageRow(icon: AppIcons.info, title: card.persona, titleMaxLines: 8)],
+          title: '人设与日常',
+          children: [ListPageRow(icon: AppIcons.info, iconColor: tint, title: card.persona, titleMaxLines: 8)],
         ),
       ],
     ];

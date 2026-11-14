@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -76,9 +77,9 @@ class GuardianModalActivity : Activity() {
 
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
-        // Require either recovery or explicit 3-min pass during engine outage / mirror enforcement.
-        if (currentMode == MODE_ENGINE_DOWN || currentMode == MODE_MIRROR_BLOCK) {
-            actionStatusView.text = "当前受「大肥鱼哨兵」保护，请先唤醒大肥鱼或申请 3 分钟急事放行。"
+        // Require either recovery or explicit 3-min pass during all active protection modes.
+        if (currentMode == MODE_ENGINE_DOWN || currentMode == MODE_MIRROR_BLOCK || currentMode == MODE_TAMPER) {
+            actionStatusView.text = "当前受「大肥鱼哨兵」强制守护：不可直接返回，请先唤醒大肥鱼或申请 3 分钟急事放行。"
             return
         }
         @Suppress("DEPRECATION")
@@ -173,18 +174,57 @@ class GuardianModalActivity : Activity() {
             }
         }
 
+        val consoleIdle = "按住 5 秒查看哨兵控制台（防误触退出）"
         val consoleBtn = GuardianTheme.makeSecondaryButton(
             this,
             darkMode,
-            "查看哨兵控制台",
+            consoleIdle,
         ).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             )
-            setOnClickListener {
-                startActivity(Intent(this@GuardianModalActivity, MainActivity::class.java))
-                if (currentMode == MODE_TAMPER) finish()
+            var downAt = 0L
+            var ticker: Runnable? = null
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downAt = android.os.SystemClock.elapsedRealtime()
+                        actionStatusView.text = "需连续按住 5 秒才可打开控制台，期间请勿松手。"
+                        val r = object : Runnable {
+                            override fun run() {
+                                if (downAt == 0L) return
+                                val elapsed = android.os.SystemClock.elapsedRealtime() - downAt
+                                val leftMs = (CONSOLE_HOLD_MS - elapsed).coerceAtLeast(0L)
+                                if (leftMs <= 0L) {
+                                    downAt = 0L
+                                    text = consoleIdle
+                                    startActivity(Intent(this@GuardianModalActivity, MainActivity::class.java))
+                                } else {
+                                    text = String.format(java.util.Locale.US, "继续按住… 还剩 %.1f 秒", leftMs / 1000f)
+                                    handler.postDelayed(this, 100L)
+                                }
+                            }
+                        }
+                        ticker = r
+                        handler.post(r)
+                        v.isPressed = true
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val wasHolding = downAt != 0L
+                        downAt = 0L
+                        ticker?.let { handler.removeCallbacks(it) }
+                        ticker = null
+                        text = consoleIdle
+                        v.isPressed = false
+                        if (wasHolding && event.actionMasked == MotionEvent.ACTION_UP) {
+                            actionStatusView.text = "按住未满 5 秒，仍处于守护拦截中。"
+                        }
+                        true
+                    }
+                    else -> false
+                }
             }
         }
 
@@ -288,6 +328,7 @@ class GuardianModalActivity : Activity() {
         const val MODE_TAMPER = "tamper"
         const val MODE_MIRROR_BLOCK = "mirror_block"
 
+        private const val CONSOLE_HOLD_MS = 5_000L
         private const val EXTRA_MODE = "mode"
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_REASON = "reason"

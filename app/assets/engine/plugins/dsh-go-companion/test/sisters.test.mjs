@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { COMPANION_LIFE, DEFAULT_NAMES, STRATEGIST_LIFE } from '../lib/roles.js'
+import { buildSnapshot, sistersView } from '../lib/panel.js'
 import { SISTERS, auditOf, cardsOf, groupPrompts, personaOf, sisterLine } from '../lib/sisters.js'
 
 test('卡片：两张，妹妹在前姐姐在后，名字默认取组合里的默认名', () => {
@@ -148,4 +149,15 @@ test('审计：墙的原话原样带出来，超长截断', () => {
   assert.equal(audit.text, '14:05 验收不过：还缺 120 字节')
   const long = auditOf({ auditText: 'x'.repeat(5000), today: '2026-11-09' })
   assert.equal(long.text.length, 2000)
+})
+
+test('原生姐妹面板：视图包含两位姐妹角色卡列表且快照携带鱼丸与鲸澜人设', () => {
+  const view = sistersView()
+  const listNode = view.children.find((n) => n.type === 'list' && n.items?.$ === 'data.sisterCards')
+  assert.ok(listNode, 'sistersView 应包含 data.sisterCards 列表组件')
+  const snap = buildSnapshot({ names: DEFAULT_NAMES })
+  assert.equal(snap.sisterCards.length, 2)
+  assert.ok(snap.sisterCards[0].title.includes('鱼丸'))
+  assert.ok(snap.sisterCards[1].title.includes('鲸澜'))
+  assert.ok(snap.sisterPersonaText.includes('鱼丸') && snap.sisterPersonaText.includes('鲸澜'))
 })

@@ -424,6 +424,64 @@ class InterceptChainTest {
         assertEquals(InterceptConfig.DEFAULT_TARGETS, InterceptConfig.fromMap(emptyMap<String, Any?>()).targets)
     }
 
+    @Test fun strictAndLinkedModesRefuseUserReleaseAndSupportRecovery() {
+        var focusOn = true
+        val store = MemorySnapshotStore()
+        val ledger = book()
+        val g = InterceptGuard(store, ledger, { wall }) { "evt-" + (++seq) }.withStrictLink { focusOn }
+        g.recover(wall)
+        g.setConfig(InterceptConfig(enabled = true, lockMode = InterceptRules.MODE_STRICT, whitelist = setOf(douyin)), wall)
+
+        assertEquals(InterceptRules.MODE_STRICT, g.effectiveLockMode())
+        val block = g.onForeground(bili, env(), wall) as InterceptDecision.Block
+        g.onPageShown(block.eventId, wall + 500L)
+        assertFalse("strict mode refuses drill taps", g.tapDrill(block.eventId, block.drill.candidates.first()))
+        assertFalse("strict mode refuses training unlock", g.onReleased(block.eventId, InterceptGuard.RELEASE_TRAINING, wall + 1_000L))
+        assertFalse("strict mode refuses whitelist bypass", g.onReleased(block.eventId, InterceptGuard.RELEASE_WHITELIST, wall + 1_000L))
+        assertFalse("strict mode refuses lock-screen pause", g.onPaused(block.eventId, InterceptGuard.DEFAULT_PAUSE_MS, wall + 1_000L))
+        assertTrue(g.onExited(block.eventId, wall + 1_500L))
+
+        // Strict mode never leaks via post-exit cooldown: reopening 500ms later blocks immediately
+        val immediateRelock = g.onForeground(bili, env(), wall + 2_000L)
+        assertTrue("strict mode blocks immediately without cooldown", immediateRelock is InterceptDecision.Block)
+        assertTrue(g.onExited((immediateRelock as InterceptDecision.Block).eventId, wall + 2_200L))
+
+        // Linked mode follows strictLinkedActive() and ignores pre-existing training passes while focus is on
+        focusOn = false
+        val afterCooldown = wall + 3 * minute
+        g.setConfig(InterceptConfig(enabled = true, lockMode = InterceptRules.MODE_LINKED, whitelist = setOf(douyin)), afterCooldown)
+        assertEquals(InterceptRules.MODE_TRAINING, g.effectiveLockMode())
+        val trainBlock = g.onForeground(bili, env(), afterCooldown) as InterceptDecision.Block
+        solveDrill(g, trainBlock.eventId)
+        assertTrue("training pass allowed when focus is off", g.onReleased(trainBlock.eventId, InterceptGuard.RELEASE_TRAINING, afterCooldown + 500L))
+        assertTrue(g.onForeground(bili, env(), afterCooldown + 1_000L) is InterceptDecision.Allow)
+
+        // Turning focus on upgrades linked mode to strict and overrides the active 10-minute training pass
+        focusOn = true
+        assertEquals(InterceptRules.MODE_STRICT, g.effectiveLockMode())
+        val linkedStrictBlock = g.onForeground(bili, env(), afterCooldown + 1_500L)
+        assertTrue("linked strict mode blocks despite prior training pass", linkedStrictBlock is InterceptDecision.Block)
+        assertTrue(g.onExited((linkedStrictBlock as InterceptDecision.Block).eventId, afterCooldown + 1_800L))
+
+        // Clearing whitelist restores interception for douyin
+        assertEquals(1, g.clearWhitelist())
+        assertTrue(g.config.whitelist.isEmpty())
+        val afterClear = g.onForeground(douyin, env(), afterCooldown + 2_000L)
+        assertTrue(afterClear is InterceptDecision.Block)
+    }
+
+    @Test fun restoreLockNowClearsPauseAndTemporaryReleases() {
+        val g = guard().armed(InterceptConfig(enabled = true, lockMode = InterceptRules.MODE_TRAINING))
+        val first = g.onForeground(bili, env(), wall) as InterceptDecision.Block
+        solveDrill(g, first.eventId)
+        assertTrue(g.onReleased(first.eventId, InterceptGuard.RELEASE_TRAINING, wall + 1_000L))
+        assertTrue(g.onPaused(null, InterceptGuard.DEFAULT_PAUSE_MS, wall + 1_000L))
+        assertEquals(1, g.activeReleasesCount(wall + 2_000L))
+        assertTrue(g.restoreLockNow())
+        assertEquals(0, g.activeReleasesCount(wall + 2_000L))
+        assertEquals(0L, g.config.pauseUntilWall)
+    }
+
     @Test fun removingATargetClosesThePageItWasShowing() {
         val ledger = book()
         val g = guard(ledger)

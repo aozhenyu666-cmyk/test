@@ -100,16 +100,62 @@ class EmergencyPassActivity : Activity() {
             ).apply { bottomMargin = dp(14) }
         }
 
+        val baseGrantText = "按住 2 秒启用 3 分钟急事放行"
         val grantBtn = GuardianTheme.makePrimaryButton(
             this,
-            "确认启用 3 分钟急事放行",
+            baseGrantText,
             GuardianTheme.accent(),
         ).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { bottomMargin = dp(10) }
-            setOnClickListener { submitPass() }
+            var downAt = 0L
+            var ticker: Runnable? = null
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        val candidate = reasonInput.text?.toString().orEmpty().trim()
+                        if (candidate.length < 2) {
+                            errorView.text = "请先填写至少 2 个字的急事原因，再按住确认。"
+                            return@setOnTouchListener true
+                        }
+                        errorView.text = ""
+                        downAt = android.os.SystemClock.elapsedRealtime()
+                        val r = object : Runnable {
+                            override fun run() {
+                                if (downAt == 0L) return
+                                val leftMs = (2_000L - (android.os.SystemClock.elapsedRealtime() - downAt)).coerceAtLeast(0L)
+                                if (leftMs <= 0L) {
+                                    downAt = 0L
+                                    text = baseGrantText
+                                    submitPass()
+                                } else {
+                                    text = String.format(java.util.Locale.US, "继续按住 %.1f 秒确认放行…", leftMs / 1000f)
+                                    handler.postDelayed(this, 100L)
+                                }
+                            }
+                        }
+                        ticker = r
+                        handler.post(r)
+                        v.isPressed = true
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        val premature = downAt != 0L
+                        downAt = 0L
+                        ticker?.let { handler.removeCallbacks(it) }
+                        ticker = null
+                        text = baseGrantText
+                        v.isPressed = false
+                        if (premature && event.actionMasked == android.view.MotionEvent.ACTION_UP) {
+                            errorView.text = "按住时间不足 2 秒，未启用急事通行。"
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
         }
 
         val cancelBtn = GuardianTheme.makeSecondaryButton(this, darkMode, "返回").apply {

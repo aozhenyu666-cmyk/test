@@ -69,4 +69,31 @@ class BuiltinPluginGuestTest {
             assertEquals("${plugin.id} ships every script", emptySet<String>(), onDisk - plugin.files.toSet())
         }
     }
+
+    /**
+     * Flutter does not recurse into asset subdirectories; every directory containing files listed in
+     * [BuiltinPluginGuest.PLUGINS] must be explicitly declared in `app/pubspec.yaml`, otherwise the
+     * APK misses those assets and `BuiltinPluginGuest.writeFiles` aborts plugin deployment at runtime.
+     */
+    @Test fun pubspecDeclaresEveryPluginDirectoryNeededByGuestManifest() {
+        val appDir = generateSequence(File("").absoluteFile) { it.parentFile }
+            .map { File(it, "app") }
+            .firstOrNull { File(it, "pubspec.yaml").isFile }
+            ?: return
+        val pubspec = File(appDir, "pubspec.yaml").readText()
+        for (plugin in BuiltinPluginGuest.PLUGINS) {
+            for (rel in plugin.files) {
+                val parent = rel.substringBeforeLast('/', "")
+                val assetDir = if (parent.isEmpty()) {
+                    "assets/engine/plugins/${plugin.id}/"
+                } else {
+                    "assets/engine/plugins/${plugin.id}/$parent/"
+                }
+                assertTrue(
+                    "app/pubspec.yaml must declare $assetDir for ${plugin.id}/$rel",
+                    pubspec.contains("- $assetDir"),
+                )
+            }
+        }
+    }
 }

@@ -10,6 +10,7 @@
 // 视图只认 data.* 绑定；数据由 index.js 推。没有任何"放松管控"的按钮——面板只能收紧（开忙时 / 拒绝模式）。
 
 import { trustLabel } from './trust.js'
+import { cardsOf } from './sisters.js'
 import { hm as zoneHm } from './tz.js'
 
 const b = (key) => ({ $: `data.${key}` })
@@ -18,6 +19,9 @@ export function sistersView(_scope, caps = {}) {
   const forms = Array.isArray(caps.components) && caps.components.includes('form')
   const children = [
     { type: 'text', text: b('summary') },
+    { type: 'text', text: '**两位姐妹**', tone: 'muted' },
+    { type: 'list', items: b('sisterCards') },
+    { type: 'text', text: b('sisterPersonaText'), tone: 'muted' },
     {
       type: 'row',
       children: [
@@ -203,7 +207,21 @@ export function buildSnapshot({ entries = [], todayEntries = [], trust, phone, n
     : wall.locked
       ? '现在锁着：' + (wall.kind === 'night' ? '深夜锁' : '默认严格') + (wall.applyWindowOpen ? ' · 申请窗口开着' : '')
       : '现在开放' + (wall.openUntil ? '到 ' + hm(wall.openUntil) : '') + (wall.applyWindowOpen ? ' · 申请窗口开着' : '')
+  const cards = cardsOf(names)
+  const sisterCards = cards.map((c) => ({
+    title: `${c.name} · ${c.role === 'companion' ? '陪伴妹妹' : '谋士姐姐'}`,
+    subtitle: c.line,
+    trailing: c.role === 'companion' ? '陪伴' : '谋划',
+    icon: c.role === 'companion' ? 'chat' : 'book',
+    tone: c.role === 'companion' ? 'warn' : 'info',
+  }))
+  const sisterPersonaText = cards
+    .map((c) => (c.persona ? `**${c.name}**：${c.persona}` : ''))
+    .filter(Boolean)
+    .join('\n')
   return {
+    sisterCards,
+    sisterPersonaText,
     wall: {
       text: wallLine,
       tone: !wall ? 'info' : wall.locked ? 'warn' : 'good',

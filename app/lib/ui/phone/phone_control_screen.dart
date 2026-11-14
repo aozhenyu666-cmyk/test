@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../l10n/l10n.dart';
-import '../../proactive/proactive_state.dart';
 import '../../runtime/local_footprint.dart';
 import '../../runtime/runtime_bridge.dart';
 import '../../runtime/runtime_state.dart';
@@ -33,11 +32,7 @@ import 'a11y_restore_sheet.dart';
 import 'app_rules_page.dart';
 import 'dnd_mode_page.dart';
 import 'loop_test_page.dart';
-import 'proactive_page.dart';
-import 'sisters_page.dart';
-import 'intercept_page.dart';
 import 'phone_disclosure_sheet.dart';
-import 'plan_page.dart';
 import 'phone_background_guide.dart';
 import 'phone_unlock_page.dart';
 import 'phone_widgets.dart';
@@ -362,8 +357,7 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
             ),
           ],
           gap,
-          // 触发测试 / 主动搭话: the first event loop, then the proactive kernel beside it.
-          // Experimental; last on the page so nothing above it moves.
+          // 触发测试: 开发巡检入口；其余大肥鱼能力统一收纳在「大肥鱼中枢」内，避免重复堆叠。
           ListPageCard(
             title: '大肥鱼伴侣',
             children: [
@@ -371,7 +365,7 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
                 icon: AppIcons.bot,
                 iconColor: Theme.of(context).colorScheme.primary,
                 title: '大肥鱼中枢',
-                subtitle: '今日计划、四部门、姐妹记忆与系统护栏的总览入口',
+                subtitle: '今日计划、两姐妹角色卡、墙与申诉、娱乐锁机、专注监督与主动搭话的统一入口',
                 subtitleMaxLines: 2,
                 onTap: () => _push(const CompanionHubPage()),
               ),
@@ -380,47 +374,6 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
                 title: l10n.loopEntryTitle,
                 subtitle: l10n.loopEntrySubtitle,
                 onTap: () => _push(const LoopTestPage()),
-              ),
-              ListPageRow(
-                icon: AppIcons.notificationsOff,
-                title: l10n.proactiveTitle,
-                subtitle: l10n.proactiveSubtitle,
-                subtitleMaxLines: 2,
-                onTap: () => _push(const ProactivePage()),
-              ),
-              // 第九轮 B1：今天的计划。每局必须写清「必需 / 允许应用」，缺了插件不收。
-              ListPageRow(
-                icon: AppIcons.calendar,
-                title: '今天的计划',
-                subtitle: '一局一行：开始时间、时长、必需应用、允许应用。交上去立刻生效',
-                subtitleMaxLines: 2,
-                onTap: () => _push(const PlanPage()),
-              ),
-              // 姐妹（R4-5）：两张角色卡，加一块墙的今日审计。只读——放松规则的入口不在这里。
-              ListPageRow(
-                icon: AppIcons.chat,
-                title: '姐妹',
-                subtitle: '鱼丸和鲸澜各一张卡：她们记得的你、最近说过的话，还有墙今天的审计',
-                subtitleMaxLines: 2,
-                onTap: () => _push(const SistersPage()),
-              ),
-              // 专注监督: the native 5-second pull-back. It is a separate screen because it
-              // must work while the engine is dead; the row is here so it is discoverable.
-              ListPageRow(
-                icon: AppIcons.time,
-                title: '专注监督',
-                subtitle: '离开任务应用 5 秒就全屏拉回；不需要引擎，也不答题',
-                subtitleMaxLines: 2,
-                onTap: () => unawaited(ProactiveChannel().openFocusControl()),
-              ),
-              // 娱乐拦截: its own page, its own ledger. Beside 主动搭话 because both are surfaces the
-              // kernel puts on screen, and because the person needs to see that they are separate.
-              ListPageRow(
-                icon: AppIcons.blocked,
-                title: l10n.interceptTitle,
-                subtitle: l10n.interceptSubtitle,
-                subtitleMaxLines: 2,
-                onTap: () => _push(const InterceptPage()),
               ),
             ],
           ),

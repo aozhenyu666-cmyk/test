@@ -324,11 +324,14 @@ void main() {
       expect(find.textContaining('回执保存失败'), findsOneWidget);
     });
 
-    testWidgets('phone control links to it', (tester) async {
+    testWidgets('phone control links to it via companion hub', (tester) async {
       FakeProactiveNative().install();
       await pumpPhone(tester, const PhoneControlScreen());
-      await tester.scrollUntilVisible(find.text('主动搭话'), 300, scrollable: find.byType(Scrollable).first);
-      await tester.tap(find.text('主动搭话').first);
+      await tester.scrollUntilVisible(find.text('大肥鱼中枢'), 300, scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.text('大肥鱼中枢'));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(find.text('主动搭话与诊断'), 300, scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.text('主动搭话与诊断'));
       await tester.pumpAndSettle();
       expect(find.byType(ProactivePage), findsOneWidget);
     });

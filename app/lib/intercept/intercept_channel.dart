@@ -16,6 +16,22 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+/// Lock discipline modes matching `InterceptRules.MODE_*` on Android.
+abstract final class InterceptLockMode {
+  static const String training = 'training';
+  static const String linked = 'linked';
+  static const String strict = 'strict';
+
+  static String normalize(Object? raw) {
+    final v = raw is String ? raw.trim().toLowerCase() : '';
+    return switch (v) {
+      strict => strict,
+      linked => linked,
+      _ => training,
+    };
+  }
+}
+
 /// The kernel's answer to `status`: config + counters + recent receipts + what is open now.
 class InterceptStatus {
   const InterceptStatus({
@@ -23,6 +39,9 @@ class InterceptStatus {
     required this.counts,
     required this.receipts,
     required this.active,
+    this.effectiveLockMode = InterceptLockMode.training,
+    this.focusActive = false,
+    this.activeReleasesCount = 0,
     this.storageError,
     this.recoveryIssue,
   });
@@ -34,6 +53,15 @@ class InterceptStatus {
   /// The package currently covered by the block page, or null when nothing is intercepted.
   final String? active;
 
+  /// Active lock mode after considering `focusActive` in linked mode (`training` or `strict`).
+  final String effectiveLockMode;
+
+  /// Whether native Focus supervision is currently active.
+  final bool focusActive;
+
+  /// Count of currently active temporary passes (`releases`).
+  final int activeReleasesCount;
+
   /// The kernel could not write its own state. Never hidden: a lost receipt is a lost receipt.
   final String? storageError;
 
@@ -44,14 +72,26 @@ class InterceptStatus {
 
   static InterceptStatus from(Object? raw) {
     final m = raw is Map ? raw : const {};
+    final config = InterceptConfig.from(m['config']);
+    final focusActive = m['focusActive'] == true;
+    final rawEffective = m['effectiveLockMode'];
+    final effective = rawEffective is String
+        ? InterceptLockMode.normalize(rawEffective)
+        : (config.lockMode == InterceptLockMode.strict || (config.lockMode == InterceptLockMode.linked && focusActive)
+            ? InterceptLockMode.strict
+            : InterceptLockMode.training);
+    final rawReleases = m['activeReleasesCount'];
     return InterceptStatus(
-      config: InterceptConfig.from(m['config']),
+      config: config,
       counts: InterceptCounts.from(m['counts']),
       receipts: (m['receipts'] is List ? m['receipts'] as List : const [])
           .map(InterceptReceipt.from)
           .whereType<InterceptReceipt>()
           .toList(),
       active: m['active'] is String ? m['active'] as String : null,
+      effectiveLockMode: effective,
+      focusActive: focusActive,
+      activeReleasesCount: rawReleases is num ? rawReleases.toInt() : 0,
       storageError: m['storageError'] is String ? m['storageError'] as String : null,
       recoveryIssue: m['recoveryIssue'] is String ? m['recoveryIssue'] as String : null,
     );
@@ -93,6 +133,7 @@ class InterceptConfig {
     this.trainingMs = 60 * 1000,
     this.cooldownMs = 2 * 60 * 1000,
     this.dailyMax = 0,
+    this.lockMode = InterceptLockMode.training,
   });
 
   final bool enabled;
@@ -106,6 +147,9 @@ class InterceptConfig {
   /// Interceptions per local day; 0 means no limit.
   final int dailyMax;
 
+  /// Lock discipline mode (`training`, `linked`, `strict`).
+  final String lockMode;
+
   InterceptConfig copyWith({
     bool? enabled,
     List<InterceptTarget>? targets,
@@ -115,6 +159,7 @@ class InterceptConfig {
     int? trainingMs,
     int? cooldownMs,
     int? dailyMax,
+    String? lockMode,
   }) =>
       InterceptConfig(
         enabled: enabled ?? this.enabled,
@@ -125,6 +170,7 @@ class InterceptConfig {
         trainingMs: trainingMs ?? this.trainingMs,
         cooldownMs: cooldownMs ?? this.cooldownMs,
         dailyMax: dailyMax ?? this.dailyMax,
+        lockMode: lockMode ?? this.lockMode,
       );
 
   Map<String, Object?> toWire() => {
@@ -136,6 +182,7 @@ class InterceptConfig {
         'trainingMs': trainingMs,
         'cooldownMs': cooldownMs,
         'dailyMax': dailyMax,
+        'lockMode': InterceptLockMode.normalize(lockMode),
       };
 
   static InterceptConfig from(Object? raw) {
@@ -161,6 +208,7 @@ class InterceptConfig {
       trainingMs: intOf('trainingMs', 60 * 1000),
       cooldownMs: intOf('cooldownMs', 2 * 60 * 1000),
       dailyMax: intOf('dailyMax', 0),
+      lockMode: InterceptLockMode.normalize(m['lockMode']),
     );
   }
 
@@ -323,4 +371,13 @@ class InterceptChannel {
 
   Future<InterceptStatus> resume() async =>
       InterceptStatus.from(await _call<Object?>('resume'));
+
+  Future<InterceptStatus> removeWhitelist(String packageName) async =>
+      InterceptStatus.from(await _call<Object?>('removeWhitelist', {'packageName': packageName}));
+
+  Future<InterceptStatus> clearWhitelist() async =>
+      InterceptStatus.from(await _call<Object?>('clearWhitelist'));
+
+  Future<InterceptStatus> restoreLockNow() async =>
+      InterceptStatus.from(await _call<Object?>('restoreLockNow'));
 }

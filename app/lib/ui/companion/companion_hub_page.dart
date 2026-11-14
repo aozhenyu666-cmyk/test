@@ -4,8 +4,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../plugins/native/native_model.dart' show NativePanel;
+import '../../plugins/native/native_state.dart' show nativeContributionsProvider, rereadNativeContributions;
 import '../../proactive/proactive_state.dart';
+import '../../state/sessions_state.dart' show currentSessionProvider;
 import '../common/list_page_row.dart';
 import '../common/overview_card.dart';
 import '../common/status_chip.dart';
@@ -16,12 +21,13 @@ import '../phone/plan_page.dart';
 import '../phone/proactive_page.dart';
 import '../phone/sisters_page.dart';
 import '../phone/wall_page.dart';
+import '../plugins/native/native_panel.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 import 'bout_voice_page.dart';
 
-class CompanionHubPage extends StatefulWidget {
+class CompanionHubPage extends ConsumerStatefulWidget {
   const CompanionHubPage({super.key, this.channel});
 
   final ProactiveChannel? channel;
@@ -31,10 +37,10 @@ class CompanionHubPage extends StatefulWidget {
   );
 
   @override
-  State<CompanionHubPage> createState() => _CompanionHubPageState();
+  ConsumerState<CompanionHubPage> createState() => _CompanionHubPageState();
 }
 
-class _CompanionHubPageState extends State<CompanionHubPage> {
+class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
 
   bool _loading = true;
@@ -44,6 +50,7 @@ class _CompanionHubPageState extends State<CompanionHubPage> {
   DepositView? _deposit;
   SistersView? _sisters;
   Map<String, Object?>? _planDay;
+  GuardianPairingStatus? _guardian;
 
   @override
   void initState() {
@@ -61,6 +68,7 @@ class _CompanionHubPageState extends State<CompanionHubPage> {
       _channel.deposit().catchError((_) => null),
       _channel.sisters().catchError((_) => null),
       _channel.planDay().catchError((_) => null),
+      _channel.guardianStatus().catchError((_) => null),
     ]);
     if (!mounted) return;
     setState(() {
@@ -70,7 +78,106 @@ class _CompanionHubPageState extends State<CompanionHubPage> {
       _deposit = results[2] is DepositView ? results[2] as DepositView : null;
       _sisters = results[3] is SistersView ? results[3] as SistersView : null;
       _planDay = results[4] is Map<String, Object?> ? results[4] as Map<String, Object?> : null;
+      _guardian = results[5] is GuardianPairingStatus ? results[5] as GuardianPairingStatus : null;
     });
+  }
+
+  Future<void> _openGuardianPairDialog() async {
+    var status = _guardian ?? await _channel.guardianStatus();
+    if (!mounted) return;
+    if (status == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('当前平台暂不支持大肥鱼哨兵互信配对')),
+      );
+      return;
+    }
+    setState(() => _guardian = status);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final current = status!;
+          final hasCode = current.pairCode.isNotEmpty;
+          return AlertDialog(
+            title: const Text('大肥鱼哨兵互信配对'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  current.sameCert
+                      ? '检测到同证书安装：哨兵已免码自动建立互信绑定。'
+                      : current.paired
+                          ? '跨证书互信已绑定成功，哨兵可实时读取引擎健康状态。'
+                          : '若哨兵与大肥鱼使用不同证书签名（如本地/CI 混装），请在下方生成 6 位配对码并填入「大肥鱼哨兵」App。',
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '安装状态：${current.installed ? "已安装哨兵" : "未检测到哨兵 App"} · 互信：${current.paired ? "已绑定" : "待配对"}',
+                  style: Theme.of(dialogContext).textTheme.bodySmall,
+                ),
+                if (hasCode) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(dialogContext).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('6 位一次性配对码（10 分钟有效）', style: Theme.of(dialogContext).textTheme.labelSmall),
+                              const SizedBox(height: 4),
+                              SelectableText(
+                                current.pairCode,
+                                style: Theme.of(dialogContext).textTheme.headlineSmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 4,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(AppIcons.copy, size: 20),
+                          tooltip: '复制配对码',
+                          onPressed: () {
+                            unawaited(Clipboard.setData(ClipboardData(text: current.pairCode)));
+                            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                              const SnackBar(content: Text('已复制 6 位配对码')),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  final next = await _channel.generateGuardianPairCode();
+                  if (next == null) return;
+                  status = next;
+                  if (mounted) setState(() => _guardian = next);
+                  if (dialogContext.mounted) setDialogState(() {});
+                },
+                child: Text(hasCode ? '刷新配对码' : '生成 6 位配对码'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('完成'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   void _openPage(Widget page) {
@@ -145,15 +252,27 @@ class _CompanionHubPageState extends State<CompanionHubPage> {
     return (tone, title, subtitle, footer);
   }
 
+  NativePanel? _boutsPanel() {
+    final plugin = ref.watch(nativeContributionsProvider).plugin('dsh-go-companion');
+    for (final panel in plugin?.panels ?? const <NativePanel>[]) {
+      if (panel.id == 'bouts') return panel;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = DshColors.of(context);
+    final bouts = _boutsPanel();
+    final currentSession = ref.watch(currentSessionProvider);
     final (tone, title, subtitle, footer) = _overviewMeta();
     final depositDone = _deposit?.items.where((e) => e.done).length ?? 0;
     final depositTotal = _deposit?.items.length ?? 0;
     final appealLeft = _sisters?.audit.done;
     final planNeedsGate = _sisters?.planGate ?? false;
     final locked = _wallStatus?['locked'] == true;
+    final planItems = (_planDay?['plan'] is Map ? (_planDay!['plan'] as Map)['items'] : null);
+    final boutCount = planItems is List ? planItems.length : 0;
 
     return AppPage.list(
       title: '大肥鱼中枢',
@@ -183,6 +302,26 @@ class _CompanionHubPageState extends State<CompanionHubPage> {
         ListPageCard(
           title: '快捷动作',
           children: [
+            ListPageRow(
+              icon: AppIcons.today,
+              iconColor: planNeedsGate ? colors.warning : Theme.of(context).colorScheme.primary,
+              title: '今日的局',
+              subtitle: bouts != null
+                  ? '直接进入实时「局」原生面板，开始本拍推局与验收'
+                  : (boutCount > 0
+                      ? '伴侣面板加载中 · 点击同步或进入今日 $boutCount 局计划'
+                      : '先排定今日几局与必需/允许应用，再开「局」更顺畅'),
+              subtitleMaxLines: 2,
+              value: bouts != null ? '进局' : (boutCount > 0 ? '$boutCount 局' : '去排局'),
+              onTap: () {
+                if (bouts != null) {
+                  _openPage(NativePanelPage(panel: bouts, sessionId: currentSession));
+                } else {
+                  rereadNativeContributions(ref);
+                  _openPage(const PlanPage());
+                }
+              },
+            ),
             ListPageRow(
               icon: AppIcons.voice,
               iconColor: Theme.of(context).colorScheme.primary,
@@ -249,8 +388,8 @@ class _CompanionHubPageState extends State<CompanionHubPage> {
           children: [
             ListPageRow(
               icon: AppIcons.blocked,
-              title: '娱乐拦截',
-              subtitle: '目标应用名单、放风时长、每日拦截上限与破窗规则',
+              title: '娱乐锁机',
+              subtitle: '严格/联动/训练锁机模式、黑名单清单、误放行白名单一键恢复',
               subtitleMaxLines: 2,
               onTap: () => _openPage(const InterceptPage()),
             ),
@@ -268,6 +407,19 @@ class _CompanionHubPageState extends State<CompanionHubPage> {
               subtitleMaxLines: 2,
               value: _proactive == null ? null : (_proactive!.config.enabled ? '已开启' : '未开启'),
               onTap: () => _openPage(const ProactivePage()),
+            ),
+            ListPageRow(
+              icon: AppIcons.permissions,
+              iconColor: (_guardian?.paired ?? false) ? colors.success : null,
+              title: '大肥鱼哨兵互信配对',
+              subtitle: '查看同签名互信状态，或生成 6 位配对码绑定独立「大肥鱼哨兵」App',
+              subtitleMaxLines: 2,
+              value: _guardian == null
+                  ? null
+                  : (_guardian!.paired
+                      ? (_guardian!.sameCert ? '免码互信' : '已配对')
+                      : (_guardian!.installed ? '待配对' : '未安装')),
+              onTap: () => unawaited(_openGuardianPairDialog()),
             ),
             ListPageRow(
               icon: AppIcons.pet,

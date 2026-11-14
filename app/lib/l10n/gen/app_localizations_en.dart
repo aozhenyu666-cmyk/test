@@ -3172,6 +3172,12 @@ class L10nEn extends L10n {
   String get catalogVoiceInputSummary => 'Microphone in the composer';
 
   @override
+  String get catalogBoutVoice => 'Bouts · Voice';
+
+  @override
+  String get catalogBoutVoiceSummary => 'The official reads, you answer aloud';
+
+  @override
   String get catalogCommunitySharingSection => 'Community and sharing';
 
   @override
@@ -7698,31 +7704,31 @@ class L10nEn extends L10n {
   String get hubPermissionPhoneConfirm => 'Phone control confirmation';
 
   @override
-  String get interceptTitle => 'Entertainment block';
+  String get interceptTitle => 'Entertainment lock';
 
   @override
   String get interceptSubtitle =>
-      'When you open an app you marked as entertainment, DSH stops you once: solve a short drill or choose an authorization rule. The block and the check-ins keep separate books.';
+      'Locks selected entertainment apps on launch with Strict, Focus-linked, or Calm-training discipline so accidental bypasses cannot stick.';
 
   @override
-  String get interceptEnabled => 'Turn on entertainment block';
+  String get interceptEnabled => 'Turn on entertainment lock';
 
   @override
   String get interceptEnabledHint =>
-      'Off by default. When on, opening one of the apps below is blocked once; the cooldown stops it from nagging.';
+      'When on, opening an app below triggers the lock screen; cooldown prevents repeated nagging.';
 
   @override
-  String get interceptTargets => 'Apps to block';
+  String get interceptTargets => 'Controlled entertainment apps';
 
   @override
   String get interceptTargetsHint =>
-      'These package names are yours, not built in. Removing one stops blocking it at once.';
+      'Pick popular video/game presets or installed apps on this phone; removing one stops locking it immediately.';
 
   @override
-  String get interceptNoTargets => 'No target app yet';
+  String get interceptNoTargets => 'No entertainment apps added yet';
 
   @override
-  String get interceptAddTarget => 'Add a package name';
+  String get interceptAddTarget => 'Add entertainment app';
 
   @override
   String get interceptAddTargetHint => 'An Android package name, e.g. tv.danmaku.bili';
@@ -8668,6 +8674,184 @@ class L10nEn extends L10n {
   @override
   String get searchKwMediaGeneration =>
       'image generation,text to image,video generation,AI art,generate images,generate video';
+
+  @override
+  String get mountTitle => 'Mount card';
+
+  @override
+  String get mountSubtitle => 'Do not lose the thread halfway. Goal, givens and where you got to — in his own words.';
+
+  @override
+  String get mountRefresh => 'Refresh';
+
+  @override
+  String get mountLoading => 'Reading the mount card…';
+
+  @override
+  String get mountFailed => 'Cannot read the mount card, try again later';
+
+  @override
+  String get mountStatusOpen => 'Card open';
+
+  @override
+  String get mountStatusParked => 'Card parked';
+
+  @override
+  String get mountStatusClosed => 'Card closed';
+
+  @override
+  String get mountStatusNone => 'No card yet';
+
+  @override
+  String get mountParkedWhy => 'Parked at: {why}';
+
+  @override
+  String get mountEmptyHint =>
+      'Open one when you start working a problem, so you never have to ask what you were solving.';
+
+  @override
+  String get mountGoal => 'Goal';
+
+  @override
+  String get mountGivens => 'Givens';
+
+  @override
+  String get mountGivensEmpty => 'No givens yet. Add the facts he has already confirmed, one at a time.';
+
+  @override
+  String get mountHandWritten => 'Written by him';
+
+  @override
+  String get mountFromSource => 'From ledger line {src}';
+
+  @override
+  String get mountAddGiven => 'Add a given';
+
+  @override
+  String get mountGivensFull => 'Givens are full (5 max). Remove one first.';
+
+  @override
+  String get mountSteps => 'Conclusions';
+
+  @override
+  String get mountStepsEmpty => 'No conclusions yet. Each one must say which givens it follows from.';
+
+  @override
+  String get mountFromGivens => 'Follows from given {from}';
+
+  @override
+  String get mountAddStep => 'Add a conclusion';
+
+  @override
+  String get mountStepNeedsGiven => 'No givens on the card, so there is nothing to derive from.';
+
+  @override
+  String get mountStepsFull => 'Conclusions are full (5 max). Remove one first.';
+
+  @override
+  String get mountPending => 'She proposes adding one';
+
+  @override
+  String get mountPendingStep => 'Conclusion: after you agree, pick which givens it follows from';
+
+  @override
+  String get mountPendingGiven => 'Given';
+
+  @override
+  String get mountAccept => 'Agree, add it';
+
+  @override
+  String get mountAccepted => 'Added';
+
+  @override
+  String get mountDrop => 'Not this one';
+
+  @override
+  String get mountDropped => 'Dropped';
+
+  @override
+  String get mountActions => 'Next';
+
+  @override
+  String get mountOpen => 'Open a new card';
+
+  @override
+  String get mountOpenHint => 'One line on what this is solving. His own words are best.';
+
+  @override
+  String get mountPark => 'Park it for now';
+
+  @override
+  String get mountParkHint => 'Say where it stops, so you can pick it up later.';
+
+  @override
+  String get mountResume => 'Pick this one back up';
+
+  @override
+  String get mountResumeHint => 'Back to where it stopped; the goal and the givens are still there.';
+
+  @override
+  String get mountClose => 'Close this card';
+
+  @override
+  String get mountCloseHint => 'Closed cards are read-only: kept, but no longer injected.';
+
+  @override
+  String get mountClosed => 'Closed';
+
+  @override
+  String get mountOtherCards => 'Other cards';
+
+  @override
+  String get mountGoalPrompt => 'What are you solving (his own words if possible)';
+
+  @override
+  String get mountGivenPrompt => 'A fact he has already confirmed';
+
+  @override
+  String get mountStepPrompt => 'Where did you get to (one line)';
+
+  @override
+  String get mountStepPick => 'Which givens does this conclusion follow from';
+
+  @override
+  String get mountParkPrompt => 'Where it stops: how far you got, where to resume';
+
+  @override
+  String get mountOpened => 'Card opened';
+
+  @override
+  String get mountAdded => 'Added';
+
+  @override
+  String get mountParked => 'Parked';
+
+  @override
+  String get mountResumed => 'Picking it up again';
+
+  @override
+  String get mountGoalEmpty => 'A card needs a goal first.';
+
+  @override
+  String get mountCardOpen => 'A card is already open. Park or close it first.';
+
+  @override
+  String get mountNoCard => 'No card is open right now.';
+
+  @override
+  String get mountNotUserText => 'Only his own words go on the card, never a summary.';
+
+  @override
+  String get mountParkNeedsWhy => 'Parking needs a line saying where it stops.';
+
+  @override
+  String get mountNeedsSource => 'A proposal needs a ledger line. No source, no proposal.';
+
+  @override
+  String get mountMiniCounts => 'Givens {givens}/{maxGivens} · at step {steps}/{maxSteps}';
+
+  @override
+  String get mountMiniAsk => 'That does not match the card: keep this one, or park it?';
 
   @override
   String get nearbyThisChat => 'This chat';
@@ -18755,6 +18939,98 @@ class L10nEn extends L10n {
   String get voiceModelNoticeFailed => 'Voice model download failed. Open the app to retry.';
 
   @override
+  String get voiceOutSection => 'Voice output';
+
+  @override
+  String get voiceOutFooter =>
+      'The words are sent to the service you choose. Off keeps them on the phone’s own voice; nothing leaves it.';
+
+  @override
+  String get voiceOutEnable => 'External voice';
+
+  @override
+  String get voiceOutEnableHint => 'Shared by the official, big fish and little fish';
+
+  @override
+  String get voiceOutService => 'Service';
+
+  @override
+  String get voiceOutKey => 'Key';
+
+  @override
+  String get voiceOutKeySet => 'Set';
+
+  @override
+  String get voiceOutKeyUnset => 'Not set';
+
+  @override
+  String get voiceOutOfficial => 'The official’s voice';
+
+  @override
+  String get voiceOutStrategist => 'Big fish’s voice';
+
+  @override
+  String get voiceOutCompanion => 'Little fish’s voice';
+
+  @override
+  String get voiceOutVoiceFollow => 'The service’s default';
+
+  @override
+  String get voiceOutPreview => 'Listen';
+
+  @override
+  String get voiceOutPreviewText => 'This bout is on the record.';
+
+  @override
+  String get voiceOutPreviewFailed => 'Couldn’t be played. Try another service or voice.';
+
+  @override
+  String get boutVoiceIntro =>
+      'The official says one line, you answer out loud. Being read to doesn’t count against your time; the clock starts when it finishes.';
+
+  @override
+  String get boutVoiceStart => 'Start';
+
+  @override
+  String get boutVoiceStop => 'Stop';
+
+  @override
+  String get boutVoiceSpeaking => 'The official is speaking';
+
+  @override
+  String get boutVoiceListening => 'Listening';
+
+  @override
+  String get boutVoiceJudging => 'Judging that answer';
+
+  @override
+  String get boutVoiceWaitAsk => 'Waiting for the next line';
+
+  @override
+  String get boutVoiceWaitText => 'Didn’t hear that. Type it instead, or stop.';
+
+  @override
+  String get boutVoiceDone => 'This bout is over.';
+
+  @override
+  String get boutVoiceFallbackOut => 'No voice available, so this line is shown as text.';
+
+  @override
+  String get boutVoiceFallbackIn => 'Didn’t catch that one, so type it instead.';
+
+  @override
+  String get boutVoiceSayLabel => 'The official';
+
+  @override
+  String get boutVoiceHeardLabel => 'You said';
+
+  @override
+  String get boutVoiceSubmit => 'Send this';
+
+  @override
+  String get boutVoiceNoBout => 'No bout is running. Open Bouts and start one, then come back and press Start.';
+
+  @override
   String get voiceScribeReadFailed => 'Could not read voice settings. Retry.';
 
   @override
@@ -18804,6 +19080,73 @@ class L10nEn extends L10n {
     String _temp0 = intl.Intl.pluralLogic(count, locale: localeName, other: '$count rules', one: '1 rule');
     return '$_temp0';
   }
+
+  @override
+  String get wallTitle => 'Wall';
+
+  @override
+  String get wallRefresh => 'Refresh';
+
+  @override
+  String get wallThreadEmpty => 'No reviews yet. The wall only speaks after you hand in something.';
+
+  @override
+  String get wallThreadFailed => 'Can\'t read the wall\'s record: {reason}';
+
+  @override
+  String get wallStatusLocked => 'Locked';
+
+  @override
+  String get wallStatusOpen => 'Open';
+
+  @override
+  String get wallStatusUntil => 'Locked until {time}';
+
+  @override
+  String get wallStatusWhy => 'Reason: {why}';
+
+  @override
+  String get wallStatusUnknown => 'Can\'t read the wall\'s status';
+
+  @override
+  String get wallBubbleSubmit => 'Submitted';
+
+  @override
+  String get wallBubbleVerdict => 'Verdict';
+
+  @override
+  String get wallBubbleRule => 'Rule change';
+
+  @override
+  String get wallActionSubmit => 'Submit evidence';
+
+  @override
+  String get wallActionAppeal => 'Appeal';
+
+  @override
+  String get wallAppealLeft => '{left} appeals left today';
+
+  @override
+  String get wallAppealNone => 'No appeals left today';
+
+  @override
+  String get wallAppealTarget => 'Which verdict';
+
+  @override
+  String get wallAppealEvidence => 'New physical evidence';
+
+  @override
+  String get wallAppealEvidenceHint =>
+      'A file path, \"screenshot\", or \"SomeApp 40 minutes\". The one you already handed in doesn\'t count as new.';
+
+  @override
+  String get wallAppealSend => 'Send appeal';
+
+  @override
+  String get wallAppealNoTarget => 'Pick a verdict first.';
+
+  @override
+  String get wallAppealNoEvidence => 'An appeal has to carry new physical evidence.';
 
   @override
   String get wallpaperTitle => 'Wallpaper';

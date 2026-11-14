@@ -84,7 +84,11 @@ void main() {
             'trainingMs': 30000,
             'cooldownMs': 300000,
             'dailyMax': 5,
+            'lockMode': 'strict',
           },
+          'effectiveLockMode': 'strict',
+          'focusActive': true,
+          'activeReleasesCount': 2,
         });
     final s = await InterceptChannel().status();
     expect(s.config.enabled, isTrue);
@@ -93,6 +97,10 @@ void main() {
     expect(s.config.trainingMs, 30000);
     expect(s.config.cooldownMs, 300000);
     expect(s.config.whitelist, {'com.example.keep'});
+    expect(s.config.lockMode, InterceptLockMode.strict);
+    expect(s.effectiveLockMode, InterceptLockMode.strict);
+    expect(s.focusActive, isTrue);
+    expect(s.activeReleasesCount, 2);
   });
 
   test('the five ledger counters stay five separate facts', () async {
@@ -185,5 +193,17 @@ void main() {
     expect(s.config.targets.map((t) => t.packageName), ['tv.danmaku.bili', 'com.x']);
     expect(s.config.targets.first.label, 'B站');
     expect(s.config.targets.last.label, 'com.x', reason: 'a missing label falls back to the package');
+  });
+
+  test('whitelist and lock recovery channel ops forward expected method names', () async {
+    final calls = <String>[];
+    mock((call) async {
+      calls.add(call.method);
+      return statusMap();
+    });
+    await InterceptChannel().removeWhitelist('tv.danmaku.bili');
+    await InterceptChannel().clearWhitelist();
+    await InterceptChannel().restoreLockNow();
+    expect(calls, ['removeWhitelist', 'clearWhitelist', 'restoreLockNow']);
   });
 }

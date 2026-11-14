@@ -16,8 +16,10 @@ import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptGuard
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptLedger
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptLedgerBook
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptReceipt
+import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptRules
 import io.github.ccch1mneyyy.dsh_app.loop.core.Switches
 import io.github.ccch1mneyyy.dsh_app.loop.core.VisibleSurface
+import io.github.ccch1mneyyy.dsh_app.loop.focus.FocusRuntime
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
 import java.io.File
 import java.util.UUID
@@ -52,8 +54,12 @@ object InterceptRuntime {
         book.recover()
         val g = InterceptGuard(
             AtomicJsonFile(File(dir, "guard.json")), book,
-            clock = System::currentTimeMillis, ids = { UUID.randomUUID().toString() },
-        )
+            clock = System::currentTimeMillis,
+            ids = { UUID.randomUUID().toString() },
+        ).withStrictLink {
+            FocusRuntime.ensure(app)
+            FocusRuntime.isActive()
+        }
         g.recover(System.currentTimeMillis())
         ledger = book
         guard = g
@@ -70,6 +76,26 @@ object InterceptRuntime {
     fun ledger(): InterceptLedger = ledger?.state ?: InterceptLedger()
     fun config(): InterceptConfig = guard?.config ?: InterceptConfig()
     fun releaseMs(): Long = config().releaseMs
+    fun effectiveLockMode(): String = guard?.effectiveLockMode() ?: InterceptRules.normalizeLockMode(config().lockMode)
+    fun activeReleasesCount(): Int = guard?.activeReleasesCount() ?: 0
+
+    fun removeWhitelist(packageName: String): Boolean {
+        val ok = guard?.removeWhitelist(packageName) == true
+        if (ok) LoopRuntime.configChanged()
+        return ok
+    }
+
+    fun clearWhitelist(): Int {
+        val count = guard?.clearWhitelist() ?: 0
+        if (count > 0) LoopRuntime.configChanged()
+        return count
+    }
+
+    fun restoreLockNow(): Boolean {
+        val ok = guard?.restoreLockNow() == true
+        if (ok) LoopRuntime.configChanged()
+        return ok
+    }
 
     fun setConfig(context: Context, next: InterceptConfig) {
         ensure(context).setConfig(next, System.currentTimeMillis())
@@ -184,6 +210,7 @@ object InterceptRuntime {
             val label = openLabel ?: g.config.targetFor(packageName)?.label ?: packageName
             val ok = InterceptPageActivity.start(
                 app, open, packageName, label, config().trainingMs, now + PAGE_TTL_MS, why ?: openWhy,
+                lockMode = effectiveLockMode(), openSinceWall = g.state.openSinceWall, todayCount = g.state.countToday,
             )
             if (!ok) VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, open)
             Log.i(TAG, "lock resurfaced for " + packageName + " (" + open + ") ok=" + ok)
@@ -235,6 +262,7 @@ object InterceptRuntime {
         val ok = InterceptPageActivity.start(
             app, block.eventId, block.target.packageName, block.target.label,
             config().trainingMs, now + PAGE_TTL_MS, why,
+            lockMode = effectiveLockMode(), openSinceWall = now, todayCount = guard?.state?.countToday ?: 1,
         )
         if (!ok) {
             VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, block.eventId)

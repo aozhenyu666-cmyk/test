@@ -28,8 +28,15 @@ import '../notify/chat_alert_host.dart';
 import '../notify/voice_model_host.dart';
 import '../phone/wall_page.dart';
 import '../../plugins/native/native_model.dart' show NativePanel;
-import '../../plugins/native/native_state.dart' show nativeContributionsProvider;
+import '../../plugins/native/native_state.dart' show nativeContributionsProvider, rereadNativeContributions;
+import '../companion/bout_voice_page.dart';
+import '../companion/companion_hub_page.dart';
+import '../common/list_page_row.dart';
+import '../common/overview_card.dart';
+import '../theme/app_icons.dart';
+import '../common/status_chip.dart';
 import '../plugins/native/native_panel.dart';
+import 'page_frame.dart';
 import '../plugins/plugins_screen.dart';
 import '../pets/pet_settings_page.dart';
 import '../phone/phone_stop_watcher.dart';
@@ -93,6 +100,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
 
   /// The tab on screen; 局, as the app opens on it.
   HomeTab _tab = HomeTab.bouts;
+
+  /// True once the person explicitly tapped the 局 tab so an unavailable panel shows status instead
+  /// of silently bouncing back to Chat while still keeping initial startup cleanly on Chat.
+  bool _userPickedBouts = false;
 
   /// Tabs already opened once. A tab is built on first visit and then kept
   /// mounted, so switching back keeps the chat's draft and scroll — but the
@@ -245,7 +256,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
 
   Widget _tabBody(HomeTab tab, Widget chat, NativePanel? bouts, String? sessionId) => switch (tab) {
     HomeTab.bouts => bouts == null
-        ? const SizedBox.shrink()
+        ? _BoutsUnavailableView(
+            key: const ValueKey('home-bouts-fallback'),
+            onRetry: () => rereadNativeContributions(ref),
+          )
         : NativePanelPage(key: const ValueKey('home-bouts'), panel: bouts, sessionId: sessionId, back: false),
     HomeTab.wall => const WallPage(key: ValueKey('home-wall'), asTab: true),
     HomeTab.chat => chat,
@@ -266,7 +280,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
           PillSegment(HomeTab.chat, l.featuresChat),
         ],
         selected: shown,
-        onChanged: (tab) => setState(() => _visited.add(_tab = tab)),
+        onChanged: (tab) => setState(() {
+          _userPickedBouts = tab == HomeTab.bouts;
+          _visited.add(_tab = tab);
+        }),
       ),
     );
   }
@@ -275,10 +292,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
   Widget build(BuildContext context) {
     final width = _drawerWidth(context);
     final sessionId = ref.watch(currentSessionProvider);
-    // With no engine there is no 局: the shell then opens on the chat rather
-    // than a blank page, and lands on 局 by itself once the companion loads.
+    // On cold start before any user tap, fall back to Chat while the engine finishes loading
+    // companion contributions; once the person taps 局 directly, always enter the 局 tab.
     final bouts = _boutsPanel();
-    final shown = _tab == HomeTab.bouts && bouts == null ? HomeTab.chat : _tab;
+    final shown = _tab == HomeTab.bouts && bouts == null && !_userPickedBouts ? HomeTab.chat : _tab;
     final prefs = ref.watch(layoutPrefsProvider);
     // Multi-select in a list on screen (the open drawer, or the sidebar):
     // back ends it before anything else.
@@ -509,6 +526,78 @@ class _DrawerOverlay extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// Fallback view inside the `局` tab whenever the engine has not published the `bouts` native
+/// panel yet (cold start, engine offline, or companion plugin loading), so tapping `局` actually
+/// opens a responsive screen with retry and direct bout/hub entrypoints instead of silently
+/// bouncing back to Chat.
+class _BoutsUnavailableView extends StatelessWidget {
+  const _BoutsUnavailableView({super.key, required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppPage.list(
+      title: '局',
+      back: false,
+      solidBar: false,
+      subtitle: const Text('实时排局与拍子节奏'),
+      children: [
+        OverviewCard(
+          leading: const OverviewGlyph(AppIcons.play, tint: 6),
+          title: const Text('「局」面板正在等待伴侣插件就绪'),
+          subtitle: Text(
+            '可能正在启动本机引擎或尚未连接活跃主机。你可以刷新面板，或直接从下方语音/文字开局、进入大肥鱼中枢。',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          footer: const OverviewFooter(tone: StatusTone.warn, text: '插件面板暂未同步 · 点击下方操作'),
+          onFooterTap: onRetry,
+        ),
+        ListPageCard(
+          title: '快捷入口',
+          children: [
+            ListPageRow(
+              icon: AppIcons.refresh,
+              iconColor: theme.colorScheme.primary,
+              title: '重新加载「局」面板',
+              subtitle: '向当前引擎重新拉取大肥鱼伴侣原生面板',
+              onTap: onRetry,
+            ),
+            ListPageRow(
+              icon: AppIcons.engine,
+              title: '本机引擎状态与启动',
+              subtitle: '若本机引擎尚未启动或连接断开，可在此一键拉起引擎',
+              onTap: () => unawaited(
+                Navigator.of(context, rootNavigator: true).push(
+                  MaterialPageRoute<void>(builder: (_) => const EngineScreen()),
+                ),
+              ),
+            ),
+            ListPageRow(
+              icon: AppIcons.voice,
+              title: '语音 / 文字开一局',
+              subtitle: '直接进入「局官」问答与推拍界面',
+              onTap: () => unawaited(
+                Navigator.of(context, rootNavigator: true).push(
+                  MaterialPageRoute<void>(builder: (_) => const BoutVoicePage()),
+                ),
+              ),
+            ),
+            ListPageRow(
+              icon: AppIcons.bot,
+              title: '打开大肥鱼中枢',
+              subtitle: '查看今日计划、两姐妹角色卡、墙与申诉、娱乐锁机与专注监督',
+              subtitleMaxLines: 2,
+              onTap: () => unawaited(CompanionHubPage.open(context)),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

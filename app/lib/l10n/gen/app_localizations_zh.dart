@@ -3020,6 +3020,12 @@ class L10nZh extends L10n {
   String get catalogVoiceInputSummary => '输入框里的麦克风';
 
   @override
+  String get catalogBoutVoice => '局 · 语音';
+
+  @override
+  String get catalogBoutVoiceSummary => '局官念题，你出声答';
+
+  @override
   String get catalogCommunitySharingSection => '社区与分享';
 
   @override
@@ -7286,28 +7292,28 @@ class L10nZh extends L10n {
   String get hubPermissionPhoneConfirm => '手机操控确认';
 
   @override
-  String get interceptTitle => '娱乐拦截';
+  String get interceptTitle => '娱乐锁机';
 
   @override
-  String get interceptSubtitle => '你打开自己标记的娱乐 APP 时，DSH 会先拦一下：做完一道小题，或者选一条授权规则，才能进去。拦截和主动搭话各记一本账。';
+  String get interceptSubtitle => '进入已标记的娱乐 APP 时强制锁屏：支持严格锁机、专注联动与冷静训练，避免误放行后锁不住。';
 
   @override
-  String get interceptEnabled => '开启娱乐拦截';
+  String get interceptEnabled => '开启娱乐锁机';
 
   @override
-  String get interceptEnabledHint => '默认关闭。开启后每次打开下面这些 APP 都会被拦一次；冷却期内不会连着拦。';
+  String get interceptEnabledHint => '开启后每次打开下面清单里的娱乐 APP 都会进入锁屏；冷却期内不会重复弹窗。';
 
   @override
-  String get interceptTargets => '要拦的 APP';
+  String get interceptTargets => '受控娱乐应用';
 
   @override
-  String get interceptTargetsHint => '这些包名是你自己选的，不是内置的。删掉一个就立刻不拦。';
+  String get interceptTargetsHint => '支持一键勾选常用视频/游戏或从本机已安装应用中多选；移出后立即停止锁机。';
 
   @override
-  String get interceptNoTargets => '还没设任何目标 APP';
+  String get interceptNoTargets => '尚未添加任何娱乐应用';
 
   @override
-  String get interceptAddTarget => '加一个包名';
+  String get interceptAddTarget => '添加娱乐应用';
 
   @override
   String get interceptAddTargetHint => '填 Android 包名，例如 tv.danmaku.bili';
@@ -8242,6 +8248,183 @@ class L10nZh extends L10n {
 
   @override
   String get searchKwMediaGeneration => '生图,画图,文生图,视频生成,AI 绘画,生成图片,生成视频';
+
+  @override
+  String get mountTitle => '挂载卡';
+
+  @override
+  String get mountSubtitle => '推导到一半别断。目标 / 已知 / 推到哪，都放他自己的话。';
+
+  @override
+  String get mountRefresh => '刷新';
+
+  @override
+  String get mountLoading => '正在读挂载卡…';
+
+  @override
+  String get mountFailed => '读不到挂载卡，稍后再试';
+
+  @override
+  String get mountStatusOpen => '开着的卡';
+
+  @override
+  String get mountStatusParked => '停着的卡';
+
+  @override
+  String get mountStatusClosed => '已关掉的卡';
+
+  @override
+  String get mountStatusNone => '还没有卡';
+
+  @override
+  String get mountParkedWhy => '停在哪：{why}';
+
+  @override
+  String get mountEmptyHint => '开始推一件事的时候开一张，回头就不用重新问「我在解决什么」。';
+
+  @override
+  String get mountGoal => '目标';
+
+  @override
+  String get mountGivens => '已知条件';
+
+  @override
+  String get mountGivensEmpty => '还没有已知条件。他手上已经确认的事实，一条条挂上来。';
+
+  @override
+  String get mountHandWritten => '他手写的';
+
+  @override
+  String get mountFromSource => '出处：账本第 {src} 行';
+
+  @override
+  String get mountAddGiven => '补一条已知条件';
+
+  @override
+  String get mountGivensFull => '已知条件满了（最多 5 条），先删一条再来。';
+
+  @override
+  String get mountSteps => '中间结论';
+
+  @override
+  String get mountStepsEmpty => '还没有结论。结论要写清由哪几条已知推出来。';
+
+  @override
+  String get mountFromGivens => '由第 {from} 条已知推出';
+
+  @override
+  String get mountAddStep => '补一条结论';
+
+  @override
+  String get mountStepNeedsGiven => '卡上还没有已知条件，结论无从推起。';
+
+  @override
+  String get mountStepsFull => '结论满了（最多 5 条），先删一条再来。';
+
+  @override
+  String get mountPending => '她提议挂一条';
+
+  @override
+  String get mountPendingStep => '中间结论：点头之后还要指明由哪几条已知推出';
+
+  @override
+  String get mountPendingGiven => '已知条件';
+
+  @override
+  String get mountAccept => '点头，挂上去';
+
+  @override
+  String get mountAccepted => '挂上了';
+
+  @override
+  String get mountDrop => '不要这条';
+
+  @override
+  String get mountDropped => '不要了';
+
+  @override
+  String get mountActions => '接下来';
+
+  @override
+  String get mountOpen => '开一张新卡';
+
+  @override
+  String get mountOpenHint => '一句话说清这次要解决什么。他原话最好。';
+
+  @override
+  String get mountPark => '先停起来';
+
+  @override
+  String get mountParkHint => '说一句停在哪，下次回来从这儿接。';
+
+  @override
+  String get mountResume => '接着推这张';
+
+  @override
+  String get mountResumeHint => '回到停下的地方，目标和已知都还在。';
+
+  @override
+  String get mountClose => '关掉这张卡';
+
+  @override
+  String get mountCloseHint => '关掉之后只读，卡还在但不再进每轮注入。';
+
+  @override
+  String get mountClosed => '关掉了';
+
+  @override
+  String get mountOtherCards => '别的卡';
+
+  @override
+  String get mountGoalPrompt => '这次要解决什么（尽量用他原话）';
+
+  @override
+  String get mountGivenPrompt => '他已经确认的一条事实';
+
+  @override
+  String get mountStepPrompt => '推到哪儿了（一句话）';
+
+  @override
+  String get mountStepPick => '这条结论由哪几条已知推出';
+
+  @override
+  String get mountParkPrompt => '停在哪：推到哪一步、回来从哪接';
+
+  @override
+  String get mountOpened => '开卡了';
+
+  @override
+  String get mountAdded => '挂上了';
+
+  @override
+  String get mountParked => '停好了';
+
+  @override
+  String get mountResumed => '接着推';
+
+  @override
+  String get mountGoalEmpty => '开卡要先有一句目标。';
+
+  @override
+  String get mountCardOpen => '已经有一张开着的卡，先停放或关掉它。';
+
+  @override
+  String get mountNoCard => '现在没有开着的卡。';
+
+  @override
+  String get mountNotUserText => '卡上只能放他自己的原话，不能放总结。';
+
+  @override
+  String get mountParkNeedsWhy => '停放要说一句停在哪。';
+
+  @override
+  String get mountNeedsSource => '提议要带账本行号，没有出处的不提议。';
+
+  @override
+  String get mountMiniCounts => '已知 {givens}/{maxGivens} · 推到 {steps}/{maxSteps}';
+
+  @override
+  String get mountMiniAsk => '他说的和卡上对不上：继续这张，还是先停放？';
 
   @override
   String get nearbyThisChat => '本对话';
@@ -17808,6 +17991,96 @@ class L10nZh extends L10n {
   String get voiceModelNoticeFailed => '语音模型下载失败，打开 App 重试';
 
   @override
+  String get voiceOutSection => '声音输出';
+
+  @override
+  String get voiceOutFooter => '念出来的文字会发给你选的服务。关掉就只用手机自带语音，文字不出手机。';
+
+  @override
+  String get voiceOutEnable => '外接语音';
+
+  @override
+  String get voiceOutEnableHint => '局官、大鱼、小鱼共用这一档声音';
+
+  @override
+  String get voiceOutService => '服务';
+
+  @override
+  String get voiceOutKey => '密钥';
+
+  @override
+  String get voiceOutKeySet => '已填写';
+
+  @override
+  String get voiceOutKeyUnset => '未填写';
+
+  @override
+  String get voiceOutOfficial => '局官音色';
+
+  @override
+  String get voiceOutStrategist => '大鱼音色';
+
+  @override
+  String get voiceOutCompanion => '小鱼音色';
+
+  @override
+  String get voiceOutVoiceFollow => '跟随服务默认';
+
+  @override
+  String get voiceOutPreview => '试听';
+
+  @override
+  String get voiceOutPreviewText => '这一局，我记下了。';
+
+  @override
+  String get voiceOutPreviewFailed => '没能念出来，换个服务或音色再试';
+
+  @override
+  String get boutVoiceIntro => '局官念一句，你出声答一句。念的时候不算你的时间，念完才开始计时。';
+
+  @override
+  String get boutVoiceStart => '开始';
+
+  @override
+  String get boutVoiceStop => '停';
+
+  @override
+  String get boutVoiceSpeaking => '局官在念';
+
+  @override
+  String get boutVoiceListening => '在听你说';
+
+  @override
+  String get boutVoiceJudging => '在判这一句';
+
+  @override
+  String get boutVoiceWaitAsk => '等下一拍';
+
+  @override
+  String get boutVoiceWaitText => '没听见。打一句也行，或者按停。';
+
+  @override
+  String get boutVoiceDone => '这一局结束了。';
+
+  @override
+  String get boutVoiceFallbackOut => '声音用不了，这一句改成文字。';
+
+  @override
+  String get boutVoiceFallbackIn => '这次没听清，改成打字。';
+
+  @override
+  String get boutVoiceSayLabel => '局官';
+
+  @override
+  String get boutVoiceHeardLabel => '你刚才说';
+
+  @override
+  String get boutVoiceSubmit => '交这句';
+
+  @override
+  String get boutVoiceNoBout => '现在没有在跑的局。先在局里开一局，再回来按开始。';
+
+  @override
   String get voiceScribeReadFailed => '没能读取语音设置，请重试。';
 
   @override
@@ -17856,6 +18129,72 @@ class L10nZh extends L10n {
   String voiceScribeHotwordRules(int count) {
     return '$count 条规则';
   }
+
+  @override
+  String get wallTitle => '墙';
+
+  @override
+  String get wallRefresh => '刷新';
+
+  @override
+  String get wallThreadEmpty => '还没有审查记录。交一份完成物，墙才会说话。';
+
+  @override
+  String get wallThreadFailed => '读不到墙的记录：{reason}';
+
+  @override
+  String get wallStatusLocked => '锁着';
+
+  @override
+  String get wallStatusOpen => '开着';
+
+  @override
+  String get wallStatusUntil => '锁到 {time}';
+
+  @override
+  String get wallStatusWhy => '原因：{why}';
+
+  @override
+  String get wallStatusUnknown => '读不到墙的状态';
+
+  @override
+  String get wallBubbleSubmit => '提交';
+
+  @override
+  String get wallBubbleVerdict => '判定';
+
+  @override
+  String get wallBubbleRule => '规则变更';
+
+  @override
+  String get wallActionSubmit => '提交证据';
+
+  @override
+  String get wallActionAppeal => '申诉';
+
+  @override
+  String get wallAppealLeft => '今天还能申诉 {left} 次';
+
+  @override
+  String get wallAppealNone => '今天的申诉用完了';
+
+  @override
+  String get wallAppealTarget => '申诉哪一条判定';
+
+  @override
+  String get wallAppealEvidence => '新的物理证据';
+
+  @override
+  String get wallAppealEvidenceHint => '文件路径、「截图」，或「某 App N 分钟」。上次交过的那份不算新的。';
+
+  @override
+  String get wallAppealSend => '提交申诉';
+
+  @override
+  String get wallAppealNoTarget => '先选一条判定，再申诉。';
+
+  @override
+  String get wallAppealNoEvidence => '申诉必须附一份新的物理证据。';
 
   @override
   String get wallpaperTitle => '壁纸';

@@ -540,6 +540,64 @@ class ProactiveChannel {
       return null;
     }
   }
+
+  /// 大肥鱼哨兵互信配对状态（原生 `GuardianPairing.statusMap`）。
+  Future<GuardianPairingStatus?> guardianStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('guardianStatus');
+      return GuardianPairingStatus.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 生成或刷新 10 分钟有效的 6 位跨签名配对码（原生 `GuardianPairing.generatePairCode`）。
+  Future<GuardianPairingStatus?> generateGuardianPairCode() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('guardianPairCode');
+      return GuardianPairingStatus.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
+}
+
+/// 大肥鱼与独立守护 App「大肥鱼哨兵」之间的互信绑定状态。
+class GuardianPairingStatus {
+  const GuardianPairingStatus({
+    this.installed = false,
+    this.guardianPkg = 'io.github.ccch1mneyyy.dsh_app.fish.guardian',
+    this.sameCert = false,
+    this.paired = false,
+    this.pairCode = '',
+    this.pairCodeExpiresAtWall = 0,
+    this.pairedAtWall = 0,
+  });
+
+  final bool installed;
+  final String guardianPkg;
+  final bool sameCert;
+  final bool paired;
+  final String pairCode;
+  final int pairCodeExpiresAtWall;
+  final int pairedAtWall;
+
+  static GuardianPairingStatus? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    return GuardianPairingStatus(
+      installed: raw['installed'] == true,
+      guardianPkg: raw['guardianPkg'] is String
+          ? raw['guardianPkg'] as String
+          : 'io.github.ccch1mneyyy.dsh_app.fish.guardian',
+      sameCert: raw['sameCert'] == true,
+      paired: raw['paired'] == true,
+      pairCode: raw['pairCode'] is String ? raw['pairCode'] as String : '',
+      pairCodeExpiresAtWall: raw['pairCodeExpiresAtWall'] is num
+          ? (raw['pairCodeExpiresAtWall'] as num).toInt()
+          : 0,
+      pairedAtWall: raw['pairedAtWall'] is num ? (raw['pairedAtWall'] as num).toInt() : 0,
+    );
+  }
 }
 
 /// 第八轮 J9：局官这一侧的端口（插件 `POST /bouts` 的四个 action）。

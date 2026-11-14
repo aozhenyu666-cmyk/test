@@ -52,6 +52,8 @@ data class InterceptConfig(
     val dailyMax: Int = 0,
     /** 授权规则 windows as minute-of-day ranges, during which a target is let through. */
     val authorizedWindows: List<IntRange> = emptyList(),
+    /** Lock mode: training (reflection + drill), linked (strict while focus active), strict (no drill/whitelist bypass). */
+    val lockMode: String = InterceptRules.MODE_TRAINING,
 ) {
     fun normalized(): InterceptConfig = copy(
         targets = targets.map { it.copy(packageName = it.packageName.trim(), label = it.label.trim().take(48)) }
@@ -64,6 +66,7 @@ data class InterceptConfig(
         dailyMax = dailyMax.coerceIn(0, 200),
         authorizedWindows = authorizedWindows
             .filter { it.first in 0..1439 && it.last in 1..1440 && it.first < it.last }.take(8),
+        lockMode = InterceptRules.normalizeLockMode(lockMode),
     )
 
     /** The target for a package, or null when this app is not one of them. */
@@ -74,6 +77,7 @@ data class InterceptConfig(
         "pauseUntilWall" to pauseUntilWall, "releaseMs" to releaseMs, "trainingMs" to trainingMs,
         "cooldownMs" to cooldownMs, "dailyMax" to dailyMax,
         "authorizedWindows" to authorizedWindows.map { listOf(it.first, it.last) },
+        "lockMode" to lockMode,
     )
 
     companion object {
@@ -107,6 +111,7 @@ data class InterceptConfig(
                     val b = (l.getOrNull(1) as? Number)?.toInt() ?: return@mapNotNull null
                     a..b
                 },
+                lockMode = InterceptRules.normalizeLockMode(M.str(m, "lockMode") ?: d.lockMode),
             ).normalized()
         }
     }
@@ -251,6 +256,16 @@ sealed interface InterceptDecision {
 }
 
 object InterceptRules {
+    const val MODE_TRAINING = "training"
+    const val MODE_STRICT = "strict"
+    const val MODE_LINKED = "linked"
+
+    fun normalizeLockMode(raw: String?): String = when (raw?.trim()?.lowercase()) {
+        MODE_STRICT -> MODE_STRICT
+        MODE_LINKED -> MODE_LINKED
+        else -> MODE_TRAINING
+    }
+
     const val REASON_WHITELIST = "whitelist"
     const val REASON_RELEASED = "released"
     const val REASON_PAUSED = "paused"
@@ -363,6 +378,13 @@ class InterceptGuard(
     private val ids: () -> String = { java.util.UUID.randomUUID().toString() },
 ) {
     private val lock = Any()
+    private var strictLinkedActive: () -> Boolean = { false }
+
+    /** Wires dynamic focus-supervision state so [InterceptRules.MODE_LINKED] upgrades to strict while active. */
+    fun withStrictLink(active: () -> Boolean): InterceptGuard = synchronized(lock) {
+        strictLinkedActive = active
+        this
+    }
 
     var config = InterceptConfig()
         private set
@@ -373,6 +395,22 @@ class InterceptGuard(
         private set
     @Volatile var recoveryIssue: String? = null
         private set
+
+    /** Effective lock mode right now (`training` or `strict`, resolving `linked` via [strictLinkedActive]). */
+    fun effectiveLockMode(): String = synchronized(lock) {
+        when (config.lockMode) {
+            InterceptRules.MODE_STRICT -> InterceptRules.MODE_STRICT
+            InterceptRules.MODE_LINKED ->
+                if (strictLinkedActive()) InterceptRules.MODE_STRICT else InterceptRules.MODE_TRAINING
+            else -> InterceptRules.MODE_TRAINING
+        }
+    }
+
+    private fun isStrictLocked(): Boolean = when (config.lockMode) {
+        InterceptRules.MODE_STRICT -> true
+        InterceptRules.MODE_LINKED -> strictLinkedActive()
+        else -> false
+    }
 
     /** Process start. An interception that was on screen died with the old process. */
     fun recover(now: Long): InterceptState = synchronized(lock) {
@@ -403,7 +441,13 @@ class InterceptGuard(
     }
 
     fun setConfig(next: InterceptConfig, now: Long): InterceptConfig = synchronized(lock) {
-        config = next.normalized()
+        val normalized = next.normalized()
+        val enteringStrict = config.lockMode != InterceptRules.MODE_STRICT && normalized.lockMode == InterceptRules.MODE_STRICT
+        config = normalized
+        if (enteringStrict && (config.pauseUntilWall != 0L || state.releases.isNotEmpty())) {
+            config = config.copy(pauseUntilWall = 0L)
+            state = state.copy(releases = emptyMap())
+        }
         // A target removed from the list must not leave its page standing.
         val open = state.openPackage
         if (open != null && config.targetFor(open) == null) {
@@ -437,10 +481,18 @@ class InterceptGuard(
                 if (same) InterceptRules.REASON_ALREADY_OPEN else InterceptRules.REASON_ANOTHER_OPEN,
             )
         }
+        val strict = isStrictLocked()
+        val effectiveConfig = if (strict) {
+            config.copy(pauseUntilWall = 0L, dailyMax = 0, cooldownMs = 0L)
+        } else {
+            config
+        }
         val d = InterceptRules.decide(
-            config, packageName, env, now,
-            releasedUntilWall = packageName?.let { s.releases[it] ?: 0 } ?: 0,
-            lastTriggerAt = s.lastTriggerAt, lastTriggerPackage = s.lastTriggerPackage, countToday = s.countToday,
+            effectiveConfig, packageName, env, now,
+            releasedUntilWall = if (strict) 0L else (s.releases[packageName] ?: 0L),
+            lastTriggerAt = if (strict) 0L else s.lastTriggerAt,
+            lastTriggerPackage = if (strict) null else s.lastTriggerPackage,
+            countToday = if (strict) 0 else s.countToday,
         )
         if (d is InterceptDecision.Block) {
             val eventId = ids()
@@ -516,6 +568,8 @@ class InterceptGuard(
      */
     fun onReleased(eventId: String, how: String, now: Long): Boolean = synchronized(lock) {
         if (state.openEventId != eventId) return@synchronized false
+        val companionRelease = how == RELEASE_RULE && state.lastReason == REASON_COMPANION
+        if (isStrictLocked() && !companionRelease) return@synchronized false
         if (how == RELEASE_TRAINING && state.drill?.solved != true) return@synchronized false
         val pkg = state.openPackage ?: return@synchronized false
         val until = now + config.releaseMs
@@ -528,6 +582,34 @@ class InterceptGuard(
         )
         persist()
         true
+    }
+
+    fun removeWhitelist(packageName: String): Boolean = synchronized(lock) {
+        val clean = packageName.trim()
+        if (clean.isEmpty() || clean !in config.whitelist) return@synchronized false
+        config = config.copy(whitelist = config.whitelist - clean)
+        persist()
+        true
+    }
+
+    fun clearWhitelist(): Int = synchronized(lock) {
+        val count = config.whitelist.size
+        if (count == 0) return@synchronized 0
+        config = config.copy(whitelist = emptySet())
+        persist()
+        count
+    }
+
+    fun restoreLockNow(): Boolean = synchronized(lock) {
+        if (config.pauseUntilWall == 0L && state.releases.isEmpty()) return@synchronized false
+        config = config.copy(pauseUntilWall = 0L)
+        state = state.copy(releases = emptyMap())
+        persist()
+        true
+    }
+
+    fun activeReleasesCount(now: Long = clock()): Int = synchronized(lock) {
+        state.releases.count { (_, until) -> until > now }
     }
 
     /** 紧急退出: the person leaves at once; recorded as an exit, never as a normal release. */
@@ -571,6 +653,7 @@ class InterceptGuard(
      */
     fun onPaused(eventId: String?, pauseMs: Long, now: Long): Boolean = synchronized(lock) {
         if (eventId != null && state.openEventId != eventId) return@synchronized false
+        if (eventId != null && isStrictLocked()) return@synchronized false
         val until = now + pauseMs.coerceIn(60_000L, 24 * 3_600_000L)
         config = config.copy(pauseUntilWall = until)
         if (eventId != null) {
@@ -621,6 +704,7 @@ class InterceptGuard(
      */
     fun tapDrill(eventId: String, value: Int): Boolean = synchronized(lock) {
         if (state.openEventId != eventId) return@synchronized false
+        if (isStrictLocked()) return@synchronized false
         val current = state.drill ?: return@synchronized false
         val next = current.tap(value)
         if (next == current) return@synchronized true

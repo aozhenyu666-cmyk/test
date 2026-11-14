@@ -22,6 +22,22 @@ class _FakeHubChannel extends ProactiveChannel {
 
   int tickCalls = 0;
   int focusCalls = 0;
+  GuardianPairingStatus guardian = const GuardianPairingStatus(installed: true, paired: false, sameCert: false);
+
+  @override
+  Future<GuardianPairingStatus?> guardianStatus() async => guardian;
+
+  @override
+  Future<GuardianPairingStatus?> generateGuardianPairCode() async {
+    guardian = const GuardianPairingStatus(
+      installed: true,
+      paired: false,
+      sameCert: false,
+      pairCode: '482916',
+      pairCodeExpiresAtWall: 9999999999999,
+    );
+    return guardian;
+  }
 
   @override
   Future<Map<String, Object?>?> wallStatus() async => wall;
@@ -106,6 +122,15 @@ void main() {
     await tester.tap(find.text('专注监督'));
     await settlePhone(tester);
     expect(ch.focusCalls, 1);
+
+    await tester.tap(find.text('大肥鱼哨兵互信配对'));
+    await settlePhone(tester);
+    expect(find.text('生成 6 位配对码'), findsOneWidget);
+    await tester.tap(find.text('生成 6 位配对码'));
+    await settlePhone(tester);
+    expect(find.text('482916'), findsOneWidget);
+    await tester.tap(find.text('完成'));
+    await settlePhone(tester);
   });
 
   testWidgets('WallPage exposes top-right shortcut to CompanionHubPage', (tester) async {

@@ -98,11 +98,12 @@ function offWorkWindows(now = Date.now()) {
   return [[Math.min(m, 1439), Math.min(m, 1439) + 1]]
 }
 
-function setup(home, { state = 'standby', minutes = 0, windows } = {}) {
+function setup(home, { state = 'standby', minutes = 0, windows, wall } = {}) {
   mkdirSync(join(home, 'companion'), { recursive: true })
   const cfg = { sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12 }
   // 工作日 / 休息日都要设：今天是不是周末由真实时钟决定，只设一种会让这条测试看运气。
   if (windows) cfg.day = { windows: { workday: windows, restday: windows, outing: windows } }
+  if (wall) cfg.wall = wall
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify(cfg))
   if (minutes > 0) seedEarned(home, minutes)
   const sis = agentOf(SIS)
@@ -162,7 +163,7 @@ test('额度用完了：默认锁回来（这条走的是 spent 而不是 earned
 
 test('这条接线真的跑到了：/plan 会给账记下这次盘账的时刻', async () => {
   await withHome(async (home) => {
-    const t = setup(home, { minutes: 60, windows: offWorkWindows() })
+    const t = setup(home, { minutes: 60, windows: offWorkWindows(), wall: { meals: [] } })
     await t.lockOn()
     await t.plan(at('com.miui.home'))
     const e = earnedFile(home)

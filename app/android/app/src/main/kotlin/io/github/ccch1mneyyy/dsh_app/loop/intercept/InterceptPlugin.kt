@@ -6,6 +6,8 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptConfig
 import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptGuard
+import io.github.ccch1mneyyy.dsh_app.loop.core.InterceptRules
+import io.github.ccch1mneyyy.dsh_app.loop.focus.FocusRuntime
 
 /**
  * MethodChannel dsh/intercept: the App side of 娱乐 APP 拦截 (round 4, M1).
@@ -59,6 +61,22 @@ class InterceptPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 InterceptRuntime.setConfig(context, InterceptRuntime.config().copy(pauseUntilWall = 0))
                 result.success(status())
             }
+            "removeWhitelist" -> {
+                InterceptRuntime.ensure(context)
+                val pkg = call.argument<String>("packageName") ?: ""
+                InterceptRuntime.removeWhitelist(pkg)
+                result.success(status())
+            }
+            "clearWhitelist" -> {
+                InterceptRuntime.ensure(context)
+                InterceptRuntime.clearWhitelist()
+                result.success(status())
+            }
+            "restoreLockNow" -> {
+                InterceptRuntime.ensure(context)
+                InterceptRuntime.restoreLockNow()
+                result.success(status())
+            }
             else -> result.notImplemented()
         }
     }
@@ -68,6 +86,9 @@ class InterceptPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         val book = InterceptRuntime.ledger()
         return linkedMapOf(
             "config" to InterceptRuntime.config().toMap(),
+            "effectiveLockMode" to (g?.effectiveLockMode() ?: InterceptRules.MODE_TRAINING),
+            "focusActive" to runCatching { FocusRuntime.isActive() }.getOrDefault(false),
+            "activeReleasesCount" to InterceptRuntime.activeReleasesCount(),
             "counts" to linkedMapOf(
                 "triggerCount" to book.triggerCount,
                 "blockedCount" to book.blockedCount,
