@@ -207,3 +207,62 @@ export function gateRound(tries) {
   if (before.some((t) => t.code === 'dup')) return { action: 'skip', code: 'dup' }
   return { action: 'rewrite', code: 'dup' }
 }
+
+// ---------------------------------------------------------------- R9 第五项：鱼丸的两条线
+//
+// 1) 催进度的问句不归她管（《补充二》§1.4）。词表放这里，别在别处再写一份。
+//    命中就重写一次；重写完还命中，这一轮不发，账本记 `companion-nag-blocked`。
+//    宁可这一轮她哑掉，也不许她把「该去做事了」说出口——那是墙的活，不是妹妹的。
+//
+// 2) 骂的底线：骂事不骂人。只拦三类明确的人身攻击（外貌 / 家人 / 能力本身），
+//    其余随便骂——她本来就该会骂，拦宽了就不是她了。
+//    拦不住就重写一次，还犯就这一轮不发，账本记 `companion-insult-blocked`。
+
+/** 进度类问句的词表。命中任意一条就算催。粗但可靠：多拦一次让她重写，代价只是一句话。 */
+export const NAG_WORDS = [
+  '做到哪', '到哪了', '进度', '计划呢', '你的计划', '今天计划', '该去做', '该去', '该准备',
+  '完成了吗', '做完了吗', '写完了吗', '弄完了吗', '复习了吗', '开始了吗', '什么时候开始',
+  '还没开始', '怎么还没', '别刷了', '又在刷', '该学习', '该工作', '该干活',
+]
+
+/** 人身攻击的三类。骂事可以，骂这三类不行。 */
+export const INSULT_FLOOR = {
+  外貌: ['丑八怪', '长得丑', '太丑了', '肥猪', '死胖子', '矮冬瓜', '秃子'],
+  家人: ['你妈', '你爸', '你全家', '你父母', '你家人'],
+  能力: ['废物', '没用的人', '没救了', '智障', '弱智', '蠢货', '你就是不行', '这辈子就这样'],
+}
+
+/** 这句话是不是在催进度。命中返回词，没命中返回空串。 */
+export function nagOf(text) {
+  const s = norm(text)
+  if (!s) return ''
+  return NAG_WORDS.find((w) => s.includes(norm(w))) || ''
+}
+
+/** 这句话骂到了哪一类人。命中返回类名（外貌/家人/能力），没命中返回空串。 */
+export function insultOf(text) {
+  const s = norm(text)
+  if (!s) return ''
+  for (const [kind, words] of Object.entries(INSULT_FLOOR)) {
+    if (words.some((w) => s.includes(norm(w)))) return kind
+  }
+  return ''
+}
+
+/**
+ * 妹妹这一句能不能发。两条线：催进度、骂到人身上。
+ * 一遍重写机会：第一遍命中 → rewrite；同一会话第二遍还命中 → skip（这一轮不发）。
+ * 姐姐不走这里——她本来就该谈进度。
+ *
+ * @param {string} text
+ * @param {{code:string}[]} tries 这个会话之前的判定（gateBall 传进来）
+ * @returns {{action:'send'|'rewrite'|'skip', code?:string, state?:string}}
+ */
+export function companionGate(text, tries = []) {
+  const nag = nagOf(text)
+  const code = nag ? 'nag' : insultOf(text) ? 'insult' : ''
+  if (!code) return { action: 'send' }
+  const again = (Array.isArray(tries) ? tries : []).some((t) => t && t.code === code)
+  if (!again) return { action: 'rewrite', code, state: 'companion-' + code + '-rewrite' }
+  return { action: 'skip', code, state: code === 'nag' ? 'companion-nag-blocked' : 'companion-insult-blocked' }
+}

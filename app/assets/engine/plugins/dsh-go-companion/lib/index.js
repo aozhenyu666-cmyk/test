@@ -24,7 +24,7 @@ import { plan as decide, inQuiet } from './plan.js'
 import { DEFAULT_TZ, hm as zoneHm, md as zoneMd, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
 import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
-import { RECENT_WINDOW, SKIP_STATE, contentGate, gateRound, isStock, nounsOf, recentOwnTexts } from './stock.js'
+import { RECENT_WINDOW, SKIP_STATE, companionGate, contentGate, gateRound, isStock, nounsOf, recentOwnTexts } from './stock.js'
 import { BURST_HOURLY_CAP, behaviorOf, emotionLine, emotionOf, voiceOf } from './emotion.js'
 import { capCount, nextShot, rallyStats } from './rally.js'
 import { pickServeType } from './serve.js'
@@ -92,6 +92,8 @@ import { RESTART_BELOW, appPrompt, missingApps, planLines, planOf, tick } from '
 import { planSentence, PLAN_CONFIRM_MS } from './dayplan.js'
 import { badPackets, judgeOver, normPacket, openSay, packetPrompt } from './packet.js'
 import * as earnedRt from './earned.js'
+// R9 第五项：鱼丸报的线索进鲸澜的待查队列（一天最多 5 条）。
+import * as clueRt from './clue.js'
 // 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
 import { buildWallSnapshot } from './wall_panel.js'
 import { wallAuditView, wallView } from './wall_view.js'
@@ -743,6 +745,17 @@ export function apply(ctx) {
     const served = servedContext.get(String(r.requestId))
     const tries = [...(gateTries.get(sid) || [])]
     const own = readLedger(home(), 60).filter((e) => e.sessionId === sid)
+    // R9 第五项：妹妹的两条线，先于套话守卫判——她话说得再新，「该去做事了」也不能发。
+    // 一次重写机会；第二遍还犯就这一轮不发，账本各记一条。姐姐不走这两条（她本来就该谈进度）。
+    if (speakerOf(sid) === 'companion') {
+      const cg = companionGate(r.text, tries)
+      if (cg.action !== 'send') {
+        tries.push({ pass: false, code: cg.code })
+        if (cg.action === 'rewrite') gateTries.set(sid, tries.slice(-1))
+        else gateTries.delete(sid)
+        return { action: cg.action, state: cg.state, code: cg.code }
+      }
+    }
     const verdict = contentGate(r.text, { recent: recentOwnTexts(own, RECENT_WINDOW), nouns: served?.nouns })
     tries.push(verdict)
     const round = gateRound(tries)
@@ -1368,6 +1381,7 @@ export function apply(ctx) {
         properties: {
           text: { type: 'string', description: '一两句话：他怎么了、你想让对方做什么。' },
           urgent: { type: 'boolean', description: '急：对方会尽快主动去找他。' },
+          kind: { type: 'string', description: '妹妹专用：写「线索」就是只报现象，进姐姐的待查队列（一天最多 5 条）。' },
         },
         required: ['text'],
         additionalProperties: false,
@@ -1380,12 +1394,32 @@ export function apply(ctx) {
         const text = String(args.text || '').trim().slice(0, 300)
         if (!text) return { ok: false, text: '话是空的。' }
         if (config.dual === false || !config.strategistSessionId) return { ok: false, text: '现在只有一个人格，没有人可以递话。' }
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        // R9 第五项：妹妹标了「线索」的话进姐姐的待查队列——只报现象、不下结论，一天最多 5 条。
+        const wantClue = role === 'companion' && String(args.kind || '').trim() === '线索'
+        let clueLeft = 0
+        if (wantClue) {
+          const day = zoneStartOfDay(now, tz)
+          const cur = clueRt.ofDay(readState(stateFile('clues.json'), null), day)
+          const cue = clueRt.add(cur, { text, at: now, day })
+          if (!cue.ok) {
+            return { ok: false, text: '今天已经报够 5 条线索了，剩下的事让' + names().strategist + '自己去看。' }
+          }
+          writeJson(stateFile('clues.json'), cue.state)
+          clueLeft = cue.left
+          record({ state: 'companion-clue', at: now, text, left: clueLeft })
+        }
         const list = loadNotes()
-        list.push({ from: role, to: other, text, urgent: args.urgent === true, at: Date.now() })
+        list.push({ from: role, to: other, text, urgent: args.urgent === true, at: now })
         saveNotes(list)
-        record({ state: 'sister-note', at: Date.now(), from: role, to: other, urgent: args.urgent === true || undefined, text })
+        record({ state: 'sister-note', at: now, from: role, to: other, urgent: args.urgent === true || undefined, text })
         const to = other === 'strategist' ? names().strategist : names().companion
-        return { ok: true, text: '递给' + to + '了' + (args.urgent === true ? '（急）' : '') + '。' }
+        return {
+          ok: true,
+          text: '递给' + to + '了' + (args.urgent === true ? '（急）' : '')
+            + (wantClue ? '，记成线索（今天还能报 ' + clueLeft + ' 条）。' : '。'),
+        }
       },
     }
   }
@@ -4388,6 +4422,10 @@ export function apply(ctx) {
     const notes = notesFor(role).map((n) => (n.from === 'companion' ? names.companion : names.strategist) + '刚跟你递话（' +
       zoneHm(Number(n.at), zoneOr(config.timeZone)) + '）："' + n.text + '"')
     const noteLines = notes.length ? ['姐妹之间的悄悄话（他看不到，自然地用上就行）：', ...notes.map((t) => '- ' + t)] : []
+    // R9 第五项：妹妹报的线索进姐姐这一轮的 prompt（只有姐姐看得到，用来核实，不是拿来念给他听的）。
+    const cueLines = role === 'strategist'
+      ? clueRt.lines(readState(stateFile('clues.json'), null), zoneStartOfDay(Date.now(), zoneOr(config.timeZone)))
+      : []
     // 内容层随机：只加不减，常驻层已经全在 stateLines 里。
     const vibeLines = (() => {
       try {
@@ -4433,6 +4471,8 @@ export function apply(ctx) {
       // A4：块刚结束的这一句进内容层（可裁），不进约束层——它是随机的一句话，不是规矩。
       { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && Date.now() - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
       { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
+      // R9 第五项：妹妹报的线索，只有姐姐这一轮看得到（content 层，可裁）。
+      { id: 'clues', layer: 'content', priority: 12, text: cueLines.join('\n') },
     ]
     // B3：depth 接 P0-3 预算——`config.ctxDepth` 是 low/mid/high（30%/60%/100%），只压内容层。
     // 默认 high，也就是不传这个配置时行为和以前一字不差。

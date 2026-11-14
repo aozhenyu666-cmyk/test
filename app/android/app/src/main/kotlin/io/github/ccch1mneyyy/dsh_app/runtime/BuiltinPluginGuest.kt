@@ -197,6 +197,8 @@ object BuiltinPluginGuest {
                 "lib/packet.js",
                 // R9 第四项：挣来的娱乐。通过一局换一段放风额度，只松默认锁那一条。
                 "lib/earned.js",
+                // R9 第五项：鱼丸的线索。只报现象、不下结论，一天最多 5 条。
+                "lib/clue.js",
                 // R8 W2：墙的面板。数据只读 machine/wall_voice/settings 的现成结论。
                 "lib/wall_panel.js",
                 // R8 W2：墙与审查两个页面的视图。
