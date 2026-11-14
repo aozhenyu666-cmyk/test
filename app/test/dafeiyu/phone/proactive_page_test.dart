@@ -245,7 +245,7 @@ void main() {
     });
 
     testWidgets('诊断卡：导出诊断和前台包名记录开关都在', (tester) async {
-      FakeProactiveNative()..install();
+      FakeProactiveNative().install();
       await pumpPhone(tester, const ProactivePage());
       final export = find.text('导出诊断');
       await tester.scrollUntilVisible(export, 300, scrollable: find.byType(Scrollable).first);

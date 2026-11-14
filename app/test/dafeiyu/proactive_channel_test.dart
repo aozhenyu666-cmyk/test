@@ -1,7 +1,6 @@
 // D1: the Dart half of the proactive Agent transport — three ops, raw answers, no interpretation.
 
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:dsh_app/dafeiyu/channels/proactive_channel.dart';
 import 'package:dsh_client/dsh_client.dart';

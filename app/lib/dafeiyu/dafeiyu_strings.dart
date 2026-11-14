@@ -359,7 +359,7 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get catalogBoutVoiceSummary => 'The official reads, you answer aloud';
   @override
-  String interceptActive(String package) => 'Blocking now: ${package}';
+  String interceptActive(String package) => 'Blocking now: $package';
   @override
   String get interceptAddTarget => 'Add entertainment app';
   @override
@@ -409,13 +409,13 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get interceptPauseNow => 'Pause for 30 minutes';
   @override
-  String interceptPausedUntil(String time) => 'Paused until ${time}';
+  String interceptPausedUntil(String time) => 'Paused until $time';
   @override
   String get interceptReceipts => 'Recent receipts';
   @override
   String get interceptReceiptsEmpty => 'No receipts yet';
   @override
-  String interceptRecoveryIssue(String error) => 'Unreadable state at start-up: ${error}';
+  String interceptRecoveryIssue(String error) => 'Unreadable state at start-up: $error';
   @override
   String get interceptRefresh => 'Refresh';
   @override
@@ -425,7 +425,7 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get interceptResume => 'Resume blocking';
   @override
-  String interceptStorageError(String error) => 'Could not write state: ${error}';
+  String interceptStorageError(String error) => 'Could not write state: $error';
   @override
   String get interceptSubtitle => 'Locks selected entertainment apps on launch with Strict, Focus-linked, or Calm-training discipline so accidental bypasses cannot stick.';
   @override
@@ -459,7 +459,7 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get loopCooldownHint => 'Minimum time between two pages; tap to change';
   @override
-  String loopCounters(int events, int readings, String app) => '${events} window events, ${readings} checks · last foreground ${app}';
+  String loopCounters(int events, int readings, String app) => '$events window events, $readings checks · last foreground $app';
   @override
   String get loopDailyCap => 'Daily limit';
   @override
@@ -467,15 +467,15 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get loopDailyCapOff => 'No limit';
   @override
-  String loopDailyCapValue(int used, int cap) => '${used}/${cap} today';
+  String loopDailyCapValue(int used, int cap) => '$used/$cap today';
   @override
   String get loopDiagnostics => 'Accessibility diagnostics';
   @override
   String get loopDiagnosticsClear => 'Clear diagnostics';
   @override
-  String loopDiagnosticsLastRead(String time) => 'Last successful foreground read: ${time}';
+  String loopDiagnosticsLastRead(String time) => 'Last successful foreground read: $time';
   @override
-  String loopDiagnosticsSummary(int events, int readings, int faults) => '${events} window events, ${readings} foreground checks, ${faults} failures';
+  String loopDiagnosticsSummary(int events, int readings, int faults) => '$events window events, $readings foreground checks, $faults failures';
   @override
   String get loopEnabled => 'Turn on trigger test';
   @override
@@ -487,7 +487,7 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get loopExport => 'Export receipts (JSON to clipboard)';
   @override
-  String loopExportDone(int count) => 'Copied ${count} receipts to the clipboard';
+  String loopExportDone(int count) => 'Copied $count receipts to the clipboard';
   @override
   String get loopFaultAttach => 'Connect failed';
   @override
@@ -511,13 +511,13 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get loopQuietHoursOff => 'Off';
   @override
-  String loopQuietHoursValue(String start, String end) => '${start}–${end}';
+  String loopQuietHoursValue(String start, String end) => '$start–$end';
   @override
   String get loopReceipts => 'Receipts';
   @override
   String get loopReceiptsEmpty => 'No receipts yet';
   @override
-  String loopRecoveredFromBackup(String file) => 'The receipt file was damaged; loaded the backup (${file})';
+  String loopRecoveredFromBackup(String file) => 'The receipt file was damaged; loaded the backup ($file)';
   @override
   String get loopRefresh => 'Refresh';
   @override
@@ -539,9 +539,9 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get loopResultUnavailable => 'Page couldn\'t show';
   @override
-  String loopSeconds(int seconds) => '${seconds} s';
+  String loopSeconds(int seconds) => '$seconds s';
   @override
-  String loopStorageError(String error) => 'Couldn\'t save receipts: ${error}';
+  String loopStorageError(String error) => 'Couldn\'t save receipts: $error';
   @override
   String get loopSurfaceNotification => 'via notification';
   @override
@@ -553,7 +553,7 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get loopTimeoutHint => 'After this it counts as "no answer in time"; tap to change';
   @override
-  String loopVisitShort(String id) => 'visit ${id}';
+  String loopVisitShort(String id) => 'visit $id';
   @override
   String get mountAccept => 'Agree, add it';
   @override
@@ -739,13 +739,13 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get phoneWallUnlocked => 'Nothing locked now';
   @override
-  String proactiveActiveStage(String stage) => 'Working on: ${stage}';
+  String proactiveActiveStage(String stage) => 'Working on: $stage';
   @override
   String get proactiveDaily => 'Daily limit';
   @override
   String get proactiveDailyHint => 'At most this many a day, recounted after midnight; undelivered ones do not count';
   @override
-  String proactiveDailyValue(int count) => '${count} times';
+  String proactiveDailyValue(int count) => '$count times';
   @override
   String get proactiveEnabled => 'Turn on proactive messages';
   @override
@@ -759,11 +759,11 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get proactiveGapMaxHint => 'Upper bound of the random gap; tap to change';
   @override
-  String proactiveGapValue(int min, int max) => '${min}–${max} min';
+  String proactiveGapValue(int min, int max) => '$min–$max min';
   @override
   String get proactiveGateFree => 'Clear: no DSH task running and no protected page in front';
   @override
-  String proactiveGateHold(String reason) => 'Holding back: ${reason}';
+  String proactiveGateHold(String reason) => 'Holding back: $reason';
   @override
   String get proactiveHoldA11y => 'accessibility is not connected';
   @override
@@ -787,7 +787,7 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get proactiveMarkShown => 'shown on screen';
   @override
-  String proactiveMinutes(int minutes) => '${minutes} min';
+  String proactiveMinutes(int minutes) => '$minutes min';
   @override
   String get proactiveOutcomeAcked => 'You said you saw it';
   @override
@@ -805,23 +805,23 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get proactivePickSession => 'Pick a session';
   @override
-  String proactiveQueued(int count) => 'Queued: ${count}';
+  String proactiveQueued(int count) => 'Queued: $count';
   @override
   String get proactiveQuiet => 'Quiet hours';
   @override
   String get proactiveQuietHint => 'No proactive message during this window; may cross midnight. Tap to change.';
   @override
-  String proactiveQuietValue(String start, String end) => '${start}–${end}';
+  String proactiveQuietValue(String start, String end) => '$start–$end';
   @override
   String get proactiveReceipts => 'Receipts';
   @override
   String get proactiveReceiptsEmpty => 'Nothing yet';
   @override
-  String proactiveRecoveryIssue(String issue) => 'The last state could not be read: ${issue}';
+  String proactiveRecoveryIssue(String issue) => 'The last state could not be read: $issue';
   @override
   String get proactiveSession => 'Target session';
   @override
-  String proactiveSessionChosen(String id) => 'Sent to ${id}';
+  String proactiveSessionChosen(String id) => 'Sent to $id';
   @override
   String get proactiveSessionEmpty => 'No live session. Open a chat in DSH first, then come back.';
   @override
@@ -835,7 +835,7 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get proactiveSessionRunning => 'Busy; it will be refused, not interrupted';
   @override
-  String proactiveSessionUnavailable(String error) => 'Couldn\'t read the session list (${error}); check that the local engine is connected and the plugin is loaded';
+  String proactiveSessionUnavailable(String error) => 'Couldn\'t read the session list ($error); check that the local engine is connected and the plugin is loaded';
   @override
   String get proactiveState => 'Right now';
   @override
@@ -847,7 +847,7 @@ class _DafeiyuStringsEn extends DafeiyuStrings {
   @override
   String get proactiveTransportReady => 'Connected to the engine on this machine, so it can really ask the model';
   @override
-  String proactiveWakeMode(String mode) => 'Wake mode: ${mode}';
+  String proactiveWakeMode(String mode) => 'Wake mode: $mode';
   @override
   String get proactiveWakeRestricted => 'This phone restricts background wakeups, so a proactive message is only attempted while DSH is open or the screen changes. For more reliable timing, allow DSH to run in the background and to autostart in system settings.';
   @override
@@ -964,7 +964,7 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get catalogBoutVoiceSummary => '局官念题，你出声答';
   @override
-  String interceptActive(String package) => '正在拦：${package}';
+  String interceptActive(String package) => '正在拦：$package';
   @override
   String get interceptAddTarget => '添加娱乐应用';
   @override
@@ -1014,13 +1014,13 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get interceptPauseNow => '立刻暂停 30 分钟';
   @override
-  String interceptPausedUntil(String time) => '已暂停，到 ${time} 恢复';
+  String interceptPausedUntil(String time) => '已暂停，到 $time 恢复';
   @override
   String get interceptReceipts => '最近回执';
   @override
   String get interceptReceiptsEmpty => '还没有回执';
   @override
-  String interceptRecoveryIssue(String error) => '启动时读到坏存档：${error}';
+  String interceptRecoveryIssue(String error) => '启动时读到坏存档：$error';
   @override
   String get interceptRefresh => '刷新';
   @override
@@ -1030,7 +1030,7 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get interceptResume => '恢复拦截';
   @override
-  String interceptStorageError(String error) => '存档写入失败：${error}';
+  String interceptStorageError(String error) => '存档写入失败：$error';
   @override
   String get interceptSubtitle => '进入已标记的娱乐 APP 时强制锁屏：支持严格锁机、专注联动与冷静训练，避免误放行后锁不住。';
   @override
@@ -1064,7 +1064,7 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get loopCooldownHint => '两次弹出之间至少隔这么久，点一下切换';
   @override
-  String loopCounters(int events, int readings, String app) => '收到 ${events} 个窗口事件，复核 ${readings} 次 · 最近前台 ${app}';
+  String loopCounters(int events, int readings, String app) => '收到 $events 个窗口事件，复核 $readings 次 · 最近前台 $app';
   @override
   String get loopDailyCap => '每天上限';
   @override
@@ -1072,15 +1072,15 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get loopDailyCapOff => '不限次数';
   @override
-  String loopDailyCapValue(int used, int cap) => '今天 ${used}/${cap} 次';
+  String loopDailyCapValue(int used, int cap) => '今天 $used/$cap 次';
   @override
   String get loopDiagnostics => '无障碍诊断';
   @override
   String get loopDiagnosticsClear => '清空诊断';
   @override
-  String loopDiagnosticsLastRead(String time) => '上次成功读到前台：${time}';
+  String loopDiagnosticsLastRead(String time) => '上次成功读到前台：$time';
   @override
-  String loopDiagnosticsSummary(int events, int readings, int faults) => '${events} 个窗口事件、${readings} 次前台复核、${faults} 次失败';
+  String loopDiagnosticsSummary(int events, int readings, int faults) => '$events 个窗口事件、$readings 次前台复核、$faults 次失败';
   @override
   String get loopEnabled => '开启触发测试';
   @override
@@ -1092,7 +1092,7 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get loopExport => '导出回执（JSON 复制到剪贴板）';
   @override
-  String loopExportDone(int count) => '已把 ${count} 条回执复制到剪贴板';
+  String loopExportDone(int count) => '已把 $count 条回执复制到剪贴板';
   @override
   String get loopFaultAttach => '连接失败';
   @override
@@ -1116,13 +1116,13 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get loopQuietHoursOff => '不限';
   @override
-  String loopQuietHoursValue(String start, String end) => '${start}–${end}';
+  String loopQuietHoursValue(String start, String end) => '$start–$end';
   @override
   String get loopReceipts => '回执';
   @override
   String get loopReceiptsEmpty => '还没有回执';
   @override
-  String loopRecoveredFromBackup(String file) => '回执文件损坏，已从备份（${file}）恢复';
+  String loopRecoveredFromBackup(String file) => '回执文件损坏，已从备份（$file）恢复';
   @override
   String get loopRefresh => '刷新';
   @override
@@ -1144,9 +1144,9 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get loopResultUnavailable => '页面没能弹出';
   @override
-  String loopSeconds(int seconds) => '${seconds} 秒';
+  String loopSeconds(int seconds) => '$seconds 秒';
   @override
-  String loopStorageError(String error) => '回执保存失败：${error}';
+  String loopStorageError(String error) => '回执保存失败：$error';
   @override
   String get loopSurfaceNotification => '通过通知';
   @override
@@ -1158,7 +1158,7 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get loopTimeoutHint => '超时就记成「超时未回应」，点一下切换';
   @override
-  String loopVisitShort(String id) => '访问 ${id}';
+  String loopVisitShort(String id) => '访问 $id';
   @override
   String get mountAccept => '点头，挂上去';
   @override
@@ -1344,13 +1344,13 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get phoneWallUnlocked => '现在没锁';
   @override
-  String proactiveActiveStage(String stage) => '正在处理：${stage}';
+  String proactiveActiveStage(String stage) => '正在处理：$stage';
   @override
   String get proactiveDaily => '每天上限';
   @override
   String get proactiveDailyHint => '一天最多几次，过零点重新算；没送达的不算';
   @override
-  String proactiveDailyValue(int count) => '${count} 次';
+  String proactiveDailyValue(int count) => '$count 次';
   @override
   String get proactiveEnabled => '开启主动搭话';
   @override
@@ -1364,11 +1364,11 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get proactiveGapMaxHint => '随机间隔的上限，点一下切换';
   @override
-  String proactiveGapValue(int min, int max) => '${min}–${max} 分钟';
+  String proactiveGapValue(int min, int max) => '$min–$max 分钟';
   @override
   String get proactiveGateFree => '现在可以让路了：没有 DSH 任务，也不在黑名单页面上';
   @override
-  String proactiveGateHold(String reason) => '正在让路：${reason}';
+  String proactiveGateHold(String reason) => '正在让路：$reason';
   @override
   String get proactiveHoldA11y => '无障碍没连上';
   @override
@@ -1392,7 +1392,7 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get proactiveMarkShown => '界面显示了';
   @override
-  String proactiveMinutes(int minutes) => '${minutes} 分钟';
+  String proactiveMinutes(int minutes) => '$minutes 分钟';
   @override
   String get proactiveOutcomeAcked => '你点了「我看到了」';
   @override
@@ -1410,23 +1410,23 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get proactivePickSession => '选一个会话';
   @override
-  String proactiveQueued(int count) => '排队中：${count} 条';
+  String proactiveQueued(int count) => '排队中：$count 条';
   @override
   String get proactiveQuiet => '免打扰时段';
   @override
   String get proactiveQuietHint => '这段时间里不主动搭话，可以跨零点，点一下切换';
   @override
-  String proactiveQuietValue(String start, String end) => '${start}–${end}';
+  String proactiveQuietValue(String start, String end) => '$start–$end';
   @override
   String get proactiveReceipts => '回执';
   @override
   String get proactiveReceiptsEmpty => '还没有记录';
   @override
-  String proactiveRecoveryIssue(String issue) => '上次的状态读不出来：${issue}';
+  String proactiveRecoveryIssue(String issue) => '上次的状态读不出来：$issue';
   @override
   String get proactiveSession => '目标会话';
   @override
-  String proactiveSessionChosen(String id) => '发到 ${id}';
+  String proactiveSessionChosen(String id) => '发到 $id';
   @override
   String get proactiveSessionEmpty => '没有活着的会话。先在 DSH 里开一个对话，再回来选。';
   @override
@@ -1440,7 +1440,7 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get proactiveSessionRunning => '正在忙，发了会被拒（不会打断它）';
   @override
-  String proactiveSessionUnavailable(String error) => '读不到会话列表（${error}），先确认本机引擎已连上、插件已加载';
+  String proactiveSessionUnavailable(String error) => '读不到会话列表（$error），先确认本机引擎已连上、插件已加载';
   @override
   String get proactiveState => '现在的状态';
   @override
@@ -1452,7 +1452,7 @@ class _DafeiyuStringsZh extends DafeiyuStrings {
   @override
   String get proactiveTransportReady => '已经连上本机引擎，可以真的问模型';
   @override
-  String proactiveWakeMode(String mode) => '唤醒方式：${mode}';
+  String proactiveWakeMode(String mode) => '唤醒方式：$mode';
   @override
   String get proactiveWakeRestricted => '这台手机限制了后台唤醒，所以只在你打开 DSH、或者屏幕有变化的时候才会尝试主动搭话。想更准时，可以在系统设置里允许 DSH 后台运行和自启动。';
   @override

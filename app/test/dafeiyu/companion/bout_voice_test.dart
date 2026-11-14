@@ -71,7 +71,7 @@ BoutVoiceLoop makeLoop(
       return i < heard.length ? heard[i] : null;
     },
     // 周期步真的等会跑十分钟：测试里只记下等了多久。
-    wait: (d) async => null,
+    wait: (d) async {},
   );
   return loop;
 }

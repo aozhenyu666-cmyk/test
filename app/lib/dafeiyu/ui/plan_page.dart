@@ -443,7 +443,7 @@ class _PlanPageState extends State<PlanPage> {
   /// 四个数：主动开局比、交付率、空局率、局内偏离分钟。
   /// 只显示，不算：算法在插件 episodes.js 的日摘要里，手机复制一份迟早会不一致。
   Widget _numbersCard() {
-    final pct = (Object? v) => v is num ? '${(v * 100).round()}%' : '—';
+    String pct(Object? v) => v is num ? '${(v * 100).round()}%' : '—';
     final dev = _numbers['deviationMin'] is int ? _numbers['deviationMin'] as int : 0;
     final opened = _numbers['opened'] is int ? _numbers['opened'] as int : 0;
     final top = _numbers['deviationTop'];
@@ -452,14 +452,14 @@ class _PlanPageState extends State<PlanPage> {
       for (final x in rows)
         if (x is Map && x['app'] is String) '${_label(x['app'] as String)} ${x['min']} 分',
     ];
-    final topText = names.isEmpty ? '' : '主要在 ' + names.take(3).join('、');
+    final topText = names.isEmpty ? '' : '主要在 ${names.take(3).join('、')}';
+    final openedSuffix = opened > 0 ? '（开了 $opened 局）' : '';
     return ListPageCard(
       children: [
         ListPageRow(
           icon: AppIcons.chart,
           title: '今天：交付 ${pct(_numbers['deliverRatio'])} · 空局 ${pct(_numbers['badRatio'])}',
-          subtitle: '主动开局 ${pct(_numbers['selfOpenRatio'])} · 局内偏离 $dev 分钟' +
-              (opened > 0 ? '（开了 $opened 局）' : ''),
+          subtitle: '主动开局 ${pct(_numbers['selfOpenRatio'])} · 局内偏离 $dev 分钟$openedSuffix',
           subtitleMaxLines: 2,
         ),
         if (topText.isNotEmpty)

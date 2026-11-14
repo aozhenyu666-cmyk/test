@@ -376,7 +376,7 @@ class _MountPageState extends State<MountPage> {
             TextButton(onPressed: () => Navigator.pop(ctx), child: Text(l.commonCancel)),
             ValueListenableBuilder<bool>(
               valueListenable: ready,
-              builder: (_, ok, __) => FilledButton(
+              builder: (_, ok, _) => FilledButton(
                 onPressed: ok ? () => Navigator.pop(ctx, ctrl.text.trim()) : null,
                 child: Text(l.commonSave),
               ),

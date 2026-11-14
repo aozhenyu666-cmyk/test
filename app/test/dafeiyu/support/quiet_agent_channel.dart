@@ -14,6 +14,6 @@ void installQuietAgentChannel() {
   TestWidgetsFlutterBinding.ensureInitialized();
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockStreamHandler(
     const EventChannel('dsh/proactive/agent'),
-    MockStreamHandler.inline(onListen: (_, __) {}, onCancel: (_) {}),
+    MockStreamHandler.inline(onListen: (_, _) {}, onCancel: (_) {}),
   );
 }

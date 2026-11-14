@@ -435,7 +435,7 @@ class ProactiveChannel {
       final raw = await _methods.invokeMethod<Object?>('wallAppeal', {
         'at': at,
         'evidence': evidence,
-        if (task != null) 'task': task,
+        'task': ?task,
       });
       if (raw is! Map) return null;
       return WallAppeal.fromWire(raw);
@@ -491,11 +491,11 @@ class ProactiveChannel {
       final raw = await _methods.invokeMethod<Object?>('deposit', {
         if (slot) 'action': 'slot',
         if (!slot && department != null) 'action': 'submit',
-        if (department != null) 'department': department,
-        if (report != null) 'report': report,
-        if (thought != null) 'thought': thought,
-        if (text != null) 'text': text,
-        if (taskId != null) 'taskId': taskId,
+        'department': ?department,
+        'report': ?report,
+        'thought': ?thought,
+        'text': ?text,
+        'taskId': ?taskId,
       });
       return DepositView.fromWire(raw);
     } on Exception {
@@ -522,14 +522,14 @@ class ProactiveChannel {
   }) async {
     try {
       final raw = await _methods.invokeMethod<Object?>('mount', {
-        if (action != null) 'action': action,
-        if (goal != null) 'goal': goal,
-        if (topicId != null) 'topicId': topicId,
-        if (text != null) 'text': text,
-        if (src != null) 'src': src,
-        if (where != null) 'where': where,
-        if (id != null) 'id': id,
-        if (from != null) 'from': from,
+        'action': ?action,
+        'goal': ?goal,
+        'topicId': ?topicId,
+        'text': ?text,
+        'src': ?src,
+        'where': ?where,
+        'id': ?id,
+        'from': ?from,
       });
       return MountView.fromWire(raw);
     } on Exception {
@@ -547,9 +547,9 @@ class ProactiveChannel {
   Future<DrillOpView?> drillOp({String? op, String? answer, bool? blind}) async {
     try {
       final raw = await _methods.invokeMethod<Object?>('drillOp', {
-        if (op != null) 'op': op,
-        if (answer != null) 'answer': answer,
-        if (blind != null) 'blind': blind,
+        'op': ?op,
+        'answer': ?answer,
+        'blind': ?blind,
       });
       return DrillOpView.fromWire(raw);
     } on Exception {
