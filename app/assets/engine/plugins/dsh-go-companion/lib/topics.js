@@ -110,3 +110,47 @@ export function backgroundFacts(candidates, limit = 5) {
     .filter(Boolean)
     .slice(0, Math.max(0, limit))
 }
+
+function parseJsonList(raw) {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw !== 'string' || !raw.trim()) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+/** 从 fish-memory.sqlite 读取激活的 Lorebook 条目（兼容旧表无 triggers/scene_tags 列）。 */
+export function loadLorebookFacts(db, input = {}) {
+  if (!db) return []
+  try {
+    const cols = db.prepare('PRAGMA table_info(facts)').all()
+    if (!cols.some((c) => c.name === 'triggers') || !cols.some((c) => c.name === 'scene_tags')) return []
+    const session = input.sessionId ? 'session:' + input.sessionId : 'global'
+    const rows = db.prepare(
+      'SELECT id, scope, text, kind, importance, pinned, triggers, scene_tags, created_at, updated_at, last_hit_at, hits, expires_at, status ' +
+      "FROM facts WHERE status = 'active' AND scope IN (?, 'global') AND (triggers != '[]' OR scene_tags != '[]') " +
+      'ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT 64'
+    ).all(session)
+    return rows.map((r) => ({
+      id: r.id,
+      scope: r.scope || 'global',
+      text: String(r.text || ''),
+      kind: r.kind || 'fact',
+      importance: Number(r.importance) || 0,
+      pinned: Number(r.pinned) === 1,
+      triggers: parseJsonList(r.triggers),
+      sceneTags: parseJsonList(r.scene_tags),
+      createdAt: Number(r.created_at) || 0,
+      updatedAt: Number(r.updated_at) || 0,
+      lastHitAt: Number(r.last_hit_at) || 0,
+      hits: Number(r.hits) || 0,
+      expiresAt: Number(r.expires_at) || 0,
+      status: r.status || 'active',
+    }))
+  } catch {
+    return []
+  }
+}

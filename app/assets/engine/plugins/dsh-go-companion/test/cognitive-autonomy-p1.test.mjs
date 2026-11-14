@@ -165,6 +165,7 @@ test('M1.3: withdrawal 状态机与 /plan 冷却抑制及目标 App / 实操解�
     mkdirSync(join(home, 'companion'), { recursive: true })
     writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({
       sessionId: 'session-sis', strategistSessionId: 'session-big', quietStart: 12, quietEnd: 12,
+      patrolHours: [],
       apps: [{ pkg: 'md.obsidian', label: 'Obsidian', role: 'work' }],
     }))
     writeFileSync(join(home, 'companion', 'withdrawal.json'), JSON.stringify({

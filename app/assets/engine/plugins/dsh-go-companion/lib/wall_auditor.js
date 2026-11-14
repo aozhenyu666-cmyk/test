@@ -14,6 +14,8 @@
 
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { evaluateSixDiceSlot, slotsForStage } from './six_dice.js'
+import { candidateNotesForLinking } from './notes.js'
 
 export const WALL_LABEL = '〔墙〕'
 /** 一份笔记要长多少才算"写了东西"：大约一两百个汉字。改个错别字、加个空行都不够。 */
@@ -260,4 +262,56 @@ export function listScreenshots(dirs = SCREENSHOT_DIRS, since = 0) {
     }
   }
   return out
+}
+
+// ---------------------------------------------------------------- 六面骰 L2 渐进验证桥接
+
+/** 生成某阶段的六面骰题槽；Stage 3 且未禁用联结时自动附上最多 3 篇 Obsidian WikiLink 候选笔记。 */
+export function buildSixDicePlan({ stage = 1, notesDir = '', stage3Note = '', query = '' } = {}) {
+  const plan = slotsForStage({ stage: Number(stage) || 1 })
+  const linkSlot = plan.find((s) => s.dice === 5 || s.id === 'linking')
+  const candidateNotes = linkSlot && notesDir
+    ? candidateNotesForLinking(notesDir, { stage3Note, query, limit: 3 })
+    : []
+  return {
+    stage: Number(stage) || 1,
+    slots: plan.map((s) => s.dice === 5 && candidateNotes.length
+      ? { ...s, candidateNotes }
+      : s),
+    candidateNotes,
+  }
+}
+
+/** 运行单个六面骰槽的 L1 代码初筛 + L2 无状态语义复核；Stage 3 骰 5 自动附 Obsidian WikiLink 候选。 */
+export async function auditSixDiceSlot(input = {}, deps = {}) {
+  const dice = Math.max(1, Math.min(6, Math.round(Number(input.dice) || 1)))
+  const notesDir = String(deps.notesDir || input.notesDir || '')
+  const candidateNotes = Array.isArray(input.candidateNotes)
+    ? input.candidateNotes
+    : (dice === 5 && notesDir
+        ? candidateNotesForLinking(notesDir, {
+            stage3Note: input.stage3Note || '',
+            query: input.query || input.sourceContext || input.answer || '',
+            limit: 3,
+          })
+        : [])
+  const sourceContext = candidateNotes.length && !String(input.sourceContext || '').includes('[[')
+    ? [
+        String(input.sourceContext || '').trim(),
+        '候选关联笔记：' + candidateNotes.map((n) => n.wikilink + (n.snippet ? `（${n.snippet.slice(0, 40)}）` : '')).join('；'),
+      ].filter(Boolean).join('\n')
+    : String(input.sourceContext || '')
+  const res = await evaluateSixDiceSlot({
+    dice,
+    prompt: input.prompt || '',
+    answer: input.answer || '',
+    sourceContext,
+    anchors: Array.isArray(input.anchors) ? input.anchors : [],
+    failures: Number(input.failures) || 0,
+    stream: deps.stream || null,
+    provider: deps.provider || '',
+    model: deps.model || '',
+    timeoutMs: input.timeoutMs || deps.timeoutMs || 8_000,
+  })
+  return { ...res, candidateNotes }
 }

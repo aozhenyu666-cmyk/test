@@ -19,6 +19,7 @@ import '../agents/team_page.dart';
 import '../bots/bots_page.dart';
 import '../community/community_page.dart';
 import '../companion/bout_voice_page.dart';
+import '../companion/companion_hub_page.dart';
 import '../cordis/cordis_page.dart';
 import '../files/files_page.dart';
 import '../forum/forum_home_page.dart';
@@ -327,6 +328,13 @@ final featureSections = <FeatureSection>[
       summary: (l10n) => l10n.catalogBoutVoiceSummary,
       icon: AppIcons.voice,
       native: (_) => const BoutVoicePage(),
+    ),
+    FeatureItem(
+      id: 'companion-hub',
+      title: '大肥鱼中枢',
+      summary: '今日计划、每日四部门、姐妹记忆、墙与系统护栏的一站入口',
+      icon: AppIcons.bot,
+      native: (_) => const CompanionHubPage(),
     ),
   ]),
   FeatureSection.localized((l10n) => l10n.catalogCommunitySharingSection, [

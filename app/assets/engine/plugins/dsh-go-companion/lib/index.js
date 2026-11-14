@@ -17,7 +17,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DEFAULT_LIMITS, Desk, SOURCE_KIND } from './core.js'
-import { BACKGROUND_LIMIT, backgroundFacts, loadCandidates, openMemoryDb } from './topics.js'
+import { BACKGROUND_LIMIT, backgroundFacts, loadCandidates, loadLorebookFacts, openMemoryDb } from './topics.js'
 import { buildPrompt } from './prompt.js'
 import { appendLedger, readLedger, summarize } from './ledger.js'
 import { plan as decide, inQuiet } from './plan.js'
@@ -159,9 +159,11 @@ import { DEPTS, TRIGGER_TEXT, blockLine, fixedBlocksOf, lateLine, markBlockDone,
 import { DEPARTMENTS, DEPT_DUTY, appendSlot, behaviorReport, completeOf, depositLines, depositOf, missingText, normalizeEntry, reconcileEntry, slotAsk, statusOf, withEntry } from './deposit.js'
 import { AUDIT_CODES, APPEAL_CODES, APPEAL_MAX_PER_DAY, appealLeft, appealVoice, verdictVoice, wallThread } from './wall_voice.js'
 import {
-  SCREENSHOT_DIRS, auditTask, baselineFor, checkMorningTasks, evidenceType, listScreenshots, loadWallMemory,
-  noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
+  SCREENSHOT_DIRS, auditSixDiceSlot, auditTask, baselineFor, buildSixDicePlan, checkMorningTasks, evidenceType,
+  listScreenshots, loadWallMemory, noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
 } from './wall_auditor.js'
+import { executeCapability } from './capabilities.js'
+import { matchLorebook } from '../../dsh-go-memory/lib/lorebook.js'
 import {
   AUDIT_DIR, PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText,
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
@@ -618,6 +620,55 @@ export function apply(ctx) {
   const saveAppGov = (g) => writeJson(stateFile('app-gov.json'), g)
   const loadExternal = () => cleanExternalState(readState(stateFile('external.json'), null))
   const saveExternal = (e) => writeJson(stateFile('external.json'), e)
+  const loadPcHeartbeat = () => readState(stateFile('pc-heartbeat.json'), null)
+  const savePcHeartbeat = (p) => writeJson(stateFile('pc-heartbeat.json'), p)
+  const loadDiceFailures = () => readState(stateFile('dice-failures.json'), {}) || {}
+  const saveDiceFailures = (d) => writeJson(stateFile('dice-failures.json'), d)
+  const freshPcLine = (now = Date.now()) => {
+    const pc = loadPcHeartbeat()
+    if (!pc || now - Number(pc.at || pc.receivedAt || 0) >= 15 * 60_000) return ''
+    if (pc.isAfk) return 'PC:离开(' + String(pc.afkStatus || 'afk').slice(0, 16) + ')'
+    const app = String(pc.activeApp || pc.category || '在线').slice(0, 20)
+    const focus = Math.max(0, Math.round(Number(pc.focusMinutes) || 0))
+    const fun = Math.max(0, Math.round(Number(pc.entertainmentMinutes) || 0))
+    return `PC:${app} 专注${focus}m${fun > 0 ? ' 娱乐' + fun + 'm' : ''}`
+  }
+  const matchActiveLorebook = (role, mainStateId, now = Date.now()) => {
+    const db = openMemoryDb(memoryPath())
+    if (!db) return ''
+    try {
+      const sid = role === 'strategist' ? config.strategistSessionId : config.sessionId
+      const facts = loadLorebookFacts(db, { sessionId: sid })
+      if (!facts.length) return ''
+      const sceneTags = [
+        'state:' + String(mainStateId || 'standby'),
+        live?.department ? 'dept:' + String(live.department) : '',
+        lastPhone?.app ? 'app:' + String(lastPhone.app) : '',
+        lastPhone?.fun ? 'scene:fun' : lastPhone?.work ? 'scene:work' : '',
+      ].filter(Boolean)
+      const recentTexts = readLedger(home(), 30)
+        .filter((e) => e && (e.state === 'heard' || e.state === 'say-text' || e.state === 'verdict') && typeof e.text === 'string')
+        .slice(-4)
+        .map((e) => e.text)
+      const query = String(live?.protocol?.name || live?.protocol?.id || '')
+      const res = matchLorebook({ facts }, {
+        scope: sid ? 'session:' + sid : 'global',
+        query,
+        historyText: recentTexts.join('\n'),
+        sceneTags,
+        limit: 3,
+      }, now)
+      return (res.items || []).map((f) => '- ' + String(f.text || '').slice(0, 140)).join('\n')
+    } catch {
+      return ''
+    } finally {
+      try {
+        db.close()
+      } catch {
+        // ignore
+      }
+    }
+  }
   // 预判账本：模型只写 claim，verdict 由墙的遥测填（predict.js 里 settle 是唯一出口）。
   const loadPredict = () => cleanLedger(readState(stateFile('predict.json'), null))
   const savePredict = (p) => writeJson(stateFile('predict.json'), p)
@@ -1492,11 +1543,12 @@ export function apply(ctx) {
     }
   }
   function notesDir() {
+    const set = typeof config.notesPath === 'string' ? config.notesPath.trim() : ''
+    if (set && isDir(set)) return set
     const now = Date.now()
     if (now - notesCache.at < 10 * 60_000) return notesCache.dir
-    const set = typeof config.notesPath === 'string' ? config.notesPath.trim() : ''
     // 第四轮：先找带 .obsidian 的真库，再退回几个常见文件夹名。
-    const dir = set && isDir(set) ? set : findObsidianVault() || NOTES_CANDIDATES.find(isDir) || ''
+    const dir = findObsidianVault() || NOTES_CANDIDATES.find(isDir) || ''
     notesCache = { at: now, dir }
     return dir
   }
@@ -3714,7 +3766,7 @@ export function apply(ctx) {
    *   relax   → 申请明天放松一段（只在窗口+额度内；替代聊天里的放风）。
    *   tighten → 立即收紧到今天零点（任何时候）。
    */
-  function wallRoute(body) {
+  async function wallRoute(body) {
     const now = Date.now()
     const tz = requestZone(body?.timeZone, config)
     const action = String(body?.action || 'status')
@@ -3744,6 +3796,61 @@ export function apply(ctx) {
     if (action === 'tighten') {
       const r = tightenNow(now, tz, { reason: body?.reason, by: 'ui' })
       return { ...status(), ok: r.ok, text: r.text }
+    }
+    if (action === 'dice-slots') {
+      const plan = buildSixDicePlan({
+        stage: body?.stage || 1,
+        notesDir: notesDir(),
+        stage3Note: body?.stage3Note || '',
+        query: body?.query || '',
+      })
+      return { v: 1, ok: true, ...plan }
+    }
+    if (action === 'dice-judge') {
+      const dice = Math.max(1, Math.min(6, Math.round(Number(body?.dice) || 1)))
+      const failMap = loadDiceFailures()
+      const prevFails = body?.failures !== undefined ? Number(body.failures) || 0 : (Number(failMap[dice]) || 0)
+      const target = judgeTargetOf(ctx, config.sessionId, config) || {}
+      const out = await auditSixDiceSlot({ ...body, dice, failures: prevFails }, {
+        notesDir: notesDir(),
+        stream: streamOf(),
+        provider: target.provider || '',
+        model: target.model || '',
+      })
+      saveDiceFailures({ ...failMap, [dice]: out.pass ? 0 : out.failures })
+      record({
+        state: 'wall-dice-judge', at: now, dice, slot: out.slot,
+        pass: out.pass, code: out.code, judgedBy: out.judgedBy,
+      })
+      return { v: 1, ok: Boolean(out.pass), ...out }
+    }
+    if (action === 'capability') {
+      const capOut = executeCapability(body?.name, body?.input || {}, {
+        perceive: (cap, input) => ({
+          ok: true, cls: cap.class, name: cap.name, phone: lastPhone, pc: loadPcHeartbeat(), signal: input?.signal ?? null,
+        }),
+        trigger: (cap, input) => {
+          if (input?.protocolId) return startBout(String(input.protocolId), { department: input?.department, by: 'capability' })
+          if (input?.question) {
+            const lock = openFollowup(String(input.kind || 'capability'), String(input.question), now)
+            return { ok: true, cls: cap.class, name: cap.name, followup: followupView(lock, now) }
+          }
+          return { ok: true, cls: cap.class, name: cap.name, triggered: true }
+        },
+        reply: (cap, input) => ({
+          ok: true, cls: cap.class, name: cap.name, prompt: String(input?.prompt || cap.how || ''), ready: true,
+        }),
+        verify: (cap, input) => {
+          const text = String(input?.answer || input?.text || '').trim()
+          const passed = Boolean(input?.evidence || text)
+          return { ok: true, cls: cap.class, name: cap.name, passed }
+        },
+        gear: (cap, input) => {
+          const mins = Math.max(1, Math.min(BUSY_MAX_MIN, Math.round(Number(input?.minutes) || BUSY_DEFAULT_MIN)))
+          return { ok: true, cls: cap.class, name: cap.name, mode: String(input?.mode || 'sprint'), minutes: mins }
+        },
+      })
+      return { v: 1, ...capOut }
     }
     return status()
   }
@@ -4212,6 +4319,31 @@ export function apply(ctx) {
       record({ state: 'obligation-reask', at: now, kind: r.ask.kind, app: String(body?.app || '').slice(0, 120) })
       return { v: 1, ok: true, ask: true, followup: followupView(lock, now) }
     }
+    if (type === 'pc-activity' || type === 'pc_heartbeat') {
+      const saved = {
+        at: Number(body?.at) || now,
+        receivedAt: now,
+        isAfk: Boolean(body?.isAfk),
+        afkStatus: String(body?.afkStatus || '').slice(0, 32),
+        activeApp: String(body?.activeApp || '').slice(0, 80),
+        activeTitle: String(body?.activeTitle || '').slice(0, 120),
+        category: String(body?.category || 'other').slice(0, 32),
+        focusMinutes: Math.max(0, Math.round(Number(body?.focusMinutes) || 0)),
+        entertainmentMinutes: Math.max(0, Math.round(Number(body?.entertainmentMinutes) || 0)),
+        switches: Math.max(0, Math.round(Number(body?.switches) || 0)),
+      }
+      savePcHeartbeat(saved)
+      record({
+        state: 'pc-heartbeat',
+        at: now,
+        isAfk: saved.isAfk,
+        activeApp: saved.activeApp,
+        category: saved.category,
+        focusMinutes: saved.focusMinutes,
+        entertainmentMinutes: saved.entertainmentMinutes,
+      })
+      return { v: 1, ok: true, pc: saved }
+    }
     return { v: 1, ok: false, error: { code: 'unknown-event' } }
   }
   /** 任务期间拦下的通知，整理成一句简报（取完就清）。 */
@@ -4635,6 +4767,7 @@ export function apply(ctx) {
     const extNow = loadExternal()
     const govNow = loadAppGov()
     const leaseNow = activeAppLease(extNow, nowMs)
+    const loreText = matchActiveLorebook(role, mainState?.id || 'standby', nowMs)
     const telemetryText = buildTelemetrySnapshot({
       state: mainState?.id || 'standby',
       department: live?.department || '',
@@ -4645,6 +4778,8 @@ export function apply(ctx) {
       emergencyPassUntil: extNow.emergencyPass?.until || 0,
       contextExempt: Number(govNow.contextExempt?.until) > nowMs ? govNow.contextExempt?.reason || 'tier1' : '',
       credit: trustNow()?.score,
+      earnedMin: earnedRt.leftOf(todayEarned(nowMs, zoneOr(config.timeZone))),
+      extraLine: freshPcLine(nowMs),
       timeZone: zoneOr(config.timeZone),
     }, nowMs).join('\n')
     const blocks = [
@@ -4660,6 +4795,7 @@ export function apply(ctx) {
       { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
       { id: 'telemetry', layer: 'content', priority: 9, text: telemetryText },
+      ...(loreText ? [{ id: 'lorebook', layer: 'content', priority: 7, text: '【情境记忆】\n' + loreText }] : []),
       ...(role === 'companion' && isInWithdrawal(wNow, nowMs)
         ? [{ id: 'withdrawal', layer: 'state', priority: 70, text: '当前处于冷静撤回期：停止哄人、追问或情绪安抚，仅简短回应等待实质行动。' }]
         : []),
@@ -5275,8 +5411,8 @@ export function apply(ctx) {
         if (path === '/gemini/due') return send(res, 200, { v: 1, launch: dueGeminiLaunch(Date.now()) })
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
-        if (path === '/bouts') return send(res, 200, boutsRoute(body.value))
-        if (path === '/wall') return send(res, 200, wallRoute(body.value))
+        if (path === '/bouts') return send(res, 200, await boutsRoute(body.value))
+        if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
@@ -5330,16 +5466,59 @@ export function apply(ctx) {
         }
         if (path === '/elastic-check') {
           const now = Date.now()
+          const tz = zoneOr(config.timeZone)
           const resBuf = evaluateElasticBuffer({
             plannedAt: body.value?.plannedAt,
             startedAt: body.value?.startedAt,
             bufferMin: body.value?.bufferMin,
             now,
           })
+          let escalationId = null
+          let earnedDeducted = 0
+          let fallbackEnqueued = false
           if (resBuf.exceeded) {
             record({ state: 'scheduling-failure', at: now, overdueMin: resBuf.overdueMin, protocolId: resBuf.fallbackBout?.protocolId })
+            let db = null
+            try {
+              db = openBoutsDb(memoryPath())
+              const esc = startEscalation(db, { reason: 'scheduling_failure', level: 'L1', now, home: home() })
+              if (esc?.ok) escalationId = esc.id
+              if (resBuf.fallbackBout) {
+                const dayStr = dayString(now, tz)
+                const existing = getDayPlan(db, dayStr)
+                const queue = [...(existing?.queue || [])]
+                const recentDup = queue.some((q) => q?.protocolId === resBuf.fallbackBout.protocolId && now - Number(q.queuedAt || 0) < 10 * 60_000)
+                if (!recentDup) {
+                  queue.push({ ...resBuf.fallbackBout, queuedAt: now, minute: zoneMinuteOfDay(now, tz) })
+                  saveDayPlan(db, {
+                    id: existing?.id || ('plan:' + dayStr),
+                    day: dayStr,
+                    template: existing?.template || 'elastic-fallback',
+                    queue,
+                    edits: [...(existing?.edits || []), { at: now, by: 'elastic-check', reason: 'scheduling_failure' }],
+                    activation: existing?.activation || 'auto',
+                    home: home(),
+                    now,
+                  })
+                  fallbackEnqueued = true
+                }
+              }
+            } catch {
+              // ignore db fallback error
+            } finally {
+              try {
+                db?.close?.()
+              } catch {
+                // ignore
+              }
+            }
+            const beforeEarned = todayEarned(now, tz)
+            const penaltyMin = Math.min(10, Math.max(5, Math.round(Number(body.value?.penaltyMin) || 5)))
+            const spentRes = earnedRt.spend(beforeEarned, penaltyMin)
+            earnedDeducted = spentRes.spent
+            if (earnedDeducted > 0) saveEarned(spentRes.state)
           }
-          return send(res, 200, { v: 1, ...resBuf })
+          return send(res, 200, { v: 1, ...resBuf, escalationId, earnedDeducted, fallbackEnqueued })
         }
         if (path === '/protocols/compose') {
           const role = String(body.value?.role || 'strategist')
@@ -6533,9 +6712,12 @@ export function apply(ctx) {
    *
    * 没有 action 的请求还是原来的「分享进来的一段话」，一个字没改。
    */
-  function boutsRoute(body) {
+  async function boutsRoute(body) {
     const action = String(body?.action || '')
     if (!action) return boutsShareRoute(body)
+    if (action === 'dice-slots' || action === 'dice-judge') {
+      return wallRoute(body)
+    }
     // 第九轮：计划界面开局时一并带上这一局的必需 / 允许应用（严格模式和「切出」按它判）；
     // 第三项起再带工作包（局官第一句就念第一步）。
     if (action === 'open') {

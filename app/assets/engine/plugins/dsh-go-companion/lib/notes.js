@@ -416,3 +416,44 @@ export function syncVerdicts({ kb, entries, now = Date.now(), tz = 'Asia/Shangha
   next.lastVerdictAt = Number(rows[rows.length - 1].at) || last
   return { state: next, count: rows.length }
 }
+
+/**
+ * Stage 3（第 5 面骰「笔记联结」）自动召回候选 Obsidian `[[WikiLink]]` 笔记。
+ * 先按 stage3Note / query 做关键词检出，不足则用最近笔记补齐，去重后最多返回 limit（默认 3）条。
+ * 路径缺失或为空时静默返回 []。
+ */
+export function candidateNotesForLinking(notesDir, { stage3Note = '', query = '', limit = 3 } = {}) {
+  const cap = Math.max(1, Math.min(8, Math.round(Number(limit) || 3)))
+  const rawQuery = String(query || stage3Note || '').trim()
+  const keywords = rawQuery
+    .replace(/[#>*`\[\]()]/g, ' ')
+    .split(/[\s,，。；;、/|]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 2)
+    .slice(0, 6)
+  const seen = new Set()
+  const picks = []
+  const pushHit = (hit) => {
+    if (!hit || picks.length >= cap) return
+    const rel = String(hit.rel || hit.path || '').trim()
+    const key = String(rel || hit.title || '').trim()
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    const rawTitle = String(hit.title || rel.split(/[\\/]/).pop() || key).replace(/\.md$/i, '').trim()
+    picks.push({
+      id: key,
+      title: rawTitle,
+      path: rel,
+      snippet: String(hit.snippet || hit.summary || hit.excerpt || '').slice(0, 140),
+      wikilink: wikiLink(rawTitle),
+    })
+  }
+  if (rawQuery) {
+    for (const h of vaultSearch(notesDir, keywords.join(' ') || rawQuery, { limit: cap * 2 })) pushHit(h)
+  }
+  if (picks.length < cap) {
+    for (const h of vaultRecentNotes(notesDir, { limit: cap * 2 })) pushHit(h)
+  }
+  return picks.slice(0, cap)
+}
+

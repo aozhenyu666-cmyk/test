@@ -424,7 +424,7 @@ test('/plan/day 的四个数与日摘要一致：开一局记一笔，数字跟�
 
 test('6.1 有预案在生效：下一次检查压到 5 分钟那一档', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    const t = setup(home, { patrolHours: [] })
     // 把早/晚/周三次对线记成今天已经做过，否则它们各自会排一分钟后的球，把基线本来就压得比 5 分钟还短。
     const day = startOfDay(Date.now(), 'Asia/Shanghai')
     mkdirSync(join(home, 'companion'), { recursive: true })

@@ -396,6 +396,141 @@ class InterceptPageActivity : Activity() {
         }
     }
 
+    /** 急事 3 分钟通行：DSH Go 雾蓝玻璃选择卡 -> 请求 /emergency-pass -> 顶部悬浮倒计时胶囊 -> 到点回收。 */
+    private fun showEmergencyPassDialog() {
+        val ctx = this
+        val reasons = arrayOf("回紧急消息", "付款 / 扫码", "查验证码 / 文件", "接电话 / 联系")
+        var selected = reasons[0]
+        val column = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(20), dp(20), dp(18))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(24).toFloat()
+                setColor(palette.fill)
+                setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+            }
+        }
+        column.addView(TextView(ctx).apply {
+            text = "每日限 2 次 · 到点自动收回"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextColor(palette.onTonal)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(999).toFloat()
+                setColor(palette.tonal)
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(10)
+        })
+        column.addView(TextView(ctx).apply {
+            text = "急事 3 分钟放行"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+            setTextColor(palette.ink)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 0, 0, dp(4))
+        })
+        column.addView(TextView(ctx).apply {
+            text = "选定当前急事类型。放行期间顶部保留轻量倒计时胶囊，结束后自动拉回。"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTextColor(palette.muted)
+            setLineSpacing(0f, 1.25f)
+            setPadding(0, 0, 0, dp(12))
+        })
+        val chipViews = ArrayList<TextView>(reasons.size)
+        fun syncChips() {
+            chipViews.forEachIndexed { idx, tv ->
+                val active = reasons[idx] == selected
+                tv.setTextColor(if (active) palette.onTonal else palette.ink)
+                tv.setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+                tv.background = GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat()
+                    setColor(if (active) palette.tonal else palette.pressed)
+                    setStroke(dp(if (active) 2 else 1).coerceAtLeast(1), if (active) palette.accent else palette.stroke)
+                }
+            }
+        }
+        for (rowIdx in 0 until reasons.size step 2) {
+            val row = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            for (colIdx in 0..1) {
+                val idx = rowIdx + colIdx
+                if (idx >= reasons.size) break
+                val label = reasons[idx]
+                val chip = TextView(ctx).apply {
+                    text = label
+                    gravity = Gravity.CENTER
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                    setPadding(dp(10), dp(11), dp(10), dp(11))
+                    setOnClickListener {
+                        selected = label
+                        syncChips()
+                    }
+                }
+                chipViews.add(chip)
+                row.addView(chip, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (colIdx == 0) marginEnd = dp(8)
+                })
+            }
+            column.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(8)
+            })
+        }
+        syncChips()
+        val noteBox = EditText(ctx).apply {
+            hint = "补充说明（可选，会记入当日台账）"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextColor(palette.ink)
+            setHintTextColor(palette.muted)
+            minLines = 2
+            maxLines = 3
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(palette.pressed)
+                setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+            }
+        }
+        column.addView(noteBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(4)
+            bottomMargin = dp(12)
+        })
+        val dialog = android.app.Dialog(this)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setContentView(ScrollView(ctx).apply { addView(column) })
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        lateinit var confirmBtn: Button
+        confirmBtn = pillButton("放行 3 分钟", primary = true, weight = 1.5f, onTap = {
+            confirmBtn.isEnabled = false
+            confirmBtn.text = "申请中…"
+            val extra = noteBox.text?.toString()?.trim().orEmpty()
+            val fullReason = if (extra.isNotEmpty()) "$selected：$extra" else selected
+            ProactiveRuntime.requestEmergencyPass(fullReason) { ok, _, errMsg ->
+                if (isFinishing || isDestroyed) return@requestEmergencyPass
+                if (!ok) {
+                    confirmBtn.isEnabled = true
+                    confirmBtn.text = "放行 3 分钟"
+                    android.widget.Toast.makeText(ctx, errMsg ?: "急事放行失败", android.widget.Toast.LENGTH_SHORT).show()
+                    return@requestEmergencyPass
+                }
+                dialog.dismiss()
+                reported = true
+                eventId?.let { InterceptRuntime.onDismissed(it, "emergency:$selected") }
+                val pkg = packageName
+                if (!isFinishing) finish()
+                if (pkg != null) InterceptRuntime.openTarget(ctx, pkg)
+            }
+        })
+        val cancelBtn = pillButton("取消", secondary = true, weight = 1f, onTap = { dialog.dismiss() })
+        column.addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(cancelBtn, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(8) })
+            addView(confirmBtn, LinearLayout.LayoutParams(0, dp(46), 1.5f))
+        })
+        dialog.show()
+    }
+
     private fun submitBreakglass(note: String) {
         val button = breakSubmit ?: return
         button.isEnabled = false
@@ -592,12 +727,19 @@ class InterceptPageActivity : Activity() {
         val releaseMinutes = (InterceptRuntime.releaseMs() / 60_000L).coerceAtLeast(1L).toInt()
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(18), dp(20), dp(14))
+            setPadding(dp(20), dp(18), dp(20), dp(16))
             background = GradientDrawable().apply {
-                cornerRadius = dp(22).toFloat()
+                cornerRadius = dp(24).toFloat()
                 setColor(palette.fill)
                 setStroke(dp(1).coerceAtLeast(1), palette.stroke)
             }
+            addView(TextView(ctx).apply {
+                text = "DSH Go · 专注守护"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setTextColor(palette.accent)
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, 0, 0, dp(4))
+            })
             addView(TextView(ctx).apply {
                 text = AppStrings.get(ctx, R.string.intercept_title, label)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
@@ -656,23 +798,38 @@ class InterceptPageActivity : Activity() {
                     setPadding(0, dp(2), 0, dp(10))
                 })
             }
-            // 他主动的两件事（接口约定 §3）：不必等插件的球，锁页上就能按。冲刺两档由插件定分钟数。
+            // 他主动的两件事（接口约定 §3）：以雾蓝次级容器收纳，不和下方放行按钮混杂。
             addView(LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(pillButton("冲刺", secondary = true, weight = 1f, onTap = {
-                    ProactiveRuntime.startSprint(null, 0, false)
-                    android.widget.Toast.makeText(ctx, "已开始冲刺", android.widget.Toast.LENGTH_SHORT).show()
-                }), LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
-                addView(pillButton("长冲刺", secondary = true, weight = 1f, onTap = {
-                    ProactiveRuntime.startSprint(null, 0, true)
-                    android.widget.Toast.makeText(ctx, "已开始长冲刺", android.widget.Toast.LENGTH_SHORT).show()
-                }), LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
-                addView(pillButton("申请验收", secondary = true, weight = 1f, onTap = {
-                    ProactiveRuntime.requestReview()
-                    android.widget.Toast.makeText(ctx, "验收申请已发出", android.widget.Toast.LENGTH_SHORT).show()
-                }), LinearLayout.LayoutParams(0, dp(44), 1f))
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(10), dp(8), dp(10), dp(10))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(16).toFloat()
+                    setColor(palette.pressed)
+                    setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                }
+                addView(TextView(ctx).apply {
+                    text = "主动切回专注 · 直接告知大肥鱼"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                    setTextColor(palette.muted)
+                    setPadding(dp(2), 0, 0, dp(6))
+                })
+                addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(pillButton("冲刺", secondary = true, weight = 1f, onTap = {
+                        ProactiveRuntime.startSprint(null, 0, false)
+                        android.widget.Toast.makeText(ctx, "已开始冲刺", android.widget.Toast.LENGTH_SHORT).show()
+                    }), LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
+                    addView(pillButton("长冲刺", secondary = true, weight = 1f, onTap = {
+                        ProactiveRuntime.startSprint(null, 0, true)
+                        android.widget.Toast.makeText(ctx, "已开始长冲刺", android.widget.Toast.LENGTH_SHORT).show()
+                    }), LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(6) })
+                    addView(pillButton("申请验收", secondary = true, weight = 1f, onTap = {
+                        ProactiveRuntime.requestReview()
+                        android.widget.Toast.makeText(ctx, "验收申请已发出", android.widget.Toast.LENGTH_SHORT).show()
+                    }), LinearLayout.LayoutParams(0, dp(42), 1f))
+                })
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(8)
+                bottomMargin = dp(10)
             })
             main.removeCallbacks(tick)
             main.postDelayed(tick, 1_000L)
@@ -780,8 +937,21 @@ class InterceptPageActivity : Activity() {
             addView(pillButton(AppStrings.get(ctx, R.string.intercept_whitelist), onTap = {
                 release(InterceptRuntime.RELEASE_WHITELIST)
             }))
-            // 破窗：走够步数 + 写清违约说明，换 10 分钟放风（比"点一下就退出"贵，但留下了记录）。
-            addView(pillButton(AppStrings.get(ctx, R.string.intercept_break), onTap = { showBreakglass() }))
+            // 破窗与急事 3 分钟并排收纳，减少纵向按钮堆叠。
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(pillButton(AppStrings.get(ctx, R.string.intercept_break), weight = 1f, onTap = { showBreakglass() }),
+                    LinearLayout.LayoutParams(0, dp(46), 1f).apply {
+                        topMargin = dp(8)
+                        if (!ProactiveRuntime.inEmergencyPass()) marginEnd = dp(6)
+                    })
+                if (!ProactiveRuntime.inEmergencyPass()) {
+                    addView(pillButton("急事 3 分钟", weight = 1f, onTap = { showEmergencyPassDialog() }),
+                        LinearLayout.LayoutParams(0, dp(46), 1f).apply {
+                            topMargin = dp(8)
+                        })
+                }
+            })
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END

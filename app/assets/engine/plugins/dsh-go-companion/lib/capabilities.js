@@ -228,6 +228,67 @@ export function measure(name, input = {}) {
   }
 }
 
+const CLASS_RUNNERS = {
+  '感知': (cap, input, runtime) => {
+    if (typeof runtime?.perceive === 'function') return runtime.perceive(cap, input)
+    return {
+      ok: true,
+      cls: cap.class,
+      name: cap.name,
+      signal: input?.signal ?? input?.value ?? input ?? null,
+      at: Number(input?.now) || Date.now(),
+    }
+  },
+  '触发': (cap, input, runtime) => {
+    if (typeof runtime?.trigger === 'function') return runtime.trigger(cap, input)
+    return { ok: true, cls: cap.class, name: cap.name, triggered: true, payload: input || {} }
+  },
+  '应答': (cap, input, runtime) => {
+    if (typeof runtime?.reply === 'function') return runtime.reply(cap, input)
+    return { ok: true, cls: cap.class, name: cap.name, prompt: String(input?.prompt || cap.how || ''), ready: true }
+  },
+  '验收': (cap, input, runtime) => {
+    if (typeof runtime?.verify === 'function') return runtime.verify(cap, input)
+    const hasEvidence = Boolean(input?.evidence || String(input?.text || '').trim())
+    const passed = typeof input?.passed === 'boolean' ? input.passed : hasEvidence
+    return { ok: true, cls: cap.class, name: cap.name, passed }
+  },
+  '变速': (cap, input, runtime) => {
+    if (typeof runtime?.gear === 'function') return runtime.gear(cap, input)
+    return {
+      ok: true,
+      cls: cap.class,
+      name: cap.name,
+      mode: String(input?.mode || 'sprint'),
+      minutes: Math.max(0, Math.round(Number(input?.minutes) || 0)),
+    }
+  },
+}
+
+/**
+ * 统一能力执行器：覆盖全部 6 类能力（「感知 / 度量 / 触发 / 应答 / 验收 / 变速」）。
+ * 优先走能力自带 `run`（如度量类），否则按类别分发到 runtime 钩子或轻量默认实现。
+ */
+export function executeCapability(name, input = {}, runtime = {}) {
+  const cap = CAPABILITIES.get(String(name || ''))
+  if (!cap) return { ok: false, error: 'unknown-capability', name: String(name || '') }
+  if (typeof cap.run === 'function') {
+    try {
+      return { ok: true, cls: cap.class, name: cap.name, value: cap.run(input) }
+    } catch (error) {
+      return { ok: false, cls: cap.class, name: cap.name, error: String((error && error.message) || error) }
+    }
+  }
+  const runner = CLASS_RUNNERS[cap.class]
+  if (!runner) return { ok: false, cls: cap.class, name: cap.name, error: 'unsupported-class' }
+  try {
+    const out = runner(cap, input, runtime)
+    return out && typeof out === 'object' ? { ok: true, cls: cap.class, name: cap.name, ...out } : { ok: true, cls: cap.class, name: cap.name, value: out }
+  } catch (error) {
+    return { ok: false, cls: cap.class, name: cap.name, error: String((error && error.message) || error) }
+  }
+}
+
 /**
  * 缺能力提议：协议用了库里没有的能力时产出的文档，交给执行 AI 去实现。
  * 同一次加载里同一个名字只提议一次。

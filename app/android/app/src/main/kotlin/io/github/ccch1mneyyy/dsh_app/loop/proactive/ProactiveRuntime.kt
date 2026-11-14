@@ -479,7 +479,7 @@ object ProactiveRuntime {
      * ([LockPriority.ORDER] is the table). Null when nothing is in force.
      */
     fun primaryLock(now: Long = System.currentTimeMillis()): LockRule? {
-        if (!::app.isInitialized || breaking()) return null
+        if (!::app.isInitialized || breaking() || inEmergencyPass(now)) return null
         val list = ArrayList(ruleBook()?.active(now).orEmpty())
         val r = refuseUntil()
         if (r > now && list.none { it.until >= r }) list.add(LockRule(LockPriority.KIND_REFUSE, r))
@@ -503,7 +503,7 @@ object ProactiveRuntime {
 
     /** Whether a lock in force right now would lock [pkg] (the lock page asks before superseding). */
     fun wouldLock(pkg: String): Boolean {
-        if (!::app.isInitialized || breaking() || !listed(pkg)) return false
+        if (!::app.isInitialized || breaking() || inEmergencyPass() || !listed(pkg)) return false
         val now = System.currentTimeMillis()
         return now < lockUntil(now) || sessionActive() || (force?.app == pkg && now < (force?.until ?: 0L))
     }
@@ -529,7 +529,7 @@ object ProactiveRuntime {
             entertainment = blockedNow() + cfg?.targets?.map { it.packageName }?.toSet().orEmpty(),
             dwellMs = dwell,
             graceMs = sessionGrace,
-            breakGlass = breaking(),
+            breakGlass = breaking() || inEmergencyPass(),
         ))
     }
 
@@ -561,7 +561,7 @@ object ProactiveRuntime {
 
     /** 4 级锁：同一个 App 启动时连发的窗口事件只锁一次（输入法已由 FrontChange 排除）。 */
     private fun lockInSession(pkg: String): Boolean {
-        if (breaking()) return false
+        if (breaking() || inEmergencyPass()) return false
         val now = System.currentTimeMillis()
         if (forcedApp == pkg && now - forcedAt < SESSION_LOCK_DEBOUNCE_MS) return true
         forcedApp = pkg
@@ -623,6 +623,101 @@ object ProactiveRuntime {
         if (at == breakUntil) return
         breakUntil = at
         runCatching { app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit().putLong("break", at).apply() }
+    }
+
+    /** 3 分钟应急急事通行（POST /emergency-pass）：顶部悬浮倒计时胶囊，到点回收权限并回弹。 */
+    @Volatile private var emergencyUntilAt: Long = -1L
+    @Volatile private var emergencyReasonText: String? = null
+    private var emergencyExpiryTask: Runnable? = null
+
+    fun inEmergencyPass(now: Long = System.currentTimeMillis()): Boolean {
+        if (!::app.isInitialized) return false
+        if (emergencyUntilAt < 0) {
+            val prefs = runCatching { app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE) }.getOrNull()
+            emergencyUntilAt = prefs?.getLong("emergency_until", 0L) ?: 0L
+            emergencyReasonText = prefs?.getString("emergency_reason", null)
+        }
+        return emergencyUntilAt > now
+    }
+
+    fun emergencyRemainingText(now: Long = System.currentTimeMillis()): String? {
+        if (!inEmergencyPass(now)) return null
+        return EmergencyCountdown.formatRemaining(emergencyUntilAt, emergencyReasonText, now)
+    }
+
+    private fun applyEmergencyPassState(until: Long, reason: String?) {
+        val now = System.currentTimeMillis()
+        val active = until > now
+        if (!active) {
+            if (emergencyUntilAt > 0L) onEmergencyPassExpired()
+            return
+        }
+        emergencyUntilAt = until
+        emergencyReasonText = reason?.takeIf { it.isNotBlank() }?.take(60)
+        runCatching {
+            app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit()
+                .putLong("emergency_until", until)
+                .putString("emergency_reason", emergencyReasonText)
+                .apply()
+        }
+        EmergencyCapsule.show(app, until, emergencyReasonText) {
+            main.post { onEmergencyPassExpired() }
+        }
+        emergencyExpiryTask?.let { main.removeCallbacks(it) }
+        val expiry = Runnable { onEmergencyPassExpired() }
+        emergencyExpiryTask = expiry
+        main.postDelayed(expiry, (until - now + 150L).coerceAtLeast(500L))
+    }
+
+    private fun onEmergencyPassExpired() {
+        emergencyExpiryTask?.let { main.removeCallbacks(it) }
+        emergencyExpiryTask = null
+        emergencyUntilAt = 0L
+        emergencyReasonText = null
+        runCatching {
+            app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit()
+                .putLong("emergency_until", 0L)
+                .remove("emergency_reason")
+                .apply()
+        }
+        EmergencyCapsule.hide()
+        consultPlanSoon(minGapMs = 0L)
+        val bouncePkg = sessionApp()
+        if (!bouncePkg.isNullOrBlank()) {
+            runCatching { InterceptRuntime.openTarget(app, bouncePkg) }
+        } else {
+            val fg = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
+            if (fg != null && listed(fg)) {
+                val f = Force(4, fg, lockWhy(pkg = fg) ?: "应急放行已到期，回到当前任务", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
+                force = f
+                enforce(f, fresh = true)
+            }
+        }
+    }
+
+    fun requestEmergencyPass(reason: String, done: (ok: Boolean, until: Long, message: String?) -> Unit) {
+        if (!::app.isInitialized) { done(false, 0L, "未初始化"); return }
+        main.post {
+            fetchPluginRoute(routeCallback { m ->
+                val okFlag = m["ok"] == true
+                val until = (m["until"] as? Number)?.toLong() ?: 0L
+                val now = System.currentTimeMillis()
+                if (okFlag && until > now) {
+                    force = null
+                    releaseCompanionLock()
+                    applyEmergencyPassState(until, reason)
+                    consultPlanSoon(minGapMs = 0L)
+                    done(true, until, null)
+                } else {
+                    val err = m["error"] as? Map<*, *>
+                    val msg = (err?.get("message") as? String)
+                        ?: if (err?.get("code") == "daily-cap") "今日急事通行次数已用完" else "急事放行未通过"
+                    done(false, 0L, msg)
+                }
+            }, "POST", "/emergency-pass", linkedMapOf(
+                "reason" to reason.trim().take(120),
+            ))
+        }
     }
 
     /**
@@ -1217,7 +1312,12 @@ object ProactiveRuntime {
             geminiDueAt = 0L
             fireGeminiDue()
         }
-        val wakeAt = listOf(at, change, followupUntilAt, geminiDueAt).filter { it > 0 }.minOrNull() ?: 0L
+        // 3 分钟应急急事通行（/plan 的 emergencyPass）：跨重启/轮询同步胶囊倒计时，到期立刻撤除并复查。
+        val ep = map["emergencyPass"] as? Map<*, *>
+        val epUntil = if (ep?.get("active") == true) (ep["until"] as? Number)?.toLong() ?: 0L else 0L
+        applyEmergencyPassState(epUntil, ep?.get("reason") as? String)
+        val epWake = if (emergencyUntilAt > stamp) emergencyUntilAt else 0L
+        val wakeAt = listOf(at, change, followupUntilAt, geminiDueAt, epWake).filter { it > 0 }.minOrNull() ?: 0L
         val speak = map["speak"] == true
         val reason = map["reason"] as? String ?: ""
         if (wakeAt <= 0) return

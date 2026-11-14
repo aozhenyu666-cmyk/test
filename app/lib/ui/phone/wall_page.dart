@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../l10n/l10n.dart';
 import '../../proactive/proactive_state.dart';
 import '../common/list_page_row.dart';
+import '../companion/companion_hub_page.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
@@ -66,6 +67,11 @@ class _WallPageState extends State<WallPage> {
       back: !widget.asTab,
       subtitle: const Text('只收证据和申诉。墙不聊天，也不谈判。'),
       actions: [
+        GlassIconButton(
+          icon: AppIcons.plugin,
+          tooltip: '大肥鱼伴侣中枢',
+          onPressed: () => unawaited(CompanionHubPage.open(context)),
+        ),
         GlassIconButton(icon: AppIcons.refresh, tooltip: l.wallRefresh, onPressed: () => unawaited(_refresh())),
       ],
       children: [
@@ -251,8 +257,10 @@ class _AppealDialogState extends State<_AppealDialog> {
   @override
   Widget build(BuildContext context) {
     final l = context.l10n;
+    final theme = Theme.of(context);
     final ready = _evidence.text.trim().isNotEmpty;
     return AlertDialog(
+      shape: AppShape.dialog,
       title: Text(l.wallActionAppeal),
       content: SizedBox(
         width: 360,
@@ -261,7 +269,15 @@ class _AppealDialogState extends State<_AppealDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(widget.bubble.text, style: Theme.of(context).textTheme.bodySmall, maxLines: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.65),
+                  borderRadius: AppShape.radiusMd,
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                child: Text(widget.bubble.text, style: theme.textTheme.bodySmall, maxLines: 4),
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: _task,

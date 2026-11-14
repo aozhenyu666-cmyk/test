@@ -19,6 +19,7 @@ import '../common/ask_ai.dart';
 import '../common/brief_notice.dart';
 import '../common/risk_notice.dart';
 import '../common/feature_tile.dart';
+import '../companion/companion_hub_page.dart';
 import '../settings/background_guide_page.dart';
 import '../settings/index/spots.dart';
 import '../common/list_page_row.dart';
@@ -364,7 +365,16 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
           // 触发测试 / 主动搭话: the first event loop, then the proactive kernel beside it.
           // Experimental; last on the page so nothing above it moves.
           ListPageCard(
+            title: '大肥鱼伴侣',
             children: [
+              ListPageRow(
+                icon: AppIcons.bot,
+                iconColor: Theme.of(context).colorScheme.primary,
+                title: '大肥鱼中枢',
+                subtitle: '今日计划、四部门、姐妹记忆与系统护栏的总览入口',
+                subtitleMaxLines: 2,
+                onTap: () => _push(const CompanionHubPage()),
+              ),
               ListPageRow(
                 icon: AppIcons.play,
                 title: l10n.loopEntryTitle,
