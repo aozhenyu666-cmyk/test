@@ -1551,8 +1551,10 @@ object ProactiveRuntime {
         val plan = companionPlan
         if (plan != null && agentPort != null) {
             // One alarm, at the companion's own next check. The local random gap/cap is not asked.
+            // 60s 地板会把插件"5 秒后再来问"（改过预案的两分钟观察窗）整条丢掉，只剩分钟级的生效；
+            // 5s 地板只防 plan.at 是 0 或已经过去时的闹钟风暴。
             val now = System.currentTimeMillis()
-            WakeAlarm.set(app, plan.at.coerceAtLeast(now + 60_000L), mode)
+            WakeAlarm.set(app, plan.at.coerceAtLeast(now + 5_000L), mode)
             return
         }
         WakeAlarm.set(app, s.nextWake(clocks(), mode), mode)

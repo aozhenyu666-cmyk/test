@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply, setStatePin } from '../lib/index.js'
 import { wallDecision, WALL_KIND_DEFAULT } from '../lib/wall.js'
-import { minuteOfDay } from '../lib/tz.js'
+import { minuteOfDay, startOfDay } from '../lib/tz.js'
 
 const PREFIX = '/dsh-go-companion/v1'
 const SIS = 'session-sis'
@@ -417,5 +417,48 @@ test('/plan/day 的四个数与日摘要一致：开一局记一笔，数字跟�
     assert.equal(n.selfOpenRatio, 1)
     assert.equal(n.deliverRatio, 0, '开了还没交付')
     assert.equal(n.passed, 0)
+  })
+})
+
+// ------------------------------------------- 第九轮 6.1：手机怎么知道预案改过了 ----
+
+test('6.1 有预案在生效：下一次检查压到 5 分钟那一档', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    // 把早/晚/周三次对线记成今天已经做过，否则它们各自会排一分钟后的球，把基线本来就压得比 5 分钟还短。
+    const day = startOfDay(Date.now(), 'Asia/Shanghai')
+    mkdirSync(join(home, 'companion'), { recursive: true })
+    writeFileSync(join(home, 'companion', 'rhythm.json'), JSON.stringify({
+      morningDay: day, morningDone: true, reviewDay: day, reviewDone: true, weekDay: day, weekDone: true,
+    }))
+    // 基线是 plan 自己的 30 分钟（roll=0 一定开口，说完这一句的下一次检查）；
+    // 有预案在生效时要压到 5 分钟，否则预案改完要等手机睡醒才生效——插件没有推送通道，
+    // 只能让手机勤回来看一眼。
+    const r = await t.plan(at('com.home'))
+    assert.equal(r.body.reason, 'ok', JSON.stringify(r.body.reason))
+    const left = Number(r.body.nextCheckAt) - Date.now()
+    assert.ok(left <= 5 * 60_000 + 2_000, '下一次检查还剩 ' + Math.round(left / 1000) + ' 秒')
+    assert.ok(left > 4 * 60_000, '压到的应当是 5 分钟那一档，而不是马上：' + Math.round(left / 1000) + ' 秒')
+  })
+})
+
+test('6.1 退避不抢：说了别烦我，那 5 分钟的空问也停掉', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { muteUntil: Date.now() + 3_600_000 })
+    const r = await t.plan(at('com.home', { screenOn: false }))
+    const left = Number(r.body.nextCheckAt) - Date.now()
+    assert.ok(left > 30 * 60_000, '别烦我期间不该 5 分钟一叫：还剩 ' + Math.round(left / 1000) + ' 秒')
+  })
+})
+
+test('6.1 预案刚改过：让手机 5 秒后就回来问，不用等下一次定时醒', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.plan(at('com.home'))
+    const changed = await t.presets({ action: 'set', preset: { id: 'off-dwell', 状态: '停用' } })
+    assert.equal(changed.body.ok, true, JSON.stringify(changed.body))
+    const r = await t.plan(at('com.home'))
+    const left = Number(r.body.nextCheckAt) - Date.now()
+    assert.ok(left <= 6_000, '改过预案后应当 5 秒回来问：还剩 ' + Math.round(left) + ' 毫秒')
   })
 })

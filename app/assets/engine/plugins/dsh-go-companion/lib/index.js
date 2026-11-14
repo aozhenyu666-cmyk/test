@@ -580,6 +580,13 @@ export function apply(ctx) {
   const lastHumanAt = new Map()
   /** 他说完这么久之内算"正在聊"。 */
   const IN_CONVERSATION_MS = 3 * 60_000
+  /**
+   * 第九轮 6.1：有预案在生效时，插件不许让手机睡过这么久。
+   * 插件没有推送通道（手机是拉的一方），预案改了只能等手机下一次来问 /plan；
+   * 明天那句 nextCheckAt 原本可能睡到天亮，等于预案改了六个小时不生效。
+   * shortcut: 每 5 分钟一次空问，用一点电换生效延迟；嫌费电就调大，代价是预案改动等更久。
+   */
+  const IDLE_POLL_MS = 5 * 60_000
 
   /** 他正在跟大肥鱼说话（刚说过，或者大肥鱼正在回他）。 */
   function inConversation(sessionId, now) {
@@ -5482,6 +5489,12 @@ export function apply(ctx) {
     // A5 热生效：插件推不动手机（手机是拉的一方）。改过预案的两分钟内让它 5 秒回来问一次，
     // 下一次问就拿到新的严格模式 / 锁 / 放行名单，不用等他退出重进，也不用等下一次定时醒。
     if (presetWatchUntil > now) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now + 5000, now + 5000)
+    // 6.1：改过预案的这两分钟里手机 5 秒回来一次（上一行）；其余时候哪怕没什么可说，也得在
+    // IDLE_POLL_MS 内回来看一眼预案——不然"改完等它下次醒"就是拿小时算。
+    // 退避的四种理由（别烦我 / 安静时段 / 关掉 / 三球没接）照旧不抢：那是他明说别叫。
+    if (!backoff && presetRt.list(now).presets.some((p) => p.status === '生效')) {
+      out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now, now + IDLE_POLL_MS)
+    }
     if (!out.speak) nextSpeaker = null
     return {
       v: 1, ...out, silence, sessionId, speaker: nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion',
