@@ -88,6 +88,9 @@ class DshService : Service() {
             else -> {
                 // intent == null: Android brought the service back after killing the app (START_STICKY).
                 if (intent == null) EngineExitLog.note(this, "stickyRestart", "phase=${controller.phase}")
+                else if (intent.action == ACTION_ENSURE_ENGINE) {
+                    EngineExitLog.note(this, "ensureEngine", "phase=${controller.phase}")
+                }
                 ensureChannel(this)
                 val notification = buildNotification(this, controller)
                 try {
@@ -182,8 +185,41 @@ class DshService : Service() {
         const val ACTION_INSTALL = "io.github.ccch1mneyyy.dsh_app.INSTALL"
         const val ACTION_INSTALL_DONE = "io.github.ccch1mneyyy.dsh_app.INSTALL_DONE"
         const val ACTION_START = "io.github.ccch1mneyyy.dsh_app.START"
+        const val ACTION_ENSURE_ENGINE = "io.github.ccch1mneyyy.dsh_app.ENSURE_ENGINE"
         const val ACTION_STOP = "io.github.ccch1mneyyy.dsh_app.STOP"
         const val ACTION_PHONE_STOP = "io.github.ccch1mneyyy.dsh_app.PHONE_STOP"
+
+        data class EnsureEngineResult(val status: String, val needsForeground: Boolean = false)
+
+        /**
+         * Ensures the DSH background service and node runtime are running when called by
+         * the paired guardian monitor. Returns `needsForeground=true` if Android 12+ refuses
+         * background foreground-service start so the guardian can open a brief wake activity.
+         */
+        fun ensureEngine(context: Context): EnsureEngineResult {
+            val appCtx = context.applicationContext
+            val ctrl = RuntimeController.get(appCtx)
+            return when (ctrl.phase) {
+                RuntimeController.Phase.RUNNING -> EnsureEngineResult("already_running")
+                RuntimeController.Phase.STARTING -> EnsureEngineResult("already_starting")
+                RuntimeController.Phase.INSTALLING -> EnsureEngineResult("installing")
+                RuntimeController.Phase.STOPPING -> EnsureEngineResult("stopping")
+                RuntimeController.Phase.NOT_INSTALLED -> EnsureEngineResult("not_installed")
+                RuntimeController.Phase.INSTALLED, RuntimeController.Phase.ERROR -> {
+                    val intent = Intent(appCtx, DshService::class.java).setAction(ACTION_ENSURE_ENGINE)
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            appCtx.startForegroundService(intent)
+                        } else {
+                            appCtx.startService(intent)
+                        }
+                        EnsureEngineResult("started")
+                    } catch (_: Throwable) {
+                        EnsureEngineResult("needs_foreground", needsForeground = true)
+                    }
+                }
+            }
+        }
 
         /** With [ACTION_INSTALL_DONE]: the unpack finished (true) or stopped. */
         const val EXTRA_INSTALL_OK = "ok"

@@ -52,7 +52,12 @@ import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionFactsOf
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionPolicy
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionVerdict
+import io.github.ccch1mneyyy.dsh_app.loop.guardian.GuardianOfflineIncident
+import io.github.ccch1mneyyy.dsh_app.loop.guardian.GuardianPolicyMirror
+import io.github.ccch1mneyyy.dsh_app.loop.guardian.GuardianPolicySnapshot
 import io.github.ccch1mneyyy.dsh_app.loop.intercept.InterceptRuntime
+import io.github.ccch1mneyyy.dsh_app.runtime.DshService
+import io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController
 import java.io.File
 import java.util.UUID
 
@@ -452,6 +457,7 @@ object ProactiveRuntime {
         if (at == refuseUntil()) return
         refuseUntil = at
         runCatching { app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit().putLong("until", at).apply() }
+        syncGuardianMirror()
         Log.i(TAG, "refuse mode " + if (at > System.currentTimeMillis()) "on until $at" else "off")
     }
 
@@ -623,6 +629,7 @@ object ProactiveRuntime {
         if (at == breakUntil) return
         breakUntil = at
         runCatching { app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit().putLong("break", at).apply() }
+        syncGuardianMirror()
     }
 
     /** 3 分钟应急急事通行（POST /emergency-pass）：顶部悬浮倒计时胶囊，到点回收权限并回弹。 */
@@ -667,6 +674,7 @@ object ProactiveRuntime {
         val expiry = Runnable { onEmergencyPassExpired() }
         emergencyExpiryTask = expiry
         main.postDelayed(expiry, (until - now + 150L).coerceAtLeast(500L))
+        syncGuardianMirror()
     }
 
     private fun onEmergencyPassExpired() {
@@ -681,6 +689,7 @@ object ProactiveRuntime {
                 .apply()
         }
         EmergencyCapsule.hide()
+        syncGuardianMirror()
         consultPlanSoon(minGapMs = 0L)
         val bouncePkg = sessionApp()
         if (!bouncePkg.isNullOrBlank()) {
@@ -799,6 +808,7 @@ object ProactiveRuntime {
                 .putString("workWhy", why.orEmpty())
                 .apply()
         }
+        syncGuardianMirror()
     }
 
     @Volatile private var sessionSince: Long = 0L
@@ -1320,6 +1330,8 @@ object ProactiveRuntime {
         val wakeAt = listOf(at, change, followupUntilAt, geminiDueAt, epWake).filter { it > 0 }.minOrNull() ?: 0L
         val speak = map["speak"] == true
         val reason = map["reason"] as? String ?: ""
+        syncGuardianMirror()
+        flushGuardianOfflineSoon()
         if (wakeAt <= 0) return
         // P2: the plugin decides, the phone executes. speak=true means this ball now; nextCheckAt is
         // when to look again afterwards. speak=false means only move the single alarm.
@@ -1564,6 +1576,8 @@ object ProactiveRuntime {
         refreshGate("agent_port")
         // The plugin is reachable now: let its /plan take over the one alarm again.
         consultPlanSoon(minGapMs = 0)
+        syncGuardianMirror()
+        flushGuardianOfflineSoon()
     }
 
     /**
@@ -1786,4 +1800,62 @@ object ProactiveRuntime {
     private fun minuteOfDay(wall: Long): Int = BeijingClock.minuteOfDay(wall)
 
     private fun dayOf(wall: Long): Long = BeijingClock.dayOf(wall)
+
+    /** Pushes the current enforcement rule snapshot to [GuardianPolicyMirror] for cross-APK fallback. */
+    private fun syncGuardianMirror() {
+        if (!::app.isInitialized) return
+        val now = System.currentTimeMillis()
+        val primary = primaryLock(now)
+        val allowSet = sessionAllow.toMutableSet()
+        runCatching { InterceptRuntime.config().whitelist }.getOrNull()?.let { allowSet.addAll(it) }
+        val todayMap = runCatching {
+            NowFeed.today(SystemClock.elapsedRealtime(), dayOf(now)).associate { it.first to it.second }
+        }.getOrDefault(emptyMap())
+        val snapshot = GuardianPolicySnapshot(
+            updatedAtWall = now,
+            enginePhase = runCatching { RuntimeController.get(app).phase.wire }.getOrDefault("unknown"),
+            dshServiceRunning = DshService.isRunning,
+            proactiveTransport = agentPort != null,
+            a11yConnected = PhoneA11yService.isConnected(),
+            planActive = controlActive() || sessionActive() || blockedNow().isNotEmpty(),
+            primaryKind = primary?.kind.orEmpty(),
+            primaryWhy = primary?.why ?: primary?.let { LockPriority.defaultWhy(it.kind) }.orEmpty(),
+            lockUntil = lockUntil(now),
+            refuseUntil = refuseUntil(),
+            breakUntil = if (breaking()) breakUntil else 0L,
+            emergencyUntil = if (inEmergencyPass(now)) emergencyUntilAt else 0L,
+            sessionUntil = if (sessionActive()) sessionUntil else 0L,
+            sessionGraceMs = sessionGrace,
+            blocked = blockedNow().toList().sorted(),
+            blockWhys = HashMap(blockWhys),
+            allow = allowSet.toList().sorted(),
+            todayMinutes = todayMap,
+        )
+        GuardianPolicyMirror.update(app, snapshot)
+    }
+
+    /** Uploads pending offline incidents reported by `大肥鱼哨兵` once the node companion is reachable. */
+    fun flushGuardianOfflineSoon() {
+        if (!::app.isInitialized || agentPort == null) return
+        val pending: List<GuardianOfflineIncident> = GuardianPolicyMirror.pendingOffline(app)
+        if (pending.isEmpty()) return
+        main.post {
+            if (agentPort == null) return@post
+            val ids = pending.map { it.id }
+            fetchPluginRoute(
+                routeCallback { res ->
+                    val hasErr = res["error"] != null
+                    if (!hasErr) {
+                        GuardianPolicyMirror.ackOffline(app, ids)
+                    }
+                },
+                "POST",
+                "/event",
+                linkedMapOf(
+                    "type" to "guardian-offline-batch",
+                    "events" to pending.map { it.toMap() },
+                ),
+            )
+        }
+    }
 }

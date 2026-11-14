@@ -34,8 +34,8 @@ object TamperGuard {
     /** 页面上出现这些字样，说明他在找关闭管控的入口。 */
     private val DANGER = listOf("强行停止", "强制停止", "卸载", "停用", "无障碍", "辅助功能")
 
-    /** 页面要同时出现 App 自己的名字，才算"冲着 DSH Go 来的"。 */
-    private val NAMES = listOf("DSH Go", "DSH", "大肥鱼")
+    /** 页面要同时出现 App 自己的名字，才算"冲着 DSH Go / 哨兵来的"。 */
+    private val NAMES = listOf("DSH Go", "DSH", "大肥鱼", "大肥鱼哨兵", "哨兵")
 
     @Volatile private var lastAt = 0L
 

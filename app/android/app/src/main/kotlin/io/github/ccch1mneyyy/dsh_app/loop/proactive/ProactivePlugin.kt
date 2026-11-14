@@ -259,6 +259,9 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             // B5：设置页试听。绕开插件的总开关（关了也能试），但不绕过设备状态——
             // 回 null 表示真的念完了，否则是降级原因（no-tts / dnd / muted / session）。
             "voiceTry" -> ProactiveRuntime.tryVoice { why -> result.success(why) }
+            // 大肥鱼哨兵互信配对状态与 6 位配对码生成。
+            "guardianStatus" -> result.success(io.github.ccch1mneyyy.dsh_app.loop.guardian.GuardianPairing.statusMap(context))
+            "guardianPairCode" -> result.success(io.github.ccch1mneyyy.dsh_app.loop.guardian.GuardianPairing.generatePairCode(context))
             else -> result.notImplemented()
         }
     }

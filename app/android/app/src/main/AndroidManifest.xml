@@ -417,6 +417,21 @@
                 android:resource="@xml/dsh_file_paths" />
         </provider>
 
+        <!-- 大肥鱼哨兵健康与规则镜像互通端点：独立防掉线守护 App 查询状态、挑战无障碍线程、唤醒引擎与回传离线日志。 -->
+        <provider
+            android:name=".loop.guardian.FishHealthProvider"
+            android:authorities="${applicationId}.guardian_health"
+            android:exported="true"
+            android:multiprocess="false" />
+
+        <activity
+            android:name=".loop.guardian.EngineWakeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -438,5 +453,6 @@
             <action android:name="android.intent.action.MAIN"/>
             <category android:name="android.intent.category.LAUNCHER"/>
         </intent>
+        <package android:name="io.github.ccch1mneyyy.dsh_app.fish.guardian" />
     </queries>
 </manifest>

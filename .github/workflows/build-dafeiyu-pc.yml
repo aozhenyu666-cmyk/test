@@ -1,0 +1,76 @@
+name: Build 大肥鱼 PC Windows 客户端
+
+on:
+  push:
+    branches: [dafeiyu-apk, feat/cognitive-autonomy-v2]
+    paths:
+      - ".github/workflows/build-dafeiyu-pc.yml"
+      - "desktop/**"
+      - "packages/dsh_client/**"
+      - "packages/dsh_remote/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-pc:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+
+      - name: Pub get, analyze & run desktop tests
+        working-directory: desktop
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos
+          flutter test
+
+      - name: Build Windows Release executable
+        working-directory: desktop
+        run: flutter build windows --release
+
+      - name: Package Windows ZIP & SHA256
+        shell: pwsh
+        run: |
+          $outDir = "desktop/build/windows/x64/runner/Release"
+          if (-not (Test-Path "$outDir/dsh_go_fish_pc.exe")) {
+            throw "Missing built executable in $outDir"
+          }
+          Compress-Archive -Path "$outDir/*" -DestinationPath "DSH-Go-Fish-PC-Windows-x64.zip" -Force
+          $hash = (Get-FileHash "DSH-Go-Fish-PC-Windows-x64.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  DSH-Go-Fish-PC-Windows-x64.zip" | Out-File -Encoding utf8 "PC-SHA256.txt"
+          cat PC-SHA256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-fish-pc-windows-x64
+          path: |
+            DSH-Go-Fish-PC-Windows-x64.zip
+            PC-SHA256.txt
+          retention-days: 14
+
+      - name: Publish prerelease for Windows PC client
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "fish-pc-build-${{ github.run_number }}"
+          @(
+            "## DSH Go 大肥鱼 · Windows PC 端 #${{ github.run_number }}"
+            ""
+            '- Pure-Dart `dsh_remote` (`Noise_IK` P2P/Relay) + Tailscale/LAN直连手机端 Companion。'
+            '- 支持鱼丸/鲸澜双线对话、Plan/Wall/Sisters/Deposit、六骰打卡、Git Diff 交墙验真与 Win32 前台/AFK/3分钟视频切片自动暂停。'
+          ) | Set-Content -Path PC_NOTES.md -Encoding utf8
+          gh release create $tag `
+            DSH-Go-Fish-PC-Windows-x64.zip PC-SHA256.txt `
+            --target "${{ github.sha }}" `
+            --title "DSH Go 大肥鱼 · PC 客户端 #${{ github.run_number }}" `
+            --notes-file PC_NOTES.md `
+            --prerelease

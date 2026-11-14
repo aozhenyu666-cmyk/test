@@ -1,0 +1,128 @@
+name: Build 大肥鱼哨兵 Android APK
+
+on:
+  push:
+    branches: [dafeiyu-apk, feat/cognitive-autonomy-v2]
+    paths:
+      - ".github/workflows/build-fish-guardian-apk.yml"
+      - "guardian-android/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  guardian-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            guardian-android/**/*.gradle.kts
+            guardian-android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Use official Gradle distribution & Maven mirror on CI
+        run: |
+          f=guardian-android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's#^distributionUrl=.*/\(gradle-[0-9.]*-all\.zip\)$#distributionUrl=https\\://services.gradle.org/distributions/\1#' "$f"
+          grep -q '^distributionUrl=https\\://services.gradle.org/distributions/gradle-' "$f"
+          mkdir -p ~/.gradle/init.d
+          printf '%s\n' \
+            'systemProp.org.gradle.internal.repository.max.retries=10' \
+            'systemProp.org.gradle.internal.repository.initial.backoff=2000' >> ~/.gradle/gradle.properties
+          cat > ~/.gradle/init.d/ci-mirror.init.gradle.kts <<'EOF'
+          val ciMirror = "https://maven-central.storage-download.googleapis.com/maven2/"
+          fun RepositoryHandler.preferCiMirror() {
+              if (any { it is MavenArtifactRepository && it.url.toString() == ciMirror }) return
+              val repo = maven { url = uri(ciMirror); name = "ciMavenCentralMirror" }
+              remove(repo)
+              addFirst(repo)
+          }
+          beforeSettings {
+              pluginManagement.repositories.preferCiMirror()
+              pluginManagement.repositories.gradlePluginPortal()
+          }
+          settingsEvaluated {
+              val central = dependencyResolutionManagement.repositoriesMode.get() != RepositoriesMode.PREFER_PROJECT
+              gradle.extensions.extraProperties.set("ciMirrorCentral", central)
+              if (central) dependencyResolutionManagement.repositories.preferCiMirror()
+          }
+          allprojects {
+              buildscript.repositories.preferCiMirror()
+              val central = gradle.extensions.extraProperties.let { it.has("ciMirrorCentral") && it.get("ciMirrorCentral") == true }
+              if (!central) repositories.preferCiMirror()
+          }
+          EOF
+          cd guardian-android
+          for i in 1 2 3 4; do
+            bash gradlew --version --console=plain && break
+            [ "$i" = 4 ] && exit 1
+            echo "wrapper 下载失败，第 $i 次，$((i * 20)) 秒后重试"; sleep $((i * 20))
+          done
+
+      - name: Run guardian unit tests & verify report
+        run: |
+          cd guardian-android
+          bash gradlew :app:testDebugUnitTest --console=plain \
+            -Dorg.gradle.internal.repository.max.retries=10 \
+            -Dorg.gradle.internal.repository.initial.backoff=2000
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          files = glob.glob("app/build/test-results/testDebugUnitTest/*.xml")
+          assert files, "missing guardian unit test XML reports"
+          total = fail = skip = 0
+          for f in files:
+              r = ET.parse(f).getroot()
+              total += int(r.get("tests", 0))
+              fail += int(r.get("failures", 0)) + int(r.get("errors", 0))
+              skip += int(r.get("skipped", 0))
+          print(f"Guardian unit tests: {total} run, {fail} failed, {skip} skipped")
+          assert total >= 5 and fail == 0
+          PY
+
+      - name: Build release APK
+        run: |
+          cd guardian-android
+          bash gradlew :app:assembleRelease --console=plain \
+            -Dorg.gradle.internal.repository.max.retries=10 \
+            -Dorg.gradle.internal.repository.initial.backoff=2000
+
+      - name: Package & inspect guardian APK
+        run: |
+          APK=guardian-android/app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$AAPT" dump badging "$APK" | grep 'io.github.ccch1mneyyy.dsh_app.fish.guardian'
+          cp "$APK" dsh-go-fish-guardian-arm64.apk
+          sha256sum dsh-go-fish-guardian-arm64.apk | tee GUARDIAN-APK-SHA256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-fish-guardian-apk
+          path: |
+            dsh-go-fish-guardian-arm64.apk
+            GUARDIAN-APK-SHA256.txt
+          retention-days: 14
+
+      - name: Publish prerelease for Fish Guardian
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="fish-guardian-build-${{ github.run_number }}"
+          {
+            echo "## 大肥鱼哨兵 (`io.github.ccch1mneyyy.dsh_app.fish.guardian`)"
+            echo
+            echo "- 独立双进程 `:watch` 监控主包引擎阶段、A11y 主线程 Challenge/Ack 存活、设置防篡改与 2 次/天 3 分钟急事放行。"
+            echo "- 与 DSH Go 大肥鱼同证书自动互信；跨证书支持 6 位配对码证书固定。"
+          } > GUARDIAN_NOTES.md
+          gh release create "$tag" \
+            dsh-go-fish-guardian-arm64.apk GUARDIAN-APK-SHA256.txt \
+            --target "${{ github.sha }}" \
+            --title "DSH Go 大肥鱼哨兵 · #${{ github.run_number }}" \
+            --notes-file GUARDIAN_NOTES.md \
+            --prerelease
