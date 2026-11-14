@@ -12,8 +12,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../dafeiyu/dafeiyu_strings.dart';
 import '../../dafeiyu/ui/bout_voice_page.dart';
 import '../../dafeiyu/ui/companion_hub_page.dart';
-
-Widget _companionHubPage(String? _) => const CompanionHubPage();
 import '../../l10n/l10n.dart';
 import '../../plugins/native/native_icons.dart';
 import '../../plugins/native/native_state.dart';
@@ -47,6 +45,8 @@ import 'permission_page.dart';
 import 'schedules_page.dart';
 import 'session_export_page.dart';
 import 'skills_page.dart';
+
+Widget _companionHubPage(String? _) => const CompanionHubPage();
 
 /// Builds a native page; [sessionId] is the conversation open in the chat.
 typedef FeaturePageBuilder = Widget Function(String? sessionId);

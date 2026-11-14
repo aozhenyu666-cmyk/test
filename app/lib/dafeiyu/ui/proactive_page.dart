@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../diagnostics/diagnostics_channel.dart';
 import '../../diagnostics/diagnostics_export.dart';
 import '../../l10n/l10n.dart';
 import '../channels/proactive_state.dart';
@@ -65,7 +64,7 @@ class _ProactivePageState extends State<ProactivePage> {
   }
 
   Future<void> _loadForegroundDebug() async {
-    final enabled = await const DiagnosticsChannel().foregroundDebug();
+    final enabled = await _channel.foregroundDebug();
     if (mounted) setState(() => _foregroundDebug = enabled);
   }
 
@@ -73,7 +72,7 @@ class _ProactivePageState extends State<ProactivePage> {
     if (_foregroundBusy) return;
     setState(() => _foregroundBusy = true);
     try {
-      final stored = await const DiagnosticsChannel().setForegroundDebug(enabled);
+      final stored = await _channel.setForegroundDebug(enabled);
       if (mounted) setState(() => _foregroundDebug = stored);
     } finally {
       if (mounted) setState(() => _foregroundBusy = false);

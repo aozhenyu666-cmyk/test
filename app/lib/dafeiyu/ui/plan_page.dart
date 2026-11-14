@@ -391,7 +391,6 @@ class _PlanPageState extends State<PlanPage> {
   Widget build(BuildContext context) {
     return AppPage.list(
       title: '今天的计划',
-      back: !widget.asTab,
       subtitle: const Text('一局一行。必需应用和允许应用都要写——严格模式就按这两栏放行。'),
       actions: [
         GlassIconButton(icon: AppIcons.refresh, tooltip: '重新读一遍', onPressed: () => unawaited(_load())),

@@ -65,7 +65,6 @@ class _WallPageState extends State<WallPage> {
     final l = context.l10n;
     return AppPage.list(
       title: DafeiyuStrings.fromL10n(l).wallTitle,
-      back: !widget.asTab,
       subtitle: const Text('只收证据和申诉。墙不聊天，也不谈判。'),
       actions: [
         GlassIconButton(

@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../dafeiyu/dafeiyu_strings.dart';
 import '../../dafeiyu/ui/bout_voice_page.dart';
 import '../../dafeiyu/ui/companion_hub_page.dart';
 import '../../dafeiyu/ui/wall_page.dart';
@@ -320,7 +321,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
               key: const ValueKey('home-bouts-fallback'),
               onRetry: () => rereadNativeContributions(ref),
             )
-          : NativePanelPage(key: const ValueKey('home-bouts'), panel: bouts, sessionId: sessionId, back: false),
+          : NativePanelPage(key: const ValueKey('home-bouts'), panel: bouts, sessionId: sessionId),
     HomeTab.wall => const WallPage(key: ValueKey('home-wall'), asTab: true),
     HomeTab.chat => chat,
   };
@@ -688,7 +689,6 @@ class _BoutsUnavailableView extends StatelessWidget {
     final theme = Theme.of(context);
     return AppPage.list(
       title: '局',
-      back: false,
       solidBar: false,
       subtitle: const Text('实时排局与拍子节奏'),
       children: [

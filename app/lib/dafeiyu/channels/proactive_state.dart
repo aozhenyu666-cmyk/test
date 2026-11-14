@@ -265,6 +265,22 @@ class ProactiveChannel {
     }
   }
 
+  Future<bool> foregroundDebug() async {
+    try {
+      return await _methods.invokeMethod<bool>('foregroundDebug') ?? false;
+    } on Exception {
+      return false;
+    }
+  }
+
+  Future<bool> setForegroundDebug(bool enabled) async {
+    try {
+      return await _methods.invokeMethod<bool>('setForegroundDebug', {'enabled': enabled}) ?? false;
+    } on Exception {
+      return false;
+    }
+  }
+
   /// Opens the native focus-supervisor screen (5s pull-back, task, pause/end).
   Future<bool> openFocusControl() async {
     try {

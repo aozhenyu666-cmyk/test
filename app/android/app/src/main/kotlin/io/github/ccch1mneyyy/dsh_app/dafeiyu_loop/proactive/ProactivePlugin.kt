@@ -262,6 +262,12 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             // 大肥鱼哨兵互信配对状态与 6 位配对码生成。
             "guardianStatus" -> result.success(io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianPairing.statusMap(context))
             "guardianPairCode" -> result.success(io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianPairing.generatePairCode(context))
+            "foregroundDebug" -> result.success(io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(context))
+            "setForegroundDebug" -> {
+                val on = call.argument<Boolean>("enabled") == true
+                io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.setEnabled(context, on)
+                result.success(io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(context))
+            }
             else -> result.notImplemented()
         }
     }
