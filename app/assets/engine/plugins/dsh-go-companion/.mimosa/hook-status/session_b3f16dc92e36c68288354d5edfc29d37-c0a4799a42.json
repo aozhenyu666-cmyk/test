@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-11-08T06:59:04.070Z",
+  "sessionId": "session_b3f16dc92e36c68288354d5edfc29d37",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "C:\\Users\\敖震宇\\.zcode\\workspace\\draft-a2e2afc5-18e9-4020-8541-deae3a01dbdf\\repo\\docs\\dafeiyu\\交接-外围任务D1-D5-2026-11-08.md",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 7,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

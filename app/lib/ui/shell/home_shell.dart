@@ -9,9 +9,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../dafeiyu/ui/bout_voice_page.dart';
+import '../../dafeiyu/ui/companion_hub_page.dart';
+import '../../dafeiyu/ui/wall_page.dart';
 import '../../links/app_links.dart';
+import '../../l10n/l10n.dart';
 import '../../pets/overlay_channel.dart' show petOverlayChannelProvider;
 import '../../pets/pet_overlay_bridge.dart';
+import '../../plugins/native/native_model.dart' show NativePanel;
+import '../../plugins/native/native_state.dart' show nativeContributionsProvider, rereadNativeContributions;
 import '../../state/adaptive_layout_state.dart';
 import '../../state/drawer_view_state.dart' show drawerSelectionProvider;
 import '../../state/quick_panel_state.dart';
@@ -19,12 +25,17 @@ import '../../state/sessions_state.dart' show currentSessionProvider;
 import '../bots/bot_alerts.dart';
 import '../chat/chat_screen.dart';
 import '../chat/composer_toast.dart' show composerToastGap;
+import '../common/list_page_row.dart';
+import '../common/overview_card.dart';
+import '../common/segmented_pill.dart';
+import '../common/status_chip.dart';
 import '../engine/engine_screen.dart';
 import '../features/all_features_page.dart';
 import '../forum/forum_link_host.dart';
 import '../notify/background_net_host.dart';
 import '../notify/chat_alert_host.dart';
 import '../notify/voice_model_host.dart';
+import '../plugins/native/native_panel.dart';
 import '../plugins/plugins_screen.dart';
 import '../pets/pet_settings_page.dart';
 import '../phone/phone_stop_watcher.dart';
@@ -37,6 +48,7 @@ import '../settings/settings_screen.dart';
 import '../share_code/share_code_host.dart';
 import '../tavern/tavern_intake.dart';
 import '../star/star_prompt_host.dart';
+import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 import '../update/update_launch_check.dart';
 import '../wallpaper/wallpaper_backdrop.dart';
@@ -45,10 +57,14 @@ import 'adaptive/adaptive_layout.dart';
 import 'adaptive/adaptive_rail.dart';
 import 'adaptive/adaptive_scaffold.dart';
 import 'drawer_drag.dart';
+import 'page_frame.dart';
 import 'quick_panel.dart';
 import 'session_search_page.dart' show showSessionSearch;
 import 'sessions_drawer.dart';
 import 'system_entry_host.dart';
+
+/// The home shell's tabs, in bar order: 局 is the page the app opens on.
+enum HomeTab { bouts, wall, chat }
 
 /// Home: the chat screen, with the sessions drawer pulled over it from the left.
 ///
@@ -94,6 +110,16 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
 
   /// The same for [_quickPanel].
   bool _quickPanelOpen = false;
+
+  /// The tab on screen; 局, as the app opens on it.
+  HomeTab _tab = HomeTab.bouts;
+
+  /// True once the person explicitly tapped the 局 tab so an unavailable panel shows status instead
+  /// of silently bouncing back to Chat while still keeping initial startup cleanly on Chat.
+  bool _userPickedBouts = false;
+
+  /// Tabs already opened once. A tab is built on first visit and then kept mounted.
+  final _visited = <HomeTab>{HomeTab.bouts, HomeTab.chat};
 
   /// The pulled-over drawer's identity bar height: its notices stand above it.
   final _identityBar = ValueNotifier<double>(0);
@@ -157,6 +183,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
   void _closeQuickPanel() => _slideClosed(_quickPanel);
 
   void _revealChat(bool animate) {
+    // A notification, a share or a shortcut lands in the chat: show that tab.
+    if (_tab != HomeTab.chat) setState(() => _visited.add(_tab = HomeTab.chat));
     for (final side in [_drawer, _quickPanel]) {
       if (side.value == 0) continue;
       if (animate) {
@@ -276,10 +304,56 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
     };
   }
 
+  /// The 局 panel as a page; null until the engine has loaded the companion.
+  NativePanel? _boutsPanel() {
+    final plugin = ref.watch(nativeContributionsProvider).plugin('dsh-go-companion');
+    for (final panel in plugin?.panels ?? const <NativePanel>[]) {
+      if (panel.id == 'bouts') return panel;
+    }
+    return null;
+  }
+
+  Widget _tabBody(HomeTab tab, Widget chat, NativePanel? bouts, String? sessionId) => switch (tab) {
+    HomeTab.bouts =>
+      bouts == null
+          ? _BoutsUnavailableView(
+              key: const ValueKey('home-bouts-fallback'),
+              onRetry: () => rereadNativeContributions(ref),
+            )
+          : NativePanelPage(key: const ValueKey('home-bouts'), panel: bouts, sessionId: sessionId, back: false),
+    HomeTab.wall => const WallPage(key: ValueKey('home-wall'), asTab: true),
+    HomeTab.chat => chat,
+  };
+
+  /// 局 / 墙 / 对话 across the bottom, [shown] selected.
+  Widget _tabBar(HomeTab shown, NativePanel? bouts) {
+    final l = context.l10n;
+    return Padding(
+      key: const ValueKey('home-tab-bar'),
+      padding: EdgeInsets.fromLTRB(16, 8, 16, 8 + MediaQuery.paddingOf(context).bottom),
+      child: SegmentedPill<HomeTab>(
+        segments: [
+          PillSegment(HomeTab.bouts, bouts?.title ?? '局'),
+          PillSegment(HomeTab.wall, DafeiyuStrings.fromL10n(l).wallTitle),
+          PillSegment(HomeTab.chat, l.featuresChat),
+        ],
+        selected: shown,
+        onChanged: (tab) => setState(() {
+          _userPickedBouts = tab == HomeTab.bouts;
+          _visited.add(_tab = tab);
+        }),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final width = _drawerWidth(context);
     final sessionId = ref.watch(currentSessionProvider);
+    // On cold start before any user tap, fall back to Chat while the engine finishes loading
+    // companion contributions; once the person taps 局 directly, always enter the 局 tab.
+    final bouts = _boutsPanel();
+    final shown = _tab == HomeTab.bouts && bouts == null && !_userPickedBouts ? HomeTab.chat : _tab;
     final prefs = ref.watch(layoutPrefsProvider);
     // Multi-select in a list on screen (the open drawer, or the sidebar):
     // back ends it before anything else.
@@ -302,6 +376,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
         if (mounted) _quickPanel.value = 0;
       });
     }
+    final typing =
+        MediaQuery.sizeOf(context).height < WindowClass.compactHeight && MediaQuery.viewInsetsOf(context).bottom > 0;
     final chat = widget.chatBuilder?.call(_onMenu) ?? ChatScreen(onOpenDrawer: _onMenu, backdrop: false);
     // The floating pet outside the app hears every pet state.
     ref.listen<void>(petOverlayBridgeProvider, (_, _) {});
@@ -332,6 +408,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
                   backgroundColor: Colors.transparent,
                   // The chat screen handles the keyboard itself.
                   resizeToAvoidBottomInset: false,
+                  // The pulled-over drawer / quick panel covers the screen: no tabs under it.
+                  bottomNavigationBar: _open || _quickPanelOpen || typing ? null : _tabBar(shown, bouts),
                   body: Stack(
                     fit: StackFit.expand,
                     children: [
@@ -375,7 +453,16 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
                               // No drawer to pull while the sidebar shows.
                               behavior: HitTestBehavior.translucent,
                               gestures: {if (!sidebar) ..._drawerGestures, if (quickPanelOn) ..._quickPanelGestures},
-                              child: chat,
+                              // A tab stays mounted once opened (the chat keeps its
+                              // draft and scroll); the panel pages aren't built before
+                              // they are ever shown.
+                              child: IndexedStack(
+                                index: shown.index,
+                                children: [
+                                  for (final tab in HomeTab.values)
+                                    _visited.contains(tab) ? _tabBody(tab, chat, bouts, sessionId) : const SizedBox.shrink(),
+                                ],
+                              ),
                             ),
                             sidebar: SessionsDrawer(
                               key: const ValueKey('persistent-sidebar'),
@@ -583,6 +670,78 @@ class _DrawerOverlay extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// Fallback view inside the `局` tab whenever the engine has not published the `bouts` native
+/// panel yet (cold start, engine offline, or companion plugin loading), so tapping `局` actually
+/// opens a responsive screen with retry and direct bout/hub entrypoints instead of silently
+/// bouncing back to Chat.
+class _BoutsUnavailableView extends StatelessWidget {
+  const _BoutsUnavailableView({super.key, required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppPage.list(
+      title: '局',
+      back: false,
+      solidBar: false,
+      subtitle: const Text('实时排局与拍子节奏'),
+      children: [
+        OverviewCard(
+          leading: const OverviewGlyph(AppIcons.play, tint: 6),
+          title: const Text('「局」面板正在等待伴侣插件就绪'),
+          subtitle: Text(
+            '可能正在启动本机引擎或尚未连接活跃主机。你可以刷新面板，或直接从下方语音/文字开局、进入大肥鱼中枢。',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          footer: const OverviewFooter(tone: StatusTone.warn, text: '插件面板暂未同步 · 点击下方操作'),
+          onFooterTap: onRetry,
+        ),
+        ListPageCard(
+          title: '快捷入口',
+          children: [
+            ListPageRow(
+              icon: AppIcons.refresh,
+              iconColor: theme.colorScheme.primary,
+              title: '重新加载「局」面板',
+              subtitle: '向当前引擎重新拉取大肥鱼伴侣原生面板',
+              onTap: onRetry,
+            ),
+            ListPageRow(
+              icon: AppIcons.engine,
+              title: '本机引擎状态与启动',
+              subtitle: '若本机引擎尚未启动或连接断开，可在此一键拉起引擎',
+              onTap: () => unawaited(
+                Navigator.of(context, rootNavigator: true).push(
+                  MaterialPageRoute<void>(builder: (_) => const EngineScreen()),
+                ),
+              ),
+            ),
+            ListPageRow(
+              icon: AppIcons.voice,
+              title: '语音 / 文字开一局',
+              subtitle: '直接进入「局官」问答与推拍界面',
+              onTap: () => unawaited(
+                Navigator.of(context, rootNavigator: true).push(
+                  MaterialPageRoute<void>(builder: (_) => const BoutVoicePage()),
+                ),
+              ),
+            ),
+            ListPageRow(
+              icon: AppIcons.bot,
+              title: '打开大肥鱼中枢',
+              subtitle: '查看今日计划、两姐妹角色卡、墙与申诉、娱乐锁机与专注监督',
+              subtitleMaxLines: 2,
+              onTap: () => unawaited(CompanionHubPage.open(context)),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

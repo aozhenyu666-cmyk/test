@@ -36,6 +36,8 @@ interface PhoneEnv {
      * Cleanup may outlive the active Owner; it must never adopt a successor's resource.
      */
     fun beforeHandoff(screen: PhoneScreen, owner: PhoneTasks.Owner): String? = null
+    fun workMode(mode: String, allow: List<String>, minutes: Int, why: String?): String? = null
+    fun usageReport(minutes: Int, now: Long): io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReport? = null
     fun sleep(ms: Long) = Thread.sleep(ms)
 }
 
@@ -97,6 +99,7 @@ class PhoneCore(
         internal val replayOutcomes: PhoneSkillOutcomes? = null,
         internal val replayDriver: PhoneDriver? = null,
         private val replayApp: PhoneAppIdentity? = null,
+        val allowRaw: Any? = null,
     ) {
         // Only Sessions reads/writes acquisition under its registry lock; never a Core-wide grant.
         internal var borrowedMainForBackgroundOpen = false
@@ -226,7 +229,7 @@ class PhoneCore(
 
     /** Production Sessions already owns begin/callStarted; PM work never takes the action worker. */
     internal fun prepareCall(name: String, args: Map<String, Any?>, owner: PhoneTasks.Owner): Either<ToolOutput, PreparedCall> {
-        val result = try { prepare(name, Args(args.toMap()), owner) }
+        val result = try { prepare(name, Args(args.toMap()), owner, args["allow"]) }
         catch (_: InterruptedException) { Thread.currentThread().interrupt(); Either.Left(stoppedOut(name)) }
         catch (e: Exception) { Either.Left(failedOut(name, e)) }
         return when (result) {
@@ -243,7 +246,7 @@ class PhoneCore(
         val owner = AtomicReference(admittedOwner)
         if (admittedOwner == null) tasks.callStarted()
         try {
-            return runCall(name, Args(args), owner)
+            return runCall(name, Args(args), owner, rawArgs = args)
         } finally {
             if (admittedOwner == null) tasks.callEnded(owner.get())
         }
@@ -251,9 +254,9 @@ class PhoneCore(
 
     /** Cheap refusals must not start a native task or acquire a screen lease. */
     internal fun rejection(name: String): ToolOutput? {
-        if (name !in PhoneToolCatalog.names && name != FOCUS_TEXT) {
+        if (name !in PhoneToolCatalog.names && name != FOCUS_TEXT && name !in io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuPhoneTools.NAMES) {
             // l10n:keep agent tool result
-            return ToolOutput("没有这个手机工具：$name。可用：${PhoneToolCatalog.names.joinToString("、")}", isError = true)
+            return ToolOutput("没有这个手机工具：$name。可用：${(PhoneToolCatalog.names + io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuPhoneTools.NAMES).joinToString("、")}", isError = true)
         }
         if (!env.enabled()) {
             // l10n:keep agent tool result
@@ -263,13 +266,14 @@ class PhoneCore(
     }
 
     private fun runCall(name: String, args: Args, callOwner: AtomicReference<PhoneTasks.Owner?>, prepared: PreparedCall? = null,
-                        executionWorker: SerialWorker = worker, remainingMs: () -> Long = { MAX_TOTAL_MS }): ToolOutput {
+                        executionWorker: SerialWorker = worker, remainingMs: () -> Long = { MAX_TOTAL_MS },
+                        rawArgs: Map<String, Any?>? = null): ToolOutput {
         if (prepared?.replay == null) rejection(name)?.let { return it }
         val remaining = remainingMs()
         val outcome = if (remaining <= 0) SerialWorker.Outcome.TimedOut(queued = true) else
             executionWorker.run(budgetMs(name), remaining, owner = tasks) { scope ->
                 if (remainingMs() <= 0) throw InterruptedException()
-                execute(name, args, scope, callOwner, prepared)
+                execute(name, args, scope, callOwner, prepared, rawArgs)
             }
         val owner = callOwner.get()
         if (owner != null && name in TRACE_ACTIONS && outcome !is SerialWorker.Outcome.Done) {
@@ -328,7 +332,7 @@ class PhoneCore(
         }
     }
 
-    private fun execute(name: String, a: Args, scope: SerialWorker.Scope, callOwner: AtomicReference<PhoneTasks.Owner?>, prepared: PreparedCall?): Out {
+    private fun execute(name: String, a: Args, scope: SerialWorker.Scope, callOwner: AtomicReference<PhoneTasks.Owner?>, prepared: PreparedCall?, rawArgs: Map<String, Any?>? = null): Out {
         val admitted = callOwner.get()
         val owner = admitted ?: when (val b = tasks.begin()) {
             is PhoneTasks.Begin.Refused -> return Out(b.message + "。", error = true, summary = name, decision = "stopped")
@@ -360,7 +364,7 @@ class PhoneCore(
             if (!current(owner)) return stoppedOut(name)
             // Direct Core callers retain their original begin/pause timing. Both paths use
             // this one preparer; production arrives with the already-admitted native plan.
-            val call = prepared ?: when (val result = prepare(name, a, owner)) {
+            val call = prepared ?: when (val result = prepare(name, a, owner, rawArgs?.get("allow"))) {
                 is Either.Left -> return result.value
                 is Either.Right -> result.value
             }
@@ -379,6 +383,10 @@ class PhoneCore(
                 PhoneToolCatalog.TAP, PhoneToolCatalog.TYPE, PhoneToolCatalog.SCROLL, PhoneToolCatalog.TAP_XY -> act(name, a, scope, owner)
                 PhoneToolCatalog.KEY -> key(a, owner)
                 PhoneToolCatalog.HANDOFF -> handoff(a, scope, owner)
+                in io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuPhoneTools.NAMES ->
+                    io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuPhoneTools.dispatch(name, a, call.allowRaw, env).let {
+                        Out(it.text, error = it.error, summary = it.summary, decision = it.decision)
+                    }
                 // l10n:keep agent tool result
                 else -> Out("没有这个手机工具：$name", error = true)
             }
@@ -440,7 +448,7 @@ class PhoneCore(
             AppMatch.Result.NotFound -> Either.Left("没找到应用「$query」。用 apps 查一下名称或包名。")
         }
 
-    private fun prepare(name: String, a: Args, owner: PhoneTasks.Owner): Either<Out, PreparedCall> {
+    private fun prepare(name: String, a: Args, owner: PhoneTasks.Owner, allowRaw: Any? = null): Either<Out, PreparedCall> {
         if (!current(owner)) return Either.Left(stoppedOut(name))
         val screens = when (val route = requiredScreens(name, a)) {
             is Either.Left -> return Either.Left(Out(route.value, error = true))
@@ -510,7 +518,7 @@ class PhoneCore(
             }
         }
         if (!current(owner)) return Either.Left(stoppedOut(name))
-        return Either.Right(PreparedCall(name, a, owner, screens, launch, shareSubject))
+        return Either.Right(PreparedCall(name, a, owner, screens, launch, shareSubject, allowRaw = allowRaw))
     }
 
     private fun open(call: PreparedCall, scope: SerialWorker.Scope, owner: PhoneTasks.Owner): Out {
@@ -1354,6 +1362,8 @@ class PhoneCore(
             PhoneToolCatalog.SCREEN -> 12_000L
             PhoneToolCatalog.COLLECT -> 120_000L
             PhoneToolCatalog.HANDOFF -> 30_000L
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuPhoneTools.USAGE,
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuPhoneTools.FOCUS -> 20_000L
             else -> 30_000L
         }
     }

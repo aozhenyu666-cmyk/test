@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../dafeiyu/dafeiyu_strings.dart';
+import '../../dafeiyu/ui/companion_hub_page.dart';
+import '../../dafeiyu/ui/loop_test_page.dart';
 import '../../l10n/l10n.dart';
 import '../../runtime/local_footprint.dart';
 import '../../runtime/runtime_bridge.dart';
@@ -509,6 +512,26 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
                 ],
               ),
               gap,
+              ListPageCard(
+                title: '大肥鱼伴侣',
+                children: [
+                  ListPageRow(
+                    icon: AppIcons.bot,
+                    iconColor: Theme.of(context).colorScheme.primary,
+                    title: '大肥鱼中枢',
+                    subtitle: '今日计划、两姐妹角色卡、墙与申诉、娱乐锁机、专注监督与主动搭话的统一入口',
+                    subtitleMaxLines: 2,
+                    onTap: () => _push(const CompanionHubPage()),
+                  ),
+                  ListPageRow(
+                    icon: AppIcons.play,
+                    title: DafeiyuStrings.of(context).loopEntryTitle,
+                    subtitle: DafeiyuStrings.of(context).loopEntrySubtitle,
+                    onTap: () => _push(const LoopTestPage()),
+                  ),
+                ],
+              ),
+              gap,
             ],
             PhoneOptionsFold(
               key: const ValueKey('phone-more-options'),
@@ -603,6 +626,8 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
     if (runtime.runtimeMissing) return context.l10n.localEnvPhoneNeedsRuntime;
     if (runtime.phase != RuntimePhase.running) return context.l10n.phoneControlAfterEngineStarts;
     if (!s.a11y.enabled) return context.l10n.phoneControlNeedsAccessibility;
+    if (!s.a11y.serviceConnected) return context.l10n.phoneControlAccessibilityReconnect;
+    if (!s.a11y.healthy) return context.l10n.phoneControlAccessibilityReconnect;
     return context.l10n.phoneControlReady;
   }
 

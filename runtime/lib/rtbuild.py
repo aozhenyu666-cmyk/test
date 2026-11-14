@@ -22,6 +22,7 @@ import tarfile
 import zlib
 
 EM_NAMES = {3: "i386", 40: "arm", 62: "x86-64", 183: "aarch64"}
+_EM_BY_NAME = {v: k for k, v in EM_NAMES.items()}
 NPMMIRROR = "https://registry.npmmirror.com/"
 NPMJS = "https://registry.npmjs.org/"
 # `dsh web` overlay (passed with --patch by the launch command): plugin-install registries and
@@ -29,6 +30,8 @@ NPMJS = "https://registry.npmjs.org/"
 DSH_WEB_PATCH = "/etc/dsh-app/dsh-web.patch.yml"
 # Where runtime/bridge/dsh-go-bridge lands in the rootfs (loaded by absolute path from the overlay).
 DSH_GO_BRIDGE = "/opt/dsh-go/dsh-go-bridge"
+# Where runtime/proactive/dsh-go-proactive lands: turns one Android proactive event into a followup turn.
+DSH_GO_PROACTIVE = "/opt/dsh-go/dsh-go-proactive"
 # runtime/boot/boot-cache.mjs: path cache for `dsh web` while it boots, preloaded by the dsh shim.
 BOOT_CACHE = "/opt/dsh-go/boot-cache.mjs"
 BOOT_CACHE_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "boot", "boot-cache.mjs")
@@ -776,6 +779,16 @@ def dsh_drop_reason(rel, abi, prune_dev):
     return None
 
 
+def proactive_drop_reason(rel, abi, prune_dev):
+    """The proactive plugin ships code only: its test/ tree starts mock services and creates
+    sessions, which must never run on a phone."""
+    parts = rel.split("/")
+    if parts and parts[0] == "test":
+        return "test-only"
+    return dsh_drop_reason(rel, abi, prune_dev)
+    return None
+
+
 def pnpm_drop_reason(rel, abi, prune_dev):
     """pnpm bundles @reflink prebuilds for macOS/Windows only (none for Linux) and Windows .exe helpers."""
     parts = rel.split("/")
@@ -847,7 +860,7 @@ def bridge_shared_rows():
                         "name: %s/lib/companion/full-context.js" % DSH_GO_BRIDGE)
 
 
-def overlay_entries(runtime_info, with_python=False, with_pnpm=False, with_bridge=False):
+def overlay_entries(runtime_info, with_python=False, with_pnpm=False, with_bridge=False, with_proactive=False):
     """Files dsh-app adds to the rootfs. Kept here so the recipe lives in one place."""
     E = {}
 
@@ -917,7 +930,7 @@ def overlay_entries(runtime_info, with_python=False, with_pnpm=False, with_bridg
         # what `npm i -g pnpm` creates under npm's global prefix (/usr/local)
         for name, target in PNPM_BINS.items():
             s("usr/local/bin/" + name, "../lib/node_modules/pnpm/bin/" + target)
-    if with_pnpm or with_bridge:
+    if with_pnpm or with_bridge or with_proactive:
         patch = ("# dsh-app: overlay for `dsh web`, passed with --patch by the app's launch command and\n"
                  "# replaced on every runtime upgrade (edits here do not survive one).\n")
         if with_pnpm:
@@ -942,6 +955,14 @@ def overlay_entries(runtime_info, with_python=False, with_pnpm=False, with_bridg
                       "    - id: dsh-go-bridge\n"
                       "      name: %s/lib/index.js\n" % DSH_GO_BRIDGE)
             patch += bridge_shared_rows()
+        if with_proactive:
+            patch += ("#\n"
+                      "# dsh-go-proactive: turns one Android proactive event into a real agent turn\n"
+                      "# (POST /dsh-go-proactive/v1/request) and reports the text back. Loaded by path;\n"
+                      "# do not also add it to a profile, or the same plugin would be mounted twice.\n"
+                      "- insert:\n"
+                      "    - id: dsh-go-proactive\n"
+                      "      name: %s/lib/index.js\n" % DSH_GO_PROACTIVE)
         f(DSH_WEB_PATCH.lstrip("/"), patch)
     d("root/.dsh", 0o700)
     d("root/.l2s", 0o700)          # PROOT_L2S_DIR: hard-link backing files (kept with /root on upgrade)
@@ -1448,10 +1469,12 @@ def cmd_assemble(args):
                  "pnpm", pnpm_drop_reason)
     if args.bridge:
         add_tree(args.bridge, DSH_GO_BRIDGE.lstrip("/"), "bridge", lambda rel, abi, prune: None)
+    if args.proactive:
+        add_tree(args.proactive, DSH_GO_PROACTIVE.lstrip("/"), "proactive", proactive_drop_reason)
 
     # 4. dsh-app overlay (wins over everything above)
     for p, e in overlay_entries(runtime_info, with_python=bool(args.python), with_pnpm=bool(args.pnpm_prefix),
-                                with_bridge=bool(args.bridge)).items():
+                                with_bridge=bool(args.bridge), with_proactive=bool(args.proactive)).items():
         entries[p] = e
 
     # 5. ELF audit + arch/libc pruning; Termux-style fixes for node-pty helpers
@@ -1703,6 +1726,7 @@ def cmd_manifest(args):
         "prootVersion": v["prootVersion"],
         "dshPatches": v.get("dshPatches", []),
         "dshGoBridge": {"version": v["dshGoBridge"], "path": DSH_GO_BRIDGE} if v.get("dshGoBridge") else None,
+        "dshGoProactive": {"version": v["dshGoProactive"], "path": DSH_GO_PROACTIVE} if v.get("dshGoProactive") else None,
         "tallocVersion": v["tallocVersion"],
         "androidShmemVersion": v["androidShmemVersion"],
         "npmRegistry": "https://registry.npmmirror.com",
@@ -1734,6 +1758,111 @@ def cmd_manifest(args):
         json.dump(m, f, indent=2)
         f.write("\n")
     print("wrote " + args.out)
+
+
+def _read_bytes(path):
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _load_json_file(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def verify_outputs(out, abis):
+    """Checks the G1' criterion on an existing runtime/out tree."""
+    JNI = ("libproot.so", "libproot-loader.so", "libtalloc.so", "libandroid-shmem.so")
+    problems, lines = [], []
+    for abi in abis:
+        before = len(problems)
+        root = os.path.join(out, abi)
+        mpath = os.path.join(root, "assets", "runtime", "manifest.json")
+        if not os.path.isfile(mpath):
+            problems.append("%s: %s missing (run runtime/build-runtime.sh %s on an x86_64 Linux host)"
+                            % (abi, mpath, abi))
+            continue
+        try:
+            m = _load_json_file(mpath)
+        except ValueError as e:
+            problems.append("%s: %s is not JSON: %s" % (abi, mpath, e))
+            continue
+        if m.get("abi") != abi:
+            problems.append("%s: manifest says abi=%r" % (abi, m.get("abi")))
+        assets = os.path.dirname(mpath)
+        name = m.get("rootfs")
+        if m.get("schema") == 2 and isinstance(m.get("layers"), dict):
+            for kind, info in m["layers"].items():
+                lname = info.get("asset")
+                lpath = os.path.join(assets, lname) if lname else ""
+                if not lname or not os.path.isfile(lpath):
+                    problems.append("%s: layer %s %r missing" % (abi, kind, lname))
+                    continue
+                lblob = _read_bytes(lpath)
+                if info.get("sha256") and hashlib.sha256(lblob).hexdigest() != info["sha256"]:
+                    problems.append("%s: %s sha256 does not match the manifest" % (abi, lname))
+            name = "layers(schema=2)"
+        else:
+            rootfs = os.path.join(assets, name) if name else ""
+            if not name or not os.path.isfile(rootfs):
+                problems.append("%s: rootfs %r missing" % (abi, name))
+            else:
+                blob = _read_bytes(rootfs)
+                if hashlib.sha256(blob).hexdigest() != m.get("rootfsSha256"):
+                    problems.append("%s: %s sha256 does not match the manifest" % (abi, name))
+                elif m.get("rootfsBytes") is not None and len(blob) != m["rootfsBytes"]:
+                    problems.append("%s: %s is %d bytes, manifest says %s" % (abi, name, len(blob), m["rootfsBytes"]))
+        jni = m.get("jniLibs") or {}
+        for lib in JNI:
+            want = jni.get(lib) or {}
+            path = os.path.join(root, "jniLibs", abi, lib)
+            if not os.path.isfile(path):
+                problems.append("%s: %s missing (the manifest %s it)"
+                                % (abi, path, "still lists" if lib in jni else "does not list"))
+                continue
+            blob = _read_bytes(path)
+            if want.get("sha256") and hashlib.sha256(blob).hexdigest() != want["sha256"]:
+                problems.append("%s: %s sha256 does not match the manifest" % (abi, lib))
+            if want.get("bytes") is not None and len(blob) != want["bytes"]:
+                problems.append("%s: %s is %d bytes, manifest says %s" % (abi, lib, len(blob), want["bytes"]))
+            want_em = want.get("e_machine")
+            if want_em is None:
+                want_em = _EM_BY_NAME.get(want.get("machine")) if isinstance(want.get("machine"), str) else want.get("machine")
+            if want_em is not None and int(want_em) != ABI[abi]["machine"]:
+                problems.append("%s: %s is machine %s, not %s"
+                                % (abi, lib, want.get("machine") or want_em, ABI[abi]["machine"]))
+        if len(problems) == before:
+            lines.append("PASS  %s  abi=%s  %s  %s  %d jniLibs"
+                         % (abi, m.get("abi"), name, m.get("runtimeVersion"), len(JNI)))
+    index_path = os.path.join(out, "manifest.json")
+    if not os.path.isfile(index_path):
+        problems.append("%s missing (write_index should have made it)" % index_path)
+    else:
+        try:
+            listed = set((_load_json_file(index_path).get("abis") or {}).keys())
+        except ValueError as e:
+            listed = set()
+            problems.append("%s is not JSON: %s" % (index_path, e))
+        absent = [a for a in abis if a not in listed]
+        if absent:
+            problems.append("%s abis=%s lacks %s" % (index_path, sorted(listed), absent))
+        else:
+            lines.append("PASS  %s  abis=%s" % (index_path, sorted(listed)))
+    return problems, lines
+
+
+def cmd_verify_outputs(args):
+    problems, lines = verify_outputs(args.out, args.abi)
+    for line in lines:
+        print(line)
+    for p in problems:
+        print("FAIL  " + p, file=sys.stderr)
+    if problems:
+        print("G1' FAIL: %s is not a complete runtime bundle for %s"
+              % (args.out, ", ".join(args.abi)), file=sys.stderr)
+        return 1
+    print("G1' PASS: %s holds a real runtime bundle for %s" % (args.out, ", ".join(args.abi)))
+    return 0
 
 
 def main():
@@ -1797,6 +1926,7 @@ def main():
     p.add_argument("--deb", action="append", help="extra .deb to unpack and register (no maintainer scripts)")
     p.add_argument("--python", help="python-build-standalone install_only tarball -> /opt/python")
     p.add_argument("--bridge", help="dsh-go-bridge package dir -> " + DSH_GO_BRIDGE + " (+ overlay row)")
+    p.add_argument("--proactive", help="dsh-go-proactive package dir -> " + DSH_GO_PROACTIVE + " (+ overlay row)")
     p.set_defaults(fn=cmd_assemble)
 
     p = sub.add_parser("manifest")
@@ -1807,8 +1937,14 @@ def main():
     p.add_argument("--out", required=True)
     p.set_defaults(fn=cmd_manifest)
 
+    p = sub.add_parser("verify-outputs")
+    p.add_argument("--out", required=True, help="runtime/out (or a RUNTIME_OUT staging dir)")
+    p.add_argument("--abi", nargs="+", required=True, choices=sorted(ABI))
+    p.set_defaults(fn=cmd_verify_outputs)
+
     args = ap.parse_args()
-    args.fn(args)
+    rc = args.fn(args)
+    sys.exit(rc or 0)
 
 
 if __name__ == "__main__":

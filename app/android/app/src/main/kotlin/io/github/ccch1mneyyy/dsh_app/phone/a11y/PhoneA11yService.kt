@@ -70,10 +70,12 @@ class PhoneA11yService : AccessibilityService() {
     /** User-initiated display captures must omit the service's own controls too. */
     internal fun hideControlOverlayForPetScreenshot(hide: Boolean) { overlay?.hideForCapture(hide) }
 
-    private val screenOff = object : BroadcastReceiver() {
+    private val power = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            // l10n:keep agent stop reason
-            if (intent.action == Intent.ACTION_SCREEN_OFF) stopAll("屏幕关闭了", PhoneTasks.StopSource.SCREEN_OFF)
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuA11yHooks.onPowerBroadcast(intent) {
+                // l10n:keep agent stop reason
+                stopAll("屏幕关闭了", PhoneTasks.StopSource.SCREEN_OFF)
+            }
         }
     }
 
@@ -97,17 +99,24 @@ class PhoneA11yService : AccessibilityService() {
         PhoneRegistry.mainDriver = d
         PhoneRegistry.overlayGate = o
         try {
-            val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
-            if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOff, filter, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(screenOff, filter)
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_POWER_CONNECTED)
+                addAction(Intent.ACTION_POWER_DISCONNECTED)
+            }
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(power, filter, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(power, filter)
             receiverRegistered = true
-        } catch (e: Exception) { Log.w(TAG, "screen-off receiver", e) }
+        } catch (e: Exception) { Log.w(TAG, "power receiver", e) }
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) probe = A11yProbe(this, d, o).also { it.register() }
+        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuA11yHooks.onServiceConnected(this) { d.foregroundPackage() }
         Log.i(TAG, "accessibility service connected")
         PhoneRegistry.controlListener?.onAccessibilityChanged(true)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         clock.tick(event?.packageName)
+        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuA11yHooks.onAccessibilityEvent(this, event)
         // Window changes retire both coordinates and screenshot authorization. Only an identified
         // window of this service's controls is exempt; switching to DSH itself is still a transition.
         if (event != null && invalidatesVisual(event.eventType) {
@@ -121,6 +130,7 @@ class PhoneA11yService : AccessibilityService() {
      * Screen off, explicit stop and service teardown retain their separate stop paths.
      */
     override fun onInterrupt() {
+        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuA11yHooks.onInterrupt()
         Log.i(TAG, "accessibility feedback interrupted; phone task unchanged")
     }
 
@@ -156,6 +166,7 @@ class PhoneA11yService : AccessibilityService() {
     private fun teardown(reason: String) {
         focusInputObservation.retire()
         focusInputRetired = true
+        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuA11yHooks.onTeardown(this, reason, instance === this)
         if (instance !== this && driver == null) return
         val d = driver
         val o = overlay
@@ -171,7 +182,7 @@ class PhoneA11yService : AccessibilityService() {
             d?.close()
             probe?.unregister()
             probe = null
-            if (receiverRegistered) { runCatching { unregisterReceiver(screenOff) }; receiverRegistered = false }
+            if (receiverRegistered) { runCatching { unregisterReceiver(power) }; receiverRegistered = false }
             driver = null
             overlay = null
             Log.i(TAG, "accessibility service gone: $reason")
@@ -191,6 +202,15 @@ class PhoneA11yService : AccessibilityService() {
             private set
 
         fun isConnected(): Boolean = instance != null
+
+        fun isAlive(now: Long = android.os.SystemClock.elapsedRealtime(), screenOn: Boolean = true): Boolean =
+            instance != null && A11yHealth.isAlive(now, screenOn)
+
+        fun isHealthy(now: Long = android.os.SystemClock.elapsedRealtime(), screenOn: Boolean = true): Boolean =
+            instance != null && A11yHealth.isHealthy(now, screenOn)
+
+        fun health(now: Long = android.os.SystemClock.elapsedRealtime(), screenOn: Boolean = true): A11yHealth.Snapshot =
+            A11yHealth.snapshot(now, screenOn)
 
         fun component(context: Context) = ComponentName(context.packageName, PhoneA11yService::class.java.name)
 

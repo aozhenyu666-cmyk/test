@@ -202,7 +202,7 @@ class PhoneControl private constructor(private val app: Context) : PhoneEnv, Con
             if (state.stopped) record.activeWorker?.interruptCurrent(record.tasks)
             prompts.stopTask(record.tasks)
         })
-    private val server = McpServer(PhoneToolCatalog.listJson(), { name, args, _ -> sessions.run(sessions.admit(null), name, args) }, SERVER_VERSION)
+    private val server = McpServer(PhoneToolCatalog.listJson() + io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuPhoneTools.extraToolsJson(), { name, args, _ -> sessions.run(sessions.admit(null), name, args) }, SERVER_VERSION)
     private val bridge = PhoneBridge(server, { line -> logger(line) }, { call ->
         if (call.name == PhoneCore.REPLAY) replayWork(call) else {
         val admission = sessions.admit(call.caller)
@@ -360,6 +360,7 @@ class PhoneControl private constructor(private val app: Context) : PhoneEnv, Con
         // The app's start: a force stop took the accessibility service out of the settings.
         cleanupIo.execute { taskJournal.load(); emitStatus() }
         ticker.execute(::keep)
+        if (switchedOn(app)) io.github.ccch1mneyyy.dsh_app.phone.a11y.A11yWatchdogService.start(app)
     }
 
     // ── Switch and app lists ────────────────────────────────────────────────────────
@@ -378,9 +379,11 @@ class PhoneControl private constructor(private val app: Context) : PhoneEnv, Con
             sessions.stopAll("手机操控已关闭")
             skillLifecycle.retired()
             stopBridge()
+            io.github.ccch1mneyyy.dsh_app.phone.a11y.A11yWatchdogService.stop(app)
         } else {
             tasks.clearStop()
             ticker.execute(::keep)
+            io.github.ccch1mneyyy.dsh_app.phone.a11y.A11yWatchdogService.start(app)
         }
         emitStatus()
         return true
@@ -826,11 +829,38 @@ class PhoneControl private constructor(private val app: Context) : PhoneEnv, Con
 
     /** Called only on ticker: complete sampling and revision assignment cannot interleave. */
     private fun captureStatus(): Map<String, Any?> {
+        val a11yNow = SystemClock.elapsedRealtime()
+        val a11yScreenOn = runCatching {
+            app.getSystemService(android.os.PowerManager::class.java)?.isInteractive == true
+        }.getOrDefault(true)
+        val a11yHealth = PhoneA11yService.health(a11yNow, a11yScreenOn)
+        runCatching { PhoneRegistry.mainDriver?.foregroundPackage() }
+            .getOrNull()
+            ?.let { io.github.ccch1mneyyy.dsh_app.phone.a11y.NowFeed.onApp(it, a11yNow) }
+        val nowState = io.github.ccch1mneyyy.dsh_app.phone.a11y.NowFeed.snapshot(a11yNow)
         val value = linkedMapOf<String, Any?>(
             "enabled" to isEnabled(),
             "skills" to skillsStatus(),
             "bridgeListening" to bridge.listening,
-            "a11y" to linkedMapOf("enabled" to a11yEnabledInSettings(), "serviceConnected" to (PhoneRegistry.mainDriver != null)),
+            "a11y" to linkedMapOf(
+                "enabled" to a11yEnabledInSettings(),
+                "serviceConnected" to (PhoneRegistry.mainDriver != null),
+                "alive" to a11yHealth.alive,
+                "healthy" to a11yHealth.healthy,
+                "verdict" to a11yHealth.verdict.name.lowercase(),
+                "lastEventAgeMs" to a11yHealth.lastEventAgeMs(a11yNow),
+                "lastProbeAgeMs" to a11yHealth.lastProbeAgeMs(a11yNow),
+                "probeOk" to a11yHealth.lastProbeOk,
+                "failures" to a11yHealth.failures,
+                "lastReason" to a11yHealth.lastReason,
+            ),
+            "now" to linkedMapOf(
+                "app" to nowState.app,
+                "appMinutes" to nowState.appMinutes,
+                "screenOn" to nowState.screenOn,
+                "charging" to nowState.charging,
+                "lastEventAgeMs" to nowState.lastEventAgeMs,
+            ),
             "overlay" to (PhoneRegistry.overlayGate != null),
             "notifications" to nm.areNotificationsEnabled(),
             "confirmationNotifications" to notificationGate.available(),
@@ -1023,10 +1053,16 @@ class PhoneControl private constructor(private val app: Context) : PhoneEnv, Con
     }
 
     override fun a11yState(): A11yState = when {
-        PhoneRegistry.mainDriver != null -> A11yState.CONNECTED
+        PhoneA11yService.isHealthy() -> A11yState.CONNECTED
         a11yEnabledInSettings() -> A11yState.ENABLED_NOT_CONNECTED
         else -> A11yState.DISABLED
     }
+
+    override fun workMode(mode: String, allow: List<String>, minutes: Int, why: String?): String =
+        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.workMode(mode, allow, minutes, why)
+
+    override fun usageReport(minutes: Int, now: Long): io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReport? =
+        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReader.usage(app, minutes, now)
 
     override fun backgroundUnavailable(): String {
         val reason = (backgroundStatus()["reason"] as? String)?.let { "（$it）" } ?: ""

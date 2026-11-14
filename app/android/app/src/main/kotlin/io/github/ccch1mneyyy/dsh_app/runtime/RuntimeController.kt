@@ -64,9 +64,10 @@ class RuntimeController private constructor(private val app: Context) : DshProce
     @Volatile private var token: String? = null
     @Volatile private var error: String? = null
     @Volatile private var pendingEnv: Map<String, String> = emptyMap()
-    @Volatile private var pendingPhoneStorage = false
+    // Kept in prefs too, so a start by the system after the app was killed uses the same settings.
+    @Volatile private var pendingPhoneStorage = prefs.getBoolean(K_PHONE_STORAGE, false)
     /** Whether the managed AGENTS.md tells the model about ```dsh-ui views (settings, on by default). */
-    @Volatile private var pendingVisualReplies = true
+    @Volatile private var pendingVisualReplies = prefs.getBoolean(K_VISUAL_REPLIES, true)
 
     // Safe mode and failure detection. State that must survive the app being killed lives in [prefs].
     @Volatile private var safeState = SafeState.parse(prefs.getString(K_SAFE_STATE, null))
@@ -112,6 +113,7 @@ class RuntimeController private constructor(private val app: Context) : DshProce
     val safeRun: Boolean get() = runSafe
 
     init {
+        worker.execute { EngineExitLog.processExits(app) }
         phase = try {
             if (installer.isCurrent()) Phase.INSTALLED else Phase.NOT_INSTALLED
         } catch (e: Exception) {
@@ -285,6 +287,7 @@ class RuntimeController private constructor(private val app: Context) : DshProce
     ) {
         pendingPhoneStorage = phoneStorage
         pendingVisualReplies = visualReplies
+        prefs.edit().putBoolean(K_PHONE_STORAGE, phoneStorage).putBoolean(K_VISUAL_REPLIES, visualReplies).apply()
         if (phase == Phase.RUNNING || phase == Phase.STARTING) return
         pendingEnv = env
         val next = SafePolicy.onStartRequest(safeState, mode)
@@ -507,6 +510,17 @@ class RuntimeController private constructor(private val app: Context) : DshProce
                 val speechOverlay = !safe && SpeechGuest.writeFiles(installer.rootfs)
                 if (!safe && !speechOverlay) {
                     log("[dsh-app] voice input overlay not written; the voice model keeps DSH's defaults", "system")
+                }
+                if (!safe && !BuiltinPluginGuest.writeFiles(app, installer.rootfs)) {
+                    log("[dsh-app] bundled plugins not written; relationship core is unavailable this run", "system")
+                }
+                if (!safe) {
+                    val fishConfig = FishMcpGuest.configFile(installer.rootfs)
+                    if (FishMcpGuest.writeFiles(installer.rootfs)) {
+                        log("[dsh-app] PC fish bridge overlay written; mcp__fish__* tools will load at startup", "system")
+                    } else if (fishConfig.isFile) {
+                        log("[dsh-app] PC fish bridge config is invalid; starting without mcp__fish__*", "system")
+                    }
                 }
                 if (pendingPhoneStorage && !storage) log("[dsh-app] phone storage requested but permission not granted", "system")
                 val env = LinkedHashMap<String, String>()
@@ -1061,6 +1075,8 @@ class RuntimeController private constructor(private val app: Context) : DshProce
                 return
             }
             if (expected || stopGen >= runGen) {
+                EngineExitLog.engineExit(app, code, expected = true, kind = null, upMs = readyAt?.let { SystemClock.elapsedRealtime() - it },
+                    restartInMs = null, recentRestarts = autoRestarts.size, tail = synchronized(runTail) { runTail.toList() })
                 if (!resetting && phase == Phase.STOPPING) setPhase(Phase.INSTALLED)
                 DshService.stopSelfIfRunning(app, runGen)
                 return
@@ -1077,8 +1093,15 @@ class RuntimeController private constructor(private val app: Context) : DshProce
             val outcome = SafePolicy.onFailure(safeState, strikes, f, autoSafe(),
                 AppStrings.get(app, R.string.safe_probation_failed), AppStrings.get(app, R.string.safe_auto_started))
             val now = SystemClock.elapsedRealtime()
-            val delay = SafePolicy.autoRestartDelay(f.kind, code, readyAt?.let { now - it }, autoRestarts.toList(), now)
-            if (!outcome.restartSafe && delay != null && DshService.isRunning) {
+            val upMs = readyAt?.let { now - it }
+            val policyDelay = SafePolicy.autoRestartDelay(f.kind, code, upMs, autoRestarts.toList(), now)
+            val delay = policyDelay?.takeIf { !outcome.restartSafe && DshService.isRunning }
+            EngineExitLog.engineExit(app, code, expected = false, kind = f.kind.wire, upMs = upMs, restartInMs = delay,
+                recentRestarts = autoRestarts.count { now - it < SafePolicy.RESTART_WINDOW_MS }, tail = tail)
+            if (policyDelay != null && delay == null && !outcome.restartSafe) {
+                EngineExitLog.note(app, "restartSkipped", "service not running")
+            }
+            if (delay != null) {
                 // Killed from outside after a good run (memory pressure, a phantom-process sweep): try again.
                 autoRestarts.removeAll { now - it >= 600_000L }
                 autoRestarts.addLast(now)
@@ -1155,6 +1178,8 @@ class RuntimeController private constructor(private val app: Context) : DshProce
         private const val K_SAFE_STATE = "safeState"
         private const val K_SAFE_REASON = "safeReason"
         private const val K_STRIKES = "strikes"
+        private const val K_PHONE_STORAGE = "phoneStorage"
+        private const val K_VISUAL_REPLIES = "visualReplies"
         private const val K_FAILURE = "failure"
         private const val K_MAIN_FAILURE = "mainFailure"
         private const val K_MOVED = "movedAside"

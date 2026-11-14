@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 触发测试 (loop/InteractionActivity.kt, loop/InteractionHub.kt). English in values/loop_strings.xml. -->
+<resources>
+    <string name="loop_page_title">DSH 触发测试</string>
+    <string name="loop_page_text">你打开了「%1$s」。这是第一条闭环的测试页面：点「返回」回去，并保存一条回执。</string>
+    <string name="loop_page_return">返回</string>
+    <string name="loop_channel">DSH 触发测试</string>
+    <string name="loop_channel_description">测试页面弹不出来时，用通知问你</string>
+    <string name="tile_bouts">局</string>
+    <string name="tile_bouts_running">进行中 · 今日 %1$d 拍</string>
+    <string name="tile_bouts_today">今日 %1$d 拍</string>
+</resources>

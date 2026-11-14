@@ -1,0 +1,464 @@
+// 第九轮 A 组：预案接到真实插件上以后的行为（走 /plan、/presets、/bouts、/event 和工具）。
+//
+// presets.test.mjs 钉的是纯规则；这里钉的是「接线」：
+//   - 引擎起来以后没有任何预案触发，就没有默认锁（第二轮的全天默认锁改成了一条停用的预案）；
+//   - 局里在不允许的 App 待满 1 分钟 / 10 分钟切出 3 次 → 同一次 /plan 的回答里 session 就是严格模式；
+//   - 严格模式的 session：只放行本局应用、0 宽限、带一句「哪条预案、怎么解除」；
+//   - AI 工具新建只能是影子、放宽被拒；面板放宽进冷却期、能撤销；
+//   - 破窗是出口：严格模式一起收掉。
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Readable } from 'node:stream'
+import { apply, setStatePin } from '../lib/index.js'
+import { wallDecision, WALL_KIND_DEFAULT } from '../lib/wall.js'
+import { minuteOfDay, startOfDay } from '../lib/tz.js'
+
+const PREFIX = '/dsh-go-companion/v1'
+const SIS = 'session-sis'
+const BIG = 'session-big'
+
+function agentOf(id) {
+  const tools = {}
+  return {
+    id, status: 'idle', inbox: { hasPending: false }, sent: [], contexts: [], tools,
+    followup(m) { this.sent.push(m) },
+    ctx: {
+      systemPrompt: { context() { return () => {} } },
+      tools: { register(def) { tools[def.name] = def; return () => { delete tools[def.name] } } },
+    },
+  }
+}
+
+function host(agents, state) {
+  let handler
+  const ctx = {
+    get(name) {
+      if (name === 'agents') return { get: (id) => agents[id], roots: () => Object.values(agents), list: () => Object.values(agents) }
+      if (name === 'connection') return { requestRejection: () => undefined }
+      if (name === 'sessionController') return { resolveAgent: async (id) => ({ agent: agents[id] }) }
+      if (name === 'workspaceRegistry') return { archivedSessionIds: [] }
+      return undefined
+    },
+    on() {},
+    inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
+    effect(fn) { fn() },
+  }
+  setStatePin(state)
+  apply(ctx)
+  return () => handler
+}
+
+function call(handler, method, path, body) {
+  const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))])
+  req.method = method
+  req.url = PREFIX + path
+  req.headers = { 'content-type': 'application/json' }
+  const res = { statusCode: 0, text: '', writeHead(s) { this.statusCode = s }, end(c) { this.text = c ? String(c) : '' } }
+  return Promise.resolve(handler(req, res)).then(() => ({ status: res.statusCode, body: res.text ? JSON.parse(res.text) : null }))
+}
+
+async function withHome(fn) {
+  const home = mkdtempSync(join(tmpdir(), 'companion-presets-'))
+  const old = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try {
+    return await fn(home)
+  } finally {
+    if (old === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = old
+    // Windows：sqlite 句柄还没放（进程里开着局库），rmSync 会 EPERM。断言已经跑完了，
+    // 这一句只是收尾——收不掉就别把一条好测试判成失败。Linux（CI）照旧删干净。
+    try {
+      rmSync(home, { recursive: true, force: true })
+    } catch {
+      // 交给系统清理临时目录
+    }
+  }
+}
+
+function setup(home, { state = 'standby', ...rest } = {}) {
+  mkdirSync(join(home, 'companion'), { recursive: true })
+  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...rest }))
+  const sis = agentOf(SIS)
+  const big = agentOf(BIG)
+  const h = host({ [SIS]: sis, [BIG]: big }, state)
+  const plan = (phone) => call(h(), 'POST', '/plan', { roll: 0, timeZone: 'Asia/Shanghai', phone })
+  const presets = (body) => call(h(), 'POST', '/presets', body)
+  const open = (protocolId, apps) => call(h(), 'POST', '/bouts', { action: 'open', protocolId, apps })
+  const event = (body) => call(h(), 'POST', '/event', { timeZone: 'Asia/Shanghai', ...body })
+  const ledger = () => readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  return { sis, big, plan, presets, open, event, ledger, h }
+}
+
+const at = (app, extra = {}) => ({ app, fun: false, minutes: 0, screenOn: true, ...extra })
+
+test('引擎起来没有预案触发：/plan 的规则快照里没有默认锁', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await t.plan(at('com.miui.home'))
+    const kinds = (r.body.rules?.rules || []).map((x) => x.kind)
+    assert.equal(kinds.includes(WALL_KIND_DEFAULT), false, '默认锁不该在：' + kinds.join(','))
+  })
+})
+
+test('他打开「全天默认锁」这条预案（收紧，立即生效）：默认锁按墙的时间表回来', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await t.presets({ action: 'set', preset: { id: 'default-lock', 状态: '生效' } })
+    assert.equal(r.body.ok, true, r.body.text)
+    assert.equal(r.body.kind, 'tighten')
+    const p = await t.plan(at('com.miui.home'))
+    const kinds = (p.body.rules?.rules || []).map((x) => x.kind)
+    // 现在是不是吃饭 / 深夜由真实时钟决定，所以用同一份墙规则算一遍期望值。
+    const want = wallDecision({}, Date.now(), 'Asia/Shanghai')
+    assert.equal(kinds.includes(WALL_KIND_DEFAULT), want.locked && want.kind === WALL_KIND_DEFAULT)
+  })
+})
+
+test('/presets list：内置预案都在，全天默认锁是停用', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await call(t.h(), 'GET', '/presets')
+    const byId = Object.fromEntries(r.body.presets.map((p) => [p.id, p]))
+    assert.equal(byId['default-lock'].status, '停用')
+    assert.equal(byId['switch-storm'].status, '生效')
+    assert.equal(byId['off-dwell'].status, '生效')
+    assert.match(byId['switch-storm'].explain, /预案「局内频繁切出」/)
+  })
+})
+
+test('/bouts open：带上 App 要求开局；不认识的协议拒绝', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const bad = await t.open('nope', {})
+    assert.equal(bad.body.ok, false)
+    const r = await t.open('execute', { need: ['com.study'], allow: ['com.dict'] })
+    assert.equal(r.body.ok, true, r.body.toast)
+    const l = await t.presets({ action: 'list' })
+    assert.deepEqual(l.body.bout.apps, { need: ['com.study'], allow: ['com.dict'] })
+  })
+})
+
+test('局里在不允许的 App 待满 1 分钟：这一次 /plan 的回答里就是严格模式', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.open('execute', { need: ['com.study'], allow: ['com.dict'] })
+    await t.plan(at('com.study'))
+    const r = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
+    const s = r.body.session
+    assert.ok(s, '应当有 session')
+    assert.deepEqual(s.allow.sort(), ['com.dict', 'com.study'])
+    assert.equal(s.graceMs, 0, '严格模式不给宽限')
+    assert.equal(s.kind, 'strict')
+    assert.match(s.why, /局内偏离停留/)
+    assert.match(s.why, /解除：本局结束 \/ 破窗/)
+    assert.ok(t.ledger().some((e) => e.state === 'preset-fire' && e.presetId === 'off-dwell'))
+  })
+})
+
+test('局里 10 分钟切出 3 次：严格模式', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.open('execute', { need: ['com.study'] })
+    for (let i = 0; i < 3; i += 1) {
+      await t.plan(at('com.study'))
+      await t.plan(at(i % 2 ? 'com.bili' : 'com.douyin', { fun: true }))
+    }
+    const r = await t.plan(at('com.study'))
+    assert.equal(r.body.session?.kind, 'strict')
+    assert.deepEqual(r.body.session.allow, ['com.study'])
+    assert.ok(t.ledger().some((e) => e.state === 'preset-fire' && e.presetId === 'switch-storm'))
+  })
+})
+
+test('没有局：在娱乐 App 里待着也不触发局内预案', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await t.plan(at('com.douyin', { fun: true, minutes: 3 }))
+    assert.notEqual(r.body.session?.kind, 'strict')
+    assert.equal(t.ledger().some((e) => e.state === 'preset-fire'), false)
+  })
+})
+
+test('严格模式期间：舱内放行的包不进封禁名单', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { apps: [{ pkg: 'com.study', fun: true }] })
+    await t.open('execute', { need: ['com.study'] })
+    const r = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
+    assert.equal(r.body.session?.kind, 'strict')
+    assert.equal(Object.hasOwn(r.body.rules?.block || {}, 'com.study'), false)
+  })
+})
+
+test('破窗是出口：严格模式一起收掉', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.open('execute', { need: ['com.study'] })
+    const on = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
+    assert.equal(on.body.session?.kind, 'strict')
+    const b = await t.event({ type: 'breakglass', minutes: 10 })
+    assert.equal(b.body.ok, true)
+    const off = await t.plan(at('com.study'))
+    assert.notEqual(off.body.session?.kind, 'strict')
+    assert.ok(t.ledger().some((e) => e.state === 'strict-off' && e.by === 'breakglass'))
+  })
+})
+
+test('面板直接把这一局切进严格模式', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const none = await t.presets({ action: 'strict' })
+    assert.equal(none.body.ok, false, '没有局不能进严格模式')
+    await t.open('execute', { need: ['com.study'] })
+    const r = await t.presets({ action: 'strict', why: '我自己要的' })
+    assert.equal(r.body.ok, true)
+    const p = await t.plan(at('com.study'))
+    assert.equal(p.body.session?.kind, 'strict')
+    assert.match(p.body.session.why, /我自己要的/)
+  })
+})
+
+test('AI 工具（计划模态）：新建只能从影子开始；放宽被拒；能给这一局记 App', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { state: 'plan' })
+    const tool = t.big.tools.preset
+    assert.ok(tool, '计划模态里应当挂着 preset 工具')
+    const made = tool.execute({
+      action: 'set',
+      preset: { id: 'two-out', 名称: '两次切出', 状态: '生效', 何时: { 事件: '切出', 窗口: '10m', 次数: 2, 仅局内: true }, 动作: [{ 严格模式: {} }], 解除: ['本局结束'] },
+    })
+    assert.equal(made.ok, true, made.text)
+    const l = await t.presets({ action: 'list' })
+    assert.equal(l.body.presets.find((p) => p.id === 'two-out').status, '影子')
+    const loosen = tool.execute({ action: 'set', preset: { id: 'switch-storm', 状态: '停用' } })
+    assert.equal(loosen.ok, false)
+    assert.match(loosen.text, /放宽/)
+    const noBout = tool.execute({ action: 'apps', need: ['com.study'] })
+    assert.equal(noBout.ok, false)
+    await t.open('execute', {})
+    const apps = tool.execute({ action: 'apps', need: ['com.study'], allow: ['com.dict'] })
+    assert.equal(apps.ok, true, apps.text)
+    assert.match(tool.execute({ action: 'list' }).text, /必需 com\.study/)
+  })
+})
+
+test('AI 的收紧开关：dafeiyu_control strict_bout', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { state: 'plan' })
+    await t.open('execute', { need: ['com.study'] })
+    const r = t.big.tools.dafeiyu_control.execute({ action: 'strict_bout' })
+    assert.equal(r.ok, true, r.text)
+    const p = await t.plan(at('com.study'))
+    assert.equal(p.body.session?.kind, 'strict')
+  })
+})
+
+test('他放宽：进 2 小时冷却期，期间照旧，可以撤销', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await t.presets({ action: 'set', preset: { id: 'off-dwell', 状态: '停用' } })
+    assert.equal(r.body.ok, true)
+    assert.equal(r.body.kind, 'loosen')
+    assert.ok(r.body.effectiveAt > Date.now() + 3_600_000)
+    const l = await t.presets({ action: 'list' })
+    assert.equal(l.body.presets.find((p) => p.id === 'off-dwell').status, '生效')
+    assert.equal(l.body.pending.length, 1)
+    const c = await t.presets({ action: 'cancel', pendingId: r.body.pendingId })
+    assert.equal(c.body.ok, true)
+    assert.equal((await t.presets({ action: 'list' })).body.pending.length, 0)
+  })
+})
+
+test('影子预案触发只记账，不落手机', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    // 他自己可以直接把新预案建成影子。同一刻内置的 off-dwell 也会触发（严格模式），这里只看影子那条。
+    const made = await t.presets({
+      action: 'set',
+      preset: { id: 'shadow-dwell', 名称: '影子停留', 状态: '影子', 何时: { 事件: '偏离停留', 分钟: 1, 仅局内: true }, 动作: [{ 全机锁: {} }], 解除: ['到点'] },
+    })
+    assert.equal(made.body.ok, true, made.body.text)
+    await t.open('execute', { need: ['com.study'] })
+    const r = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
+    assert.notEqual(r.body.session?.cell, 'all-lock', '影子的全机锁不该落下去')
+    assert.ok(t.ledger().some((e) => e.state === 'preset-shadow' && e.presetId === 'shadow-dwell'))
+    assert.equal(t.ledger().some((e) => e.state === 'preset-fire' && e.presetId === 'shadow-dwell'), false)
+  })
+})
+
+// ---- 第九轮 B1：计划界面（/plan/day） -------------------------------------------------------
+
+test('/plan/day：哪一局缺必需或允许应用就交不上去，并点名是哪一局', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await call(t.h(), 'POST', '/plan/day', {
+      action: 'set',
+      items: [
+        { protocolId: 'study', title: '刷题', minute: 9 * 60, budget: 60, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku'] },
+        { protocolId: 'execute', title: '写东西', minute: 10 * 60 + 30, budget: 40, need: ['com.tencent.mm'], allow: [] },
+      ],
+    })
+    assert.equal(r.body.ok, false)
+    assert.equal(r.body.code, 'apps-missing')
+    assert.deepEqual(r.body.missing, ['写东西'])
+    assert.ok(r.body.text.includes('写东西'), r.body.text)
+  })
+})
+
+test('/plan/day：都写清了就定下来，立刻生效（不用等 10 分钟），到点开局带上这一局的 App', async (tc) => {
+  await withHome(async (home) => {
+    // 到点开局走的是 60 秒那一拍（planBeat 里的 tick + startBout），不是 /plan 请求本身，
+    // 所以这里把时钟和定时器一起接管，手动推一拍。
+    tc.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.UTC(2026, 10, 14, 1, 0, 0) })
+    try {
+      const t = setup(home)
+      const r = await call(t.h(), 'POST', '/plan/day', {
+        action: 'set',
+        items: [
+          { protocolId: 'study', title: '刷题', minute: minuteOfDay(Date.now(), 'Asia/Shanghai'), budget: 60, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku', 'com.dict'] },
+        ],
+      })
+      assert.equal(r.body.ok, true, r.body.text)
+      assert.equal(r.body.plan.accepted, true, '交上去就是生效，不是草案')
+      assert.equal(r.body.plan.items[0].need[0], 'com.zhuoyin.tiku')
+      // 下一拍：到点，局自己开，App 要求跟着这一局走。
+      tc.mock.timers.tick(60_000)
+      assert.ok(t.ledger().some((e) => e.state === 'plan-open' && e.ok), '到点就开局，不用他再点')
+      const apps = (await t.presets({ action: 'list' })).body.bout?.apps
+      assert.deepEqual(apps.need, ['com.zhuoyin.tiku'])
+      assert.deepEqual(apps.allow, ['com.zhuoyin.tiku', 'com.dict'])
+      // 而且这 App 要求是真在管：跑到没写允许的地方就是严格模式，允许名单就是这一局写的两个。
+      await t.plan(at('com.zhuoyin.tiku'))
+      const p = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
+      assert.equal(p.body.session?.kind, 'strict', '这一局一开就按自己的 App 管')
+      assert.deepEqual(p.body.session.allow.sort(), ['com.dict', 'com.zhuoyin.tiku'])
+    } finally {
+      tc.mock.timers.reset()
+    }
+  })
+})
+
+test('/plan/day GET：读今天的计划；今天还没有计划时 /plan 带 planGate', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const before = await t.plan(at('com.miui.home'))
+    assert.equal(before.body.planGate?.need, true, '没计划要挂一张「去定计划」')
+    const g = await call(t.h(), 'GET', '/plan/day')
+    assert.equal(g.body.ok, true)
+    await call(t.h(), 'POST', '/plan/day', {
+      action: 'set',
+      items: [{ protocolId: 'study', title: '刷题', minute: 9 * 60, budget: 60, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku'] }],
+    })
+    const after = await t.plan(at('com.zhuoyin.tiku'))
+    assert.equal(after.body.planGate, null, '计划定了就不再挂卡')
+  })
+})
+
+test('/plan/day GET：局型清单和最近用过的 App 一起给，手机不用硬编码', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    // 先把「最近用过」喂进去：这一串是每次 /plan 都在送的。
+    await t.plan({ ...at('com.douyin', { fun: true }), switches: { recent: [{ pkg: 'com.douyin', agoMs: 60_000 }] } })
+    const g = await call(t.h(), 'GET', '/plan/day')
+    assert.equal(g.body.ok, true)
+    const ids = g.body.protocols.map((p) => p.id)
+    for (const id of ['study', 'execute', 'design', 'outing', 'rest']) assert.ok(ids.includes(id), '缺 ' + id)
+    assert.ok(g.body.protocols.every((p) => typeof p.name === 'string' && p.name.length > 0))
+    assert.ok(g.body.protocols.every((p) => p.minutes > 0), '默认时长要能预填')
+    assert.ok(g.body.recent.includes('com.douyin'), '最近用过的包名要带上：' + JSON.stringify(g.body.recent))
+  })
+})
+
+test('/sisters 也带同一张「去定计划」：计划定了就没了', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const before = await call(t.h(), 'POST', '/sisters', { timeZone: 'Asia/Shanghai' })
+    assert.equal(before.body.planGate?.need, true, '姐妹页也要能挂卡')
+    await call(t.h(), 'POST', '/plan/day', {
+      action: 'set',
+      items: [{ protocolId: 'study', title: '刷题', minute: 9 * 60, budget: 60, need: ['com.zhuoyin.tiku'], allow: ['com.zhuoyin.tiku'] }],
+    })
+    const after = await call(t.h(), 'POST', '/sisters', { timeZone: 'Asia/Shanghai' })
+    assert.equal(after.body.planGate, null, '定了计划就不该再催')
+  })
+})
+
+// ---- 第九轮第二项：四个数显示在计划页顶部 ------------------------------------------------
+
+test('/plan/day 带上四个数：字段齐全，没开过局时比率是 null 不是 0', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    const r = await call(t.h(), 'POST', '/plan/day', { action: 'list' })
+    const n = r.body.numbers
+    assert.ok(n, '计划页顶部要有四个数')
+    for (const k of ['selfOpenRatio', 'deliverRatio', 'badRatio', 'deviationMin']) {
+      assert.ok(k in n, '缺字段：' + k)
+    }
+    assert.equal(n.selfOpenRatio, null, '今天还没开过局，比率算不出来')
+    assert.equal(n.deliverRatio, null)
+    assert.equal(n.badRatio, null)
+    assert.equal(n.deviationMin, 0)
+    assert.equal(n.opened, 0)
+  })
+})
+
+test('/plan/day 的四个数与日摘要一致：开一局记一笔，数字跟着变', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await call(t.h(), 'POST', '/bouts', { action: 'open', protocolId: 'study', apps: { need: ['com.zhuoyin.tiku'], allow: [] } })
+    const r = await call(t.h(), 'POST', '/plan/day', { action: 'list' })
+    const n = r.body.numbers
+    assert.equal(n.opened, 1)
+    assert.equal(n.self, 1, '面板开的局算他自己开的')
+    assert.equal(n.selfOpenRatio, 1)
+    assert.equal(n.deliverRatio, 0, '开了还没交付')
+    assert.equal(n.passed, 0)
+  })
+})
+
+// ------------------------------------------- 第九轮 6.1：手机怎么知道预案改过了 ----
+
+test('6.1 有预案在生效：下一次检查压到 5 分钟那一档', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { patrolHours: [] })
+    // 把早/晚/周三次对线记成今天已经做过，否则它们各自会排一分钟后的球，把基线本来就压得比 5 分钟还短。
+    const day = startOfDay(Date.now(), 'Asia/Shanghai')
+    mkdirSync(join(home, 'companion'), { recursive: true })
+    writeFileSync(join(home, 'companion', 'rhythm.json'), JSON.stringify({
+      morningDay: day, morningDone: true, reviewDay: day, reviewDone: true, weekDay: day, weekDone: true,
+    }))
+    // 基线是 plan 自己的 30 分钟（roll=0 一定开口，说完这一句的下一次检查）；
+    // 有预案在生效时要压到 5 分钟，否则预案改完要等手机睡醒才生效——插件没有推送通道，
+    // 只能让手机勤回来看一眼。
+    const r = await t.plan(at('com.home'))
+    assert.equal(r.body.reason, 'ok', JSON.stringify(r.body.reason))
+    const left = Number(r.body.nextCheckAt) - Date.now()
+    assert.ok(left <= 5 * 60_000 + 2_000, '下一次检查还剩 ' + Math.round(left / 1000) + ' 秒')
+    assert.ok(left > 4 * 60_000, '压到的应当是 5 分钟那一档，而不是马上：' + Math.round(left / 1000) + ' 秒')
+  })
+})
+
+test('6.1 退避不抢：说了别烦我，那 5 分钟的空问也停掉', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { muteUntil: Date.now() + 3_600_000 })
+    const r = await t.plan(at('com.home', { screenOn: false }))
+    const left = Number(r.body.nextCheckAt) - Date.now()
+    assert.ok(left > 30 * 60_000, '别烦我期间不该 5 分钟一叫：还剩 ' + Math.round(left / 1000) + ' 秒')
+  })
+})
+
+test('6.1 预案刚改过：让手机 5 秒后就回来问，不用等下一次定时醒', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.plan(at('com.home'))
+    const changed = await t.presets({ action: 'set', preset: { id: 'off-dwell', 状态: '停用' } })
+    assert.equal(changed.body.ok, true, JSON.stringify(changed.body))
+    const r = await t.plan(at('com.home'))
+    const left = Number(r.body.nextCheckAt) - Date.now()
+    assert.ok(left <= 6_000, '改过预案后应当 5 秒回来问：还剩 ' + Math.round(left) + ' 毫秒')
+  })
+})

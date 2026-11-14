@@ -48,7 +48,7 @@ PNPM_VERSION="${PNPM_VERSION:-11.28.5}"
 # dist.integrity of pnpm-$PNPM_VERSION.tgz, identical on registry.npmjs.org and npmmirror
 PNPM_INTEGRITY="${PNPM_INTEGRITY:-sha512-SEVj0wtMKtJ8tIqpT/KzAtvOvI/2vyiBbCWJiG4UbOf3bzVPO8GkOOb16XaMMCqgpvet2CMpA81M+BQmy8FNng==}"
 UBUNTU_VERSION="${UBUNTU_VERSION:-24.04.5}"
-PROOT_VERSION="5.1.107.98"
+PROOT_VERSION="${PROOT_VERSION:-5.1.107.101}"
 TALLOC_VERSION="2.5.0"
 SHMEM_VERSION="0.7"
 UBUNTU_EXTRA="${UBUNTU_EXTRA:-tzdata ca-certificates git}"   # extra noble debs (+ dependency closure)
@@ -62,7 +62,7 @@ SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1767225600}"  # 2026-01-01T00:00:00Z, fi
 
 UBUNTU_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release"
 NODE_MIRROR="https://npmmirror.com/mirrors/node"
-NPM_REGISTRY="https://registry.npmmirror.com"
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 TERMUX_REPO="https://packages.termux.dev/apt/termux-main"
 UBUNTU_ARCHIVE_AMD64="https://mirrors.tuna.tsinghua.edu.cn/ubuntu"        # InRelease verified with gpgv
 UBUNTU_ARCHIVE_ARM64="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports"
@@ -79,6 +79,8 @@ declare -A PIN=(
   [node-v24.22.1-linux-x64.tar.xz]=6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6
   [proot_5.1.107.98_aarch64.deb]=29de40efea4daa2a6168b617915206511c63e8d46bf5f4b07d48723441ef7f3b
   [proot_5.1.107.98_x86_64.deb]=1c31ad7e1046f4d418fef19b6dfaa9a14801d2047ade6ad0375b3f5501e3e227
+  [proot_5.1.107.101_aarch64.deb]=a28355e9be257e1f87f4e9294b3118470d4fd7a5442fed8b278f4443c83407d7
+  [proot_5.1.107.101_x86_64.deb]=85adb8d0d2e1edc6c56e60c17136adf05e54ce75f69407ec7116a4c5997eaed5
   [libtalloc_2.5.0_aarch64.deb]=556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7
   [libtalloc_2.5.0_x86_64.deb]=b8c6d95f20075dc1f9ec6573575b2444e8d526e48e0d8d6d5cf4e071e6e06530
   [libandroid-shmem_0.7_aarch64.deb]=0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6
@@ -86,6 +88,7 @@ declare -A PIN=(
   [cpython-3.12.15+20261021-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz]=b4567aa5a11f51b540c4dfd9e082ebf23e554f8ac17b85caa6cea23e83693394
   [cpython-3.12.15+20261021-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz]=6d7521138fd33afddc1ccd08abb007d9a2829e38117c2576f9efdc0ec73ce772
   # GPL-2.0 source of the proot binary (same archive Termux's build recipe pins); used for COPYING.
+  [proot-v5.1.107.101.zip]=a66743f50c7b0bac1913b83bf55e139d679c80a0ca2808eec76432a65640017f
   [proot-v5.1.107.98.zip]=9de61bddd6f5016d065e2755b72ff4747290e5f992562f031785b107b51d02ba
 )
 
@@ -105,24 +108,38 @@ case "$RUNTIME_INPUT_STORE_URL" in
   *) die "RUNTIME_INPUT_STORE_URL must be an HTTPS or absolute file:// URL" ;;
 esac
 
-# fetch URL DEST [expected-sha256] [fallback-url]: verified cache, origin, then retained bytes.
+# fetch URL DEST [expected-sha256] [fallback-url...]: verified cache, origin, fallbacks, then retained bytes.
 fetch() {
-  local url="$1" dest="$2" want="${3:-}"
+  local url="$1" dest="$2" want="${3:-}"; shift 3 2>/dev/null || shift $#
   mkdir -p "$(dirname "$dest")" || die "cannot create download directory for $dest"
   if [[ -f "$dest" && -n "$want" && "$(sha256 "$dest")" == "$want" ]]; then return 0; fi
   if [[ -f "$dest" && -z "$want" ]]; then return 0; fi
   # Handle transport failure here: callers include command substitutions, where
   # errexit is disabled, and a conditional fetch call would disable it too.
-  local candidate fetched=0 retained=""
+  local candidate fetched=0 retained="" attempt
   if [[ -n "$want" && -n "$RUNTIME_INPUT_STORE_URL" ]]; then
     retained="${RUNTIME_INPUT_STORE_URL%/}/sha256-$want"
   fi
-  for candidate in "$url" "${4:-}" "$retained"; do
+  for candidate in "$url" "$@" "$retained"; do
     [[ -n "$candidate" ]] || continue
     log "download $candidate"
-    if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 -sS -o "$dest.part" "$candidate"; then
-      fetched=1; break
+    for attempt in 1 2 3 4 5; do
+      if curl -fL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 \
+           --max-time 1800 -sS --continue-at - -o "$dest.part" "$candidate"; then
+        break
+      fi
+      if [[ "$attempt" == 5 ]]; then
+        log "giving up on $candidate after 5 attempts"
+      else
+        log "retry $attempt/5 for $candidate"
+        sleep $((attempt * 2))
+      fi
+    done
+    if [[ -f "$dest.part" ]] && { [[ -z "$want" ]] || [[ "$(sha256 "$dest.part")" == "$want" ]]; }; then
+      fetched=1
+      break
     fi
+    rm -f "$dest.part"
   done
   if [[ "$fetched" != 1 ]]; then
     rm -f "$dest.part"
@@ -161,13 +178,17 @@ ubuntu_base() {  # $1 = ubuntu arch; echoes path
 
 node_dist() {  # $1 = node arch (arm64|x64); echoes path
   local name="node-v${NODE_VERSION}-linux-$1.tar.xz" dir="$CACHE/node/v$NODE_VERSION"
+  local mirror_noredirect="https://registry.npmmirror.com/-/binary/node"
+  local official="https://nodejs.org/dist"
   local pin; pin="$(pin_of "$name")"
   if [[ -z "$pin" ]]; then
-    fetch "$NODE_MIRROR/v$NODE_VERSION/SHASUMS256.txt" "$dir/SHASUMS256.txt"
+    fetch "$NODE_MIRROR/v$NODE_VERSION/SHASUMS256.txt" "$dir/SHASUMS256.txt" "" \
+      "$mirror_noredirect/v$NODE_VERSION/SHASUMS256.txt" "$official/v$NODE_VERSION/SHASUMS256.txt"
     pin="$(awk -v f="$name" '$2==f {print $1}' "$dir/SHASUMS256.txt")"
     [[ -n "$pin" ]] || die "$name not listed in SHASUMS256.txt"
   fi
-  fetch "$NODE_MIRROR/v$NODE_VERSION/$name" "$dir/$name" "$pin"
+  fetch "$NODE_MIRROR/v$NODE_VERSION/$name" "$dir/$name" "$pin" \
+    "$mirror_noredirect/v$NODE_VERSION/$name" "$official/v$NODE_VERSION/$name"
   printf '%s' "$dir/$name"
 }
 
@@ -197,10 +218,22 @@ termux_deb() {  # $1 = package, $2 = version, $3 = termux arch; echoes path
 # ubuntu-archive-keyring.gpg from the checksum-verified Ubuntu Base tarball -> Packages.xz hash
 # -> each .deb hash. The resolved set is pinned in runtime/locks/ubuntu-noble-<arch>.json
 # (re-resolve with UPDATE_DEB_LOCK=1).
+pinned_debs_reachable() {  # $1 = mirror, $2 = lock file
+  local file
+  while read -r file; do
+    curl -fsI --connect-timeout 15 --max-time 60 -o /dev/null "$1/$file" || return 1
+  done < <(python3 -I -c 'import json,sys; [print(p["filename"]) for p in json.load(open(sys.argv[1]))["packages"]]' "$2")
+}
+
 ubuntu_extra_debs() {  # $1 = ubuntu arch, $2 = verified base tarball; echoes deb paths, one per line
   local arch="$1" base="$2" lock="$LOCKS/ubuntu-noble-$1.json" mirror
   [[ "$arch" == amd64 ]] && mirror="$UBUNTU_ARCHIVE_AMD64" || mirror="$UBUNTU_ARCHIVE_ARM64"
-  if [[ ! -f "$lock" || "${UPDATE_DEB_LOCK:-0}" == 1 ]] || \
+  local stale=0
+  if [[ -f "$lock" && "${RUNTIME_INPUT_STORE_URL:-}" == "" ]] && ! pinned_debs_reachable "$mirror" "$lock"; then
+    stale=1
+    log "pinned .deb is gone from the mirror; re-resolving $lock"
+  fi
+  if [[ ! -f "$lock" || "${UPDATE_DEB_LOCK:-0}" == 1 || "$stale" == 1 ]] || \
      ! python3 -I -c 'import json,sys; sys.exit(json.load(open(sys.argv[1]))["want"] != sys.argv[2].split())' "$lock" "$UBUNTU_EXTRA"; then
     command -v gpgv >/dev/null || die "gpgv is required to resolve Ubuntu packages"
     local dir="$CACHE/ubuntu/dists-$arch"; rm -rf "$dir"; mkdir -p "$dir"
@@ -286,6 +319,11 @@ npm_prefix_flags() {  # $1 = npm cpu, $2 = prefix dir; sets the caller's npm_fla
   )
 }
 
+retarget_lock() {  # $1 = package-lock.json
+  [[ "$NPM_REGISTRY" == "https://registry.npmmirror.com" ]] && return 0
+  sed -i "s#https://registry.npmmirror.com#${NPM_REGISTRY}#g" "$1"
+}
+
 warm_npm_cache() {  # $1 = host npm bin dir, $2 = pinned lock; updates caller's npm_flags
   [[ -n "$RUNTIME_INPUT_STORE_URL" ]] || return 0
   PATH="$1:$PATH" python3 -I "$HERE/lib/input_store.py" warm-npm \
@@ -304,6 +342,7 @@ install_dsh() {  # $1 = npm cpu, $2 = prefix dir
   if [[ -f "$lockdir/package-lock.json" ]]; then
     log "npm ci @deepseek-ai/dsh@$DSH_VERSION (cpu=$cpu, pinned lock)"
     cp "$lockdir/package.json" "$lockdir/package-lock.json" "$prefix/"
+    [[ -n "$RUNTIME_INPUT_STORE_URL" ]] || retarget_lock "$prefix/package-lock.json"
     warm_npm_cache "$bin" "$lockdir/package-lock.json"
     PATH="$bin:$PATH" npm ci "${npm_flags[@]}"
   else
@@ -337,6 +376,7 @@ install_pnpm() {  # $1 = npm cpu, $2 = prefix dir
   if [[ -f "$lockdir/package-lock.json" ]]; then
     log "npm ci pnpm@$PNPM_VERSION (pinned lock)"
     cp "$lockdir/package.json" "$lockdir/package-lock.json" "$prefix/"
+    [[ -n "$RUNTIME_INPUT_STORE_URL" ]] || retarget_lock "$prefix/package-lock.json"
     warm_npm_cache "$bin" "$lockdir/package-lock.json"
     PATH="$bin:$PATH" npm ci "${npm_flags[@]}"
   else
@@ -453,6 +493,10 @@ PYEOF
   local bridge="$HERE/bridge/dsh-go-bridge"
   local bridge_version
   bridge_version="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$bridge/package.json")"
+  # The proactive host plugin (D4): turns one Android proactive event into a real followup turn.
+  local proactive="$HERE/proactive/dsh-go-proactive"
+  local proactive_version
+  proactive_version="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$proactive/package.json")"
   local pnpm_prefix="$work/pnpm-prefix"
   install_pnpm "$npm_cpu" "$pnpm_prefix"
 
@@ -465,13 +509,13 @@ PYEOF
       sha256 "$base"; sha256 "$node"; sha256 "$python"; sha256sum "${extra_debs[@]}" | cut -d' ' -f1
       sha256 "$proot_deb"; sha256 "$talloc_deb"; sha256 "$shmem_deb"
       sha256 "$lockfile"; sha256 "$pnpm_lockfile"; sha256 "$HERE/build-runtime.sh"; sha256 "$HERE/lib/rtbuild.py"
-      (cd "$HERE" && find patches bridge boot direct session-deletion -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+      (cd "$HERE" && find patches bridge proactive boot direct session-deletion -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
     } | sha256sum | cut -c1-12 )"
   local runtime_version="${RUNTIME_REVISION}-dsh${DSH_VERSION}-node${NODE_VERSION}-ubuntu${UBUNTU_VERSION}-${inputs_sha}"
   local runtime_info
-  runtime_info="$(printf '{"runtimeVersion":"%s","abi":"%s","dshVersion":"%s","nodeVersion":"%s","pnpmVersion":"%s","ubuntuVersion":"%s","prootVersion":"%s","dshPatches":%s,"dshGoBridge":"%s"}' \
+  runtime_info="$(printf '{"runtimeVersion":"%s","abi":"%s","dshVersion":"%s","nodeVersion":"%s","pnpmVersion":"%s","ubuntuVersion":"%s","prootVersion":"%s","dshPatches":%s,"dshGoBridge":"%s","dshGoProactive":"%s"}' \
     "$runtime_version" "$abi" "$DSH_VERSION" "$NODE_VERSION" "$PNPM_VERSION" "$UBUNTU_VERSION" "$PROOT_VERSION" \
-    "$(cat "$work/dsh-patches.json")" "$bridge_version")"
+    "$(cat "$work/dsh-patches.json")" "$bridge_version" "$proactive_version")"
 
   # -- rootfs archive --
   local -a archives=("$assets/rootfs-$abi.tar.$COMPRESS")
@@ -485,12 +529,12 @@ PYEOF
   "${PY[@]}" assemble --abi "$abi" --base "$base" --node "$node" --dsh-prefix "$prefix" --pnpm-prefix "$pnpm_prefix" \
     "${archive_args[@]}" --report "$out/build-report.json" --runtime-info "$runtime_info" \
     --compress "$COMPRESS" --xz-preset "$XZ_PRESET" --threads "$XZ_THREADS" --epoch "$SOURCE_DATE_EPOCH" "${prune[@]}" \
-    "${extra_debs[@]/#/--deb=}" --python "$python" --bridge "$bridge"
+    "${extra_debs[@]/#/--deb=}" --python "$python" --bridge "$bridge" --proactive "$proactive"
 
   local versions
-  versions="$(printf '{"runtimeVersion":"%s","dshVersion":"%s","nodeVersion":"%s","pnpmVersion":"%s","ubuntuVersion":"%s","prootVersion":"%s","tallocVersion":"%s","androidShmemVersion":"%s","dshPatches":%s,"dshGoBridge":"%s","build":{"inputsSha256_12":"%s","ubuntuBaseSha256":"%s","nodeSha256":"%s","dshLockSha256":"%s","pnpmIntegrity":"%s","sourceDateEpoch":%s}}' \
+  versions="$(printf '{"runtimeVersion":"%s","dshVersion":"%s","nodeVersion":"%s","pnpmVersion":"%s","ubuntuVersion":"%s","prootVersion":"%s","tallocVersion":"%s","androidShmemVersion":"%s","dshPatches":%s,"dshGoBridge":"%s","dshGoProactive":"%s","build":{"inputsSha256_12":"%s","ubuntuBaseSha256":"%s","nodeSha256":"%s","dshLockSha256":"%s","pnpmIntegrity":"%s","sourceDateEpoch":%s}}' \
     "$runtime_version" "$DSH_VERSION" "$NODE_VERSION" "$PNPM_VERSION" "$UBUNTU_VERSION" "$PROOT_VERSION" "$TALLOC_VERSION" "$SHMEM_VERSION" \
-    "$(cat "$work/dsh-patches.json")" "$bridge_version" \
+    "$(cat "$work/dsh-patches.json")" "$bridge_version" "$proactive_version" \
     "$inputs_sha" "$(sha256 "$base")" "$(sha256 "$node")" "$(sha256 "$lockfile")" "$PNPM_INTEGRITY" "$SOURCE_DATE_EPOCH")"
   "${PY[@]}" manifest --abi "$abi" --report "$out/build-report.json" --jnilibs "$work/jnilibs.json" \
     --versions "$versions" --out "$assets/manifest.json" >&2
@@ -542,6 +586,8 @@ main() {
   local abi
   for abi in "${abis[@]}"; do build_abi "$abi"; done
   write_index
+  "${PY[@]}" verify-outputs --out "$OUT" --abi "${abis[@]}" >&2 \
+    || die "runtime/out is not a complete bundle for: ${abis[*]}"
 }
 
 main "$@"
