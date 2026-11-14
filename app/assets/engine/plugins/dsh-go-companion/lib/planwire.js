@@ -20,7 +20,41 @@ export const LATE_SKIP_MIN = 20
 /** 一次节拍最多处理几局（够排空一整天的积压，又不会死循环）。 */
 const MAX_STEPS = 24
 
-/** 今天还没有计划时的空壳。 */
+/** 重启协议的那一局：15 分钟，且只要一局。 */
+export const RESTART_MINUTES = 15
+
+/**
+ * 交付率低于这个数就算「糟糕的一天」，第二天只要求一个最小局。
+ * 30% 是施工书写死的：一天三局做成一局刚好在线上，做到一局以下就是失控。
+ */
+export const RESTART_BELOW = 0.3
+
+/**
+ * 重启协议（第九轮第四项）：坏日之后不追加码，只要求一件事——做一个 15 分钟的局。
+ * 原则是「不连着空两天」：做成这一局就算回到轨道，做成之后第二天照常排。
+ * @param {{now:number, protocolId?:string, title?:string}} input
+ */
+export function restartDraft(input = {}) {
+  const now = Number(input.now) || 0
+  return {
+    items: [{
+      id: 'restart-' + now,
+      protocolId: String(input.protocolId || 'execute'),
+      title: String(input.title || '最小的一局'),
+      type: '行为',
+      minute: Math.max(0, Math.min(24 * 60 - 1, Math.round(Number(input.minute) || 0))),
+      budget: RESTART_MINUTES,
+      why: '昨天几乎没做成事：今天只要做成这一局就算回到轨道',
+    }],
+    edits: 0,
+    accepted: false,
+    at: now,
+    pool: [],
+    restart: true,
+  }
+}
+
+/** 一天的计划。day 是日号，不是时间戳。 */
 export function emptyPlan(day) {
   return { v: 1, day: Number(day) || 0, items: [], edits: 0, accepted: false, at: 0, talkedAt: 0 }
 }
@@ -116,7 +150,11 @@ export function tick(input) {
     plan.rolled = false
     const settings = settingsOf(input.config)
     const kind = dayKindOf(now, input.tz, input.config)
-    const draft = draftOf({ settings, kind, missed: [], now, min })
+    // 第九轮第四项：昨天的交付率太低就别再排满——只出一个 15 分钟的最小局。
+    // 这不是加码，恰恰是反过来：坏日之后先让他做成一件事，别一上来就是五局。
+    const draft = input.restart
+      ? restartDraft({ now, minute: min, protocolId: 'execute', title: '最小的一局' })
+      : draftOf({ settings, kind, missed: [], now, min })
     plan.items = draft.items.map(normItem).filter(Boolean)
     plan.edits = 0
     plan.accepted = false

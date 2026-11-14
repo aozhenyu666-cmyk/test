@@ -88,13 +88,14 @@ import { buildSnapshot, sistersView } from './panel.js'
 import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from './bouts_view.js'
 import { boutsTileStatus, buildBoutsSnapshot } from './bouts_panel.js'
 // 第八轮 P1/P2：计划的节拍。草案、到点开局、过点记空局的规则全在 planwire.js，这里只接线。
-import { appPrompt, missingApps, planLines, planOf, tick } from './planwire.js'
+import { RESTART_BELOW, appPrompt, missingApps, planLines, planOf, tick } from './planwire.js'
 import { planSentence, PLAN_CONFIRM_MS } from './dayplan.js'
 import { badPackets, judgeOver, normPacket, openSay, packetPrompt } from './packet.js'
+import * as earnedRt from './earned.js'
 // 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
 import { buildWallSnapshot } from './wall_panel.js'
 import { wallAuditView, wallView } from './wall_view.js'
-import { settingsOf, applySettings, dayKindOf } from './settings.js'
+import { settingsOf, applySettings, dayKindOf, inWorkWindow } from './settings.js'
 // 第八轮 W4：设定页。解析、渲染、预填都在 settings_panel.js，这里只接线。
 import { buildSettingsSnapshot, parseDay, parseLimits, settingsMarkdown } from './settings_panel.js'
 import { settingsDayView, settingsLimitsView } from './settings_view.js'
@@ -1486,6 +1487,10 @@ export function apply(ctx) {
   }
   const loadRhythm = () => readState(stateFile('rhythm.json'), {}) || {}
   const saveRhythm = (r) => writeJson(stateFile('rhythm.json'), r)
+  // 第九轮第四项：挣来的放风额度。一天一个账，换天自动清零（earned.ofDay）。
+  const todayEarned = (now = Date.now(), tz = zoneOr(config.timeZone)) =>
+    earnedRt.ofDay(readState(stateFile('earned.json'), null), startOfDay(now, tz))
+  const saveEarned = (e) => writeJson(stateFile('earned.json'), e)
   /** 最近一次 /plan 算出的作息（早上门 / 晚上门 / 深夜阶段 / 深夜锁到几点）。 */
   let lastRhythm = null
   let lastApplyWindow = null
@@ -1745,6 +1750,22 @@ export function apply(ctx) {
     }
   }
 
+  /**
+   * 第九轮第四项：昨天算不算「糟糕的一天」（交付率低于 30%），今天要不要走重启协议。
+   * 只看昨天一天的定稿摘要：两天前的账不该决定今天排几局。
+   * 昨天根本没开过局（没有摘要或 opened=0）不算——那不是糟糕的一天，是还没开始。
+   */
+  function restartDue(now, tz) {
+    const y = dayString(now - 86_400_000, tz)
+    const dg = (brainRt.view(now).digests || []).find((d) => String(d?.day || '') === y)
+    if (!dg) return false
+    const opened = Number(dg.bouts?.opened) || 0
+    if (opened <= 0) return false
+    const ratio = dg.deliverRatio
+    if (ratio === null || ratio === undefined) return false
+    return Number(ratio) < RESTART_BELOW
+  }
+
   function setGear(sw, by) {
     config = applyGear(config, sw, Date.now())
     try {
@@ -1961,7 +1982,9 @@ export function apply(ctx) {
     // 墙：默认严格的时间表锁（白天非吃饭时段 default，夜里 night）。深夜锁这里不重复推（下面 rhythm 的 night 管），
     // 只推白天的默认锁；手机端 LockPriority 里 default 排在普通之上、拒绝之下。
     const wd = wallDecision(wallCfgNow(), now, tz)
-    if (wd.locked && wd.kind === WALL_KIND_DEFAULT) push(WALL_KIND_DEFAULT, wd.until, wd.why)
+    if (wd.locked && wd.kind === WALL_KIND_DEFAULT && !earnedOpen(now, tz)) {
+      push(WALL_KIND_DEFAULT, wd.until, wd.why)
+    }
     // 追问锁：门开着就不放——回复敷衍时窗口不消失，到点由插件自己结束。
     if (lockActive(config.followup, now)) push('followup', Number(config.followup.until), '追问锁：把这一个问题说清楚')
     const rh = lastRhythm
@@ -4640,6 +4663,34 @@ export function apply(ctx) {
   }
 
   /**
+   * 第九轮第四项：这会儿的娱乐是不是「挣来的」。
+   * 非工作时段 + 今天还有额度才算；算上了就按他在娱乐 App 里实际待的时间扣额度。
+   *
+   * shortcut: 每次 /plan 最多扣 5 分钟，中间不切 App 就不扣。他连着玩半小时只会扣一次 5 分钟，
+   * 所以额度是个软上限，不是分钟表——要精确到分钟得让手机每分钟回报一次，那是下一轮的事。
+   */
+  function earnedOpen(now, tz) {
+    const before = todayEarned(now, tz)
+    const checked = earnedRt.covers({
+      state: before, settings: settingsOf(config), kind: dayKindOf(now, tz, config),
+      min: zoneMinuteOfDay(now, tz), inWork: inWorkWindow,
+    })
+    if (!checked) return false
+    const phone = lastPhone
+    const funNow = Boolean(phone) && (phone.fun === true || (phone.app && blockedNow(now).includes(phone.app)))
+    const since = Number(before.spentAt) || now
+    // 只有在娱乐里才扣：工作时段外刷手机问一次不该扣他的额度。
+    const mins = funNow && now > since ? Math.min(5, Math.floor((now - since) / 60_000)) : 0
+    if (mins > 0) {
+      const r = earnedRt.spend(before, mins)
+      saveEarned({ ...r.state, spentAt: now })
+      return earnedRt.leftOf(r.state) > 0
+    }
+    if (!Number(before.spentAt)) saveEarned({ ...before, spentAt: now })
+    return true
+  }
+
+  /**
    * 把一条升级动作落到手机。手机只认两处（见 ladder.js 头注释）：连麦舱和墙的收紧。
    * @returns {string} 这一条为什么落在那儿（给 record 用）
    */
@@ -4853,6 +4904,8 @@ export function apply(ctx) {
       stored: readState(stateFile('plan.json'), null),
       running: Boolean(live?.official && !live.official.view().closed),
       known: [...builtinProtocols().filter((x) => x.ok).map((x) => x.protocol.id), ...(thinkingProtocol() ? ['thinking'] : [])],
+      // 第九轮第四项：昨天几乎没做成事 → 今天的草案只有一个 15 分钟的最小局。
+      restart: restartDue(now, tz),
     })
     if (r.action !== 'hold' && r.action !== 'wait-confirm') writeJson(stateFile('plan.json'), r.plan)
     // 挂着的「改松」到点了就在这里落地：这是唯一每分钟都跑一次的地方，不另开定时器。
@@ -5984,9 +6037,26 @@ export function apply(ctx) {
       if (kind === 'perfunctory') presetRt.perfunctory(now, lastPhone)
     }
     if (r.state === 'closed' || r.state === 'escalated') {
-      brainRt.noteBout({ protocolId: live.protocol?.id, outcome: r.state === 'closed' ? 'done' : 'bad', accepted: r.state === 'closed' && r.accepted !== false }, now)
+      const passed = r.state === 'closed' && r.accepted !== false
+      brainRt.noteBout({ protocolId: live.protocol?.id, outcome: r.state === 'closed' ? 'done' : 'bad', accepted: passed }, now)
+      // 第九轮第四项：通过验收就记一段放风额度——娱乐用交付挣，不再靠「今天表现好」这种虚的。
+      // 升级收场不算交付，一分不给。
+      let earnt = ''
+      if (passed) {
+        const tz = zoneOr(config.timeZone)
+        const before = todayEarned(now, tz)
+        const next = earnedRt.addForPass(before, config, now, before.day)
+        saveEarned(next)
+        if (next.lastAdd) {
+          earnt = '放风 +' + next.lastAdd + ' 分钟（今天还剩 ' + earnedRt.leftOf(next) + ' 分钟）'
+          record({ state: 'earned', at: now, add: next.lastAdd, left: earnedRt.leftOf(next) })
+        }
+      }
       dropLive()
-      return { ok: true, state: r.state, accepted: r.accepted !== false, say: '', toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' }
+      return {
+        ok: true, state: r.state, accepted: r.accepted !== false, say: '', earned: earnt,
+        toast: r.state === 'escalated' ? '升级了，这一局结束。' : '收局。' + earnt,
+      }
     }
     const say = String(r.say || '')
     // 语音这一路（hold）：下一句已经在返回里了，说明局官马上要念。

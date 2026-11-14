@@ -98,12 +98,13 @@ test('当天第 2 次触发 E1：E2，20 分钟（cellMin + cellMinStep）', () 
   assert.equal(v[5].action.type, 'cell')
 })
 
-test('当天第 3 次触发：E3，娱乐锁到当天结束 + 次日严格模板', () => {
+test('当天第 3 次触发：E3，娱乐锁到当天结束（不再给次日加码）', () => {
   const v = shoveMany(9)
   assert.equal(v[8].rule, 'E3')
   assert.deepEqual(v[8].action, { type: 'fun-lock-day', untilDayEnd: true })
   assert.equal(v[8].state.e3, true)
-  assert.equal(v[8].state.strictTomorrow, true)
+  // 原断言：state.strictTomorrow === true。新断言：该字段不再存在，次日走重启协议。
+  assert.equal(v[8].state.strictTomorrow, undefined, '不再留次日加码标记')
 })
 
 test('窗口外的敷衍不算：30 分钟以前的那几次被丢掉', () => {

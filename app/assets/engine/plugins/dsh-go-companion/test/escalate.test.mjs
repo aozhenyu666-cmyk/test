@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   CELL_GRACE_MS, EXITS, L2_GRACE_MS,
-  dayState, evaluate, evaluateE, evaluateEPrime, evaluateL, notePerfunctory, perfunctoryCount, strictTemplate,
+  dayState, evaluate, evaluateE, evaluateEPrime, evaluateL, notePerfunctory, perfunctoryCount,
 } from '../lib/escalate.js'
 import { DAY_RESTDAY, DAY_WORKDAY, settingsOf } from '../lib/settings.js'
 
@@ -111,7 +111,7 @@ test('P4 E2：当天第 2 次触发 → 审讯舱 20 分钟', () => {
   assert.equal(first.state.e1Count, 1)
 })
 
-test('P4 E3：当天第 3 次 → 当天剩余娱乐全锁 + 次日严格模板', () => {
+test('P4 E3：当天第 3 次 → 当天剩余娱乐全锁（不再给次日加码）', () => {
   const now = at(10)
   let s = fresh()
   let last = null
@@ -124,7 +124,9 @@ test('P4 E3：当天第 3 次 → 当天剩余娱乐全锁 + 次日严格模板'
   assert.equal(last.rule, 'E3')
   assert.equal(last.action.type, 'fun-lock-day')
   assert.equal(last.state.e3, true)
-  assert.equal(strictTemplate(last.state), true, '次日切严格模板')
+  // 原断言：strictTemplate(last.state) === true（E3 后次日切严格模板）。
+  // 新断言：状态里不再有次日加码标记——次日改走重启协议（15 分钟的局），不加码。
+  assert.equal(last.state.strictTomorrow, undefined, '不再留次日加码标记')
 })
 
 test('P4 E1′：没有 Gemini → 直接全机锁', () => {
@@ -325,10 +327,14 @@ test('P4 改紧阈值后立刻按新的算', () => {
   assert.equal(r.rule, 'E1', '设成 2 次就 2 次触发')
 })
 
-test('P4 明天切严格模板只对 E3 成立', () => {
-  assert.equal(strictTemplate({ strictTomorrow: true }), true)
-  assert.equal(strictTemplate(fresh()), false)
-  assert.equal(strictTemplate(null), false)
+// 原测试：'P4 明天切严格模板只对 E3 成立'——断言 strictTemplate({strictTomorrow:true})===true、
+// strictTemplate(fresh())===false、strictTemplate(null)===false。
+// 新测试：strictTemplate 已删除，改断言「任何升级状态都不写 strictTomorrow」，
+// 且 dayState 产出的空状态里没有这个字段。为什么：次日加码被重启协议取代。
+test('P4 升级状态不再写次日加码标记', () => {
+  assert.equal(fresh().strictTomorrow, undefined)
+  // 跨天后重建的状态也不带这个字段
+  assert.equal(dayState({ day: DAY - 86_400_000, strictTomorrow: true }, DAY).strictTomorrow, undefined)
 })
 
 test('P4 空状态不崩', () => {

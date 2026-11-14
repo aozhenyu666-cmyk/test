@@ -34,7 +34,6 @@ function emptyState(day) {
     perfunctory: [],
     e1Count: 0,
     e3: false,
-    strictTomorrow: false,
     funToday: 0,
     funRun: null,
     l2: null,
@@ -97,7 +96,7 @@ export function evaluateE(input) {
       minutes,
       action: { type: 'fun-lock-day', untilDayEnd: true },
       why: '当天第 3 次触发 E1',
-      state: { ...base, e3: true, strictTomorrow: true },
+      state: { ...base, e3: true },
     }
   }
   return {
@@ -208,7 +207,6 @@ export function evaluate(input) {
   return { ...l, track: l.rule ? 'L' : '', minutes: 0 }
 }
 
-/** 明天要不要切严格模板（E3 的次日代价）。 */
-export function strictTemplate(state) {
-  return Boolean(state && state.strictTomorrow)
-}
+// 第九轮第四项：原来这里有一个 strictTemplate(state)，E3 之后让「次日切严格模板」。
+// 已删除——次日加码会把糟糕的一天变成更糟的一天，而它从来没有调用者（只是留了个口子）。
+// 现在坏日之后走的是重启协议：第二天只要求一个 15 分钟的局（planwire.restartDraft）。
