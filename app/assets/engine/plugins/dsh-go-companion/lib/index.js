@@ -1284,8 +1284,8 @@ export function apply(ctx) {
             revise(b, now)
             saveBrain(b)
           }
-          // M1.3 反敷衍冷处理：连续 2 次 brief/evasive/stock 进入 45 分钟撤回期，实质回复立即解除。
-          {
+          // M1.3 反敷衍冷处理：双人格模式下连续 2 次 brief/evasive/stock 触发鱼丸 45 分钟撤回期，实质回复或打开目标 App 立即解除。
+          if (config.dual !== false && Boolean(config.strategistSessionId)) {
             const usedTarget = Boolean(lastPhone?.app && !lastPhone.fun && !lastPhone.idle && roleOf(appsOf(), lastPhone.app) === 'work')
             const wr = recordReplyOutcome(loadWithdrawal(), { verdict: judged.verdict, hadTargetAppUse: usedTarget, now })
             saveWithdrawal(wr.state)
@@ -5368,7 +5368,7 @@ export function apply(ctx) {
         if (r?.body?.state === 'generated' && typeof r.body.text === 'string') {
           const sp = speakerOf(r.body.sessionId)
           let outText = sp === 'strategist' ? stripStrategistAudit(r.body.text).cleanText : r.body.text
-          if (sp === 'companion' && isInWithdrawal(loadWithdrawal(), Date.now())) {
+          if (config.dual !== false && Boolean(config.strategistSessionId) && sp === 'companion' && isInWithdrawal(loadWithdrawal(), Date.now())) {
             outText = withdrawalReply(roleNames(config))
           }
           const n = roleNames(config)
@@ -5817,8 +5817,10 @@ export function apply(ctx) {
     }
     {
       const wNow = loadWithdrawal()
+      const dualOn = config.dual !== false && Boolean(config.strategistSessionId)
       const speakerRole = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
-      if (out.speak && speakerRole === 'companion' && isInWithdrawal(wNow, now)) {
+      const urgentEnforcement = out.force?.level >= 2 || String(out.reason || '').startsWith('ladder-')
+      if (dualOn && out.speak && !urgentEnforcement && speakerRole === 'companion' && isInWithdrawal(wNow, now)) {
         nextSpeaker = null
         Object.assign(out, {
           speak: false,
