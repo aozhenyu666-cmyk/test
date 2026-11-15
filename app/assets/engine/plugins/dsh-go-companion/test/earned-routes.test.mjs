@@ -165,7 +165,11 @@ test('这条接线真的跑到了：/plan 会给账记下这次盘账的时刻',
   await withHome(async (home) => {
     const t = setup(home, { minutes: 60, windows: offWorkWindows(), wall: { meals: [] } })
     await t.lockOn()
+    // 盘账只在「此刻是默认锁」时发生。深夜锁（0:30–7:00）盖在默认锁上面，那几个小时这条路本来就不走——
+    // 和上一条测试同一个口径：按此刻墙的真实判定走，不看运气（CI 凌晨跑时挂过）。
+    const want = wallDecision({ wall: { meals: [] } }, Date.now(), TZ)
     await t.plan(at('com.miui.home'))
+    if (!(want.locked && want.kind === WALL_KIND_DEFAULT)) return
     const e = earnedFile(home)
     assert.ok(Number(e.spentAt) > 0, 'earnedOpen 没跑到，账上不会有 spentAt')
     assert.equal(e.earned, 60, '盘账不该把额度清零')

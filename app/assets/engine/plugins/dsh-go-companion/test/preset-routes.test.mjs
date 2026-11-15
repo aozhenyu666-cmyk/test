@@ -434,7 +434,8 @@ test('6.1 有预案在生效：下一次检查压到 5 分钟那一档', async (
     // 基线是 plan 自己的 30 分钟（roll=0 一定开口，说完这一句的下一次检查）；
     // 有预案在生效时要压到 5 分钟，否则预案改完要等手机睡醒才生效——插件没有推送通道，
     // 只能让手机勤回来看一眼。
-    const r = await t.plan(at('com.home'))
+    // 带上手机当地时刻：不带就按真实时钟，凌晨跑会得到 night（CI 夜里挂过）。
+    const r = await t.plan(at('com.home', { local: '15:00' }))
     assert.equal(r.body.reason, 'ok', JSON.stringify(r.body.reason))
     const left = Number(r.body.nextCheckAt) - Date.now()
     assert.ok(left <= 5 * 60_000 + 2_000, '下一次检查还剩 ' + Math.round(left / 1000) + ' 秒')
