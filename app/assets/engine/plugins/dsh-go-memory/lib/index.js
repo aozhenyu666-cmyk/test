@@ -16,6 +16,7 @@ import path from 'node:path'
 import { openStore } from './store.js'
 import { importFishMemory } from './migrate.js'
 import { memoryView } from './view.js'
+import { appendDialog, dialogLines, readDialog, trimDialog, userTextOf } from './dialog.js'
 import {
   correct, exportMarkdown, forget, listTopics, markTopicAsked, dateOf, maintain, pickTopicToAsk,
   publicFact, publicTopic, recall, remember, resolveTopic, normalizeScope, scopeOfSession, search,
@@ -50,17 +51,6 @@ function sessionIdOf(agent) {
   }
 }
 
-function textOfMessage(msg) {
-  try {
-    const m = msg && msg.message ? msg.message : msg
-    if (!m) return ''
-    if (typeof m.text === 'string') return m.text
-    const parts = Array.isArray(m.content) ? m.content : []
-    return parts.filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join(' ')
-  } catch {
-    return ''
-  }
-}
 
 function writeText(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -117,6 +107,8 @@ export function apply(ctx) {
 
   const disposers = []
   const lastText = new Map()   // sid -> 这一轮用户刚说的话（检索线索）
+  const dialogSeen = new Map() // 同一句的去重窗口（引擎可能对同一条消息发两次事件）
+  let dialogTrimmedAt = 0
   const mounted = new Map()    // sid -> { agent, offs }
 
   // ── 工具 ────────────────────────────────────────────────────────────────
@@ -132,15 +124,17 @@ export function apply(ctx) {
         name: 'remember',
         description:
           '把一件值得长期记住的事写进手机本地记忆（以后每轮都可能想起）。' +
-          '一条只装一件事：「她身高一米七、侧睡」要分两条。只记长期有价值的：她明确说的重要的话、约定、' +
-          '喜好、身体和情绪状态、你们之间发生的事。不要记日常琐事（吃了什么、天气）、不要记你自己做过的事、' +
-          '不要重复记。记的时候安静地记，回复里不要说「记下了」「我记住了」。' +
+          '一条只装一件事：「她身高一米七、侧睡」要分两条。该记的：他说的重要的话、约定、喜好、身体和情绪状态、' +
+          '正在烦的事和进展、你们之间发生的事。生活小事（吃了什么、看了什么）以后可能拿来聊的也记，kind 写「小事」、重要度 0。' +
+          '不要记你自己做过的事、不要重复记；他原话会自动留底，这里只记提炼过的结论。' +
+          '会影响以后每一次对话的（称呼、忌讳、承诺、正在准备的大事）给 importance 2 或钉住，它们每轮都会带上。' +
+          '记的时候安静地记，回复里不要说「记下了」「我记住了」。' +
           '同一件会变的事（身高、工作、称呼）请给同一个 key，旧值会自动作废但保留可回溯。',
         parameters: {
           type: 'object',
           properties: {
             text: { type: 'string', description: '一句话说清，最多 500 字。人称用「我」指她自己、用她对用户的称呼。' },
-            kind: { type: 'string', enum: ['fact', 'preference', 'promise', 'event'], description: '事实/偏好/承诺/事件。' },
+            kind: { type: 'string', description: 'fact 事实 / preference 偏好 / promise 承诺 / event 共同经历；也可以直接写「小事」「偏好」「承诺」。' },
             importance: { type: 'integer', description: '0 琐事、1 普通（默认）、2 重要到不能忘。' },
             key: { type: 'string', description: '同一件会变的事用同一个键，如「她.身高」「约定.复盘」。键里不要写具体值。' },
             tags: { type: 'array', items: { type: 'string' }, description: '几个关键词，方便以后检索。' },
@@ -310,8 +304,22 @@ export function apply(ctx) {
     const offs = []
     try {
       const off = agent.ctx.on('agent/inbox/inserted', (payload) => {
-        const txt = textOfMessage(payload)
-        if (txt) lastText.set(sid, txt)
+        // 只认他本人说的：主动发球的提示也是以 user 角色塞进会话的，以前它被当成检索线索，
+        // 整段「这不是他说的话……」去对记忆，几乎什么都对不上。
+        const txt = userTextOf(payload)
+        if (!txt) return
+        lastText.set(sid, txt)
+        const s = db()
+        if (!s) return
+        try {
+          appendDialog(s.dir, { sid, text: txt, at: Date.now() }, dialogSeen)
+          if (Date.now() - dialogTrimmedAt > 6 * 3_600_000) {
+            dialogTrimmedAt = Date.now()
+            trimDialog(s.dir)
+          }
+        } catch (error) {
+          console.error('[memory] 原话留底失败：' + (error && error.message))
+        }
       })
       if (typeof off === 'function') offs.push(off)
     } catch {}
@@ -353,14 +361,24 @@ export function apply(ctx) {
       // 1.5 秒内且线索没变就复用，避免重复检索和重复落盘。
       if (cached && cached.query === query && Date.now() - cached.at < 1500) return cached.text
       const ftsHits = query ? s.ftsSearch(query, { scopes: [scopeOfSession(sid), 'global'], limit: 12 }) : []
+      const now = Date.now()
+      let dialog = []
+      try {
+        dialog = dialogLines(readDialog(s.dir), { query, now })
+      } catch {}
+      // 随机想起一条旧事：每 20 分钟换一条，同一段时间里前缀稳定，不会每轮都换话头。
+      const slot = Math.floor(now / (20 * 60_000))
+      const random = ((slot * 2654435761) >>> 0) % 1000 / 1000
       const picked = recall(s.doc, {
         scope: scopeOfSession(sid),
         query,
         limit: 6,
         ftsIds: ftsHits.map((h) => h.id),
-      }, Date.now())
+        dialog,
+        random,
+      }, now)
       // 召回命中会累加 hits —— 只在真的有内容时顺手落盘，避免每轮空写。
-      if (picked.facts.length || picked.lorebook?.length) s.save()
+      if (picked.facts.length || picked.lorebook?.length || picked.core?.length) s.save()
       recallCache.set(sid, { at: Date.now(), query, text: picked.text })
       return picked.text
     } catch (error) {

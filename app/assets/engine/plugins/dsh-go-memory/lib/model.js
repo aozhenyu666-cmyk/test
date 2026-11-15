@@ -14,6 +14,22 @@ import { matchLorebook, normalizeSceneTags, normalizeTriggers } from './lorebook
 
 export const SCHEMA_VERSION = 1
 export const KINDS = ['fact', 'preference', 'promise', 'event']
+/**
+ * 模型常写的中文类别。人设让鱼丸把小事记成「小事」，以前这里不认，悄悄当成 fact，
+ * 小事就失去了「共同经历」那一层（不进当天经历、不被主动回合拿来当话头）。
+ */
+const KIND_ALIASES = {
+  小事: 'event', 琐事: 'event', 事件: 'event', 经历: 'event', 日常: 'event',
+  偏好: 'preference', 喜好: 'preference', 口味: 'preference',
+  承诺: 'promise', 约定: 'promise', 答应: 'promise',
+  事实: 'fact', 线索: 'fact',
+}
+
+export function normalizeKind(raw) {
+  const k = String(raw == null ? '' : raw).trim()
+  if (KINDS.includes(k)) return k
+  return KIND_ALIASES[k] || 'fact'
+}
 export const TOPIC_STATUS = ['open', 'done', 'deferred', 'dropped']
 const DAY = 86_400_000
 
@@ -156,8 +172,10 @@ export function remember(doc, input, now = Date.now()) {
   if (!text) return { ok: false, text: '内容不能为空。' }
   if ([...text].length > MAX_TEXT) return { ok: false, text: `内容太长（上限 ${MAX_TEXT} 字）。` }
   const scope = normalizeScope((input && input.scope) || 'global')
-  const kind = KINDS.includes(input && input.kind) ? input.kind : 'fact'
-  const importance = clampInt(input && input.importance, 0, 2, 1)
+  const kind = normalizeKind(input && input.kind)
+  // 小事没写重要度时按琐事算：照样记、照样能被随机想起，只是不挤占常驻档案。
+  const smallTalk = ['小事', '琐事', '日常'].includes(String((input && input.kind) || '').trim())
+  const importance = clampInt(input && input.importance, 0, 2, smallTalk ? 0 : 1)
   const key = input && input.key ? normalizeText(input.key).slice(0, 80) : ''
   const tags = Array.isArray(input && input.tags)
     ? [...new Set(input.tags.map((t) => normalizeText(t).slice(0, 24)).filter(Boolean))].slice(0, 8)
@@ -505,7 +523,34 @@ export function recall(doc, input = {}, now = Date.now()) {
     facts = facts.slice().sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) ||
       (b.updatedAt || 0) - (a.updatedAt || 0))
   }
-  const picked = facts.slice(0, limit)
+  let picked = facts.slice(0, limit)
+  // 线索对不上时（「嗯」「好烦」「在干嘛」——他大多数时候就是这么说话的）以前一条都不带，
+  // 她们就像失忆。对不上的空位用最近更新的条目补，保证每轮至少有点东西可接。
+  const minFill = clampInt(input.minFacts, 0, limit, Math.min(3, limit))
+  if (query && picked.length < minFill) {
+    const have = new Set(picked.map((f) => f.id))
+    const recent = activeFacts(doc, scopes)
+      .filter((f) => !isExpired(f, now) && !have.has(f.id) && (f.importance ?? 1) >= 1)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    picked = [...picked, ...recent.slice(0, minFill - picked.length)]
+  }
+  // 常驻档案：钉住的和重要的，不管这一句说了什么都带上——称呼、忌讳、承诺、他正在为什么事焦虑。
+  const coreLimit = clampInt(input.coreLimit, 0, 8, 5)
+  const pickedIds = new Set(picked.map((f) => f.id))
+  const core = coreLimit > 0
+    ? activeFacts(doc, scopes)
+      .filter((f) => !isExpired(f, now) && !pickedIds.has(f.id) && (f.pinned || f.importance === 2))
+      .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.updatedAt || 0) - (a.updatedAt || 0))
+      .slice(0, coreLimit)
+    : []
+  // 随机想起一条：不相关、也不重要的旧事，像人一样偶尔冒出来。只在调用方给了随机数时才挑，
+  // 这样单测和「同一次请求里重复求值」都是确定的。
+  let drift = null
+  if (typeof input.random === 'number' && input.random >= 0 && input.random < 1) {
+    const taken = new Set([...pickedIds, ...core.map((f) => f.id)])
+    const pool = activeFacts(doc, scopes).filter((f) => !isExpired(f, now) && !taken.has(f.id) && now - (f.createdAt || now) > DAY)
+    if (pool.length) drift = pool[Math.floor(input.random * pool.length)]
+  }
   const lorebookLimit = clampInt(input.lorebookLimit, 0, 5, 3)
   const lore = lorebookLimit > 0
     ? matchLorebook(doc, {
@@ -514,9 +559,10 @@ export function recall(doc, input = {}, now = Date.now()) {
       historyText: input.historyText,
       sceneTags: input.sceneTags,
       limit: lorebookLimit,
-      excludeIds: picked.map((f) => f.id),
+      excludeIds: [...picked, ...core].map((f) => f.id),
     }, now)
     : { items: [], matchedIds: [], reasons: {} }
+  // 常驻档案每轮都带，不算「被想起」：不然重要条目的命中数每轮涨、永远不淡。
   const allPicked = [...picked, ...lore.items]
   touchHits(doc, allPicked.map((f) => f.id), query, now)
 
@@ -532,6 +578,10 @@ export function recall(doc, input = {}, now = Date.now()) {
     .slice(0, 3)
 
   const lines = []
+  if (core.length) {
+    lines.push('【关于他·常驻】不管聊什么都要记得：')
+    for (const f of core) lines.push(`- ${dateOf(f.createdAt)}${f.pinned ? ' 钉住' : ''} ${f.text}`)
+  }
   if (picked.length) {
     lines.push('【本地记忆】下面这些是手机本地库里的记录（时间由系统给出，别自己推算）：')
     for (const f of picked) {
@@ -559,12 +609,23 @@ export function recall(doc, input = {}, now = Date.now()) {
     lines.push('【今天记下的】')
     for (const e of episodes) lines.push(`- ${e.text}`)
   }
+  const dialog = Array.isArray(input.dialog) ? input.dialog.filter((l) => l && l.text) : []
+  if (dialog.length) {
+    lines.push('【他最近说过的话】（原话，时间是系统记的；接得上就接，别逐句复述）')
+    for (const l of dialog) lines.push(`- ${l.when ? l.when + ' ' : ''}${l.text}`)
+  }
+  if (drift) {
+    lines.push('【顺手想起】一件以前的事，合适就自然提一嘴，不合适就别提：')
+    lines.push(`- ${dateOf(drift.createdAt)} ${drift.text}`)
+  }
   if (lines.length) {
     lines.push('只提相关的，不要逐条复述，也不要说“我记得你说过”；不确定的就先问。')
   }
   return {
     text: lines.join('\n'),
     facts: picked.map(publicFact),
+    core: core.map(publicFact),
+    drift: drift ? publicFact(drift) : null,
     lorebook: lore.items,
     topics: topics.map(publicTopic),
     episodes,

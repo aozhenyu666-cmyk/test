@@ -24,6 +24,7 @@ import { plan as decide, inQuiet } from './plan.js'
 import { DEFAULT_TZ, hm as zoneHm, md as zoneMd, minuteOfDay as zoneMinuteOfDay, startOfDay as zoneStartOfDay, weekdayOf, zoneOr } from './tz.js'
 import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
+import { eyeCheck, newContent } from './wall_eye.js'
 import { RECENT_WINDOW, SKIP_STATE, companionGate, contentGate, gateRound, isStock, nounsOf, recentOwnTexts } from './stock.js'
 import { BURST_HOURLY_CAP, behaviorOf, emotionLine, emotionOf, voiceOf } from './emotion.js'
 import { capCount, nextShot, rallyStats } from './rally.js'
@@ -88,9 +89,9 @@ import { buildSnapshot, sistersView } from './panel.js'
 import { boutsBooksView, boutsNowView, boutsProtocolsView, boutsQueueView } from './bouts_view.js'
 import { boutsTileStatus, buildBoutsSnapshot } from './bouts_panel.js'
 // 第八轮 P1/P2：计划的节拍。草案、到点开局、过点记空局的规则全在 planwire.js，这里只接线。
-import { RESTART_BELOW, appPrompt, missingApps, planLines, planOf, tick } from './planwire.js'
+import { RESTART_BELOW, appPrompt, missingApps, pkgsOf, planLines, planOf, tick } from './planwire.js'
 import { planSentence, PLAN_CONFIRM_MS } from './dayplan.js'
-import { badPackets, judgeOver, normPacket, openSay, packetPrompt } from './packet.js'
+import { badPackets, judgeOver, normPacket, openSay, packetProblems, packetPrompt } from './packet.js'
 import * as earnedRt from './earned.js'
 // R9 第五项：鱼丸报的线索进鲸澜的待查队列（一天最多 5 条）。
 import * as clueRt from './clue.js'
@@ -120,7 +121,7 @@ import { createPresetRuntime } from './presetwire.js'
 import { createBrainRuntime } from './brainwire.js'
 import { buildCodex } from './codex.js'
 import { classify as classifyAnswer } from './reply.js'
-import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch } from './notes.js'
+import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch, vaultPick } from './notes.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
   FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
@@ -1965,7 +1966,21 @@ export function apply(ctx) {
       saveGearState({ ...gs, chaseAt: now, chased: [...(Array.isArray(gs.chased) ? gs.chased : []), { path: why.note.path, at: now }].slice(-30) })
     }
     if (why.reason === 'patrol') saveGearState({ ...loadGearState(), patrolAt: now, ...(why.note?.slot ? { patrolSlot: why.note.slot } : {}) })
+    if (why.reason === 'plan-draft') saveGearState({ ...loadGearState(), planDraftAt: now })
     if (why.mark) saveGemini({ ...loadGemini(), ...why.mark })
+  }
+  /**
+   * 今天的局计划还是代码出的空壳（没有一局带工作包）、也还没生效：该鲸澜来填了。
+   * 一小时最多来一次，她填过（任何一局有工作包）就不再来。
+   */
+  function planDraftDue(now, tz) {
+    const p = planOf(readState(stateFile('plan.json'), null), startOfDay(now, tz))
+    const min = zoneMinuteOfDay(now, tz)
+    // 只看还没到点的局：时段都过了，填了也开不了。
+    const open = p.items.filter((i) => !i.openedAt && !i.missed && Number(i.minute) > min)
+    if (!open.length || p.accepted) return false
+    if (open.some((i) => i.packet)) return false
+    return now - (Number(loadGearState().planDraftAt) || 0) >= 60 * 60_000
   }
   /** 两姐妹共用的信用分（从账本算，见 trust.js）。 */
   const trustWeights = () => ({
@@ -2442,6 +2457,40 @@ export function apply(ctx) {
       files: today && base.files && typeof base.files === 'object' ? base.files : {},
     }
   }
+  /** 交验收时交的是哪一件（工具和墙共用一套口径）。认不出来时 fail 里是墙要说的话。 */
+  function reviewTarget(args, now) {
+    const ctx = wallCtx(now)
+    const state = loadDaily(loadDailyState(), now, zoneOr(config.timeZone))
+    const pick = String(args?.task ?? '').trim()
+    const idx = /^\d+$/.test(pick) ? Number(pick) - 1 : state.tasks.findIndex((t) => pick && (t.task.includes(pick) || pick.includes(t.task)))
+    let task = idx >= 0 ? state.tasks[idx] : state.tasks.length === 1 ? state.tasks[0] : null
+    const extra = String(args?.evidence ?? '').trim()
+    if (!task && extra) {
+      // 临时交的完成物：文件类没有立项时的底数，量不出长了多少，所以只收截图和 App 时长。
+      const type = evidenceType(extra)
+      if (type === 'file' || !type) return { fail: { data: ['临时完成物「' + extra + '」'], missing: ['临时交的只收"截图"或"某 App N 分钟"；文件类要在早上立项时登记'] } }
+      task = { task: String(config.taskGoal || '这一轮'), evidence: extra }
+    }
+    if (!task) return { fail: { data: ['今天立项的事：' + (state.tasks.map((t, i) => (i + 1) + '. ' + t.task).join('；') || '无')], missing: ['说清交的是第几件（task），或者交截图 / App 时长（evidence）'] } }
+    return { task, idx, state, ctx, r: auditOne(task, ctx) }
+  }
+  /** 这一次交墙要不要让墙的眼睛读：交的是验收、文件证据在代码层已经过了、没关掉这一层。 */
+  function eyeWanted(kind, args, now) {
+    if (kind !== 'review' || config.wallEye === false) return false
+    const t = reviewTarget(args, now)
+    return !t.fail && Boolean(t.r?.pass && t.r.file)
+  }
+  /** 交验收前先让墙的眼睛读一遍（只在文件证据已经过了的时候读）。没读成就是 null。 */
+  async function wallEye(args, now) {
+    if (!eyeWanted('review', args, now)) return null
+    const t = reviewTarget(args, now)
+    const before = Number(t.ctx.files?.[t.task.task]?.size) || 0
+    const text = newContent(t.r.file, before)
+    const target = judgeTargetOf(ctx, config.strategistSessionId || config.sessionId, config) || {}
+    const eye = await eyeCheck({ stream: streamOf(), provider: target.provider, model: target.model, task: t.task.task, evidence: t.task.evidence, text })
+    if (!eye.judged) record({ state: 'wall-eye', at: now, judged: false, why: eye.why })
+    return eye
+  }
   function auditOne(task, ctx) {
     return auditTask(task, { ...ctx, baseline: ctx.files[task.task] })
   }
@@ -2807,20 +2856,19 @@ export function apply(ctx) {
     }
 
     if (kind === 'review') {
-      const ctx = wallCtx(now)
-      const state = loadDaily(loadDailyState(), now, zoneOr(config.timeZone))
-      const pick = String(args.task ?? '').trim()
-      const idx = /^\d+$/.test(pick) ? Number(pick) - 1 : state.tasks.findIndex((t) => pick && (t.task.includes(pick) || pick.includes(t.task)))
-      let task = idx >= 0 ? state.tasks[idx] : state.tasks.length === 1 ? state.tasks[0] : null
-      const extra = String(args.evidence ?? '').trim()
-      if (!task && extra) {
-        // 临时交的完成物：文件类没有立项时的底数，量不出长了多少，所以只收截图和 App 时长。
-        const type = evidenceType(extra)
-        if (type === 'file' || !type) return done(false, ['临时完成物「' + extra + '」'], ['临时交的只收"截图"或"某 App N 分钟"；文件类要在早上立项时登记'])
-        task = { task: String(config.taskGoal || '这一轮'), evidence: extra }
+      const t = reviewTarget(args, now)
+      if (t.fail) return done(false, t.fail.data, t.fail.missing)
+      const { task, idx, state } = t
+      const r = t.r
+      // 墙的眼睛（2026-11）：文件证据在代码层过了，再读一遍新写的内容；只能把过改成不过。
+      const eye = args && args.__eye
+      if (r.pass && eye && eye.judged && eye.pass === false) {
+        record({ state: 'wall-eye', at: now, pass: false, why: eye.why, quote: eye.quote })
+        applyVerdict({ ok: true, kind, satisfied: false }, now, 'wall')
+        return done(false, [task.task + '：' + r.data, '读了新写的内容：' + (eye.why || '和任务对不上') + (eye.quote ? '（原文：「' + eye.quote + '」）' : '')],
+          ['写的东西要真是在做「' + task.task + '」，凑字数和无关内容不算'])
       }
-      if (!task) return done(false, ['今天立项的事：' + (state.tasks.map((t, i) => (i + 1) + '. ' + t.task).join('；') || '无')], ['说清交的是第几件（task），或者交截图 / App 时长（evidence）'])
-      const r = auditOne(task, ctx)
+      if (r.pass && eye && eye.judged) record({ state: 'wall-eye', at: now, pass: true, why: eye.why })
       if (!r.pass) {
         applyVerdict({ ok: true, kind, satisfied: false }, now, 'wall')
         return done(false, [task.task + '：' + r.data], [r.missing])
@@ -2910,7 +2958,17 @@ export function apply(ctx) {
         additionalProperties: false,
       },
       output: toolOutput,
-      execute: (args = {}) => wallAudit(String(args.kind || ''), args, Date.now(), role),
+      execute: (args = {}) => {
+        const kind = String(args.kind || '')
+        // 只有「文件证据在代码层已经过了」这一种要等模型读一遍（异步）；其余照旧当场给结论。
+        if (!eyeWanted(kind, args, Date.now())) return wallAudit(kind, args, Date.now(), role)
+        return (async () => {
+          const eye = await wallEye(args, Date.now())
+          const out = wallAudit(kind, eye ? { ...args, __eye: eye } : args, Date.now(), role)
+          if (eye && !eye.judged && out?.pass) out.text += '\n（墙没读成新写的内容：' + eye.why + '，这次按物理证据判。）'
+          return out
+        })()
+      },
     }
   }
   /** 知识库只读检索：找证据、翻旧结论。姐妹共用（C4：两人工具一致）。 */
@@ -3550,6 +3608,172 @@ export function apply(ctx) {
       },
       output: toolOutput,
       execute: (args = {}) => composeAndEnqueueBout(args.protocol || args, role),
+    }
+  }
+
+  // ── 2026-11：她们自己开局、自己排局 ─────────────────────────────────────────
+  // 以前局只能由面板或计划到点开，计划草案也只有时段没有内容，又没有任何工具能填——
+  // 局官只能问「第一步是什么」，她们也只能催。这两个工具把这件事交还给她们。
+  function protocolChoices() {
+    const list = builtinProtocols().filter((x) => x.ok).map((x) => x.protocol.id + '（' + x.protocol.name + '）')
+    if (thinkingProtocol()) list.push('thinking（思维局）')
+    return list.join('、')
+  }
+  function knownProtocol(id) {
+    const k = String(id || '')
+    return Boolean(builtinProtocolOf(k) || customProtocolOf(k) || (k === 'thinking' && thinkingProtocol()))
+  }
+  const PACKET_PROPS = {
+    goal: { type: 'string', description: '这一局的目标，一句话（如「投出 3 份简历」）' },
+    first: { type: 'string', description: '第一步：2 分钟内能开始的动作，≤40 字，含动词和一个 App 或物件（如「打开 Boss 直聘，筛上海后端前 10 个」）' },
+    steps: { type: 'array', items: { type: 'string' }, maxItems: 5, description: '后面几步，最多 5 步' },
+    deliverable: { type: 'string', description: '交付物：做完能拿出来的东西（如「3 张投递成功截图」「周报.md 写满 800 字」）' },
+    accept_kind: { type: 'string', enum: ['evidence', 'basis', 'judge'], description: '验收方式：evidence 证据（截图、文件变长、App 时长，优先）/ basis 依据（对答案、对原文）/ judge 判断（一天最多 2 个）' },
+    accept_what: { type: 'string', description: '具体怎么验（如「截图时间在开局后、能看到已投递、3 张」）' },
+    stuck: { type: 'string', description: '可选：卡住时怎么办' },
+    need: { type: 'array', items: { type: 'string' }, description: '必需应用的包名（不确定就先 mcp__phone__apps 查）' },
+    allow: { type: 'array', items: { type: 'string' }, description: '允许应用的包名；不写就等于必需应用' },
+  }
+  function packetFrom(a = {}) {
+    const raw = {
+      goal: a.goal, first: a.first, steps: a.steps, deliverable: a.deliverable,
+      accept: { kind: a.accept_kind, what: a.accept_what }, stuck: a.stuck,
+    }
+    return normPacket(raw).ok ? normPacket(raw).packet : null
+  }
+  function appsFrom(a = {}) {
+    const need = pkgsOf(a.need)
+    const allow = pkgsOf(Array.isArray(a.allow) && a.allow.length ? [...a.allow, ...need] : need)
+    return { need, allow: [...new Set(allow)] }
+  }
+  function hmToMinute(raw) {
+    const m = /^(\d{1,2})[:：](\d{2})$/.exec(String(raw || '').trim())
+    if (!m) return NaN
+    const h = Number(m[1])
+    const mi = Number(m[2])
+    return h < 24 && mi < 60 ? h * 60 + mi : NaN
+  }
+
+  function openBoutTool(role) {
+    return {
+      name: 'open_bout',
+      description: '现在就开一局（不用等计划到点，也不用他先同意）。他在晃、在拖、刚说要做某件事，就直接开，' +
+        '开完告诉他第一步。要带工作包（目标、第一步、交付物、验收方式）和必需 / 允许的 App——严格模式按它放行。' +
+        '同时只能有一局。可用局型：' + protocolChoices() + '。',
+      parameters: {
+        type: 'object',
+        properties: {
+          protocol: { type: 'string', description: '局型 id，如 execute / study / design / thinking' },
+          why: { type: 'string', description: '为什么现在开（一句话，记进账本）' },
+          ...PACKET_PROPS,
+        },
+        required: ['protocol', 'first', 'deliverable', 'need'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const id = String(args.protocol || '').trim()
+        if (!knownProtocol(id)) return { ok: false, text: '没有这个局型：' + id + '。可用：' + protocolChoices() }
+        const packet = packetFrom(args)
+        const probs = packetProblems(packet, { apps: Array.isArray(config.apps) ? config.apps : [] })
+        if (!packet || probs.length) return { ok: false, text: '工作包还不行：' + (probs.join('、') || '是空的') + '。改了再开。' }
+        const apps = appsFrom(args)
+        if (!apps.need.length) return { ok: false, text: '要写必需应用的包名（need），严格模式靠它放行。不确定就先 mcp__phone__apps 查。' }
+        const r = startBout(id, { apps, packet, by: 'ai' })
+        record({ state: 'ai-open-bout', at: Date.now(), by: role, protocolId: id, ok: r.ok, why: String(args.why || '').slice(0, 80) })
+        if (r.ok) refreshPanels()
+        return { ok: r.ok, text: r.toast + (r.ok ? '（告诉他第一步就行；他要换就 /bouts 收局）' : '') }
+      },
+    }
+  }
+
+  function planBoutsTool(role) {
+    return {
+      name: 'plan_bouts',
+      description: '排今天的局：一次交整张表，替换今天还没开的局（已经开过、记过空局的保留）。每局都要有时间、局型、工作包和 App。' +
+        '交上去后他有十分钟可以换，不说话就自动生效、到点自动开局。不用先问他想做什么——你根据记忆、笔记库和昨天的账先排，他只负责说行或换。' +
+        '可用局型：' + protocolChoices() + '。',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 8,
+            items: {
+              type: 'object',
+              properties: {
+                at: { type: 'string', description: '开局时刻 HH:MM（北京时间）' },
+                protocol: { type: 'string', description: '局型 id' },
+                minutes: { type: 'integer', minimum: 5, maximum: 180, description: '这一局多少分钟' },
+                title: { type: 'string', description: '局名（如「求职局」）' },
+                ...PACKET_PROPS,
+              },
+              required: ['at', 'protocol', 'minutes', 'title', 'first', 'deliverable', 'accept_kind', 'accept_what', 'need'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['items'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const day = startOfDay(now, tz)
+        const nowMin = zoneMinuteOfDay(now, tz)
+        const stored = planOf(readState(stateFile('plan.json'), null), day)
+        const kept = stored.items.filter((i) => i.openedAt || i.missed)
+        const raw = Array.isArray(args.items) ? args.items : []
+        const problems = []
+        const items = []
+        raw.forEach((a, n) => {
+          const label = '第 ' + (n + 1) + ' 局（' + String(a?.title || a?.protocol || '') + '）'
+          const minute = hmToMinute(a?.at)
+          if (!Number.isFinite(minute)) return problems.push(label + '时间要写 HH:MM')
+          if (minute < nowMin - 5) return problems.push(label + '的 ' + a.at + ' 已经过了')
+          if (!knownProtocol(a?.protocol)) return problems.push(label + '没有这个局型：' + String(a?.protocol || ''))
+          const apps = appsFrom(a)
+          items.push({
+            id: 'ai-' + String(a.protocol) + '-' + minute,
+            protocolId: String(a.protocol),
+            title: String(a.title || a.protocol).slice(0, 30),
+            minute,
+            budget: Math.round(Number(a.minutes) || 25),
+            need: apps.need,
+            allow: apps.allow,
+            packet: packetFrom(a),
+            why: role === 'strategist' ? '鲸澜排的' : '鱼丸排的',
+          })
+        })
+        if (problems.length) return { ok: false, text: problems.join('；') + '。改了再交。' }
+        items.sort((x, y) => x.minute - y.minute)
+        for (let i = 1; i < items.length; i++) {
+          if (items[i].minute < items[i - 1].minute + items[i - 1].budget) {
+            return { ok: false, text: items[i - 1].title + '和' + items[i].title + '时间重叠了。' }
+          }
+        }
+        const plan = { ...stored, items: [...kept, ...items] }
+        const miss = missingApps({ items })
+        if (miss.length) return { ok: false, text: appPrompt({ items }) + '包名不确定就先 mcp__phone__apps 查。' }
+        const apps = Array.isArray(config.apps) ? config.apps : []
+        const bad = badPackets({ items }, { apps })
+        if (bad.length) return { ok: false, text: packetPrompt({ items }, { apps }) }
+        const over = judgeOver(plan)
+        if (over) return { ok: false, text: over }
+        // 交上来不立刻生效：给他十分钟换（planwire 到点自动生效），和早上代码出的草案同一个规矩。
+        const next = planOf({ ...plan, day, edits: Number(stored.edits) || 0, accepted: false, at: now }, day)
+        writeJson(stateFile('plan.json'), next)
+        record({ state: 'plan-ai', at: now, by: role, items: items.length })
+        refreshPanels()
+        const first = items[0]
+        return {
+          ok: true,
+          text: '排好了 ' + items.length + ' 局，十分钟后自动生效。第一局 ' + String(args.items.find((x) => hmToMinute(x.at) === first.minute)?.at || '') +
+            ' ' + first.title + '，第一步：' + String(first.packet?.first || '') + '。用一句话告诉他，他只说行或换。',
+        }
+      },
     }
   }
 
@@ -4452,7 +4676,8 @@ export function apply(ctx) {
     const fun = funToday(phone)
     if (phone?.fun && fun >= 90) return { why: '他今天娱乐已经 ' + fun + ' 分钟了，现在还在' + (phone.label || phone.app) }
     const hour = phone?.local ? Number(phone.local.slice(0, 2)) : Math.floor(zoneMinuteOfDay(now, tz) / 60)
-    const slots = Array.isArray(config.patrolHours) ? config.patrolHours.map(Number) : [10, 15, 20]
+    // 巡逻是她不等他、自己来看一眼并动手的时刻：一天三次太少，白天每两三个小时来一次。
+    const slots = Array.isArray(config.patrolHours) ? config.patrolHours.map(Number) : [9, 11, 14, 16, 19]
     const day = new Date(now).toISOString().slice(0, 10)
     const slotKey = day + ':' + hour
     if (slots.includes(hour) && gs.patrolSlot !== slotKey && phone?.screenOn) return { why: '到了 ' + hour + ' 点的巡逻时段，看看他该干的事动了没有', slot: slotKey }
@@ -4773,6 +4998,32 @@ export function apply(ctx) {
       session: loadGemini().session,
     }).state
   }
+  /**
+   * 笔记库里随手翻到的那一篇：每 30 分钟换一篇、两姐妹各翻各的。走一遍库要读盘，所以按时段缓存。
+   */
+  const vaultPickCache = new Map()
+  function vaultPickText(role, now) {
+    const dir = notesDir()
+    if (!dir) return ''
+    const slot = Math.floor(now / (30 * 60_000))
+    const key = role + ':' + slot + ':' + dir
+    if (!vaultPickCache.has(key)) {
+      vaultPickCache.clear()
+      let pick = null
+      try {
+        pick = vaultPick(dir, { seed: slot * 31 + (role === 'strategist' ? 17 : 0), now })
+      } catch {
+        pick = null
+      }
+      vaultPickCache.set(key, pick)
+    }
+    const p = vaultPickCache.get(key)
+    if (!p) return ''
+    return '【笔记库里翻到的】《' + p.rel + '》（' + zoneMd(p.mtime, zoneOr(config.timeZone)) + ' 改过）：' + p.excerpt + '\n' +
+      (role === 'strategist'
+        ? '合适时拿它说事：接着他没想完的地方推一步，或者对一下他写下的打算后来做了没有。不合适就别提。'
+        : '合适时自然提一嘴（问他后来怎么样了、拿来逗他），不合适就别提，别说「我看了你的笔记」。')
+  }
   function chatPersonaText(role) {
     if (config.personaInChat === false) return ''
     // R7 P0-3：先把工具子集对齐到当前主状态，再算注入——不然模型拿到的议程和手里的工具会对不上。
@@ -4907,6 +5158,8 @@ export function apply(ctx) {
       // A4：块刚结束的这一句进内容层（可裁），不进约束层——它是随机的一句话，不是规矩。
       { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && Date.now() - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
       { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
+      // 2026-11：笔记库随手翻一篇，内容层（可裁）。
+      { id: 'vault-pick', layer: 'content', priority: 14, text: vaultPickText(role, Date.now()) },
       // R9 第五项：妹妹报的线索，只有姐姐这一轮看得到（content 层，可裁）。
       { id: 'clues', layer: 'content', priority: 12, text: cueLines.join('\n') },
     ]
@@ -4965,6 +5218,7 @@ export function apply(ctx) {
         takeStanceTool(role), reviseStanceTool(role),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
         fishIndexTool(), presetTool(role), brainTool(role), composeBoutTool(role),
+        openBoutTool(role), planBoutsTool(role),
       ].filter(Boolean)
       const list = all.filter((tool) => sub.has(tool.name))
       toolBag.set(role, { sid, all, state })
@@ -6138,6 +6392,11 @@ export function apply(ctx) {
           ? { role: thinker, reason: 'task-due', at: now, busy: { goal: config.taskGoal, what: config.gearWhat }, digest: true }
           : { role: 'companion', reason: 'busy-done', at: now, what: config.gearWhat, digest: true,
             minutes: Math.round((Number(config.gearUntil) - Number(config.gearSince || config.gearUntil)) / 60_000) }
+      } else if (gearNow === 'free' && config.proactiveTools !== false && phone?.screenOn && !lastRhythm?.night &&
+        (!silence || silence.stage === 'none') && planDraftDue(now, tz)) {
+        // 计划草案只有时段没有内容：鲸澜自己去填，不等他来问。排在深夜锁、连麦、忙时之后；
+        // 有一球还没接（阶梯在走）时让阶梯先走完，不插队。
+        nextSpeaker = { role: thinker, reason: 'plan-draft', at: now }
       } else if (patrol) {
         nextSpeaker = { role: thinker, reason: 'patrol', at: now, note: patrol }
       } else if (gearNow === 'free' && config.proactiveTools !== false && chaseSignal(phone, now, tz)) {
@@ -6803,7 +7062,8 @@ export function apply(ctx) {
       }
     }
     // 行为大脑：谁开的局。计划到点自动开的不算他自己开（主动开局比的分母和分子）。
-    brainRt.noteBout({ protocolId: protocol.id, outcome: 'open', self: opts.by !== 'plan' }, now)
+    // 她们开的（by: 'ai'）也不算他自己开的：主动开局比量的是他，不是她们。
+    brainRt.noteBout({ protocolId: protocol.id, outcome: 'open', self: opts.by !== 'plan' && opts.by !== 'ai' }, now)
     // 第九轮：开局时带了 App 要求就记下（严格模式和「切出」都按它判）。
     if (opts.apps && typeof opts.apps === 'object') presetRt.setApps('current', opts.apps, now, String(opts.by || 'panel'))
     // 第三项：局官的第一句必须是工作包的第一步（施工书总验收第 4 条）。

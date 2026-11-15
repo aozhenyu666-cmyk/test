@@ -132,7 +132,8 @@ export function auditTask(task, ctx) {
     const data = '文件 ' + shortPath(path) + '：立项时 ' + before + ' 字节，现在 ' + now + ' 字节（' + signed(grew) + '）'
     const vars = { path: shortPath(path), min: GROWTH_MIN_BYTES, before, now, grew, diff: GROWTH_MIN_BYTES - grew }
     if (Number(st.mtimeMs) < since) return miss('file:stale', vars, data + '，立项后没动过', '立项后在这份文件里写东西')
-    if (grew >= GROWTH_MIN_BYTES) return { verdict: 'done', pass: true, code: 'file:pass', vars, data, missing: '' }
+    // file：给墙的眼睛（wall_eye.js）读新写的那段用，模板不读它。
+    if (grew >= GROWTH_MIN_BYTES) return { verdict: 'done', pass: true, code: 'file:pass', vars, data, missing: '', file: path }
     if (grew > 0) return { verdict: 'partial', pass: false, code: 'file:short', vars, data, missing: '还差至少 ' + (GROWTH_MIN_BYTES - grew) + ' 字节的实质内容' }
     return miss('file:grew0', vars, data, '在这份文件里写实质内容（至少 ' + GROWTH_MIN_BYTES + ' 字节）')
   }

@@ -71,6 +71,12 @@ test('W9 一个字两个字的尾巴不当应用名（com.a.io 的 io）', () =>
   assert.match(checkFirst('打开 io 看看', { apps: [{ pkg: 'com.a.io', label: '' }] }), /应用|东西/)
 })
 
+test('W9b 没登记过的应用，「打开 / 登录 + 名字」也认；「打开看看」不认', () => {
+  assert.equal(checkFirst('打开 Boss 直聘，筛上海后端前 10 个', { apps: [] }), '')
+  assert.equal(checkFirst('登录飞书回两条消息', { apps: [] }), '')
+  assert.match(checkFirst('打开看看', { apps: [] }), /应用|东西/)
+})
+
 test('W10 只有动词没有宾语也不收（打开）', () => {
   assert.match(checkFirst('打开', { apps: [] }), /应用|东西/)
 })

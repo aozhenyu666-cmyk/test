@@ -63,7 +63,7 @@ function mountPair(home, cfg = {}, state = 'standby') {
   return { sis, big }
 }
 
-test('C1 任一主状态的工具子集都不超过 8 个', () => {
+test('C1 任一主状态的工具子集都不超过上限（14）', () => {
   for (const row of STATE_TABLE) {
     assert.ok(row.tools && row.tools.length <= MAX_TOOLS_PER_STATE,
       row.id + ' 挂了 ' + (row.tools || []).length + ' 个工具')
@@ -71,7 +71,7 @@ test('C1 任一主状态的工具子集都不超过 8 个', () => {
 })
 
 test('C2 全部工具每一个都至少在一个状态下可达', () => {
-  assert.equal(ALL_TOOLS.length, 31) // 22 个原有工具 + fish_index（P0-3）+ take_stance/revise_stance（A1）+ mount_propose/mount_park/mount_close（C1）+ preset（R9 A）+ brain（行为大脑第一版）+ compose_bout_protocol（M4.2 鲸澜动态造局）
+  assert.equal(ALL_TOOLS.length, 33) // 22 个原有工具 + fish_index（P0-3）+ take_stance/revise_stance（A1）+ mount_propose/mount_park/mount_close（C1）+ preset（R9 A）+ brain（行为大脑第一版）+ compose_bout_protocol（M4.2 鲸澜动态造局）+ open_bout/plan_bouts（2026-11 主动开局、排局）
   assert.equal(new Set(ALL_TOOLS).size, ALL_TOOLS.length, '并集里不许有重复')
   for (const name of ALL_TOOLS) {
     const reachable = STATE_TABLE.filter((r) => r.tools.includes(name)).map((r) => r.id)

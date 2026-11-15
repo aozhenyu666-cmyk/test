@@ -230,6 +230,31 @@ export function vaultRecentNotes(notesDir, { limit = 3, now = Date.now(), exclud
     .map((f) => ({ rel: f.rel, mtime: f.mtime, summary: stripMarkdown(readText(f.path, VAULT_READ_BYTES), 220) }))
 }
 
+/**
+ * 从笔记库里随手翻一篇（2026-11）。她们以前只在主动发球时看「最近改过的 3 篇」，
+ * 平时聊天里笔记库是空的。这里按 seed 稳定地挑一篇：一半概率挑最近两周的，一半挑更老的，
+ * 像人一样偶尔想起很久以前写过的东西。系统产出（每日、审计、记忆、长期规划）不挑；正文太短的不挑。
+ * @returns {{rel:string, mtime:number, excerpt:string}|null}
+ */
+export function vaultPick(notesDir, { seed = 0, now = Date.now(), exclude = [] } = {}) {
+  if (!notesDir) return null
+  const skip = new Set(exclude)
+  const auditPrefix = KB_DIR + '/' + WALL_DIR + '/' + AUDIT_DIR + '/'
+  const files = walkVault(notesDir).filter((f) => !f.rel.startsWith(KB_DIR + '/每日/') && !f.rel.startsWith(auditPrefix) &&
+    f.rel !== KB_DIR + '/记忆.md' && f.rel !== KB_DIR + '/长期规划.md' && !skip.has(f.rel))
+  if (!files.length) return null
+  const fresh = files.filter((f) => now - f.mtime < 14 * 86_400_000)
+  const old = files.filter((f) => now - f.mtime >= 14 * 86_400_000)
+  const r = Math.abs(Math.floor(Number(seed) || 0))
+  const pool = (r % 2 === 0 && fresh.length) || !old.length ? fresh.length ? fresh : files : old
+  for (let i = 0; i < Math.min(pool.length, 6); i++) {
+    const f = pool[(r + i * 7) % pool.length]
+    const excerpt = stripMarkdown(readText(f.path, VAULT_READ_BYTES), 240)
+    if (excerpt.length >= 30) return { rel: f.rel, mtime: f.mtime, excerpt }
+  }
+  return null
+}
+
 /** 全库只读搜索：文件名/路径命中优先，其次正文命中。 */
 export function vaultSearch(notesDir, query, { limit = 8 } = {}) {
   const q = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 80)

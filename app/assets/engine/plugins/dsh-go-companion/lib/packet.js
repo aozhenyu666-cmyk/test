@@ -76,13 +76,25 @@ function appTokens(apps) {
  * 规则（施工书第三项）：一个 2 分钟内能开始的物理动作；含一个动词、含一个应用或物件、≤ 40 字。
  * @returns {string} 不合格的原因；合格返回空串
  */
+/**
+ * 「打开 Boss 直聘」「登录飞书」：动词后面紧跟一个名字，就当它是个应用。
+ * 应用表和常见叫法表永远列不全，以前这句连报错里自己举的例子都过不了，她们排的计划一直被打回。
+ * 名字要像名字：英文至少 3 个字母（挡住「打开 io」），中文至少 2 个字且不是又一个动词（挡住「打开看看」）。
+ */
+function openedApp(s) {
+  const m = /(打开|点开|登录|登陆|启动|进入)\s*([A-Za-z][A-Za-z0-9]{2,}|[\u4e00-\u9fff]{2,})/.exec(s)
+  if (!m) return false
+  const name = m[2]
+  return /^[A-Za-z]/.test(name) || !VERBS.some((v) => name.startsWith(v))
+}
+
 export function checkFirst(raw, { apps = [] } = {}) {
   const s = text(raw, 200)
   if (!s) return '第一步还没写'
   if (s.length > FIRST_MAX) return '第一步太长了（' + s.length + ' 字，最多 ' + FIRST_MAX + ' 字）'
   if (!VERBS.some((v) => s.includes(v))) return '第一步里没有一个能马上做的动作（要有个动词，比如「打开」「筛选」「投」）'
   const names = appTokens(apps)
-  const hitApp = names.some((n) => s.includes(n)) || COMMON_APPS.some((n) => s.includes(n))
+  const hitApp = names.some((n) => s.includes(n)) || COMMON_APPS.some((n) => s.includes(n)) || openedApp(s)
   const hitObj = OBJECTS.some((o) => s.includes(o))
   if (!hitApp && !hitObj) return '第一步要落在某个应用或某件东西上（比如「打开 Boss 直聘」「拿简历」）'
   return ''

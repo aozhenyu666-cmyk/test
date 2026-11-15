@@ -186,14 +186,17 @@ test('晚上 21:30 以后（当地）姐姐对一次账，一天一次', async (
     const plan = await call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })
     assert.equal(plan.body.reason, 'strategist-review', JSON.stringify(plan.body))
     const day = await call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone: { ...phone, local: '16:00' } })
-    assert.notEqual(day.body.speaker, 'strategist', '白天不对账')
+    // 白天她可能为别的事来（比如 2026-11 起，计划草案没填时她会来填），但不会是对账。
+    assert.notEqual(day.body.reason, 'strategist-review', '白天不对账')
+    assert.notEqual(day.body.reason, 'review', '白天不对账')
   })
 })
 
 test('主动找他时可以动手（他给了高权限），关掉就不许', () => {
   const on = buildPrompt({ role: 'companion', allowTools: true, names: { companion: '鱼丸', strategist: '鲸澜' } })
-  assert.match(on, /需要时可以动手/)
+  assert.match(on, /直接动手，不用先问/)
   assert.match(on, /不可逆/)
+  assert.doesNotMatch(on, /点头/, '可逆的事不再等他点头')
   const off = buildPrompt({ role: 'companion', allowTools: false, names: { companion: '鱼丸', strategist: '鲸澜' } })
   assert.match(off, /不要调用任何工具/)
 })

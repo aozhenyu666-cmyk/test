@@ -49,41 +49,44 @@ export const STATE_TABLE = [
     tools: ['notes_vault', 'fish_index', 'dafeiyu_control', 'kb_write'] },
   { id: 'plan', priority: 95, enter: ['plan-lock'], lock: 'plan', back: null,
     agenda: '计划模态：先把今天的局定下来。第一句必须是计划，不是问题；他不开口就 10 分钟后自动生效。',
-    tools: ['daily_plan', 'dafeiyu_control', 'notes_vault', 'fish_index', 'kb_write', 'preset', 'brain', 'compose_bout_protocol'] },
+    tools: ['daily_plan', 'plan_bouts', 'dafeiyu_control', 'notes_vault', 'vault_search', 'fish_index', 'kb_write', 'preset', 'brain', 'compose_bout_protocol', 'sister_note'] },
   { id: 'evening', priority: 90, enter: ['evening-followup', 'evening-gate'], lock: 'evening', back: null,
     agenda: '晚间对账：逐项核对今天的完成物，满意才收；满意后今晚的申请窗口才可能开。',
     tools: ['daily_review', 'submit_to_wall', 'submit_verdict', 'request_relax', 'submit_prediction', 'notes_vault', 'fish_index', 'kb_write'] },
   { id: 'morning', priority: 80, enter: ['morning-lock'], lock: 'followup', back: null,
     agenda: '晨间立项：定今天 1–3 件事，每件带完成物；裁决满意且任务校验通过才放。',
-    tools: ['daily_plan', 'take_stance', 'notes_vault', 'vault_search', 'fish_index', 'sister_note', 'kb_write', 'dafeiyu_control'] },
+    tools: ['daily_plan', 'plan_bouts', 'open_bout', 'take_stance', 'notes_vault', 'vault_search', 'fish_index', 'sister_note', 'kb_write', 'dafeiyu_control', 'gemini_live'] },
   { id: 'review', priority: 80, enter: ['review-lock'], lock: 'followup', back: null,
     agenda: '验收：对照完成物和笔记库追问，满意才放风。',
-    tools: ['submit_verdict', 'end_task_mode', 'submit_to_wall', 'notes_vault', 'fish_index', 'vault_recent_notes', 'kb_write', 'dafeiyu_control'] },
+    tools: ['submit_verdict', 'end_task_mode', 'submit_to_wall', 'notes_vault', 'fish_index', 'vault_recent_notes', 'kb_write', 'dafeiyu_control', 'open_bout', 'start_task_mode'] },
   { id: 'followup', priority: 80, enter: ['followup-other'], lock: 'followup',
     agenda: '追问锁：把当前问题问完，证据凑齐交墙（submit_to_wall）。',
-    tools: ['submit_verdict', 'submit_to_wall', 'revise_stance', 'notes_vault', 'fish_index', 'grant_break', 'vault_search', 'kb_write'] },
+    tools: ['submit_verdict', 'submit_to_wall', 'revise_stance', 'notes_vault', 'fish_index', 'grant_break', 'vault_search', 'kb_write', 'open_bout', 'gemini_live'] },
   { id: 'sprint', priority: 70, enter: ['sprint'], lock: 'sprint', back: null,
     agenda: '冲刺：少打扰，最多 20 分钟看一眼进展；到点或他点「申请验收」进验收。',
     // C1：冲刺是最典型的「推导到一半」，mount_propose 换掉 sister_note（递话不在冲刺里做）。
-    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'mount_propose', 'gemini_live'] },
+    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'block_apps', 'notes_vault', 'fish_index', 'mount_propose', 'gemini_live', 'vault_search', 'sister_note'] },
   { id: 'brain', priority: 70, enter: ['brain'], lock: 'brain', back: null,
     agenda: '共脑：在 Gemini 舱里，不插嘴。结束满 3 分钟才会出现追问。',
     tools: ['gemini_end', 'gemini_log', 'gemini_live', 'schedule_gemini_live', 'notes_vault', 'fish_index'] },
   { id: 'meal', priority: 60, enter: ['meal'], lock: 'open', back: null,
     agenda: '吃饭时段：娱乐开放，纯陪聊。',
-    tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'tighten_today', 'workflow_propose'] },
+    tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'tighten_today', 'workflow_propose', 'open_bout', 'plan_bouts'] },
   { id: 'break', priority: 60, enter: ['break'], lock: 'open', back: null,
     agenda: '放风：纯陪聊，到点回待命。',
-    tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control'] },
+    tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control', 'open_bout', 'plan_bouts', 'gemini_live'] },
   { id: 'standby', priority: 50, enter: ['always'], lock: 'standby', back: null,
     agenda: '待命：帮他挑下一件事、拆出第一步；10 分钟没动就开追问锁。',
     // C1：挂载卡的三件套在待命里齐（挑下一件事靠的就是「他手上推到哪」）。
     // 让位的是 block_apps / revise_stance / gemini_live——它们各自在冲刺、追问锁、共脑里有位置。
-    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'notes_vault', 'fish_index', 'mount_propose', 'mount_park', 'mount_close'] },
+    tools: ['start_task_mode', 'submit_to_wall', 'end_task_mode', 'notes_vault', 'fish_index', 'mount_propose', 'mount_park', 'mount_close', 'open_bout', 'plan_bouts', 'block_apps', 'gemini_live', 'sister_note', 'dafeiyu_control'] },
 ]
 
-/** 每个主状态最多挂几个工具（规格：任一状态 ≤8）。 */
-export const MAX_TOOLS_PER_STATE = 8
+/**
+ * 每个主状态最多挂几个工具。原规格是 ≤8，代价是待命里连开局、连麦、封 App 都没有，
+ * 人设说她们能做、手里却没有，只能催他。放到 14：主动性比省几百个 token 要紧。
+ */
+export const MAX_TOOLS_PER_STATE = 14
 
 /** 全部工具的并集：任一工具至少在一个状态下可达，测试拿它核对覆盖率。 */
 export const ALL_TOOLS = [...new Set(STATE_TABLE.flatMap((row) => row.tools || []))]
