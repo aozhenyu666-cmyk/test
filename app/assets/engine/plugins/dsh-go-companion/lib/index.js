@@ -6149,6 +6149,12 @@ export function apply(ctx) {
         if (path === '/drill-op') return send(res, 200, drillOpRoute(body.value))
         if (path === '/emergency-pass') {
           const now = Date.now()
+          if (body.value?.action === 'revoke') {
+            const cur = loadExternal()
+            saveExternal({ ...cur, emergencyPass: null })
+            record({ state: 'emergency-pass-revoke', at: now })
+            return send(res, 200, { v: 1, ok: true, revoked: true })
+          }
           const resEp = grantEmergencyPass(loadExternal(), {
             reason: body.value?.reason,
             day: dayString(now, zoneOr(config.timeZone)),
@@ -6271,14 +6277,15 @@ export function apply(ctx) {
           return send(res, out.ok ? 200 : 400, { v: 1, ...out })
         }
         if (path === '/clock') {
-          const act = String(body.value?.action || 'list')
+          const rawSpec = (body.value?.task && typeof body.value.task === 'object') ? body.value.task : (body.value || {})
+          const act = String(body.value?.action || body.value?.op || (body.value?.task ? 'upsert' : 'list'))
           const now = Date.now()
           if (act === 'upsert') {
-            const allow = resolveAppNames(body.value?.allowApps || [], {
+            const allow = resolveAppNames(rawSpec?.allowApps || body.value?.allowApps || [], {
               installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : [],
               declaredApps: appsOf(),
             }).resolved
-            const spec = { ...(body.value || {}) }
+            const spec = { ...rawSpec }
             if (spec.kind === 'CYCLE_PHASE' && Array.isArray(spec.phases)) {
               spec.phases = spec.phases.map((p) => ({
                 ...p,

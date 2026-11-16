@@ -451,6 +451,7 @@ reset()
   const planEp = await route('POST', '/plan', { roll: 100, timeZone: tzDay, phone: game(10) })
   check('J4.5 /plan 通行证有效期内放行', planEp.body?.emergencyPass?.active === true && planEp.body?.force?.level === 0, planEp.body)
   await route('POST', '/lease', { action: 'revoke', reason: 'e2e-done' })
+  await route('POST', '/emergency-pass', { action: 'revoke' })
 
   // J5. 弹性缓冲降级 -> 3 次 scheduling_failure 触发低功耗保底日 (/elastic-check) + PC 心跳 (/event pc-activity)
   let el3 = null
