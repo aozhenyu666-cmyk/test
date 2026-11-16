@@ -190,7 +190,7 @@ jobs:
         run: |
           APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
           if [ -n "$FISH_KEYSTORE_BASE64" ] && [ -n "$FISH_KEYSTORE_PASS" ] && [ -n "$FISH_KEY_ALIAS" ]; then
-            python3 -c 'import base64,os; open("/tmp/fish.jks","wb").write(base64.b64decode("".join(os.environ["FISH_KEYSTORE_BASE64"].split())))'
+            python3 -c 'import base64,os,re; raw=re.sub(r"[^A-Za-z0-9+/=]","",os.environ["FISH_KEYSTORE_BASE64"]); open("/tmp/fish.jks","wb").write(base64.b64decode(raw))'
             export EFFECTIVE_KEY_PASS="${FISH_KEY_PASS:-$FISH_KEYSTORE_PASS}"
             BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
             "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" /tmp/app-aligned.apk
