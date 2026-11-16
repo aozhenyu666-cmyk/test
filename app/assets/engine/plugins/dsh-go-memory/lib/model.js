@@ -61,8 +61,16 @@ export function scopeOfSession(sid) {
   return sid ? normalizeScope(`session:${sid}`) : 'global'
 }
 
-/** 一个会话能看到的范围：自己的 + 全局。 */
+/** 一个会话能看到的范围：自己的 + 全局（也支持传多个同组会话 scope 数组）。 */
 export function visibleScopes(scope) {
+  if (Array.isArray(scope)) {
+    const out = new Set(['global'])
+    for (const s of scope) {
+      const n = normalizeScope(s)
+      if (n) out.add(n)
+    }
+    return [...out]
+  }
   const s = normalizeScope(scope)
   return s === 'global' ? ['global'] : [s, 'global']
 }

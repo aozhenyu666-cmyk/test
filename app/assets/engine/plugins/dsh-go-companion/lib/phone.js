@@ -90,6 +90,16 @@ export function cleanPhone(raw) {
       today.push({ app: pkg, label: labelOf(pkg, t.label), minutes, fun: funOf(pkg, t.fun), ...(opens ? { opens } : {}) })
     }
   }
+  const installedApps = Array.isArray(raw.installedApps)
+    ? raw.installedApps
+      .filter((a) => a && typeof a === 'object' && pkgOf(a.pkg))
+      .slice(0, 160)
+      .map((a) => ({
+        pkg: pkgOf(a.pkg),
+        label: labelOf(pkgOf(a.pkg), a.label),
+        bypass: a.bypass === true,
+      }))
+    : []
   const local = typeof raw.local === 'string' && /^\d{2}:\d{2}$/.test(raw.local) ? raw.local : ''
   const out = {
     app,
@@ -103,6 +113,7 @@ export function cleanPhone(raw) {
     local,
     today,
     switches: cleanSwitches(raw.switches),
+    ...(installedApps.length ? { installedApps } : {}),
   }
   if (!out.app && !today.length && !out.charging && !local) return null
   return out

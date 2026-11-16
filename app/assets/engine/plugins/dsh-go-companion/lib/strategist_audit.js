@@ -16,9 +16,9 @@ export const ALL_AUDIT_FIELDS = [...AUDIT_FIELDS, ...V3_AUDIT_FIELDS]
 const AUDIT_FULL_RE = /<strategist_audit\b[^>]*>([\s\S]*?)<\/strategist_audit>/gi
 const AUDIT_OPEN_DANGLING_RE = /<strategist_audit\b[^>]*>[\s\S]*$/gi
 
-/** 短且紧凑的谋士隐藏思考指令（进约束或高优先状态块，避免撑爆预算）。 */
+/** Claude 式高密度思考锚点（短而锐利，展示前代码强行剥离 <strategist_audit>）。 */
 export const STRATEGIST_AUDIT_DIRECTIVE =
-  '回答关键判断或规划前，先在输出开头用 <strategist_audit>{"surface_claim":"...","unverified_assumption":"...","telemetry_contradiction":"...","core_question_or_call":"..."}</strategist_audit> 完成四项内部核查（展示时会被系统自动剥离）；正文只给结论与反证依据，绝不无条件附和或空洞安抚。'
+  '回答判断或取舍前，用最小 <strategist_audit>{"surface_claim":"...","unverified_assumption":"...","telemetry_contradiction":"...","core_question_or_call":"..."}</strategist_audit> 做 4 秒心检（自动剥离，不透出）；正文像极简高手搭档那样直接给洞察、概念取舍和独立立场——少列 1-2-3 模板清单，禁止婆婆妈妈说教或无条件附和。'
 
 function parseAuditBody(rawBody) {
   const body = String(rawBody || '').trim()
@@ -74,7 +74,9 @@ export function stripStrategistAudit(raw) {
 }
 
 /**
- * SYS-002 反顺从正则库：拦截「无条件赞同/安抚但没有给出边界/代价/反证」的套话开头或主句。
+ * SYS-002 反顺从与反空泛吹捧正则库：
+ * 1) 拦截谋士无条件顺从/保姆安抚；
+ * 2) 拦截小鱼「无具体事实支撑的空泛吹捧/舔狗句式」（需结合具体动作才允许夸）。
  */
 const SYCOPHANCY_PATTERNS = [
   /(?:^|[。！？\n]\s*)(?:确实)?你说[得的]?(?:很|非常|完全|太)?对/,
@@ -89,10 +91,16 @@ const SYCOPHANCY_PATTERNS = [
   /(?:^|[。！？，,\n]\s*)(?:没关系的|不要紧的)[，,！!\s]*(?:慢慢来|休息|别急)/,
 ]
 
+const COMPANION_FLATTERY_PATTERNS = [
+  /(?:^|[。！？，,\n]\s*)(?:哥哥|你)?(?:真的)?太(?:棒|厉害|强|优秀|自律)了[！!~]*$/,
+  /(?:^|[。！？，,\n]\s*)不愧是你[！!~]*$/,
+  /(?:^|[。！？，,\n]\s*)(?:加油|你可以的|相信你一定行|你最棒)[！!~]*$/,
+]
+
 /** 如果句子含明显的条件反证词（但/不过/风险/前提/代价/反证），说明并非盲目顺从。 */
 const COUNTER_BALANCE_RE = /(?:但是|不过|前提是|风险在于|漏洞在于|反证|代价|未必|先核验|还缺证据)/
 
-export function detectSycophancy(raw) {
+export function detectSycophancy(raw, { role = 'strategist' } = {}) {
   const { cleanText } = stripStrategistAudit(raw)
   const text = String(cleanText || '').trim()
   if (!text) return { sycophantic: false, pattern: '', reason: '' }
@@ -106,6 +114,18 @@ export function detectSycophancy(raw) {
         sycophantic: true,
         pattern: m[0].trim(),
         reason: 'sys002-unconditional-agreement',
+      }
+    }
+  }
+  if (role === 'companion') {
+    for (const re of COMPANION_FLATTERY_PATTERNS) {
+      const m = re.exec(text)
+      if (m && text.length < 36) {
+        return {
+          sycophantic: true,
+          pattern: m[0].trim(),
+          reason: 'sys002-empty-flattery',
+        }
       }
     }
   }

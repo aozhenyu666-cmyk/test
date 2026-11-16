@@ -181,6 +181,30 @@ jobs:
         working-directory: app
         run: |
           flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.0.16 --build-number ${{ github.run_number }}0 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/test
+      - name: Sign release APK with persistent fish keystore (if configured)
+        env:
+          FISH_KEYSTORE_BASE64: ${{ secrets.FISH_KEYSTORE_BASE64 }}
+          FISH_KEYSTORE_PASS: ${{ secrets.FISH_KEYSTORE_PASS }}
+          FISH_KEY_ALIAS: ${{ secrets.FISH_KEY_ALIAS }}
+          FISH_KEY_PASS: ${{ secrets.FISH_KEY_PASS }}
+        run: |
+          APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          if [ -n "$FISH_KEYSTORE_BASE64" ] && [ -n "$FISH_KEYSTORE_PASS" ] && [ -n "$FISH_KEY_ALIAS" ]; then
+            echo "$FISH_KEYSTORE_BASE64" | base64 -d > /tmp/fish.jks
+            BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+            "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" /tmp/app-aligned.apk
+            "$BUILD_TOOLS/apksigner" sign \
+              --ks /tmp/fish.jks \
+              --ks-pass "env:FISH_KEYSTORE_PASS" \
+              --ks-key-alias "$FISH_KEY_ALIAS" \
+              --key-pass "env:${FISH_KEY_PASS:-FISH_KEYSTORE_PASS}" \
+              --out "$APK" /tmp/app-aligned.apk
+            "$BUILD_TOOLS/apksigner" verify "$APK"
+            rm -f /tmp/fish.jks /tmp/app-aligned.apk
+            echo "Signed with fixed persistent keystore."
+          else
+            echo "::notice::FISH_KEYSTORE_BASE64 not set; keeping default Gradle debug signature."
+          fi
       - name: Verify bundled runtime and package
         run: |
           APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk

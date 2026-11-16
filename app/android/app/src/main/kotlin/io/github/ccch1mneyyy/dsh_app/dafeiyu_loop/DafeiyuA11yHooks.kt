@@ -36,6 +36,20 @@ object DafeiyuA11yHooks {
     private var healthThread: HandlerThread? = null
     private var healthHandler: Handler? = null
     private val wechat = WechatStay()
+    @Volatile private var lastEngineHealAttemptAt = 0L
+    private const val ENGINE_HEAL_COOLDOWN_MS = 60_000L
+
+    private fun tryHealEngine(context: Context) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastEngineHealAttemptAt < ENGINE_HEAL_COOLDOWN_MS) return
+        val ctrl = runCatching {
+            io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController.get(context.applicationContext)
+        }.getOrNull() ?: return
+        if (ctrl.phase == io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController.Phase.INSTALLED) {
+            lastEngineHealAttemptAt = now
+            runCatching { io.github.ccch1mneyyy.dsh_app.runtime.DshService.ensureEngine(context.applicationContext) }
+        }
+    }
 
     private fun isCharging(context: Context): Boolean = runCatching {
         val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
@@ -84,6 +98,7 @@ object DafeiyuA11yHooks {
                     if (A11yHealth.snapshot(t, true).verdict == A11yHealthPlan.Verdict.DEAD) {
                         Thread({ runCatching { A11yKeeper.check(service.applicationContext) } }, "dsh-a11y-heal").start()
                     }
+                    tryHealEngine(service)
                 }
                 handler.postDelayed(this, HEALTH_TICK_MS)
             }
@@ -105,6 +120,7 @@ object DafeiyuA11yHooks {
             Intent.ACTION_SCREEN_ON -> {
                 NowFeed.onScreen(true, now)
                 runCatching { ProactiveRuntime.onScreenOn() }
+                PhoneA11yService.instance?.let { tryHealEngine(it) }
             }
             Intent.ACTION_POWER_CONNECTED -> NowFeed.onCharging(true, now)
             Intent.ACTION_POWER_DISCONNECTED -> NowFeed.onCharging(false, now)

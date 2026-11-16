@@ -1095,6 +1095,7 @@ class RuntimeController private constructor(private val app: Context) : DshProce
             val now = SystemClock.elapsedRealtime()
             val upMs = readyAt?.let { now - it }
             val policyDelay = SafePolicy.autoRestartDelay(f.kind, code, upMs, autoRestarts.toList(), now)
+                ?: io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineAutoHealer.nextRestartDelayMs(code, upMs, autoRestarts.toList(), now)
             val delay = policyDelay?.takeIf { !outcome.restartSafe && DshService.isRunning }
             EngineExitLog.engineExit(app, code, expected = false, kind = f.kind.wire, upMs = upMs, restartInMs = delay,
                 recentRestarts = autoRestarts.count { now - it < 600_000L }, tail = tail)
@@ -1103,7 +1104,7 @@ class RuntimeController private constructor(private val app: Context) : DshProce
             }
             if (delay != null) {
                 // Killed from outside after a good run (memory pressure, a phantom-process sweep): try again.
-                autoRestarts.removeAll { now - it >= 600_000L }
+                autoRestarts.removeAll { now - it >= 1_800_000L }
                 autoRestarts.addLast(now)
                 val gen = runGen
                 setPhase(Phase.STARTING)
@@ -1152,6 +1153,37 @@ class RuntimeController private constructor(private val app: Context) : DshProce
                 }
             }
         }
+    }
+
+    /** 大肥鱼手机文件（Obsidian）挂载自诊状态。 */
+    fun phoneStorageStatus(): Map<String, Any?> = linkedMapOf(
+        "enabled" to pendingPhoneStorage,
+        "permission" to PhoneStorage.isGranted(app),
+        "binds" to PhoneStorage.binds().size,
+    )
+
+    /** 打开 `phoneStorage` 并按需热重启引擎使 `/sdcard` 立刻对 Obsidian / 伴侣插件生效。 */
+    @Synchronized fun enablePhoneStorageAndRestart(forceRestart: Boolean = true): Map<String, Any?> {
+        val granted = PhoneStorage.isGranted(app)
+        if (!pendingPhoneStorage) {
+            pendingPhoneStorage = true
+            prefs.edit().putBoolean(K_PHONE_STORAGE, true).apply()
+        }
+        if (granted && forceRestart) manualRestart()
+        return phoneStorageStatus()
+    }
+
+    /** 通知栏或大肥鱼中枢手动触发引擎安全重启。 */
+    @Synchronized fun manualRestart() {
+        if (phase == Phase.INSTALLING) return
+        stopProcess(null)
+        main.postDelayed({
+            try {
+                start(pendingEnv, pendingPhoneStorage)
+            } catch (e: Exception) {
+                log("[dsh-app] manual restart failed: ${e.message}", "system")
+            }
+        }, 500L)
     }
 
     private fun log(line: String, stream: String, storageLine: String = line) = runtimeLogs.accept(line, stream, storageLine)

@@ -181,6 +181,9 @@ import {
 } from './vault_wall.js'
 import { GEMINI_PACKAGES, driftPull, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
 import { auditOf, cardsOf, groupPrompts } from './sisters.js'
+import { ClockKernel, parseCron } from './clock_kernel.js'
+import { classifyApp, isDualUseApp, isPureGame, resolveAppNames } from './app_resolver.js'
+import { evalBehaviorRadar } from './behavior_radar.js'
 
 export const name = 'dsh-go-companion'
 // Without this, `ctx.tools` below throws "cannot get property tools without inject"
@@ -851,8 +854,19 @@ export function apply(ctx) {
         else gateTries.delete(sid)
         return { action: cg.action, state: cg.state, code: cg.code }
       }
+      const syc = detectSycophancy(cleanText, { role: 'companion' })
+      if (syc.sycophantic) {
+        const prevSyc = tries.filter((t) => t?.code === 'sycophancy').length
+        if (prevSyc === 0) {
+          tries.push({ pass: false, code: 'sycophancy' })
+          gateTries.set(sid, tries.slice(-1))
+          return { action: 'rewrite', state: 'stock-rewrite', code: 'sycophancy', hint: antiSycophancyRewriteHint(syc) }
+        }
+        gateTries.delete(sid)
+        return { action: 'skip', state: 'skip-sycophancy', code: 'sycophancy' }
+      }
     } else if (speaker === 'strategist') {
-      const syc = detectSycophancy(cleanText)
+      const syc = detectSycophancy(cleanText, { role: 'strategist' })
       if (syc.sycophantic) {
         const prevSyc = tries.filter((t) => t?.code === 'sycophancy').length
         if (prevSyc === 0) {
@@ -1356,12 +1370,18 @@ export function apply(ctx) {
             revise(b, now)
             saveBrain(b)
           }
-          // M1.3 反敷衍冷处理：双人格模式下连续 2 次 brief/evasive/stock 触发鱼丸 45 分钟撤回期，实质回复或打开目标 App 立即解除。
+        // M1.3 反敷衍冷处理：双人格模式下连续 2 次 brief/evasive/stock 触发鱼丸 45 分钟撤回期，
+          // 并同步落地真实 30 分钟硬件拒绝锁（不再只冷处理闭嘴）。
           if (config.dual !== false && Boolean(config.strategistSessionId)) {
             const usedTarget = Boolean(lastPhone?.app && !lastPhone.fun && !lastPhone.idle && roleOf(appsOf(), lastPhone.app) === 'work')
             const wr = recordReplyOutcome(loadWithdrawal(), { verdict: judged.verdict, hadTargetAppUse: usedTarget, now })
             saveWithdrawal(wr.state)
-            if (wr.entered) record({ state: 'withdrawal-enter', at: now, until: wr.state.personaCooldownUntil, streak: wr.state.streak })
+            if (wr.entered) {
+              const refuseUntil = Math.max(now + 30 * 60_000, Number(config.refuseUntil) || 0)
+              commit({ refuseUntil, refuseBy: 'perfunctory' })
+              presetRt.perfunctory(now, lastPhone)
+              record({ state: 'withdrawal-enter', at: now, until: wr.state.personaCooldownUntil, refuseUntil, streak: wr.state.streak })
+            }
             if (wr.released) record({ state: 'withdrawal-release', at: now, reason: wr.reason })
           }
           // 话题花园跟着人的反应走：认真答就继续，敷衍就换轻的，拒绝就停。
@@ -1896,8 +1916,41 @@ export function apply(ctx) {
       agentId: l.agentId,
     }
   }
-  /** 手机的 session 槽：连麦舱 / 外部 Agent 租约优先，其次是预案的严格模式。 */
-  const sessionNow = (now) => geminiSessionView(now) || leaseSessionView(now) || presetRt.sessionView(now)
+  const clockKernel = new ClockKernel(stateFile('clock.json'), { tz: zoneOr(config.timeZone) })
+  const aiWorkSessionView = (now) => {
+    const s = config.aiWorkSession
+    if (!s || Number(s.until) <= now || !Array.isArray(s.allow) || !s.allow.length) return null
+    const allow = [...new Set([...s.allow, ...emergencyPackages(appsOf())])]
+    return {
+      allow,
+      until: Number(s.until),
+      topic: String(s.why || '专时锁定'),
+      why: String(s.why || '专时锁定中：只允许指定正事 App'),
+      strict: s.strict !== false,
+      graceMs: s.strict === false ? 10_000 : 0,
+      mode: s.strict === false ? 'task-lease' : 'ai-work',
+    }
+  }
+  const taskLeaseView = (now) => {
+    const tl = config.taskLease
+    if (!tl || Number(tl.until) <= now || !tl.app) return null
+    return {
+      allow: [...new Set([tl.app, ...(Array.isArray(tl.allow) ? tl.allow : []), ...emergencyPackages(appsOf())])],
+      until: Number(tl.until),
+      topic: String(tl.goal || '双用途工具租约'),
+      why: '鲸澜批复任务租约：' + String(tl.goal || '').slice(0, 60),
+      strict: false,
+      graceMs: 10_000,
+      mode: 'task-lease',
+    }
+  }
+  /** 手机的 session 槽：连麦舱 / AI 专时锁 / 鲸澜租约 / 外部 Agent 租约 / 预案严格模式。 */
+  const sessionNow = (now) =>
+    geminiSessionView(now) ||
+    aiWorkSessionView(now) ||
+    taskLeaseView(now) ||
+    leaseSessionView(now) ||
+    presetRt.sessionView(now)
   // 行为大脑：片段与日摘要、模式卡。只看见、只记住；不自动立规则（K4 以后再接）。
   const brainRt = createBrainRuntime({
     loadEpisodes: () => readState(stateFile('episodes.json'), null),
@@ -2287,6 +2340,17 @@ export function apply(ctx) {
     schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, text: { type: 'string' } } },
     render: (_a, v) => [{ type: 'text', text: String((v && v.text) || '') }],
   }
+  if (tools && typeof tools.register === 'function') {
+    for (const def of [dispatchControlTool('global'), clockManageTool('global'), grantTaskLeaseTool('strategist')]) {
+      try {
+        const offExtra = tools.register(def)
+        if (typeof offExtra === 'function') ctx.effect?.(() => offExtra)
+        console.error('[companion] registered global tool ' + def.name)
+      } catch (error) {
+        console.error('[companion] global tool ' + def.name + ' 注册失败：' + String((error && error.message) || error))
+      }
+    }
+  }
   /**
    * 管他（第二轮：只留收紧类）。在聊天里只能收紧，不能放松——放松只走申请窗口（底线 1）。
    *   busy / refuse / mute / strict 保留；free、refuse_off、gentle 已撤（那是聊天里切回宽松状态的口子）。
@@ -2351,17 +2415,14 @@ export function apply(ctx) {
     }
   }
   /**
-   * 立任务（第二轮：只在用户主动要求时）。不再"不经同意就立"——那等于聊天里当场加锁，违反底线。
-   * 娱乐照样按规则锁，任务模式只在他说"帮我立个任务/盯我 45 分钟"时开。
+   * 姐妹主动调度工具（解禁「必须等他先要求」，支持随时按上下文或指令执行）。
    */
   function startTaskTool(role) {
     return {
       name: 'start_task_mode',
-      description: '给他立一个任务（**只在他主动要求时**：他说"给我立个任务""盯我 45 分钟""这一个小时别让我玩"）。' +
-        'mode=task 任务模式（有目标，到点报到一次，娱乐按规则锁，验收合格才结束）；mode=refuse 只锁娱乐不立目标。' +
-        '他没要求时不要调用——规矩由墙执行，你只在他点名要的时候帮他立。立完告诉他做了什么、为什么、第一步是什么。' +
-        'task 还有三条必答：goal（这一段要交出什么）、domain（涉及哪些领域/范围）、breakAt（什么时候休息）。' +
-        '缺一条工具会返回 field-missing 并点名缺哪条：那就先问他，别自己编一个填上去。',
+      description: '给他立一个任务并立刻收紧娱乐。你在观察或判断他该干正事时可直接动手，无需先问他同不同意。' +
+        'mode=task 任务模式（到点验收，娱乐按规则锁）；mode=refuse 只开拒绝锁。' +
+        'task 必带 goal、domain（领域/范围）、breakAt（休息点），缺项可补问或从笔记补全。',
       parameters: {
         type: 'object',
         properties: {
@@ -3033,7 +3094,12 @@ export function apply(ctx) {
       execute: (args = {}) => {
         const now = Date.now()
         const until = now + Math.max(1, Math.min(48, Math.round(Number(args.hours) || 24))) * 3_600_000
-        const want = (Array.isArray(args.apps) ? args.apps : []).map((a) => String(a).trim()).filter((a) => /^[A-Za-z0-9_.]{3,120}$/.test(a)).slice(0, 10)
+        const wantInput = Array.isArray(args.apps) ? args.apps : []
+        const resolvedRes = resolveAppNames(wantInput, {
+          installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : [],
+          declaredApps: appsOf(),
+        })
+        const want = resolvedRes.resolved.map((a) => String(a).trim()).filter((a) => /^[A-Za-z0-9_.]{3,120}$/.test(a)).slice(0, 10)
         const skipped = want.filter((a) => NEVER_BLOCK.includes(a))
         const apps = want.filter((a) => !NEVER_BLOCK.includes(a))
         if (!apps.length) return { ok: false, text: skipped.length ? '这些永远不封：' + skipped.join('、') : '没有有效的包名。' }
@@ -3642,9 +3708,13 @@ export function apply(ctx) {
     return normPacket(raw).ok ? normPacket(raw).packet : null
   }
   function appsFrom(a = {}) {
-    const need = pkgsOf(a.need)
-    const allow = pkgsOf(Array.isArray(a.allow) && a.allow.length ? [...a.allow, ...need] : need)
-    return { need, allow: [...new Set(allow)] }
+    const installedApps = Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : []
+    const declaredApps = appsOf()
+    const rawNeed = Array.isArray(a.need) ? a.need : a.need ? [a.need] : []
+    const need = pkgsOf(resolveAppNames(rawNeed, { installedApps, declaredApps }).resolved)
+    const rawAllow = Array.isArray(a.allow) && a.allow.length ? [...a.allow, ...rawNeed] : rawNeed
+    const allow = pkgsOf(resolveAppNames(rawAllow, { installedApps, declaredApps }).resolved)
+    return { need, allow: [...new Set([...allow, ...need])] }
   }
   function hmToMinute(raw) {
     const m = /^(\d{1,2})[:：](\d{2})$/.exec(String(raw || '').trim())
@@ -3680,9 +3750,13 @@ export function apply(ctx) {
         const apps = appsFrom(args)
         if (!apps.need.length) return { ok: false, text: '要写必需应用的包名（need），严格模式靠它放行。不确定就先 mcp__phone__apps 查。' }
         const r = startBout(id, { apps, packet, by: 'ai' })
+        if (r.ok && args.strict !== false && apps.allow.length) {
+          const until = Date.now() + Math.max(10, Math.min(180, Number(args.minutes) || 45)) * 60_000
+          commit({ aiWorkSession: { allow: apps.allow, until, strict: true, why: '本局专时 · ' + id, by: role } })
+        }
         record({ state: 'ai-open-bout', at: Date.now(), by: role, protocolId: id, ok: r.ok, why: String(args.why || '').slice(0, 80) })
         if (r.ok) refreshPanels()
-        return { ok: r.ok, text: r.toast + (r.ok ? '（告诉他第一步就行；他要换就 /bouts 收局）' : '') }
+        return { ok: r.ok, text: r.toast + (r.ok ? '（已同步激活专时严格白名单；他要换就 /bouts 收局）' : '') }
       },
     }
   }
@@ -3834,6 +3908,268 @@ export function apply(ctx) {
         }
         record({ state: 'workflow-proposed', at: now, by: role, workflowId: r.workflow.id, problem: r.workflow.problem, metric: r.workflow.metric })
         return { ok: true, text: '提上去了。他不点「试」它不会跑；7 天没有可数效果自动停。' }
+      },
+    }
+  }
+
+  /**
+   * 统一超级调度器工具（全时段挂载给小鱼与大鱼，支持中文应用名模糊解析）。
+   */
+  function dispatchControlTool(role) {
+    return {
+      name: 'dispatch_control',
+      description:
+        '大肥鱼核心手机调度器：支持中文应用名（如「微信」「小红书」「Obsidian」「王者」「浏览器」）或包名。' +
+        'focus_lock=开启严格专时铁笼（仅 apps 列表内的 App 可用，其余立即拦截）；' +
+        'block_apps=把特定 App 临时拉黑禁开；' +
+        'tag_app=给未收录 App 永久打标（fun/work/tool）；' +
+        'unlock_focus=结束当前 AI 专时锁（仅鲸澜可用，纯游戏禁止解除）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['focus_lock', 'block_apps', 'tag_app', 'unlock_focus'] },
+          apps: { type: 'array', items: { type: 'string' }, description: '中文应用名或包名列表（如 ["Obsidian", "微信"]）' },
+          minutes: { type: 'integer', minimum: 5, maximum: 720, description: '持续分钟数（默认 focus_lock 45 / block_apps 120）' },
+          tag: { type: 'string', enum: ['fun', 'work', 'tool'], description: 'tag_app 时填写角色分类' },
+          why: { type: 'string', description: '锁机或操作原因（直接展示在锁屏页）' },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}, execCtx = {}) => {
+        const now = Date.now()
+        const callerSid = execCtx?.agent?.session?.id || execCtx?.agent?.id || execCtx?.sessionId || ''
+        const callerRole = role === 'global' ? (callerSid ? speakerOf(callerSid) : (args.callerRole || 'companion')) : role
+        const installedApps = Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : []
+        const declaredApps = appsOf()
+        const { resolved, unresolved } = resolveAppNames(args.apps || [], { installedApps, declaredApps })
+        const why = String(args.why || '').trim().slice(0, 80)
+
+        if (args.action === 'focus_lock') {
+          if (!resolved.length) {
+            return { ok: false, text: '没识别出允许保留的 App（' + (unresolved.join('、') || '请传中文名或包名') + '）。' }
+          }
+          const mins = Math.max(5, Math.min(720, Math.round(Number(args.minutes) || 45)))
+          const until = now + mins * 60_000
+          commit({
+            aiWorkSession: {
+              allow: resolved,
+              until,
+              strict: true,
+              why: why || (callerRole === 'strategist' ? '鲸澜开启严格专时：只保留指定 App' : '鱼丸锁机：这阵子只用这几个 App'),
+              by: callerRole,
+            },
+          })
+          record({ state: 'dispatch-focus-lock', at: now, by: callerRole, allow: resolved, minutes: mins, why })
+          refreshPanels()
+          return {
+            ok: true,
+            text: `已进入严格专时（${mins} 分钟）：仅保留 ${resolved.join('、')}，切出或用系统浏览器将立即全屏拉回（若需退出请去局页面收局或等倒计时结束）。`,
+          }
+        }
+
+        if (args.action === 'block_apps') {
+          const apps = resolved.filter((a) => !NEVER_BLOCK.includes(a))
+          if (!apps.length) {
+            return { ok: false, text: '没有可封禁的应用（' + (unresolved.join('、') || '电话/短信/地图/支付不可封') + '）。' }
+          }
+          const mins = Math.max(5, Math.min(2880, Math.round(Number(args.minutes) || 120)))
+          const until = now + mins * 60_000
+          const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && Number(b.until) > now && !apps.includes(b.app))
+          commit({
+            blockExtra: [...keep, ...apps.map((app) => ({ app, until, by: callerRole, why: why || '姐妹临时封禁' }))].slice(-30),
+          })
+          record({ state: 'dispatch-block', at: now, by: callerRole, apps, minutes: mins, why })
+          return { ok: true, text: `已封禁 ${apps.join('、')} ${mins} 分钟，一开即锁。` }
+        }
+
+        if (args.action === 'tag_app') {
+          const pkg = resolved[0]
+          if (!pkg) return { ok: false, text: '没找到要打标的应用。' }
+          const nextRole = args.tag || 'fun'
+          const cur = cleanApps(config.apps).filter((a) => a.pkg !== pkg)
+          cur.push({ pkg, role: nextRole, label: String((args.apps && args.apps[0]) || '').slice(0, 20) })
+          commit({ apps: cur })
+          record({ state: 'dispatch-tag-app', at: now, by: callerRole, pkg, roleTag: nextRole })
+          return { ok: true, text: `已将 ${pkg} 永久分类为「${nextRole}」。` }
+        }
+
+        if (args.action === 'unlock_focus') {
+          if (callerRole !== 'strategist') {
+            return { ok: false, text: '小鱼无权解除专时或放行锁；要调整范围或申领任务短租约请找鲸澜。' }
+          }
+          commit({ aiWorkSession: null, taskLease: null })
+          record({ state: 'dispatch-unlock-focus', at: now, by: callerRole, why })
+          return { ok: true, text: '已提前结束当前 AI 专时锁（普通墙与拒绝规则仍按制度运行）。' }
+        }
+
+        return { ok: false, text: '未知动作' }
+      },
+    }
+  }
+
+  /**
+   * 仅鲸澜（strategist）专享的双用途 App 短租约（≤20 分钟，纯游戏硬拒）。
+   */
+  function grantTaskLeaseTool(role) {
+    return {
+      name: 'grant_task_lease',
+      description: '（仅鲸澜）为你批一段 ≤20 分钟的双用途 App（如 B 站 / 小红书 / 浏览器 / 微信）正事租约。' +
+        '纯游戏（王者/原神/游戏中心等）硬编码绝对拒绝；租约期手机持续巡检 screenText，偏航进娱乐流立即吊销重锁。',
+      parameters: {
+        type: 'object',
+        properties: {
+          app: { type: 'string', description: '双用途应用中文名或包名' },
+          minutes: { type: 'integer', minimum: 5, maximum: 20, description: '租约时长，上限 20 分钟' },
+          taskGoal: { type: 'string', description: '具体要在里面办什么正事' },
+          verifyHints: { type: 'array', items: { type: 'string' }, description: '读屏期望关键词' },
+        },
+        required: ['app', 'taskGoal'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}, execCtx = {}) => {
+        const callerSid = execCtx?.agent?.session?.id || execCtx?.agent?.id || execCtx?.sessionId || ''
+        if (callerSid && speakerOf(callerSid) !== 'strategist') {
+          return { ok: false, text: '只有鲸澜可以签发双用途任务租约。' }
+        }
+        if (!callerSid && role !== 'strategist') return { ok: false, text: '只有鲸澜可以签发双用途任务租约。' }
+        const now = Date.now()
+        const { resolved } = resolveAppNames([args.app], {
+          installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : [],
+          declaredApps: appsOf(),
+        })
+        const pkg = resolved[0]
+        if (!pkg) return { ok: false, text: '没认出要租约的应用名。' }
+        if (isPureGame(pkg, args.app)) {
+          return { ok: false, text: '硬规矩拦回：纯游戏绝不可通过聊天租约当场放行。' }
+        }
+        const mins = Math.max(5, Math.min(20, Math.round(Number(args.minutes) || 15)))
+        const until = now + mins * 60_000
+        commit({
+          taskLease: {
+            app: pkg,
+            allow: [pkg],
+            until,
+            goal: String(args.taskGoal || '').slice(0, 80),
+            verifyHints: Array.isArray(args.verifyHints) ? args.verifyHints.map((x) => String(x)).slice(0, 6) : [],
+            by: role,
+          },
+        })
+        record({ state: 'grant-task-lease', at: now, pkg, minutes: mins, goal: args.taskGoal })
+        return { ok: true, text: `已批复 ${pkg} 的 ${mins} 分钟任务租约（${args.taskGoal}）；租约期间若刷出无关娱乐流将自动吊销。` }
+      },
+    }
+  }
+
+  /**
+   * 内核时钟与复杂定时任务管理工具（高频/Cron/多阶段循环计时同步原生 AlarmManager）。
+   */
+  function clockManageTool(role) {
+    return {
+      name: 'clock_manage',
+      description: '管理内核高精度时钟：支持单次闹钟（alarm）、固定频率高频/循环提醒（interval，支持秒级）、' +
+        '5/6 段 Cron 循环闹钟（cron，北京时间）、多阶段循环计时（cycle，如专注25m->休息5m x N轮）及 list/pause/resume/skip/delete。',
+      parameters: {
+        type: 'object',
+        properties: {
+          op: { type: 'string', enum: ['create_alarm', 'create_interval', 'create_cron', 'create_cycle', 'list', 'pause', 'resume', 'skip', 'delete'] },
+          id: { type: 'string', description: '任务 id（pause/resume/skip/delete 时传）' },
+          label: { type: 'string', description: '闹钟/循环任务名称' },
+          minutes: { type: 'integer', minimum: 1, maximum: 1440, description: 'create_alarm 延迟分钟数' },
+          intervalSec: { type: 'integer', minimum: 5, maximum: 86400, description: 'create_interval 循环间隔（秒）' },
+          cronExpr: { type: 'string', description: 'create_cron 5/6 段表达式，如 "30 8 * * 1-5"' },
+          focusMin: { type: 'integer', minimum: 5, maximum: 180, description: 'create_cycle 专注阶段分钟数' },
+          breakMin: { type: 'integer', minimum: 1, maximum: 60, description: 'create_cycle 休息阶段分钟数' },
+          cycles: { type: 'integer', minimum: 0, maximum: 20, description: '循环轮数（0=无限）' },
+          allowApps: { type: 'array', items: { type: 'string' }, description: '专时阶段允许的 App 名或包名' },
+          urgent: { type: 'boolean', description: '是否走强闹钟唤醒（穿透省电白名单）' },
+        },
+        required: ['op'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const op = args.op
+        if (op === 'list') {
+          const items = clockKernel.list()
+          if (!items.length) return { ok: true, text: '当前内核里没有挂着的闹钟或循环计时任务。' }
+          return {
+            ok: true,
+            text: items.map((t) => `${t.id} [${t.kind}] ${t.label} ${t.paused ? '(已暂停)' : t.enabled ? '(运行中)' : '(已结束)'}`).join('\n'),
+          }
+        }
+        if (op === 'pause') {
+          const t = clockKernel.pause(args.id, now)
+          return t ? { ok: true, text: '已暂停：' + t.label } : { ok: false, text: '没找到任务 ' + args.id }
+        }
+        if (op === 'resume') {
+          const t = clockKernel.resume(args.id, now)
+          return t ? { ok: true, text: '已继续：' + t.label } : { ok: false, text: '没找到任务 ' + args.id }
+        }
+        if (op === 'skip') {
+          const ev = clockKernel.skipPhase(args.id, now)
+          return ev ? { ok: true, text: `已跳过本段，切入：${ev.nextPhase ? ev.nextPhase.name : '全部完成'}` } : { ok: false, text: '只有循环计时支持跳段。' }
+        }
+        if (op === 'delete') {
+          return clockKernel.remove(args.id) ? { ok: true, text: '已删除时钟任务。' } : { ok: false, text: '没找到任务。' }
+        }
+        if (op === 'create_cron') {
+          if (!parseCron(args.cronExpr)) return { ok: false, text: 'Cron 表达式格式不对，需 5 或 6 段（如 "30 8 * * 1-5"）。' }
+          const t = clockKernel.upsert({
+            label: args.label || '定时循环闹钟',
+            kind: 'CRON',
+            cronExpr: args.cronExpr,
+            urgent: args.urgent !== false,
+            action: 'notify',
+          }, now)
+          return { ok: true, text: `已创建 Cron 循环闹钟「${t.label}」（${t.cronExpr}），id=${t.id}。` }
+        }
+        if (op === 'create_interval') {
+          const sec = Math.max(5, Math.min(86400, Math.round(Number(args.intervalSec) || 60)))
+          const t = clockKernel.upsert({
+            label: args.label || `每 ${sec} 秒循环提醒`,
+            kind: 'FIXED_RATE',
+            intervalMs: sec * 1000,
+            maxRuns: Number(args.cycles) || 0,
+            urgent: Boolean(args.urgent),
+            action: 'notify',
+          }, now)
+          return { ok: true, text: `已启动防漂移循环计时「${t.label}」（每 ${sec}s），id=${t.id}。` }
+        }
+        if (op === 'create_cycle') {
+          const fMin = Math.max(5, Math.min(180, Math.round(Number(args.focusMin) || 25)))
+          const bMin = Math.max(1, Math.min(60, Math.round(Number(args.breakMin) || 5)))
+          const allow = resolveAppNames(args.allowApps || [], {
+            installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : [],
+            declaredApps: appsOf(),
+          }).resolved
+          const t = clockKernel.upsert({
+            label: args.label || `专注${fMin}m/休${bMin}m循环`,
+            kind: 'CYCLE_PHASE',
+            maxRuns: Number(args.cycles) || 0,
+            urgent: true,
+            phases: [
+              { name: '专注', durationMs: fMin * 60_000, strictLock: allow.length > 0, allowApps: allow },
+              { name: '休息', durationMs: bMin * 60_000, strictLock: false, allowApps: [] },
+            ],
+          }, now)
+          if (allow.length) {
+            commit({ aiWorkSession: { allow, until: now + fMin * 60_000, strict: true, why: '循环专时 · 专注', by: role } })
+          }
+          return { ok: true, text: `已启动多阶段循环计时「${t.label}」（id=${t.id}），手机原生时钟与锁笼已同步。` }
+        }
+        const mins = Math.max(1, Math.min(1440, Math.round(Number(args.minutes) || 15)))
+        const t = clockKernel.upsert({
+          label: args.label || `${mins} 分钟后闹钟`,
+          kind: 'ONE_SHOT',
+          intervalMs: mins * 60_000,
+          urgent: args.urgent !== false,
+          action: 'notify',
+        }, now)
+        return { ok: true, text: `已定好 ${mins} 分钟后的精确闹钟「${t.label}」（id=${t.id}）。` }
       },
     }
   }
@@ -4593,6 +4929,20 @@ export function apply(ctx) {
       record({ state: 'obligation-reask', at: now, kind: r.ask.kind, app: String(body?.app || '').slice(0, 120) })
       return { v: 1, ok: true, ask: true, followup: followupView(lock, now) }
     }
+    if (type === 'clock-fire') {
+      const taskId = String(body?.taskId || '').slice(0, 64)
+      record({
+        state: 'clock-fire-phone',
+        at: now,
+        taskId,
+        kind: String(body?.kind || ''),
+        action: String(body?.action || ''),
+        cycleIndex: Number(body?.cycleIndex) || undefined,
+        phaseName: String(body?.phaseName || ''),
+      })
+      clockKernel.tick(now)
+      return { v: 1, ok: true }
+    }
     if (type === 'pc-activity' || type === 'pc_heartbeat') {
       const saved = {
         at: Number(body?.at) || now,
@@ -5304,6 +5654,29 @@ export function apply(ctx) {
   const sweeper = setInterval(() => {
     desk.sweep()
     const now = Date.now()
+    try {
+      const ckRes = clockKernel.tick(now)
+      for (const ev of ckRes.fires) {
+        record({ state: 'clock-fire', at: now, taskId: ev.taskId, kind: ev.kind, action: ev.action })
+        if (ev.kind === 'CYCLE_PHASE') {
+          if (ev.nextPhase?.strictLock && ev.nextPhase?.allowApps?.length) {
+            commit({
+              aiWorkSession: {
+                allow: ev.nextPhase.allowApps,
+                until: now + ev.nextPhase.durationMs,
+                strict: true,
+                why: '循环专时 · ' + ev.nextPhase.name,
+                by: 'clock',
+              },
+            })
+          } else if (config.aiWorkSession?.by === 'clock') {
+            commit({ aiWorkSession: null })
+          }
+        }
+      }
+    } catch {
+      // clock tick must not break sweeper
+    }
     for (const [sid, pending] of [...pendingReply]) {
       if (now - pending.at < REPLY_WINDOW_MS) continue
       record({ requestId: pending.requestId, sessionId: sid, topicId: pending.topicId, state: 'none', at: now })
@@ -5324,16 +5697,25 @@ export function apply(ctx) {
   ctx.effect?.(() => () => clearInterval(sweeper))
 
   // 引擎崩过之后：库里还挂着一局，但这进程里没有它（live 是空的）。
-  // 收成空局，不补。挂在库里的话，手机那头会一直以为「有局在进行」，而这一局永远判不出来。
+  // 收成空局，不补；同时记录重启上下文用于触发轻量的「重启接管玩法」。
+  let bootRecoveryNote = ''
   try {
     const db = openBoutsDb(memoryPath())
     const r = reapRunning(db, { now: Date.now(), home: home() })
     if (r.closed) {
       record({ state: 'bout-reap', at: Date.now(), boutId: r.bout.id, protocolId: r.bout.protocolId || '' })
+      bootRecoveryNote = '刚才引擎重启过一次，已清理挂死的旧局「' + (r.bout.protocolId || '执行') + '」'
     }
     db?.close?.()
   } catch (error) {
     console.error('[companion] 重启收尾失败：' + String((error && error.message) || error))
+  }
+  if (!bootRecoveryNote && config.aiWorkSession && Number(config.aiWorkSession.until) > Date.now()) {
+    bootRecoveryNote = '刚才引擎后台重连，原有的严格专时白名单锁已原地续接生效'
+  }
+  if (bootRecoveryNote) {
+    record({ state: 'engine-restart-recovery', at: Date.now(), note: bootRecoveryNote })
+    writeJson(stateFile('restart-takeover.json'), { at: Date.now(), note: bootRecoveryNote, handled: false })
   }
 
   // 第八轮 P1/P2：计划的节拍。每分钟一次，只做两件事——把今天的计划维护在文件里，
@@ -5692,7 +6074,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -5888,6 +6270,33 @@ export function apply(ctx) {
           const out = composeAndEnqueueBout(body.value?.protocol || body.value || {}, role)
           return send(res, out.ok ? 200 : 400, { v: 1, ...out })
         }
+        if (path === '/clock') {
+          const act = String(body.value?.action || 'list')
+          const now = Date.now()
+          if (act === 'upsert') {
+            const allow = resolveAppNames(body.value?.allowApps || [], {
+              installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : [],
+              declaredApps: appsOf(),
+            }).resolved
+            const spec = { ...(body.value || {}) }
+            if (spec.kind === 'CYCLE_PHASE' && Array.isArray(spec.phases)) {
+              spec.phases = spec.phases.map((p) => ({
+                ...p,
+                allowApps: resolveAppNames(p.allowApps || allow, {
+                  installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : [],
+                  declaredApps: appsOf(),
+                }).resolved,
+              }))
+            }
+            const t = clockKernel.upsert(spec, now)
+            return send(res, 200, { v: 1, ok: true, task: t, tasks: clockKernel.list() })
+          }
+          if (act === 'pause') return send(res, 200, { v: 1, ok: true, task: clockKernel.pause(body.value?.id, now), tasks: clockKernel.list() })
+          if (act === 'resume') return send(res, 200, { v: 1, ok: true, task: clockKernel.resume(body.value?.id, now), tasks: clockKernel.list() })
+          if (act === 'skip') return send(res, 200, { v: 1, ok: true, event: clockKernel.skipPhase(body.value?.id, now), tasks: clockKernel.list() })
+          if (act === 'delete') return send(res, 200, { v: 1, ok: clockKernel.remove(body.value?.id), tasks: clockKernel.list() })
+          return send(res, 200, { v: 1, ok: true, tasks: clockKernel.list() })
+        }
         if (path === '/departments') {
           const act = String(body.value?.action || 'status')
           const now = Date.now()
@@ -5993,6 +6402,7 @@ export function apply(ctx) {
         return send(res, r.status, r.body)
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
+      if (req.method === 'GET' && path === '/clock') return send(res, 200, { v: 1, ok: true, tasks: clockKernel.list() })
       if (req.method === 'GET' && path === '/plan/day') return send(res, 200, planDayRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/brain') return send(res, 200, brainRoute({ action: 'view' }))
       if (req.method === 'GET' && path === '/codex') return send(res, 200, codexView(Date.now()))
@@ -6121,6 +6531,44 @@ export function apply(ctx) {
     const silence = silenceState(ledger, { sessionId, now })
     // 手机每次问 /plan 都带上现状：水位决定节奏和力度，大脑顺带判上一球有没有把他拉回来。
     const phone = phoneOf(body?.phone)
+    // 内核时钟滴答：推进到期的循环/周期/Cron 任务，并把全量任务表顺带返还原生 AlarmManager 对齐。
+    try {
+      clockKernel.tick(now)
+    } catch {
+      // ignore clock tick errors
+    }
+    // 行为雷达 0ms 先行判定：晨间开机直奔娱乐 / 纯游戏连玩 / 未收录短视频与信息流 / 租约偏航（静音/免打扰时段不越权抢跑）
+    const radarAllowed = config.control !== false && body?.skipRadar !== true && !(Number(config.muteUntil) > now) && !inQuiet(now, config.quietStart, config.quietEnd, tz)
+    const radar = radarAllowed
+      ? evalBehaviorRadar({
+          phone,
+          declaredApps: appsOf(),
+          now,
+          tz,
+          morningPlanned: !planGateNow(now, tz),
+          onBreak: onBreak(now),
+          emergencyActive: isEmergencyPassActive(loadExternal(), now),
+          runningBout: runningBoutNow(),
+          activeLease: config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null,
+        })
+      : { triggered: false }
+    if (radar.triggered) {
+      if (radar.revokeLease) commit({ taskLease: null })
+      if (Array.isArray(radar.tempBlockApps) && radar.tempBlockApps.length) {
+        const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && Number(b.until) > now && !radar.tempBlockApps.includes(b.app))
+        const until = now + Math.max(15, radar.refuseMinutes || 30) * 60_000
+        commit({
+          blockExtra: [...keep, ...radar.tempBlockApps.map((app) => ({ app, until, by: 'radar', why: radar.forceWhy }))].slice(-30),
+        })
+      }
+      if (radar.revokeLease && radar.refuseMinutes > 0) {
+        commit({
+          refuseUntil: Math.max(now + radar.refuseMinutes * 60_000, Number(config.refuseUntil) || 0),
+          refuseBy: 'ai',
+        })
+      }
+      record({ state: 'behavior-radar', at: now, kind: radar.kind, app: phone?.app || '', reason: radar.reason })
+    }
     // 临时封禁名单里的 App 也算娱乐。
     if (phone?.app && blockedNow(now).includes(phone.app)) phone.fun = true
     const appGov = loadAppGov()
@@ -6469,16 +6917,32 @@ export function apply(ctx) {
       }
     }
     if (!out.speak) nextSpeaker = null
+    // 若行为雷达在 0ms 先行锁机，优先于骰子/冷却唤起对应姐妹解释锁机原因（Gemini 审讯拉起、静音、免打扰时不抢戏）
+    if (radar.triggered && out.reason !== 'gemini-drift' && !out.geminiSchedule && out.reason !== 'muted' && out.reason !== 'quiet' && out.reason !== 'disabled' && !desk.inFlight() && !inConversation(sessionId, now)) {
+      const targetRole = radar.speaker === 'strategist' && config.dual !== false && config.strategistSessionId ? 'strategist' : 'companion'
+      nextSpeaker = { role: targetRole, reason: radar.ballReason || 'radar-drift', at: now, note: radar.forceWhy }
+      Object.assign(out, { speak: true, reason: radar.ballReason || 'radar-drift', nextCheckAt: now })
+    } else if (!nextSpeaker && canTalk && !desk.inFlight() && !inConversation(sessionId, now)) {
+      const takeover = readState(stateFile('restart-takeover.json'), null)
+      if (takeover && !takeover.handled && now - Number(takeover.at) < 30 * 60_000) {
+        writeJson(stateFile('restart-takeover.json'), { ...takeover, handled: true })
+        nextSpeaker = { role: 'companion', reason: 'restart-takeover', at: now, note: takeover.note }
+        Object.assign(out, { speak: true, reason: 'restart-takeover', nextCheckAt: now })
+      }
+    }
     const epUntil = emergencyActive ? extState.emergencyPass.until : 0
-    const effectiveForceLevel = emergencyActive ? 0 : force.level
-    const effectiveForceRelease = emergencyActive || onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)
+    const effectiveForceLevel = emergencyActive ? 0 : Math.max(force.level, radar.triggered ? radar.forceLevel : 0)
+    const effectiveForceWhy = radar.triggered ? (radar.forceWhy || force.why) : force.why
+    const effectiveForceRelease = emergencyActive || (!radar.triggered && (onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)))
     const mediaAction = !emergencyActive && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     return {
       v: 1, ...out, silence, sessionId, speaker: nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion',
       tide: { level: water.level, band: water.band, why: water.why },
       // release：只有他讲通了（宽限期内）或 3 分钟应急放行期间才放行大肥鱼加的锁。
-      force: { level: effectiveForceLevel, name: force.name, why: force.why, app: phone?.app || undefined,
+      force: { level: effectiveForceLevel, name: force.name, why: effectiveForceWhy, app: phone?.app || undefined,
         release: effectiveForceRelease },
+      ...(radar.triggered ? { behaviorRadar: { kind: radar.kind, reason: radar.reason } } : {}),
+      clockTasks: clockKernel.list(),
       ...(mediaAction ? { media: mediaAction } : {}),
       appTier: tierInfo,
       contextExempt: exemptRes.exempt ? { active: true, until: exemptRes.until, reason: exemptRes.reason } : null,

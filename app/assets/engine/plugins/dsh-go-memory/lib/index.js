@@ -16,6 +16,7 @@ import path from 'node:path'
 import { openStore } from './store.js'
 import { importFishMemory } from './migrate.js'
 import { memoryView } from './view.js'
+import { extractAutoFacts } from './auto_facts.js'
 import { appendDialog, dialogLines, readDialog, trimDialog, userTextOf } from './dialog.js'
 import {
   correct, exportMarkdown, forget, listTopics, markTopicAsked, dateOf, maintain, pickTopicToAsk,
@@ -111,11 +112,36 @@ export function apply(ctx) {
   let dialogTrimmedAt = 0
   const mounted = new Map()    // sid -> { agent, offs }
 
+  /** 读 companion/config.json 拿双姐妹与主会话 id，让鱼丸、鲸澜与主聊天天然互见各自记忆。 */
+  function readCompanionSessionIds() {
+    try {
+      const cfgPath = path.join(home(), 'companion', 'config.json')
+      if (!fs.existsSync(cfgPath)) return []
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'))
+      const out = []
+      if (typeof cfg?.sessionId === 'string' && cfg.sessionId) out.push(scopeOfSession(cfg.sessionId))
+      if (typeof cfg?.strategistSessionId === 'string' && cfg.strategistSessionId) out.push(scopeOfSession(cfg.strategistSessionId))
+      return out
+    } catch {
+      return []
+    }
+  }
+
+  function sharedScopesFor(sid) {
+    const set = new Set([scopeOfSession(sid), 'global', ...readCompanionSessionIds()])
+    for (const activeSid of mounted.keys()) {
+      if (activeSid) set.add(scopeOfSession(activeSid))
+    }
+    return [...set]
+  }
+
   // ── 工具 ────────────────────────────────────────────────────────────────
   function scopeFor(sid, args = {}) {
-    if (args.scope === 'global' || args.share === true) return 'global'
+    if (args.share === false) return scopeOfSession(sid)
     if (typeof args.scope === 'string' && args.scope.startsWith('workspace:')) return normalizeScope(args.scope)
-    return scopeOfSession(sid)
+    if (args.scope === 'session') return scopeOfSession(sid)
+    // 默认跨会话共享入 global（解决双姐妹各自会话失忆）
+    return 'global'
   }
 
   function makeTools(sid) {
@@ -141,7 +167,7 @@ export function apply(ctx) {
             pinned: { type: 'boolean', description: '钉住：永不淡忘（称呼忌讳、承诺、身体禁忌才用）。' },
             triggers: { type: 'array', items: { type: 'string' }, description: '可选，Lorebook 触发词或 /regex/flags，命中对话时按需召回。' },
             sceneTags: { type: 'array', items: { type: 'string' }, description: '可选，场景标签，如 scene:video_learning / scene:commute。' },
-            share: { type: 'boolean', description: 'true = 所有会话可见（默认只在本会话可见）。' },
+            share: { type: 'boolean', description: 'true = 所有会话可见（默认 true 共享，传 false 才仅限本会话）。' },
             expiresInDays: { type: 'integer', description: '可选，多少天后自动过期（临时状态用）。' },
             replaces: { type: 'string', description: '可选，指认被更新的旧条目（id 或原文片段）。' },
             force: { type: 'boolean', description: '可选，用户明确要求重新记一条此前让忘掉的原话时用。' },
@@ -313,6 +339,16 @@ export function apply(ctx) {
         if (!s) return
         try {
           appendDialog(s.dir, { sid, text: txt, at: Date.now() }, dialogSeen)
+          const autoItems = extractAutoFacts(txt)
+          if (autoItems.length) {
+            let changed = false
+            const now = Date.now()
+            for (const item of autoItems) {
+              const r = remember(s.doc, { ...item, scope: 'global', source: 'auto-extract' }, now)
+              if (r.ok && !r.duplicate) changed = true
+            }
+            if (changed) persist()
+          }
           if (Date.now() - dialogTrimmedAt > 6 * 3_600_000) {
             dialogTrimmedAt = Date.now()
             trimDialog(s.dir)
@@ -360,7 +396,8 @@ export function apply(ctx) {
       // 同一次请求里 text() 会被调好几遍（宿主在装配阶段会重复求值）：
       // 1.5 秒内且线索没变就复用，避免重复检索和重复落盘。
       if (cached && cached.query === query && Date.now() - cached.at < 1500) return cached.text
-      const ftsHits = query ? s.ftsSearch(query, { scopes: [scopeOfSession(sid), 'global'], limit: 12 }) : []
+      const scopes = sharedScopesFor(sid)
+      const ftsHits = query ? s.ftsSearch(query, { scopes, limit: 12 }) : []
       const now = Date.now()
       let dialog = []
       try {
@@ -370,9 +407,9 @@ export function apply(ctx) {
       const slot = Math.floor(now / (20 * 60_000))
       const random = ((slot * 2654435761) >>> 0) % 1000 / 1000
       const picked = recall(s.doc, {
-        scope: scopeOfSession(sid),
+        scope: scopes,
         query,
-        limit: 6,
+        limit: 8,
         ftsIds: ftsHits.map((h) => h.id),
         dialog,
         random,

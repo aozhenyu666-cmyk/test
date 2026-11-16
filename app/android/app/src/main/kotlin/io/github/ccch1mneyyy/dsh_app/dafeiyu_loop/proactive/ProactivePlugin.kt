@@ -256,9 +256,35 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                     ProactiveRuntime.fetchPluginRoute(result, "POST", "/drill-op", body)
                 }
             }
-            // B5：设置页试听。绕开插件的总开关（关了也能试），但不绕过设备状态——
-            // 回 null 表示真的念完了，否则是降级原因（no-tts / dnd / muted / session）。
+            // 姐妹语音试听 / 音频流
             "voiceTry" -> ProactiveRuntime.tryVoice { why -> result.success(why) }
+            // 内核时钟管理（列出 / 新增 / 暂停 / 恢复 / 跳阶段 / 删除，双向同步伴侣与原生日历闹钟）
+            "clockList" -> result.success(ProactiveRuntime.clockList())
+            "clockUpsert" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                result.success(ProactiveRuntime.upsertClockTask(args))
+            }
+            "clockControl" -> {
+                val id = call.argument<String>("id").orEmpty()
+                val op = call.argument<String>("op").orEmpty()
+                result.success(ProactiveRuntime.controlClockTask(id, op))
+            }
+            // 「局」工作台原生桥（开局 / 队列 / 协议 / 账 / 重排）
+            "boutsStatus" -> ProactiveRuntime.fetchPluginRoute(
+                result, "GET", "/bouts?timeZone=${BeijingClock.ZONE.id}", null,
+            )
+            // 一键开启 Obsidian 手机文件（/sdcard）挂载与自诊
+            "phoneStorageStatus" -> {
+                result.success(io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController.get(context).phoneStorageStatus())
+            }
+            "enablePhoneStorage" -> {
+                val restart = call.argument<Boolean>("restart") != false
+                result.success(io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController.get(context).enablePhoneStorageAndRestart(restart))
+            }
+            "restartEngine" -> {
+                io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController.get(context).manualRestart()
+                result.success(true)
+            }
             // 大肥鱼哨兵互信配对状态与 6 位配对码生成。
             "guardianStatus" -> result.success(io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianPairing.statusMap(context))
             "guardianPairCode" -> result.success(io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianPairing.generatePairCode(context))

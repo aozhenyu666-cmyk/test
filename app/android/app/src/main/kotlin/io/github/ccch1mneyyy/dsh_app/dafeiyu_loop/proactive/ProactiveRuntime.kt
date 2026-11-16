@@ -23,11 +23,16 @@ import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.BeijingClock
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.BurstPlan
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.VoicePlan
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.Clocks
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ClockFireEvent
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ClockPhase
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ClockTask
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ClockTaskKind
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.Command
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.Coordinator
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.CoordinatorConfig
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.EventRequest
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.Gate
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.KernelClockEngine
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ProactiveLedgerBook
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ProactiveScheduler
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ReplyWindow
@@ -55,6 +60,7 @@ import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionVerdict
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianOfflineIncident
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianPolicyMirror
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianPolicySnapshot
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.SystemBypassClassifier
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.intercept.InterceptRuntime
 import io.github.ccch1mneyyy.dsh_app.runtime.DshService
 import io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController
@@ -99,7 +105,9 @@ object ProactiveRuntime {
     private lateinit var app: Context
     private var coordinator: Coordinator? = null
     private var scheduler: ProactiveScheduler? = null
-    /** A. 主动交流账: its own file, its own counters; 行为拦截账 lives in InterceptRuntime. */
+    private var clockEngine: KernelClockEngine? = null
+    private val highFreqClockTick = Runnable { tickClockHighFreq() }
+    private val sessionActiveTick = Runnable { tickSessionActive() }
     private var ledger: ProactiveLedgerBook? = null
     @Volatile var agentPort: AgentPort? = null
     @Volatile var notificationPort: NotificationPort? = null
@@ -167,15 +175,18 @@ object ProactiveRuntime {
         val book = ProactiveLedgerBook(AtomicJsonFile(File(dir, "ledger.json")))
         book.recover()
         val s = ProactiveScheduler(AtomicJsonFile(File(dir, "scheduler.json")), ::minuteOfDay, ::dayOf, ledger = book)
+        val ck = KernelClockEngine(AtomicJsonFile(File(dir, "clock.json")), BeijingClock.ZONE)
         ledger = book
         coordinator = c
         scheduler = s
+        clockEngine = ck
         s.recover(clocks())
+        ck.recover(clocks())
         dispatch(c.recover(gate()))
-        // Round-1 twins whose kernel event closed while no LoopEngine was alive (review r3, A).
         runCatching { LoopRuntime.reconcileWithKernel(c::find) }
         applySwitches()
         watchTasks()
+        if (sessionActive()) scheduleSessionActiveTick()
         arm()
         return c
     }
@@ -383,7 +394,10 @@ object ProactiveRuntime {
         fetchPluginRoute(routeCallback { m ->
             val error = ((m["error"] as? Map<*, *>)?.get("code") as? String)
             when (m["state"]) {
-                "generated" -> done((m["text"] as? String)?.trim(), null)
+                "generated" -> {
+                    consultPlanSoon(minGapMs = 0L)
+                    done((m["text"] as? String)?.trim(), null)
+                }
                 "failed" -> done(null, ((m["failure"] as? Map<*, *>)?.get("code") as? String) ?: "failed")
                 "cancelled" -> done(null, "cancelled")
                 // Still thinking (accepted / claimed), or this poll's own transport timed out: ask again.
@@ -526,8 +540,15 @@ object ProactiveRuntime {
      * R7 P0-1：舱内这一包的判定。事实由 [SessionFactsOf] 查（Android 那边），规则在 [SessionPolicy]。
      */
     private fun sessionVerdict(pkg: String): SessionVerdict {
-        val dwell = if (pkg == frontPkg) (System.currentTimeMillis() - frontSince).coerceAtLeast(0L) else 0L
+        val now = System.currentTimeMillis()
+        val dwell = if (pkg == frontPkg) (now - frontSince).coerceAtLeast(0L) else 0L
         val cfg = runCatching { InterceptRuntime.config() }.getOrNull()
+        val bounceCount = synchronized(sessionBounceStamps) {
+            while (sessionBounceStamps.isNotEmpty() && now - sessionBounceStamps.first() > 30_000L) {
+                sessionBounceStamps.removeFirst()
+            }
+            sessionBounceStamps.size
+        }
         return SessionPolicy.judge(pkg, SessionFactsOf.of(
             app, pkg,
             allow = sessionAllow,
@@ -536,25 +557,39 @@ object ProactiveRuntime {
             dwellMs = dwell,
             graceMs = sessionGrace,
             breakGlass = breaking() || inEmergencyPass(),
+            strict = sessionStrict,
+            bounceCount = bounceCount,
         ))
     }
 
     /**
-     * 舱内前台变了：同一份判定给两条调用路（前台事件、/plan 回调）用，逻辑只留这一处。
-     * ALLOW 清零去抖，GRACE 只发一条不打断的提示，LOCK 才上 4 级。
+     * 舱内前台变了：同一份判定给两条调用路用，且 30 秒滑窗记横跳次数（回到桌面/任务应用不再洗白计数）。
      */
-    private fun sessionFront(pkg: String?): Boolean {
-        if (pkg == null || !FrontChange.switched(pkg)) return false
+    private fun sessionFront(pkg: String?, forceCheck: Boolean = false): Boolean {
+        if (pkg == null) return false
+        if (!forceCheck && !FrontChange.switched(pkg)) return false
+        val now = System.currentTimeMillis()
         if (pkg != frontPkg) {
+            val isAllowLike = pkg in sessionAllow || pkg == app.packageName
+            if (isAllowLike) {
+                lastSessionInAllowPkg = pkg
+            } else if (lastSessionInAllowPkg != null && pkg !in SessionPolicy.NEVER_LOCK) {
+                synchronized(sessionBounceStamps) {
+                    sessionBounceStamps.addLast(now)
+                    while (sessionBounceStamps.isNotEmpty() && now - sessionBounceStamps.first() > 30_000L) {
+                        sessionBounceStamps.removeFirst()
+                    }
+                }
+            }
             frontPkg = pkg
-            frontSince = System.currentTimeMillis()
+            frontSince = now
             graceHinted = false
         }
         if (!sessionActive()) return false
         return when (sessionVerdict(pkg)) {
             SessionVerdict.ALLOW -> {
-                // 回到 Gemini / 桌面 / 图库：去抖清掉，下回再进来要重新锁。
-                forcedApp = null
+                // 仅在真正回到白名单目标 App 时清防抖，回桌面不洗白
+                if (pkg in sessionAllow || pkg == app.packageName) forcedApp = null
                 false
             }
             SessionVerdict.GRACE -> {
@@ -565,6 +600,12 @@ object ProactiveRuntime {
         }
     }
 
+    /** 提供给 FocusRuntime 仲裁：专时严格 session 直接用 InterceptPageActivity 统管锁面。 */
+    fun onSessionBounce(pkg: String): Boolean {
+        if (!sessionActive()) return false
+        return sessionFront(pkg, forceCheck = true)
+    }
+
     /** 4 级锁：同一个 App 启动时连发的窗口事件只锁一次（输入法已由 FrontChange 排除）。 */
     private fun lockInSession(pkg: String): Boolean {
         if (breaking() || inEmergencyPass()) return false
@@ -572,7 +613,7 @@ object ProactiveRuntime {
         if (forcedApp == pkg && now - forcedAt < SESSION_LOCK_DEBOUNCE_MS) return true
         forcedApp = pkg
         forcedAt = now
-        val f = Force(4, pkg, lockWhy() ?: "Gemini 互动中，只许 Gemini", now + FORCE_HOLD_MS, refuse = true)
+        val f = Force(4, pkg, workWhy ?: lockWhy() ?: "专时锁定中，只许任务应用", now + FORCE_HOLD_MS, refuse = sessionStrict)
         force = f
         enforce(f, fresh = true)
         return true
@@ -754,6 +795,10 @@ object ProactiveRuntime {
     @Volatile private var frontPkg: String? = null
     @Volatile private var frontSince: Long = 0L
     @Volatile private var graceHinted = false
+    @Volatile private var sessionStrict: Boolean = false
+    private val sessionBounceStamps = ArrayDeque<Long>()
+    @Volatile private var lastSessionInAllowPkg: String? = null
+    private var installedAppsCache: Pair<Long, List<Map<String, Any?>>>? = null
     private var graceRecheck: Runnable? = null
     private fun loadSession() {
         if (sessionUntil >= 0) return
@@ -765,6 +810,7 @@ object ProactiveRuntime {
         sessionOwner = runCatching { p.getString("sessionOwner", "").orEmpty() }.getOrDefault("").ifBlank { OWNER_PLUGIN }
         workWhy = runCatching { p.getString("workWhy", "").orEmpty() }.getOrDefault("").ifBlank { null }
         sessionSince = runCatching { p.getLong("sessionSince", 0L) }.getOrDefault(0L)
+        sessionStrict = runCatching { p.getBoolean("sessionStrict", false) }.getOrDefault(false)
         sessionGrace = runCatching { p.getLong("sessionGraceMs", SessionPolicy.DEFAULT_GRACE_MS) }
             .getOrDefault(SessionPolicy.DEFAULT_GRACE_MS)
     }
@@ -773,6 +819,7 @@ object ProactiveRuntime {
         loadSession()
         return System.currentTimeMillis() < sessionUntil
     }
+    fun isStrictSession(): Boolean = sessionActive() && sessionStrict
     /** R9：这个舱是不是 Gemini 连麦（锁页的「回去」按钮按它换文案）。 */
     fun sessionIsGemini(): Boolean = sessionApp()?.let { it in GEMINI_PACKAGES } ?: false
 
@@ -781,7 +828,7 @@ object ProactiveRuntime {
         loadSession()
         return sessionPkg ?: sessionAllow.firstOrNull()
     }
-    private fun setSession(until: Long, allow: Set<String>, pkg: String?, graceMs: Long, owner: String = OWNER_PLUGIN, why: String? = null) {
+    private fun setSession(until: Long, allow: Set<String>, pkg: String?, graceMs: Long, owner: String = OWNER_PLUGIN, why: String? = null, strict: Boolean = false) {
         // 连麦开始时间：手机要在结束时报 gemini-end 的 minutes，而插件的 until 是我们唯一的时间来源。
         if (until > 0 && sessionUntil <= 0) sessionSince = System.currentTimeMillis()
         if (until <= 0) sessionSince = 0L
@@ -790,6 +837,7 @@ object ProactiveRuntime {
         sessionPkg = pkg
         sessionOwner = owner
         workWhy = why
+        sessionStrict = strict && until > 0L
         // 0 是合法值，不是「没给」：R8 P4 的升级舱要求「不给第三方应用宽限」，
         // 46 秒的宽限等于让他先白刷一分钟。缺省（没有这个键）由 applySession 填默认值。
         sessionGrace = if (graceMs >= 0) graceMs else SessionPolicy.DEFAULT_GRACE_MS
@@ -797,6 +845,8 @@ object ProactiveRuntime {
         frontPkg = null
         frontSince = 0L
         graceHinted = false
+        synchronized(sessionBounceStamps) { sessionBounceStamps.clear() }
+        lastSessionInAllowPkg = null
         runCatching {
             app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit()
                 .putLong("sessionUntil", until)
@@ -806,9 +856,32 @@ object ProactiveRuntime {
                 .putLong("sessionGraceMs", sessionGrace)
                 .putString("sessionOwner", owner)
                 .putString("workWhy", why.orEmpty())
+                .putBoolean("sessionStrict", sessionStrict)
                 .apply()
         }
+        if (until > System.currentTimeMillis()) scheduleSessionActiveTick() else cancelSessionActiveTick()
         syncGuardianMirror()
+    }
+
+    private fun scheduleSessionActiveTick() {
+        main.removeCallbacks(sessionActiveTick)
+        main.postDelayed(sessionActiveTick, 1_000L)
+    }
+
+    private fun cancelSessionActiveTick() {
+        main.removeCallbacks(sessionActiveTick)
+    }
+
+    private fun tickSessionActive() {
+        if (!::app.isInitialized || !sessionActive()) {
+            cancelSessionActiveTick()
+            return
+        }
+        val front = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
+        if (!front.isNullOrBlank()) {
+            sessionFront(front, forceCheck = true)
+        }
+        main.postDelayed(sessionActiveTick, 1_000L)
     }
 
     @Volatile private var sessionSince: Long = 0L
@@ -836,6 +909,7 @@ object ProactiveRuntime {
             (s["graceMs"] as? Number)?.toLong() ?: SessionPolicy.DEFAULT_GRACE_MS,
             // R9：预案的严格模式带一句解释（哪条预案、为什么、怎么解除），锁页照它说。
             why = (s["why"] as? String)?.take(120),
+            strict = s["strict"] == true || ((s["graceMs"] as? Number)?.toLong() ?: 1L) <= 0L,
         )
     }
 
@@ -881,9 +955,9 @@ object ProactiveRuntime {
             val allowed = allow.filter { it.isNotBlank() }.toSet()
             // l10n:keep agent tool result
             if (allowed.isEmpty()) return "开工作模式要先给 allow：至少一个允许使用的 App 包名（用 apps 查）。"
-            setSession(now + mins * 60_000L, allowed, null, 0L, OWNER_WORK, why?.take(80))
+            setSession(now + mins * 60_000L, allowed, null, 0L, OWNER_WORK, why?.take(80), strict = true)
             // 现在就判一次：他可能已经停在名单外的 App 里，不该等到下次切换才锁。
-            sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app)
+            sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app, forceCheck = true)
             // l10n:keep agent tool result
             return "已进入工作模式，$mins 分钟后自动结束：只有 ${allowed.joinToString("、")} 能用，" +
                 "其余第三方 App 一进去就被锁页挡住；电话、短信、地图、支付和桌面不受影响。"
@@ -1326,13 +1400,18 @@ object ProactiveRuntime {
         val ep = map["emergencyPass"] as? Map<*, *>
         val epUntil = if (ep?.get("active") == true) (ep["until"] as? Number)?.toLong() ?: 0L else 0L
         applyEmergencyPassState(epUntil, ep?.get("reason") as? String)
+        // 同步伴侣插件下发的内核时钟任务（Cron / 循环计时 / 循环闹钟）
+        val remoteClock = (map["clockTasks"] as? List<*>)?.mapNotNull { ClockTask.fromMap(it as? Map<*, *>) }
+        if (remoteClock != null) {
+            clockEngine?.syncFromPlugin(remoteClock, clocks())
+        }
         val epWake = if (emergencyUntilAt > stamp) emergencyUntilAt else 0L
         val wakeAt = listOf(at, change, followupUntilAt, geminiDueAt, epWake).filter { it > 0 }.minOrNull() ?: 0L
         val speak = map["speak"] == true
         val reason = map["reason"] as? String ?: ""
         syncGuardianMirror()
         flushGuardianOfflineSoon()
-        if (wakeAt <= 0) return
+        if (wakeAt <= 0 && remoteClock == null) return
         // P2: the plugin decides, the phone executes. speak=true means this ball now; nextCheckAt is
         // when to look again afterwards. speak=false means only move the single alarm.
         if (speak && !ballInFlight()) {
@@ -1348,8 +1427,10 @@ object ProactiveRuntime {
         // Keep the plugin's next-check time authoritative even after this ball: no local vote until
         // the next /plan or until the plugin goes away. speak=false on a nextChangeAt wake, so the
         // tick asks again instead of speaking.
-        companionPlan = CompanionPlan(false, wakeAt, reason, System.currentTimeMillis())
-        scheduler?.setNextDueAt(wakeAt, clocks())
+        if (wakeAt > 0L) {
+            companionPlan = CompanionPlan(false, wakeAt, reason, System.currentTimeMillis())
+            scheduler?.setNextDueAt(wakeAt, clocks())
+        }
         arm()
     }
 
@@ -1663,16 +1744,137 @@ object ProactiveRuntime {
     private fun arm() {
         val s = scheduler ?: return
         val mode = WakeMode.of(caps())
-        val plan = companionPlan
-        if (plan != null && agentPort != null) {
-            // One alarm, at the companion's own next check. The local random gap/cap is not asked.
-            // 60s 地板会把插件"5 秒后再来问"（改过预案的两分钟观察窗）整条丢掉，只剩分钟级的生效；
-            // 5s 地板只防 plan.at 是 0 或已经过去时的闹钟风暴。
-            val now = System.currentTimeMillis()
-            WakeAlarm.set(app, plan.at.coerceAtLeast(now + 5_000L), mode)
-            return
+        val cNow = clocks()
+        val clockRes = clockEngine?.tick(cNow)
+        if (clockRes != null && clockRes.fires.isNotEmpty()) {
+            handleClockFires(clockRes.fires)
         }
-        WakeAlarm.set(app, s.nextWake(clocks(), mode), mode)
+        val plan = companionPlan
+        val schedulerWake = if (plan != null && agentPort != null) {
+            plan.at.coerceAtLeast(cNow.wall + 5_000L)
+        } else {
+            s.nextWake(cNow, mode)
+        }
+        val nextWake = listOfNotNull(schedulerWake, clockRes?.nextWakeWall).filter { it > 0L }.minOrNull()
+        WakeAlarm.set(app, nextWake, mode, clockRes?.nextUrgentWakeWall)
+        main.removeCallbacks(highFreqClockTick)
+        val highFreqMs = clockRes?.highFreqIntervalMs
+        if (highFreqMs != null) {
+            main.postDelayed(highFreqClockTick, highFreqMs.coerceIn(250L, 5_000L))
+        }
+    }
+
+    private fun tickClockHighFreq() {
+        if (!::app.isInitialized) return
+        val ck = clockEngine ?: return
+        val res = ck.tick(clocks())
+        if (res.fires.isNotEmpty()) {
+            handleClockFires(res.fires)
+        }
+        val hf = res.highFreqIntervalMs
+        if (hf != null) {
+            main.postDelayed(highFreqClockTick, hf.coerceIn(250L, 5_000L))
+        }
+        val mode = WakeMode.of(caps())
+        val plan = companionPlan
+        val cNow = clocks()
+        val schedWake = if (plan != null && agentPort != null) plan.at else scheduler?.nextWake(cNow, mode)
+        val mergedWake = listOfNotNull(schedWake, res.nextWakeWall).filter { it > 0L }.minOrNull()
+        WakeAlarm.set(app, mergedWake, mode, res.nextUrgentWakeWall)
+    }
+
+    fun onSystemClockJump(reason: String) {
+        if (!::app.isInitialized) return
+        clockEngine?.onClockJump(clocks())
+        tick(reason)
+    }
+
+    fun clockList(): List<Map<String, Any?>> =
+        clockEngine?.list()?.map { it.toMap() } ?: emptyList()
+
+    fun upsertClockTask(raw: Map<*, *>): Map<String, Any?>? {
+        val ck = clockEngine ?: return null
+        val t = ClockTask.fromMap(raw) ?: return null
+        val saved = ck.upsert(t, clocks())
+        arm()
+        return saved.toMap()
+    }
+
+    fun controlClockTask(id: String, op: String): Any? {
+        val ck = clockEngine ?: return null
+        val now = clocks()
+        val out = when (op) {
+            "pause" -> ck.pause(id, now)?.toMap()
+            "resume" -> ck.resume(id, now)?.toMap()
+            "delete", "remove" -> ck.remove(id)
+            "skip" -> ck.skipCyclePhase(id, now)?.let { ev ->
+                handleClockFires(listOf(ev))
+                ck.get(id)?.toMap()
+            }
+            else -> null
+        }
+        arm()
+        return out
+    }
+
+    private fun handleClockFires(fires: List<ClockFireEvent>) {
+        val now = System.currentTimeMillis()
+        for (ev in fires) {
+            Log.i(TAG, "clock fire: ${ev.taskId} kind=${ev.kind} action=${ev.action} cycle=${ev.cycleIndex} phase=${ev.phaseName}")
+            if (ev.kind == ClockTaskKind.CYCLE_PHASE) {
+                val next = ev.nextPhase
+                if (next != null && next.strictLock && next.allowApps.isNotEmpty()) {
+                    setSession(
+                        now + next.durationMs,
+                        next.allowApps.toSet(),
+                        null,
+                        0L,
+                        OWNER_WORK,
+                        "循环专时 · ${next.name}",
+                        strict = true,
+                    )
+                    sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app, forceCheck = true)
+                } else if (ev.completedPhase?.strictLock == true && (next == null || !next.strictLock)) {
+                    if (sessionOwner == OWNER_WORK) {
+                        setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
+                    }
+                }
+            } else if (ev.action == "focus_lock") {
+                @Suppress("UNCHECKED_CAST")
+                val allow = (ev.payload["allow"] as? List<*>)?.mapNotNull { it as? String }?.filter { it.isNotBlank() }.orEmpty()
+                val mins = ((ev.payload["minutes"] as? Number)?.toInt() ?: 25).coerceIn(5, 720)
+                if (allow.isNotEmpty()) workMode("on", allow, mins, ev.label)
+            } else if (ev.action == "unlock_focus" && sessionOwner == OWNER_WORK) {
+                setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
+            }
+
+            if (ev.urgent || ev.action == "notify" || ev.action == "alarm" || ev.kind == ClockTaskKind.CYCLE_PHASE) {
+                val msg = if (ev.kind == ClockTaskKind.CYCLE_PHASE) {
+                    val np = ev.nextPhase
+                    if (np == null) "${ev.label} 已完成全部循环"
+                    else "${ev.label}：已进入「${np.name}」（第 ${ev.cycleIndex} 轮）"
+                } else {
+                    "闹钟到点：${ev.label}"
+                }
+                main.post {
+                    runCatching { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
+                    runCatching { VoiceOut.speak(VoicePlan(text = msg, rate = 1.05f, pitch = 1.0f, maxChars = 60)) }
+                }
+            }
+
+            postEvent(
+                "clock-fire",
+                "taskId" to ev.taskId,
+                "label" to ev.label,
+                "kind" to ev.kind.name,
+                "action" to ev.action,
+                "runCount" to ev.runCount,
+                "cycleIndex" to ev.cycleIndex,
+                "phaseName" to ev.phaseName,
+                "nextPhase" to ev.nextPhase?.name,
+                "finished" to ev.finished,
+            ) { consultPlanSoon(minGapMs = 0L) }
+        }
     }
 
     fun clocks() = Clocks(System.currentTimeMillis(), SystemClock.elapsedRealtime(),
@@ -1716,6 +1918,7 @@ object ProactiveRuntime {
             "foregroundDebugOn" to io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(app),
             "local" to String.format(java.util.Locale.US, "%02d:%02d", minuteOfDay(wall) / 60, minuteOfDay(wall) % 60),
             "today" to today,
+            "installedApps" to cachedInstalledApps(wall),
             // 走神前兆：90 秒 / 15 分钟 / 60 分钟内切了几次 App、切过哪些。
             "switches" to synchronized(switches) {
                 val recent90 = switches.filter { now - it.first <= 90_000L }
@@ -1743,6 +1946,34 @@ object ProactiveRuntime {
             },
         )
     }.getOrNull()
+
+    /** 每小时缓存一次本机可启动应用目录，供插件 JS 0ms 把中文应用名解析成包名。 */
+    private fun cachedInstalledApps(wall: Long): List<Map<String, Any?>> = runCatching {
+        installedAppsCache?.let { if (wall - it.first < 3_600_000L) return@runCatching it.second }
+        val pm = app.packageManager
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        @Suppress("DEPRECATION")
+        val resolved = pm.queryIntentActivities(intent, 0)
+        val bypass = SystemBypassClassifier.resolvedBypasses(app, wall)
+        val seen = HashSet<String>()
+        val list = ArrayList<Map<String, Any?>>(128)
+        for (ri in resolved) {
+            val ai = ri.activityInfo?.applicationInfo ?: continue
+            val pkg = ai.packageName ?: continue
+            if (!seen.add(pkg)) continue
+            val label = runCatching { ri.loadLabel(pm).toString().trim() }.getOrNull()?.takeIf { it.isNotEmpty() } ?: continue
+            val isSys = (ai.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
+            if (isSys && pkg !in bypass && pkg !in SystemBypassClassifier.KNOWN_SYSTEM_BYPASS) continue
+            list.add(linkedMapOf(
+                "pkg" to pkg,
+                "label" to label.take(36),
+                "bypass" to (pkg in bypass),
+            ))
+            if (list.size >= 160) break
+        }
+        installedAppsCache = wall to list
+        list
+    }.getOrDefault(emptyList())
 
     /** 近 60 分钟 UsageEvents 应用切换流（"使用情况访问"授权后可读，供 ForegroundRecorder 之外补齐历史）。 */
     private var usage60Cache: Pair<Long, List<Map<String, Any?>>>? = null

@@ -89,6 +89,11 @@ class DshService : Service() {
                     }
                 }
             }
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuServiceHooks.ACTION_RESTART_ENGINE -> {
+                EngineExitLog.note(this, "userRestartNotification", "phase=${controller.phase}")
+                controller.manualRestart()
+                return if (running) START_STICKY else START_NOT_STICKY
+            }
             else -> {
                 if (intent == null) EngineExitLog.note(this, "stickyRestart", "phase=${controller.phase}")
                 else if (intent.action == ACTION_ENSURE_ENGINE) {
@@ -389,6 +394,7 @@ class DshService : Service() {
             if (voice != null) builder.setOnlyAlertOnce(true)
             val boutLine = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuServiceHooks
                 .boutLineAndApplyChronometer(context, builder, phoneLine != null || voice != null)
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuServiceHooks.addRestartAction(context, builder)
             return builder
                 .setSmallIcon(R.drawable.ic_stat_dsh)
                 .setContentTitle(AppStrings.APP_NAME)

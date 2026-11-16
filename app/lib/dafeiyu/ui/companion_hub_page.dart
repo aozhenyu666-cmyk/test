@@ -26,6 +26,8 @@ import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import 'bout_voice_page.dart';
+import 'bouts_workspace_page.dart';
+import 'voice_settings_page.dart';
 
 class CompanionHubPage extends ConsumerStatefulWidget {
   const CompanionHubPage({super.key, this.channel});
@@ -51,6 +53,8 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   SistersView? _sisters;
   Map<String, Object?>? _planDay;
   GuardianPairingStatus? _guardian;
+  Map<String, dynamic>? _phoneStorage;
+  int _clockCount = 0;
 
   @override
   void initState() {
@@ -80,6 +84,41 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       _planDay = results[4] is Map<String, Object?> ? results[4] as Map<String, Object?> : null;
       _guardian = results[5] is GuardianPairingStatus ? results[5] as GuardianPairingStatus : null;
     });
+    unawaited(_refreshExtras());
+  }
+
+  Future<void> _refreshExtras() async {
+    final extras = await Future.wait<Object?>([
+      _channel.phoneStorageStatus().catchError((_) => null),
+      _channel.clockList().catchError((_) => const <Map<String, dynamic>>[]),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _phoneStorage = extras[0] is Map<String, dynamic> ? extras[0] as Map<String, dynamic> : null;
+      _clockCount = extras[1] is List ? (extras[1] as List).length : 0;
+    });
+  }
+
+  Future<void> _enableStorage() async {
+    setState(() => _actionBusy = true);
+    final res = await _channel.enablePhoneStorage(restart: true);
+    await _refresh();
+    if (!mounted) return;
+    setState(() => _actionBusy = false);
+    final granted = res?['granted'] == true;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(granted ? '已启用手机存储挂载并刷新引擎（Obsidian 可读取）' : '请在系统授权页允许全盘存储访问')),
+    );
+  }
+
+  Future<void> _restartEngineNow() async {
+    setState(() => _actionBusy = true);
+    final ok = await _channel.restartEngine();
+    if (!mounted) return;
+    setState(() => _actionBusy = false);
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(ok ? '主动引擎已热重启接管' : '正在后台唤醒引擎，请稍候片刻')),
+    );
   }
 
   Future<void> _openGuardianPairDialog() async {
@@ -427,6 +466,42 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               subtitle: '桌面悬浮形象、气泡提问与双姐妹互动样式',
               subtitleMaxLines: 2,
               onTap: () => _openPage(const PetSettingsPage()),
+            ),
+            ListPageRow(
+              icon: AppIcons.voice,
+              title: '姐妹与局官语音声线',
+              subtitle: '独立配置鱼丸 / 鲸澜 / 局官音色、MiMo/OpenAI TTS 与试听',
+              subtitleMaxLines: 2,
+              onTap: () => _openPage(const VoiceSettingsPage()),
+            ),
+            ListPageRow(
+              icon: AppIcons.queued,
+              title: '局工作台与时钟内核',
+              subtitle: '快速开严格专时、管理 Cron / 高频 / 循环番茄闹钟',
+              subtitleMaxLines: 2,
+              value: _clockCount > 0 ? '$_clockCount 个时钟' : '打开',
+              onTap: () => _openPage(BoutsWorkspacePage(channel: _channel)),
+            ),
+            ListPageRow(
+              icon: AppIcons.files,
+              iconColor: (_phoneStorage?['granted'] == true) ? colors.success : colors.warning,
+              title: '手机目录与 Obsidian 自动挂载',
+              subtitle: (_phoneStorage?['granted'] == true)
+                  ? '已授权全盘读取，Obsidian 库自动检索就绪'
+                  : '未挂载 /sdcard 目录，点击一键授权并热重启让姐妹读到 Obsidian 笔记',
+              subtitleMaxLines: 2,
+              badge: StatusChip(
+                tone: (_phoneStorage?['granted'] == true) ? StatusTone.ok : StatusTone.warn,
+                label: (_phoneStorage?['granted'] == true) ? '已挂载' : '需授权',
+              ),
+              onTap: _actionBusy ? null : () => unawaited(_enableStorage()),
+            ),
+            ListPageRow(
+              icon: AppIcons.restart,
+              title: '一键热重启主动引擎',
+              subtitle: '遇到后台长期无响应或切库后立即拉起接管，并自动补发中断对话',
+              subtitleMaxLines: 2,
+              onTap: _actionBusy ? null : () => unawaited(_restartEngineNow()),
             ),
           ],
         ),

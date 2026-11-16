@@ -72,8 +72,10 @@ object FocusPolicy {
     /** 切过去后要停留这么久才算「离开」：避开应用启动、返回桌面时的瞬时窗口。 */
     const val GRACE_MS = 5_000L
 
-    /** 同一个应用一分钟内只拉一次，避免页面关掉又立刻弹。 */
+    /** 同一个应用一分钟内只拉一次（非严格模式下）；严格/横跳模式下缩至 3 秒防卡死但杜绝 60 秒免死金牌。 */
     const val REBLOCK_MS = 60_000L
+    const val STRICT_REBLOCK_MS = 3_000L
+    const val BOUNCE_WINDOW_MS = 30_000L
 
     /** 电话、系统 UI、输入法永远放行：不能在接电话时把页面盖上去。 */
     val ALWAYS_ALLOWED = setOf(
@@ -91,7 +93,8 @@ object FocusPolicy {
 
     /**
      * [deviationSince] 是运行层记下的「第一次看到这个应用」的时间；传 0 表示还没记。
-     * 返回 Block 时，调用方负责计数、震动、弹页。
+     * [bounceCount] 为 30s 滑窗内切出次数，>= 2 时宽限直降 0ms（杜绝"切走→回桌面→切走"重置计时）。
+     * [strict] 为 true 时启用严格冷却与系统绕过分类拦截。
      */
     fun evaluate(
         state: FocusState,
@@ -100,6 +103,9 @@ object FocusPolicy {
         deviationSince: Long,
         ownPackage: String,
         imePackages: Set<String>,
+        bounceCount: Int = 0,
+        strict: Boolean = false,
+        bypassPackages: Set<String> = emptySet(),
     ): FocusDecision {
         if (!state.active) return FocusDecision.None
         if (isExpired(state, now) || isPaused(state, now)) return FocusDecision.None
@@ -109,11 +115,16 @@ object FocusPolicy {
         if (pkg in ALWAYS_ALLOWED) return FocusDecision.None
         if (pkg in imePackages) return FocusDecision.None
         if (pkg in state.allowed) return FocusDecision.None
-        if (deviationSince <= 0L || now - deviationSince < GRACE_MS) return FocusDecision.None
-        // 页面已经盖上去过一次：给一分钟静默，别关掉就立刻再弹。
-        if (state.lastBlockPkg == pkg && state.lastBlockAt > 0L && now - state.lastBlockAt < REBLOCK_MS) {
+        val bypass = pkg in bypassPackages || SystemBypassClassifier.isBypassPackage(pkg)
+        val effectiveGrace = if (bounceCount >= 2 || (strict && bypass)) 0L else GRACE_MS
+        if (effectiveGrace > 0L && (deviationSince <= 0L || now - deviationSince < effectiveGrace)) {
             return FocusDecision.None
         }
-        return FocusDecision.Block(pkg, (now - deviationSince) / 1000L)
+        val cooldown = if (strict || bounceCount >= 2) STRICT_REBLOCK_MS else REBLOCK_MS
+        if (state.lastBlockPkg == pkg && state.lastBlockAt > 0L && now - state.lastBlockAt < cooldown) {
+            return FocusDecision.None
+        }
+        val secondsOff = if (deviationSince > 0L) ((now - deviationSince) / 1000L).coerceAtLeast(0L) else 0L
+        return FocusDecision.Block(pkg, secondsOff)
     }
 }

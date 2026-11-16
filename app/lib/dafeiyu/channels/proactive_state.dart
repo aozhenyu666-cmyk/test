@@ -576,6 +576,120 @@ class ProactiveChannel {
       return null;
     }
   }
+
+  /// 读取内核时钟全量任务（原生 `KernelClockEngine`）。
+  Future<List<Map<String, dynamic>>> clockList() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('clockList');
+      if (raw is! List) return const [];
+      return [
+        for (final item in raw)
+          if (item is Map)
+            {
+              for (final e in item.entries)
+                if (e.key is String) e.key as String: e.value,
+            },
+      ];
+    } on Exception {
+      return const [];
+    }
+  }
+
+  /// 新增或更新内核时钟任务，并同步唤醒原生地端闹钟。
+  Future<Map<String, dynamic>?> clockUpsert(Map<String, Object?> spec) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('clockUpsert', spec);
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 对内核时钟任务执行 pause / resume / skip / delete。
+  Future<Map<String, dynamic>?> clockControl(String id, String op) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('clockControl', {'id': id, 'op': op});
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 读取实时局状态、队列与内置协议（插件 `/bouts` GET）。
+  Future<Map<String, dynamic>?> boutsStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('boutsStatus');
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 向插件 `POST /bouts` 下发局动作（开局/收局/严格切换/跳过等）。
+  Future<Map<String, dynamic>?> boutsCommand(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('boutsVoice', body);
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 检查 Android 11+ 全盘访问权限及手机目录挂载状态（用于 Obsidian 读取）。
+  Future<Map<String, dynamic>?> phoneStorageStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('phoneStorageStatus');
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 一键开启手机存储读写权限，并在需要时热重启引擎加载 Obsidian 挂载。
+  Future<Map<String, dynamic>?> enablePhoneStorage({bool restart = true}) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('enablePhoneStorage', {'restart': restart});
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 手动热重启引擎，保持最新接管。
+  Future<bool> restartEngine() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('restartEngine');
+      if (raw is bool) return raw;
+      if (raw is Map) return raw['ok'] == true;
+      return false;
+    } on Exception {
+      return false;
+    }
+  }
 }
 
 /// 大肥鱼与独立守护 App「大肥鱼哨兵」之间的互信绑定状态。

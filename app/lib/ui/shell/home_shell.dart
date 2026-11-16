@@ -10,15 +10,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../dafeiyu/dafeiyu_strings.dart';
-import '../../dafeiyu/ui/bout_voice_page.dart';
-import '../../dafeiyu/ui/companion_hub_page.dart';
+import '../../dafeiyu/ui/bouts_workspace_page.dart';
 import '../../dafeiyu/ui/wall_page.dart';
 import '../../links/app_links.dart';
 import '../../l10n/l10n.dart';
 import '../../pets/overlay_channel.dart' show petOverlayChannelProvider;
 import '../../pets/pet_overlay_bridge.dart';
 import '../../plugins/native/native_model.dart' show NativePanel;
-import '../../plugins/native/native_state.dart' show nativeContributionsProvider, rereadNativeContributions;
+import '../../plugins/native/native_state.dart' show nativeContributionsProvider;
 import '../../state/adaptive_layout_state.dart';
 import '../../state/drawer_view_state.dart' show drawerSelectionProvider;
 import '../../state/quick_panel_state.dart';
@@ -26,17 +25,13 @@ import '../../state/sessions_state.dart' show currentSessionProvider;
 import '../bots/bot_alerts.dart';
 import '../chat/chat_screen.dart';
 import '../chat/composer_toast.dart' show composerToastGap;
-import '../common/list_page_row.dart';
-import '../common/overview_card.dart';
 import '../common/segmented_pill.dart';
-import '../common/status_chip.dart';
 import '../engine/engine_screen.dart';
 import '../features/all_features_page.dart';
 import '../forum/forum_link_host.dart';
 import '../notify/background_net_host.dart';
 import '../notify/chat_alert_host.dart';
 import '../notify/voice_model_host.dart';
-import '../plugins/native/native_panel.dart';
 import '../plugins/plugins_screen.dart';
 import '../pets/pet_settings_page.dart';
 import '../phone/phone_stop_watcher.dart';
@@ -49,7 +44,6 @@ import '../settings/settings_screen.dart';
 import '../share_code/share_code_host.dart';
 import '../tavern/tavern_intake.dart';
 import '../star/star_prompt_host.dart';
-import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 import '../update/update_launch_check.dart';
 import '../wallpaper/wallpaper_backdrop.dart';
@@ -58,7 +52,6 @@ import 'adaptive/adaptive_layout.dart';
 import 'adaptive/adaptive_rail.dart';
 import 'adaptive/adaptive_scaffold.dart';
 import 'drawer_drag.dart';
-import 'page_frame.dart';
 import 'quick_panel.dart';
 import 'session_search_page.dart' show showSessionSearch;
 import 'sessions_drawer.dart';
@@ -315,13 +308,12 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
   }
 
   Widget _tabBody(HomeTab tab, Widget chat, NativePanel? bouts, String? sessionId) => switch (tab) {
-    HomeTab.bouts =>
-      bouts == null
-          ? _BoutsUnavailableView(
-              key: const ValueKey('home-bouts-fallback'),
-              onRetry: () => rereadNativeContributions(ref),
-            )
-          : NativePanelPage(key: const ValueKey('home-bouts'), panel: bouts, sessionId: sessionId),
+    HomeTab.bouts => BoutsWorkspacePage(
+      key: const ValueKey('home-bouts'),
+      asTab: true,
+      nativePanel: bouts,
+      sessionId: sessionId,
+    ),
     HomeTab.wall => const WallPage(key: ValueKey('home-wall'), asTab: true),
     HomeTab.chat => chat,
   };
@@ -671,77 +663,6 @@ class _DrawerOverlay extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-/// Fallback view inside the `局` tab whenever the engine has not published the `bouts` native
-/// panel yet (cold start, engine offline, or companion plugin loading), so tapping `局` actually
-/// opens a responsive screen with retry and direct bout/hub entrypoints instead of silently
-/// bouncing back to Chat.
-class _BoutsUnavailableView extends StatelessWidget {
-  const _BoutsUnavailableView({super.key, required this.onRetry});
-
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return AppPage.list(
-      title: '局',
-      solidBar: false,
-      subtitle: const Text('实时排局与拍子节奏'),
-      children: [
-        OverviewCard(
-          leading: const OverviewGlyph(AppIcons.play, tint: 6),
-          title: const Text('「局」面板正在等待伴侣插件就绪'),
-          subtitle: Text(
-            '可能正在启动本机引擎或尚未连接活跃主机。你可以刷新面板，或直接从下方语音/文字开局、进入大肥鱼中枢。',
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-          footer: const OverviewFooter(tone: StatusTone.warn, text: '插件面板暂未同步 · 点击下方操作'),
-          onFooterTap: onRetry,
-        ),
-        ListPageCard(
-          title: '快捷入口',
-          children: [
-            ListPageRow(
-              icon: AppIcons.refresh,
-              iconColor: theme.colorScheme.primary,
-              title: '重新加载「局」面板',
-              subtitle: '向当前引擎重新拉取大肥鱼伴侣原生面板',
-              onTap: onRetry,
-            ),
-            ListPageRow(
-              icon: AppIcons.engine,
-              title: '本机引擎状态与启动',
-              subtitle: '若本机引擎尚未启动或连接断开，可在此一键拉起引擎',
-              onTap: () => unawaited(
-                Navigator.of(context, rootNavigator: true).push(
-                  MaterialPageRoute<void>(builder: (_) => const EngineScreen()),
-                ),
-              ),
-            ),
-            ListPageRow(
-              icon: AppIcons.voice,
-              title: '语音 / 文字开一局',
-              subtitle: '直接进入「局官」问答与推拍界面',
-              onTap: () => unawaited(
-                Navigator.of(context, rootNavigator: true).push(
-                  MaterialPageRoute<void>(builder: (_) => const BoutVoicePage()),
-                ),
-              ),
-            ),
-            ListPageRow(
-              icon: AppIcons.bot,
-              title: '打开大肥鱼中枢',
-              subtitle: '查看今日计划、两姐妹角色卡、墙与申诉、娱乐锁机与专注监督',
-              subtitleMaxLines: 2,
-              onTap: () => unawaited(CompanionHubPage.open(context)),
-            ),
-          ],
-        ),
-      ],
     );
   }
 }

@@ -42,6 +42,12 @@ data class SessionFacts(
     val graceMs: Long = SessionPolicy.DEFAULT_GRACE_MS,
     /** 破窗放风期间什么都不锁。 */
     val breakGlass: Boolean = false,
+    /** 严格专时模式（strict=true 时对非白名单第三方与可绕过系统包零容忍，横跳 2 次起 0 秒瞬锁）。 */
+    val strict: Boolean = false,
+    /** 是否属于可绕过系统包（系统预装浏览器/应用商店/视频/信息流）；strict 或拦截状态下不再放行。 */
+    val systemBypass: Boolean = false,
+    /** 30 秒滑窗内的切出横跳次数（≥2 次立刻将宽限降至 0ms）。 */
+    val bounceCount: Int = 0,
 )
 
 object SessionPolicy {
@@ -71,12 +77,21 @@ object SessionPolicy {
         if (pkg in NEVER_LOCK) return SessionVerdict.ALLOW
         if (pkg in facts.self) return SessionVerdict.ALLOW
         if (FrontChange.isLayer(pkg, facts.ime, facts.self)) return SessionVerdict.ALLOW
-        if (pkg in facts.allow || pkg in facts.whitelist) return SessionVerdict.ALLOW
+        if (pkg in facts.allow) return SessionVerdict.ALLOW
+        if (!facts.strict && pkg in facts.whitelist) return SessionVerdict.ALLOW
         if (pkg in facts.home) return SessionVerdict.ALLOW
         // 娱乐目标在系统应用之前判：装成系统的娱乐 App 也得立刻锁。
         if (pkg in facts.entertainment) return SessionVerdict.LOCK
-        // 图库 / 文件选择器 / 相机 / GMS 弹层：连麦里点"添加图片"必经之路，放行。
+        // 预装浏览器 / 应用商店 / 系统视频：披着系统外衣的绕过口，一律不再当安全系统组件放行。
+        if (facts.systemBypass) {
+            if (facts.strict || facts.bounceCount >= 2 || facts.graceMs <= 0L) return SessionVerdict.LOCK
+            return if (facts.dwellMs.coerceAtLeast(0L) < facts.graceMs) SessionVerdict.GRACE else SessionVerdict.LOCK
+        }
+        // 图库 / 文件选择器 / 相机 / GMS / 权限弹窗等关键系统组件放行（避免 ROM 生物识别/权限死锁）。
         if (facts.systemApp) return SessionVerdict.ALLOW
-        return if (facts.dwellMs.coerceAtLeast(0L) < facts.graceMs) SessionVerdict.GRACE else SessionVerdict.LOCK
+        // 横跳惩罚（30s 内切出 >=2 次）或严格零宽限专时：直接 0ms 瞬锁。
+        val effectiveGrace = if (facts.bounceCount >= 2) 0L else facts.graceMs.coerceAtLeast(0L)
+        if (effectiveGrace <= 0L) return SessionVerdict.LOCK
+        return if (facts.dwellMs.coerceAtLeast(0L) < effectiveGrace) SessionVerdict.GRACE else SessionVerdict.LOCK
     }
 }

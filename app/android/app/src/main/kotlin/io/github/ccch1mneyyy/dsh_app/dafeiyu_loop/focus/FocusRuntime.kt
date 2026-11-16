@@ -34,6 +34,7 @@ object FocusRuntime {
     private const val TAG = "DshFocus"
     private const val CHANNEL = "dsh_focus"
     private const val NOTIF_ID = 4310
+    private const val ACTIVE_TICK_MS = 1_000L
 
     private val main = Handler(Looper.getMainLooper())
     private lateinit var app: Context
@@ -41,8 +42,12 @@ object FocusRuntime {
     @Volatile private var state = FocusState()
     private var deviationPkg = ""
     private var deviationSince = 0L
+    private val bounceStamps = ArrayDeque<Long>()
+    private var lastNonDeviationPkg: String? = null
     private var imePackages: Set<String> = emptySet()
+    private var bypassPackages: Set<String> = emptySet()
     private var ticker: Runnable? = null
+    private var lastNotifSyncAt = 0L
 
     fun ensure(context: Context): FocusState {
         if (store == null) {
@@ -60,6 +65,7 @@ object FocusRuntime {
             }
             val imm = app.getSystemService(InputMethodManager::class.java)
             imePackages = imm?.enabledInputMethodList?.mapNotNull { it.packageName }?.toSet().orEmpty()
+            bypassPackages = SystemBypassClassifier.resolvedBypasses(app)
             restore()
         }
         return state
@@ -160,17 +166,48 @@ object FocusRuntime {
         }
         val pkg = packageName?.trim().orEmpty()
         if (pkg.isEmpty()) return
+        val inTask = pkg in state.allowed || pkg == app.packageName
+        if (inTask) {
+            lastNonDeviationPkg = pkg
+            deviationPkg = ""
+            deviationSince = 0L
+            return
+        }
         if (pkg != deviationPkg) {
+            if (lastNonDeviationPkg != null && pkg !in FocusPolicy.ALWAYS_ALLOWED && pkg !in imePackages) {
+                bounceStamps.addLast(now)
+                while (bounceStamps.isNotEmpty() && now - bounceStamps.first() > FocusPolicy.BOUNCE_WINDOW_MS) {
+                    bounceStamps.removeFirst()
+                }
+            }
             deviationPkg = pkg
             deviationSince = now
         }
+        val strict = runCatching {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.isStrictSession()
+        }.getOrDefault(false)
         val decision = FocusPolicy.evaluate(
-            state, pkg, now, deviationSince, app.packageName, imePackages,
+            state,
+            pkg,
+            now,
+            deviationSince,
+            app.packageName,
+            imePackages,
+            bounceCount = bounceStamps.count { now - it <= FocusPolicy.BOUNCE_WINDOW_MS },
+            strict = strict,
+            bypassPackages = bypassPackages,
         )
         if (decision is FocusDecision.Block) showBlock(decision, now)
     }
 
     private fun showBlock(block: FocusDecision.Block, now: Long) {
+        // 单核铁笼仲裁：若 ProactiveRuntime 专时 session 正在管，则让位给 InterceptPageActivity，绝不互抢 SurfaceSlot。
+        val handledBySession = runCatching {
+            val pr = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime
+            pr.sessionActive() && pr.onSessionBounce(block.packageName)
+        }.getOrDefault(false)
+        if (handledBySession) return
+
         val token = "focus:" + block.packageName + ":" + now
         if (!VisibleSurface.claim(VisibleSurface.OWNER_FOCUS, token, now)) {
             Log.i(TAG, "surface busy (" + VisibleSurface.holder() + "); focus page skipped")
@@ -290,7 +327,10 @@ object FocusRuntime {
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
-        if (state.active) {
+        val strictSession = runCatching {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.isStrictSession()
+        }.getOrDefault(false)
+        if (state.active && !strictSession) {
             builder.addAction(
                 Notification.Action.Builder(
                     null,
@@ -321,16 +361,24 @@ object FocusRuntime {
         val r = object : Runnable {
             override fun run() {
                 if (!state.active) return
-                if (FocusPolicy.isExpired(state, System.currentTimeMillis())) {
+                val now = System.currentTimeMillis()
+                if (FocusPolicy.isExpired(state, now)) {
                     stop("time_up")
                     return
                 }
-                notifyState()
-                main.postDelayed(this, 30_000L)
+                val front = runCatching {
+                    io.github.ccch1mneyyy.dsh_app.phone.a11y.NowFeed.snapshot(android.os.SystemClock.elapsedRealtime()).app
+                }.getOrNull()
+                if (!front.isNullOrBlank()) onForeground(front)
+                if (now - lastNotifSyncAt >= 15_000L) {
+                    lastNotifSyncAt = now
+                    notifyState()
+                }
+                main.postDelayed(this, ACTIVE_TICK_MS)
             }
         }
         ticker = r
-        main.postDelayed(r, 30_000L)
+        main.postDelayed(r, ACTIVE_TICK_MS)
     }
 
     private fun cancelTick() {

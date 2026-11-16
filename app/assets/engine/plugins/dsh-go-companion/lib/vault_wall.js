@@ -258,25 +258,30 @@ function isDirAt(p) {
 }
 
 /**
- * 找一个真正的 Obsidian 库：目录里有 .obsidian 文件夹的那个。先看根目录本身，再看它下一层。
- * 找到多个时取最近改过的（他正在用的那个）。
+ * 找一个真正的 Obsidian 库：目录里有 .obsidian 文件夹的那个。支持沿根目录递归最多 3 层自动探测
+ * （避开 Android/、隐藏目录等大目录），找到多个时取最近改过的（他正在用的那个）。
  */
-export function findObsidianVault(roots = VAULT_ROOTS) {
+export function findObsidianVault(roots = VAULT_ROOTS, maxDepth = 3) {
   const hits = []
-  for (const root of roots) {
-    if (isDirAt(join(root, '.obsidian'))) hits.push(root)
+  const visited = new Set()
+  const scan = (dir, depth) => {
+    if (!dir || visited.has(dir)) return
+    visited.add(dir)
+    if (isDirAt(join(dir, '.obsidian'))) hits.push(dir)
+    if (depth >= maxDepth) return
     let names = []
     try {
-      names = readdirSync(root)
+      names = readdirSync(dir)
     } catch {
-      continue
+      return
     }
     for (const name of names) {
-      if (name.startsWith('.')) continue
-      const dir = join(root, name)
-      if (isDirAt(join(dir, '.obsidian'))) hits.push(dir)
+      if (!name || name.startsWith('.') || name === 'Android' || name === 'DCIM' || name === 'Pictures' || name === 'Music') continue
+      const sub = join(dir, name)
+      if (isDirAt(sub)) scan(sub, depth + 1)
     }
   }
+  for (const root of roots) scan(root, 0)
   if (!hits.length) return ''
   const mtime = (d) => {
     try {

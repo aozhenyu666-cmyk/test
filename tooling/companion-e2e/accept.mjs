@@ -464,6 +464,21 @@ reset()
 
   const pcHb = await route('POST', '/event', { type: 'pc-activity', activeApp: 'code.exe', activeTitle: 'accept.mjs - dsh', category: 'coding', focusMinutes: 18, entertainmentMinutes: 0, isAfk: false })
   check('J5.3 /event pc-activity 记录桌面端心跳并落账', pcHb.body?.ok === true && pcHb.body?.pc?.category === 'coding' && ledger().some((e) => e.state === 'pc-heartbeat' && e.category === 'coding'), pcHb.body)
+
+  // J6. 内核高精度时钟 (/clock) + 零延迟行为雷达 (/plan)
+  const clkUp = await route('POST', '/clock', { op: 'upsert', task: { id: 'e2e_cyc', label: 'E2E 番茄钟', kind: 'CYCLE_PHASE', maxRuns: 2, phases: [{ name: '专注', durationMs: 1500000, strictLock: true, allowApps: ['md.obsidian'] }, { name: '休息', durationMs: 300000, strictLock: false, allowApps: [] }] } })
+  check('J6.1 /clock upsert 创建多阶段循环番茄成功', clkUp.status === 200 && clkUp.body?.ok === true && Array.isArray(clkUp.body?.tasks) && clkUp.body.tasks.some((t) => t.id === 'e2e_cyc'), clkUp.body)
+  await route('POST', '/clock', { op: 'pause', id: 'e2e_cyc' })
+  const clkAfterPause = await route('GET', '/clock')
+  check('J6.2 /clock GET 持久可读 paused 状态', clkAfterPause.status === 200 && clkAfterPause.body?.tasks?.find((t) => t.id === 'e2e_cyc')?.paused === true, clkAfterPause.body)
+  await route('POST', '/clock', { op: 'delete', id: 'e2e_cyc' })
+
+  const feedRadar = await route('POST', '/plan', {
+    roll: 100,
+    timeZone: tzDay,
+    phone: { app: 'com.vendor.shortvideo.feed', label: '某某短视频', minutes: 14, fun: false, screenOn: true, installedApps: [{ pkg: 'com.vendor.shortvideo.feed', label: '某某短视频', bypass: true }] },
+  })
+  check('J6.3 零延迟行为雷达在 /plan 中自动识别未收录短视频流并落锁', feedRadar.status === 200 && feedRadar.body?.behaviorRadar?.kind === 'feed-drift' && feedRadar.body?.force?.level >= 4, feedRadar.body)
 }
 
 console.log(failed ? '✗ ' + failed + ' 项失败' : '✓ 全部通过')

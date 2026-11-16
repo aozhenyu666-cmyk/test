@@ -76,7 +76,13 @@ object InterceptRuntime {
     fun ledger(): InterceptLedger = ledger?.state ?: InterceptLedger()
     fun config(): InterceptConfig = guard?.config ?: InterceptConfig()
     fun releaseMs(): Long = config().releaseMs
-    fun effectiveLockMode(): String = guard?.effectiveLockMode() ?: InterceptRules.normalizeLockMode(config().lockMode)
+    fun effectiveLockMode(): String {
+        val strictSession = runCatching {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.isStrictSession()
+        }.getOrDefault(false)
+        if (strictSession) return InterceptRules.MODE_STRICT
+        return guard?.effectiveLockMode() ?: InterceptRules.normalizeLockMode(config().lockMode)
+    }
     fun activeReleasesCount(): Int = guard?.activeReleasesCount() ?: 0
 
     fun removeWhitelist(packageName: String): Boolean {

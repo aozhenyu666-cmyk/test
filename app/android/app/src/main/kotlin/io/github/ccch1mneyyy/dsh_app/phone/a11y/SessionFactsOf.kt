@@ -23,18 +23,27 @@ object SessionFactsOf {
         dwellMs: Long,
         graceMs: Long,
         breakGlass: Boolean,
-    ) = SessionFacts(
-        allow = allow,
-        whitelist = whitelist,
-        home = home(context),
-        entertainment = entertainment,
-        self = selfPkgs(context),
-        ime = FrontChange.imePackages(),
-        systemApp = isSystem(context, pkg),
-        dwellMs = dwellMs,
-        graceMs = graceMs,
-        breakGlass = breakGlass,
-    )
+        strict: Boolean = false,
+        bounceCount: Int = 0,
+    ): SessionFacts {
+        val resolvedBypass = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.SystemBypassClassifier.resolvedBypasses(context)
+        val bypass = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.SystemBypassClassifier.isBypassPackage(pkg, resolvedBypass)
+        return SessionFacts(
+            allow = allow,
+            whitelist = whitelist,
+            home = home(context),
+            entertainment = entertainment,
+            self = selfPkgs(context),
+            ime = FrontChange.imePackages(),
+            systemApp = !bypass && isSystem(context, pkg),
+            dwellMs = dwellMs,
+            graceMs = graceMs,
+            breakGlass = breakGlass,
+            strict = strict,
+            systemBypass = bypass,
+            bounceCount = bounceCount,
+        )
+    }
 
     /** 当前默认桌面：`ACTION_MAIN + CATEGORY_HOME` 解析出来的包，兜底用 [SessionPolicy.NEUTRAL]。 */
     fun home(context: Context): Set<String> {
