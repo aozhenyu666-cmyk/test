@@ -190,16 +190,17 @@ jobs:
         run: |
           APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
           if [ -n "$FISH_KEYSTORE_BASE64" ] && [ -n "$FISH_KEYSTORE_PASS" ] && [ -n "$FISH_KEY_ALIAS" ]; then
-            echo "$FISH_KEYSTORE_BASE64" | base64 -d > /tmp/fish.jks
+            python3 -c 'import base64,os; open("/tmp/fish.jks","wb").write(base64.b64decode("".join(os.environ["FISH_KEYSTORE_BASE64"].split())))'
+            export EFFECTIVE_KEY_PASS="${FISH_KEY_PASS:-$FISH_KEYSTORE_PASS}"
             BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
             "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" /tmp/app-aligned.apk
             "$BUILD_TOOLS/apksigner" sign \
               --ks /tmp/fish.jks \
               --ks-pass "env:FISH_KEYSTORE_PASS" \
               --ks-key-alias "$FISH_KEY_ALIAS" \
-              --key-pass "env:${FISH_KEY_PASS:-FISH_KEYSTORE_PASS}" \
+              --key-pass "env:EFFECTIVE_KEY_PASS" \
               --out "$APK" /tmp/app-aligned.apk
-            "$BUILD_TOOLS/apksigner" verify "$APK"
+            "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
             rm -f /tmp/fish.jks /tmp/app-aligned.apk
             echo "Signed with fixed persistent keystore."
           else
