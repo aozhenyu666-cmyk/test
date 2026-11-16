@@ -16,6 +16,7 @@ export function evalBehaviorRadar({
   morningPlanned = false,
   onBreak = false,
   emergencyActive = false,
+  graceActive = false,
   runningBout = null,
   activeLease = null,
 } = {}) {
@@ -71,7 +72,7 @@ export function evalBehaviorRadar({
     }
   }
 
-  if (inBoutAllow || appCat === 'emergency' || appCat === 'work') return out
+  if (inBoutAllow || appCat === 'emergency' || appCat === 'work' || graceActive) return out
 
   // 1) 早起直奔游戏或娱乐 >= 3 分钟（未完成晨间立项 / 正在开局以外）
   if (isMorning && !morningPlanned && (appCat === 'game' || appCat === 'fun' || phone.fun) && mins >= 3) {

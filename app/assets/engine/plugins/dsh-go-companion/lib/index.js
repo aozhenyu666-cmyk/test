@@ -6546,6 +6546,7 @@ export function apply(ctx) {
     }
     // 行为雷达 0ms 先行判定：晨间开机直奔娱乐 / 纯游戏连玩 / 未收录短视频与信息流 / 租约偏航（静音/免打扰时段不越权抢跑）
     const radarAllowed = config.control !== false && body?.skipRadar !== true && !(Number(config.muteUntil) > now) && !inQuiet(now, config.quietStart, config.quietEnd, tz)
+    const inJudgeGrace = Number(loadBrain()?.graceUntil) > now && trustNow(now).band !== 'low' && !(refuseUntilAt(now) > now)
     const radar = radarAllowed
       ? evalBehaviorRadar({
           phone,
@@ -6555,6 +6556,7 @@ export function apply(ctx) {
           morningPlanned: !planGateNow(now, tz),
           onBreak: onBreak(now),
           emergencyActive: isEmergencyPassActive(loadExternal(), now),
+          graceActive: inJudgeGrace,
           runningBout: runningBoutNow(),
           activeLease: config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null,
         })
