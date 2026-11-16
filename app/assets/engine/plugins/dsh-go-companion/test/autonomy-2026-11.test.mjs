@@ -98,7 +98,7 @@ const goodItem = (at, extra = {}) => ({
   accept_kind: 'evidence', accept_what: '截图时间在开局后、能看到已投递、3 张', need: ['com.hpbr.bosszhipin'], ...extra,
 })
 const hm = (min) => String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0')
-const soon = (plus) => Math.min(1430, minuteOfDay(Date.now(), TZ) + plus)
+const soon = (plus) => Math.min(1439, minuteOfDay(Date.now(), TZ) + plus)
 
 test('待命里她们拿得到开局、排局、连麦、封 App、递话', () => {
   const sb = toolsFor('standby')
