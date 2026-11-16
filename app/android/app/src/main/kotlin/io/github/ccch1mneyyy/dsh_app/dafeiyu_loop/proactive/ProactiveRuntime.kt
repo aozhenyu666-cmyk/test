@@ -1858,7 +1858,7 @@ object ProactiveRuntime {
                 }
                 main.post {
                     runCatching { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
-                    runCatching { VoiceOut.speak(VoicePlan(text = msg, rate = 1.05f, pitch = 1.0f, maxChars = 60)) }
+                    runCatching { VoiceOut.speak(VoicePlan(text = msg.take(60), rate = 1.05f, pitch = 1.0f)) {} }
                 }
             }
 

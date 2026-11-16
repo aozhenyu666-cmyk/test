@@ -162,6 +162,7 @@ data class ClockFireEvent(
     val completedPhase: ClockPhase? = null,
     val nextPhase: ClockPhase? = null,
     val finished: Boolean = false,
+    val urgent: Boolean = false,
     val payload: Map<String, Any?> = emptyMap(),
 )
 
@@ -178,7 +179,7 @@ data class ClockTickResult(
  * 支持：
  * - 5 段：`分 时 日 月 周`（秒固定 0）
  * - 6 段：`秒 分 时 日 月 周`
- * - 语法：`*`、`*/N`、`A-B`、`A-B/N`、`A,B,C`，周日支持 `0` 与 `7`。
+ * - 语法：通配、步进斜杠 N、`A-B`、`A-B/N`、`A,B,C`，周日支持 `0` 与 `7`。
  */
 class BeijingCronExpression private constructor(
     private val seconds: Set<Int>,
@@ -719,6 +720,7 @@ class KernelClockEngine(
             completedPhase = completedPhase,
             nextPhase = nextPhase,
             finished = completedAll,
+            urgent = t.urgent,
             payload = t.payload,
         )
         return CycleAdvance(updated, ev)
@@ -742,6 +744,7 @@ class KernelClockEngine(
         phaseIndex = t.phaseIndex,
         phaseName = t.phases.getOrNull(t.phaseIndex)?.name,
         finished = finished,
+        urgent = t.urgent,
         payload = t.payload,
     )
 
