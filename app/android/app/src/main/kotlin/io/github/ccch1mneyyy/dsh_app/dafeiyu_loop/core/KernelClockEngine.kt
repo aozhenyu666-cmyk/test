@@ -342,7 +342,7 @@ class KernelClockEngine(
     private val tasks = LinkedHashMap<String, ClockTask>()
     private val heap = PriorityQueue<ClockTask>(compareBy<ClockTask> { it.nextFireWall }.thenBy { it.id })
     private val cronCache = HashMap<String, BeijingCronExpression>()
-    private var bootId: Int = 0
+    private var bootId: Int = -1
     private var lastTickWall: Long = 0L
 
     fun recover(now: Clocks): List<ClockTask> = synchronized(lock) {
@@ -363,6 +363,7 @@ class KernelClockEngine(
     }
 
     fun upsert(task: ClockTask, now: Clocks): ClockTask = synchronized(lock) {
+        if (bootId < 0) bootId = now.boot
         val normalized = initializeTask(task, now)
         tasks[normalized.id] = normalized
         rebuildHeap()
@@ -372,6 +373,7 @@ class KernelClockEngine(
 
     /** 批量从插件 /plan `clockTasks` 增量同步（保留本机已有更高频或未结束状态）。 */
     fun syncFromPlugin(remoteTasks: List<ClockTask>, now: Clocks): Boolean = synchronized(lock) {
+        if (bootId < 0) bootId = now.boot
         var changed = false
         val remoteIds = remoteTasks.map { it.id }.toSet()
         // 只移除同源且已被远端删除的插件任务
@@ -467,6 +469,7 @@ class KernelClockEngine(
      * 核心滴答：在 [now] 时刻弹出所有到期任务，按策略精确推进下一拍并更新小顶堆。
      */
     fun tick(now: Clocks): ClockTickResult = synchronized(lock) {
+        if (bootId < 0) bootId = now.boot
         if (lastTickWall > 0L && now.wall + 30_000L < lastTickWall) {
             onClockJumpLocked(now)
         }
