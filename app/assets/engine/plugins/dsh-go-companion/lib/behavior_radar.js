@@ -19,6 +19,7 @@ export function evalBehaviorRadar({
   graceActive = false,
   runningBout = null,
   activeLease = null,
+  funTotalToday = 0,
 } = {}) {
   const out = {
     triggered: false,
@@ -125,6 +126,39 @@ export function evalBehaviorRadar({
         : '15 分钟切了 ' + in15m + ' 次 App 在游走，先收手定一局。',
       speaker: 'companion',
       ballReason: 'radar-drift',
+    }
+  }
+
+  // 4) 基于真实 UsageStats 的全天娱乐总时长兜底：无局时今日累计娱乐已满 60 分钟且仍停留在娱乐/游戏
+  const totalFun = Math.max(Number(funTotalToday) || 0, (phone.today || []).filter((t) => t?.fun).reduce((s, t) => s + (Number(t.minutes) || 0), 0))
+  if (!runningBout && (appCat === 'game' || appCat === 'fun' || phone.fun) && totalFun >= 60) {
+    return {
+      ...out,
+      triggered: true,
+      kind: 'daily-fun-budget',
+      reason: '今日娱乐累计已达 ' + totalFun + ' 分钟',
+      tempBlockApps: [phone.app],
+      refuseMinutes: 45,
+      forceLevel: 4,
+      forceWhy: '今天娱乐应用累计已经用了 ' + totalFun + ' 分钟，先暂时停下，定一局再继续。',
+      speaker: 'strategist',
+      ballReason: 'radar-fun-budget',
+    }
+  }
+
+  // 5) 上午亮屏未定计划/未开局的轻量主动唤起（不锁机，只做一定触发器让姐妹主动开启模态/定计划）
+  if (phone.screenOn && !runningBout && !morningPlanned && isMorning && (mins >= 6 || in15m >= 5)) {
+    return {
+      ...out,
+      triggered: true,
+      kind: 'unplanned-nudge',
+      reason: '上午亮屏尚未立项开局',
+      tempBlockApps: [],
+      refuseMinutes: 0,
+      forceLevel: 0,
+      forceWhy: '',
+      speaker: 'strategist',
+      ballReason: 'radar-unplanned',
     }
   }
 

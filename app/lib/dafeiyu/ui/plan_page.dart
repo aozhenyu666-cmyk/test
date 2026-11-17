@@ -334,6 +334,13 @@ class _PlanPageState extends State<PlanPage> {
         _ => '这一行',
       };
 
+  static String _acceptHint(String kind) => switch (kind) {
+        'evidence' => '例：提交截图、文档或跑通结果，让墙能核对',
+        'basis' => '例：Obsidian ≥ 45 分钟，娱乐应用 ≤ 5 分钟',
+        'judge' => '例：到点由姐妹按约定标准问询或抽查确认',
+        _ => '说清看到什么或做到什么算这一局通过',
+      };
+
   Future<void> _pickAccept(int index) async {
     final row = _rows[index];
     final picked = await showAppSheet<String>(
@@ -349,6 +356,9 @@ class _PlanPageState extends State<PlanPage> {
     );
     if (picked == null || !mounted) return;
     setState(() => row.acceptKind = picked);
+    if (row.acceptWhat.trim().isEmpty) {
+      await _editText(index, 'acceptWhat', hint: _acceptHint(picked));
+    }
   }
 
   Future<void> _submit() async {
@@ -600,11 +610,18 @@ class _PlanPageState extends State<PlanPage> {
             title: '验收方式',
             subtitle: row.acceptKind.isEmpty
                 ? '必须选一类：证据 / 依据 / 判断'
-                : (PlanRow.acceptNames[row.acceptKind] ?? row.acceptKind) +
-                    (row.acceptWhat.isEmpty ? '（怎么验还没写）' : '：${row.acceptWhat}'),
+                : (PlanRow.acceptNames[row.acceptKind] ?? row.acceptKind),
             subtitleMaxLines: 2,
-            subtitleColor: _bad(row, 'accept') ? DshColors.of(context).danger : null,
+            subtitleColor: _bad(row, 'accept') && row.acceptKind.isEmpty ? DshColors.of(context).danger : null,
             onTap: () => unawaited(_pickAccept(index)),
+          ),
+          ListPageRow(
+            icon: AppIcons.edit,
+            title: '怎么验（具体内容）',
+            subtitle: row.acceptWhat.isEmpty ? _acceptHint(row.acceptKind) : row.acceptWhat,
+            subtitleMaxLines: 2,
+            subtitleColor: _bad(row, 'accept') && row.acceptWhat.isEmpty ? DshColors.of(context).danger : null,
+            onTap: () => unawaited(_editText(index, 'acceptWhat', hint: _acceptHint(row.acceptKind))),
           ),
           ListPageRow(
             icon: AppIcons.question,

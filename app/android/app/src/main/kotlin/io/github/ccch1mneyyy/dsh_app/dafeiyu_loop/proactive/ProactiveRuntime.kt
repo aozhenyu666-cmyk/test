@@ -549,11 +549,15 @@ object ProactiveRuntime {
             }
             sessionBounceStamps.size
         }
+        val geminiSession = sessionIsGemini() || sessionAllow.any { it in GEMINI_PACKAGES }
+        val baseAllow = if (geminiSession) sessionAllow + GEMINI_PACKAGES else sessionAllow
+        val baseEntertain = blockedNow() + cfg?.targets?.map { it.packageName }?.toSet().orEmpty()
+        val safeEntertain = if (geminiSession) baseEntertain - GEMINI_PACKAGES else baseEntertain
         return SessionPolicy.judge(pkg, SessionFactsOf.of(
             app, pkg,
-            allow = sessionAllow,
+            allow = baseAllow,
             whitelist = cfg?.whitelist ?: emptySet(),
-            entertainment = blockedNow() + cfg?.targets?.map { it.packageName }?.toSet().orEmpty(),
+            entertainment = safeEntertain,
             dwellMs = dwell,
             graceMs = sessionGrace,
             breakGlass = breaking() || inEmergencyPass(),
@@ -819,7 +823,7 @@ object ProactiveRuntime {
         loadSession()
         return System.currentTimeMillis() < sessionUntil
     }
-    fun isStrictSession(): Boolean = sessionActive() && sessionStrict
+    fun isStrictSession(): Boolean = sessionActive() && sessionStrict && !breaking() && !inEmergencyPass()
     /** R9：这个舱是不是 Gemini 连麦（锁页的「回去」按钮按它换文案）。 */
     fun sessionIsGemini(): Boolean = sessionApp()?.let { it in GEMINI_PACKAGES } ?: false
 
@@ -902,14 +906,20 @@ object ProactiveRuntime {
             setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
             return
         }
+        val allow = (s["allow"] as? List<*>)?.mapNotNull { it as? String }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+        val isAllLock = (s["cell"] as? String) == "all-lock"
+        if (allow.isEmpty() && !isAllLock) {
+            setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
+            return
+        }
         setSession(
             (s["until"] as? Number)?.toLong() ?: 0L,
-            (s["allow"] as? List<*>)?.mapNotNull { it as? String }?.toSet() ?: emptySet(),
+            allow,
             s["app"] as? String,
             (s["graceMs"] as? Number)?.toLong() ?: SessionPolicy.DEFAULT_GRACE_MS,
             // R9：预案的严格模式带一句解释（哪条预案、为什么、怎么解除），锁页照它说。
             why = (s["why"] as? String)?.take(120),
-            strict = s["strict"] == true || ((s["graceMs"] as? Number)?.toLong() ?: 1L) <= 0L,
+            strict = s["strict"] == true || s["kind"] == "strict" || ((s["graceMs"] as? Number)?.toLong() ?: 1L) <= 0L,
         )
     }
 
@@ -1348,8 +1358,8 @@ object ProactiveRuntime {
             val why = m["why"] as? String ?: return@mapNotNull null
             if (app.isBlank() || why.isBlank()) null else app to why
         }?.toMap() ?: emptyMap()
-        // Gemini 互动舱：插件给 allow 就进入"只许 Gemini"，null 就退出。
-        applySession(map["session"] as? Map<*, *>)
+        // Gemini 互动舱：插件给 allow 就进入"只许 Gemini"，null 就退出（插件明示解锁时可强清 AI 工作模式）。
+        applySession(map["session"] as? Map<*, *>, force = map["clearWorkSession"] == true)
         val refusing = System.currentTimeMillis() < lockUntil()
         force = if (level >= 3 && !target.isNullOrBlank()) {
             // C5: while a rule lock is in force the page names only the primary lock's requirement.
@@ -1885,22 +1895,51 @@ object ProactiveRuntime {
      * time. From [NowFeed] (accessibility events, no screen text). Null when the service never fed
      * it: unknown is not "not using the phone".
      */
+    private var usageDayCache: Pair<Long, io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReport?>? = null
+    private fun usageTodayReport(wall: Long): io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReport? = runCatching {
+        usageDayCache?.let { if (wall - it.first < 20_000L) return@runCatching it.second }
+        val mins = minuteOfDay(wall).coerceAtLeast(1)
+        val report = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReader.usage(app, mins, wall)
+        usageDayCache = wall to report
+        report
+    }.getOrNull()
+
     private fun phoneContext(): Map<String, Any?>? = runCatching {
         val now = SystemClock.elapsedRealtime()
         val s = NowFeed.snapshot(now)
-        if (s.lastEventAgeMs < 0) return@runCatching null
         val wall = System.currentTimeMillis()
+        val usage = usageTodayReport(wall)
+        if (s.lastEventAgeMs < 0 && usage == null) return@runCatching null
         val targets = runCatching { InterceptRuntime.config().targets }.getOrNull().orEmpty()
         val funApps = targets.associate { it.packageName to it.label }
         val pm = app.packageManager
         fun label(pkg: String): String? = funApps[pkg]
+            ?: usage?.rows?.firstOrNull { it.packageName == pkg }?.label
             ?: runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrNull()
         val opens = usageOpens(wall)
-        val today = NowFeed.today(now, dayOf(wall)).map { (pkg, minutes) ->
-            linkedMapOf<String, Any?>("app" to pkg, "label" to label(pkg), "minutes" to minutes, "fun" to (pkg in funApps || pkg in blockedNow()),
-                "opens" to opens?.get(pkg))
+        val nowTodayMap = if (s.lastEventAgeMs >= 0) NowFeed.today(now, dayOf(wall)).toMap() else emptyMap()
+        val usageMap = usage?.rows?.associateBy { it.packageName }.orEmpty()
+        val allPkgs = (nowTodayMap.keys + usageMap.keys).distinct()
+        val today = allPkgs.mapNotNull { pkg ->
+            val uRow = usageMap[pkg]
+            val mins = maxOf(nowTodayMap[pkg] ?: 0L, uRow?.minutes ?: 0L)
+            val op = opens?.get(pkg) ?: uRow?.opens
+            if (mins <= 0L && (op ?: 0) <= 0) return@mapNotNull null
+            linkedMapOf<String, Any?>(
+                "app" to pkg,
+                "label" to label(pkg),
+                "minutes" to mins,
+                "fun" to (pkg in funApps || pkg in blockedNow()),
+                "opens" to op,
+            )
+        }.sortedWith(compareByDescending<Map<String, Any?>> { (it["minutes"] as? Number)?.toLong() ?: 0L }
+            .thenByDescending { (it["opens"] as? Number)?.toInt() ?: 0 })
+            .take(24)
+        val front = s.app ?: usage?.current
+        val frontMinutes = if (s.app != null) s.appMinutes else {
+            val cs = usage?.currentSince ?: 0L
+            if (usage?.current != null && cs > 0L) ((wall - cs) / 60_000L).toInt().coerceAtLeast(0) else 0
         }
-        val front = s.app
         val mediaPlaying = PhoneMediaControl.isPlaying(app)
         val screenText = runCatching {
             io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.MaskedSummaryHelper.maskedSummary(1500)
@@ -1909,7 +1948,7 @@ object ProactiveRuntime {
         linkedMapOf<String, Any?>(
             "app" to front,
             "label" to front?.let { label(it) },
-            "minutes" to s.appMinutes,
+            "minutes" to frontMinutes,
             "fun" to (front != null && (front in funApps || front in blockedNow())),
             "screenOn" to s.screenOn,
             "charging" to s.charging,

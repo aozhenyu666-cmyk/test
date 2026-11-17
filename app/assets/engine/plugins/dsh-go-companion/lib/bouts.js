@@ -94,8 +94,9 @@ function num(value, fallback = 0) {
 
 /** 建表 + 与记忆库一致的 WAL 设置。可重复调用。 */
 export function ensureBoutSchema(db) {
-  db.prepare('PRAGMA journal_mode = WAL').run()
-  db.prepare('PRAGMA synchronous = NORMAL').run()
+  try { db.prepare('PRAGMA busy_timeout = 5000').run() } catch { /* 兼容只读或已占锁句柄 */ }
+  try { db.prepare('PRAGMA journal_mode = WAL').run() } catch { /* 并发首开时 WAL 已存在 */ }
+  try { db.prepare('PRAGMA synchronous = NORMAL').run() } catch { /* 同上 */ }
   for (const sql of BOUT_DDL) db.prepare(sql).run()
 }
 

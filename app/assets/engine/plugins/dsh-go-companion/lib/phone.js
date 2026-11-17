@@ -81,12 +81,12 @@ export function cleanPhone(raw) {
   const app = pkgOf(raw.app)
   const today = []
   if (Array.isArray(raw.today)) {
-    for (const t of raw.today.slice(0, 8)) {
+    for (const t of raw.today.slice(0, 24)) {
       if (!t || typeof t !== 'object') continue
       const pkg = pkgOf(t.app)
       const minutes = minutesOf(t.minutes)
-      if (!pkg || !minutes) continue
       const opens = Number.isFinite(Number(t.opens)) && Number(t.opens) > 0 ? Math.min(999, Math.round(Number(t.opens))) : undefined
+      if (!pkg || (!minutes && !opens)) continue
       today.push({ app: pkg, label: labelOf(pkg, t.label), minutes, fun: funOf(pkg, t.fun), ...(opens ? { opens } : {}) })
     }
   }
@@ -181,9 +181,17 @@ export function phoneLines(phone) {
     const list = fun.slice(0, 3).map((t) => t.label + ' ' + t.minutes + ' 分钟').join('、')
     facts.push('今天娱乐类累计 ' + funToday(phone) + ' 分钟（' + list + '）')
   }
-  // 今天整体用在哪（巡逻时判断他是不是在晃）：前 5 个，不只娱乐类。
-  const top = [...phone.today].sort((a, b) => b.minutes - a.minutes).slice(0, 5).filter((t) => t.minutes > 0)
-  if (top.length) facts.push('今天手机用得最多：' + top.map((t) => t.label + ' ' + t.minutes + ' 分钟' + (t.opens ? '（打开 ' + t.opens + ' 次）' : '')).join('、'))
+  // 今天整体用在哪（巡逻与主动触发用）：前 8 个，按使用时长优先、含高频打开应用。
+  const top = [...phone.today]
+    .sort((a, b) => (b.minutes - a.minutes) || ((b.opens || 0) - (a.opens || 0)))
+    .filter((t) => t.minutes > 0 || (t.opens && t.opens >= 3))
+    .slice(0, 8)
+  if (top.length) {
+    facts.push(
+      '今天手机用得最多：' +
+        top.map((t) => t.label + ' ' + t.minutes + ' 分钟' + (t.opens ? '（打开 ' + t.opens + ' 次）' : '')).join('、'),
+    )
+  }
   if (phone.charging) facts.push('手机正在充电')
   if (phone.local) facts.push('他那边现在 ' + phone.local)
   if (!facts.length) return []

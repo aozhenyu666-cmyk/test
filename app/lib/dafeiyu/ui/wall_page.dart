@@ -176,6 +176,10 @@ class _WallPageState extends State<WallPage> {
   Widget _actions(L10n l) {
     final t = _thread;
     final left = t?.appealLeft ?? 0;
+    final verdicts = (t?.bubbles ?? const <WallBubble>[])
+        .where((b) => !b.isSubmit && !b.isRule && b.at > 0)
+        .toList();
+    final target = verdicts.isEmpty ? null : verdicts.last;
     return ListPageCard(
       title: DafeiyuStrings.fromL10n(l).wallActionAppeal,
       children: [
@@ -195,8 +199,16 @@ class _WallPageState extends State<WallPage> {
         ListPageRow(
           icon: AppIcons.edit,
           title: DafeiyuStrings.fromL10n(l).wallAppealTarget,
-          subtitle: '在上面点一条判定。',
-          onTap: null,
+          subtitle: target == null ? '当前还没有可申诉的判定记录。' : '点击立即对最近一条判定发起申诉。',
+          onTap: () {
+            if (target == null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('当前没有可申诉的判定记录。')),
+              );
+              return;
+            }
+            unawaited(_appeal(target));
+          },
         ),
       ],
     );

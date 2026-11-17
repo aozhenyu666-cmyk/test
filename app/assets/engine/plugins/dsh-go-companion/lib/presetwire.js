@@ -73,7 +73,14 @@ export function createPresetRuntime(deps) {
     let d = doc
     for (const op of ops) {
       try {
-        if (op.op === 'strict') d = enterStrict(d, op, now)
+        if (op.op === 'strict') {
+          if (Array.isArray(op.allow) && op.allow.length > 0) {
+            d = enterStrict(d, op, now)
+          } else if (phone?.app && phone?.fun) {
+            // 当前局未声明可用 App 时不发空白名单全机锁，仅封禁当下分心的娱乐 App。
+            deps.apply.block(phone.app, op.until, op.why)
+          }
+        }
         else if (op.op === 'block') deps.apply.block(op.app, op.until, op.why)
         else if (op.op === 'all-lock') deps.apply.allLock(op.until, op.why)
         else if (op.op === 'tool') deps.apply.tool(op.tool, op.until, op.topic, op.why)
@@ -147,7 +154,7 @@ export function createPresetRuntime(deps) {
   function sessionView(now) {
     const bout = deps.runningBout()
     const s = strictView(load(), now, bout?.id || null)
-    if (!s) return null
+    if (!s || !Array.isArray(s.allow) || s.allow.length === 0) return null
     return { app: s.allow[0] || undefined, allow: s.allow, until: s.until, graceMs: 0, why: s.why, kind: 'strict', by: 'preset' }
   }
 
@@ -157,6 +164,9 @@ export function createPresetRuntime(deps) {
     if (!bout) return { ok: false, text: '现在没有局，严格模式要绑在一局上。' }
     const apps = boutAppsOf(load(), bout.id)
     const allow = [...new Set([...apps.need, ...apps.allow])]
+    if (!allow.length) {
+      return { ok: false, text: '当前局尚未绑定允许的应用；为避免误锁全机，请先为本局指定至少一个允许使用的 App。' }
+    }
     const text = String(why || '').trim().slice(0, 40)
     const d = enterStrict(load(), {
       allow, until: now + 6 * 3_600_000, boutId: bout.id, presetId: 'manual',

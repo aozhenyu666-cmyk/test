@@ -110,7 +110,7 @@ import { composeBoutProtocol, loadProtocol } from './protocol.js'
 import { createOfficial } from './boutrun.js'
 // 第八轮 P5：排一段专注之前的必答项。规则在 autobout.js，这里只接线。
 import { answerPrompt, missingAnswers } from './autobout.js'
-import { getDayPlan, listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, runningBout, saveDayPlan, startEscalation, upsertProtocol } from './bouts.js'
+import { getDayPlan, listBeats, listBouts, listEscalations, listVerdicts, openBoutsDb, reapRunning, runningBout, saveDayPlan, startEscalation, upsertProtocol } from './bouts.js'
 // 第八轮 P4 接线：一条回答 → 分类 → 记敷衍 → 判升级 → 落手机。全部在 ladder.js 里，
 // 这里只负责把状态读写、数据库、手机快照喂给它。
 import { ALL_LOCK, CELL, funStep, landing, rowOf, step as ladderStep } from './ladder.js'
@@ -1844,17 +1844,20 @@ export function apply(ctx) {
    *   'all-lock' E1′ 的全机锁——放行名单为空，只剩急事底线和局界面（DSH 自己）。
    * 不另造字段：手机 applySession 只读 until/allow/graceMs 三个，多一个形态就多一处它不认。
    */
+  let forceUnlockUntil = 0
+
   const geminiSessionView = (now = Date.now()) => {
     const s = loadGemini().session
     if (!s || !(Number(s.until) > now)) return null
     const cell = String(s.cell || '')
+    const isLadderAllLock = cell === 'all-lock' && s.by === 'ladder'
     return {
       app: geminiPackages()[0],
-      allow: cell === 'all-lock' ? [] : geminiPackages(),
+      allow: isLadderAllLock ? [] : geminiPackages(),
       until: Number(s.until),
       // R7 P0-1：舱内第三方 App 的宽限。手机侧不再"非白名单一律锁"，按这个秒数先放行再升锁。
-      // 升级舱一律 0：等 45 秒才锁，等于给了一次白刷。
-      graceMs: cell ? 0 : Math.max(0, Number(config.sessionGraceMs) || 45_000),
+      // 升级舱（by === 'ladder'）一律 0；主动开的 Gemini 训练模式给足宽限且永不锁 Gemini 自己。
+      graceMs: (cell && s.by === 'ladder') ? 0 : Math.max(0, Number(config.sessionGraceMs) || 45_000),
       cell: cell || undefined,
       topic: String(s.topic || ''),
       mode: String(s.mode || 'think'),
@@ -3267,25 +3270,40 @@ export function apply(ctx) {
       execute: (args = {}) => {
         const now = Date.now()
         const summary = String(args.summary || '').trim().slice(0, 300)
-        if (!aiTask(config, now) && !(config.refuseBy === 'ai' && Number(config.refuseUntil) > now)) return { ok: false, text: '现在没有你们立的任务。' }
+        const hasAiLock = aiTask(config, now) ||
+          (config.refuseBy === 'ai' && Number(config.refuseUntil) > now) ||
+          Boolean(config.aiWorkSession && Number(config.aiWorkSession.until) > now) ||
+          Boolean(config.taskLease && Number(config.taskLease.until) > now) ||
+          Boolean(presetRt.sessionView(now))
+        if (!hasAiLock) return { ok: false, text: '现在没有你们立的任务。' }
         if (args.passed !== true) {
           record({ state: 'task-check', at: now, by: role, passed: false, summary })
           return { ok: true, text: '记下了：没通过，任务继续。' }
         }
         const goal = config.taskGoal
         setGear({ gear: 'free' }, 'ai-' + role)
-        if (config.refuseBy === 'ai') {
-          config = { ...config, refuseUntil: 0, refuseBy: undefined }
-          try {
-            writeConfig(config)
-          } catch {
-            // 这一轮照样生效
-          }
+        const patch = {
+          aiWorkSession: null,
+          taskLease: null,
         }
+        if (config.refuseBy === 'ai') {
+          patch.refuseUntil = 0
+          patch.refuseBy = undefined
+        }
+        if (Array.isArray(config.blockExtra) && config.blockExtra.length) {
+          patch.blockExtra = config.blockExtra.filter((b) => b && b.by !== 'ai' && b.by !== 'tool' && b.by !== 'ladder' && b.by !== 'companion' && b.by !== 'strategist')
+        }
+        commit(patch)
+        presetRt.strictOff(now, 'ai-' + role)
+        const ld = loadLadderDoc()
+        if (ld.cell || ld.cellUntil || ld.planUntil) {
+          saveLadderDoc({ ...ld, cell: '', cellUntil: 0, planUntil: 0 })
+        }
+        forceUnlockUntil = now + 90_000
         // 提前验收通过：到点那一下"任务到点"的验收就不用再来了。
         saveGearState({ ...loadGearState(), doneFor: Number(config.gearUntil) })
         record({ state: 'task-done', at: now, by: role, goal, summary })
-        return { ok: true, text: '验收通过，解锁了。' }
+        return { ok: true, text: '验收通过，锁已全部解除。' }
       },
     }
   }
@@ -3923,11 +3941,12 @@ export function apply(ctx) {
         'focus_lock=开启严格专时铁笼（仅 apps 列表内的 App 可用，其余立即拦截）；' +
         'block_apps=把特定 App 临时拉黑禁开；' +
         'tag_app=给未收录 App 永久打标（fun/work/tool）；' +
-        'unlock_focus=结束当前 AI 专时锁（仅鲸澜可用，纯游戏禁止解除）。',
+        'unlock_focus=结束当前 AI 专时/严格/升级锁（仅鲸澜可用，纯游戏禁止解除）；' +
+        'unlock_gemini=强制关闭 Gemini 连麦舱与连带铁笼（两姐妹都可用）。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['focus_lock', 'block_apps', 'tag_app', 'unlock_focus'] },
+          action: { type: 'string', enum: ['focus_lock', 'block_apps', 'tag_app', 'unlock_focus', 'unlock_gemini'] },
           apps: { type: 'array', items: { type: 'string' }, description: '中文应用名或包名列表（如 ["Obsidian", "微信"]）' },
           minutes: { type: 'integer', minimum: 5, maximum: 720, description: '持续分钟数（默认 focus_lock 45 / block_apps 120）' },
           tag: { type: 'string', enum: ['fun', 'work', 'tool'], description: 'tag_app 时填写角色分类' },
@@ -3999,9 +4018,32 @@ export function apply(ctx) {
           if (callerRole !== 'strategist') {
             return { ok: false, text: '小鱼无权解除专时或放行锁；要调整范围或申领任务短租约请找鲸澜。' }
           }
-          commit({ aiWorkSession: null, taskLease: null })
+          setGear({ gear: 'free' }, 'strategist')
+          commit({ aiWorkSession: null, taskLease: null, refuseUntil: 0, refuseBy: undefined, blockExtra: [] })
+          presetRt.strictOff(now, 'strategist')
+          const g = loadGemini()
+          if (g.session) saveGemini({ ...g, session: null })
+          const ld = loadLadderDoc()
+          if (ld.cell || ld.cellUntil || ld.planUntil) {
+            saveLadderDoc({ ...ld, cell: '', cellUntil: 0, planUntil: 0 })
+          }
+          forceUnlockUntil = now + 90_000
           record({ state: 'dispatch-unlock-focus', at: now, by: callerRole, why })
-          return { ok: true, text: '已提前结束当前 AI 专时锁（普通墙与拒绝规则仍按制度运行）。' }
+          refreshPanels()
+          return { ok: true, text: '已解除当前 AI 专时、严格模式、Gemini 连麦舱及临时封禁锁。' }
+        }
+
+        if (args.action === 'unlock_gemini') {
+          const g = loadGemini()
+          if (g.session) saveGemini({ ...g, session: null })
+          const ld = loadLadderDoc()
+          if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
+          presetRt.strictOff(now, callerRole)
+          commit({ aiWorkSession: null, taskLease: null })
+          forceUnlockUntil = now + 90_000
+          record({ state: 'gemini-end', at: now, by: callerRole, reason: why || 'unlock_gemini' })
+          refreshPanels()
+          return { ok: true, text: '已关闭 Gemini 连麦舱及连带铁笼，手机恢复正常使用。' }
         }
 
         return { ok: false, text: '未知动作' }
@@ -4327,8 +4369,12 @@ export function apply(ctx) {
     const g = loadGemini()
     if (action === 'end') {
       saveGemini({ ...g, session: null })
+      const ld = loadLadderDoc()
+      if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
+      presetRt.strictOff(now, String(body?.by || 'ui').slice(0, 20))
+      forceUnlockUntil = now + 90_000
       record({ state: 'gemini-end', at: now, by: String(body?.by || 'ui').slice(0, 20) })
-      return { v: 1, ok: true, session: null }
+      return { v: 1, ok: true, session: null, clearWorkSession: true }
     }
     if (action !== 'start') return { v: 1, ok: false, error: { code: 'bad-action', message: 'start|end' } }
     const minutes = Math.max(5, Math.min(180, Math.round(Number(body?.minutes) || 30)))
@@ -4338,6 +4384,8 @@ export function apply(ctx) {
       topic, mode, minutes, startedAt: now, until: now + minutes * 60_000,
       by: String(body?.by || 'ui').slice(0, 20),
     }
+    const ld = loadLadderDoc()
+    if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
     saveGemini({ ...g, session })
     record({ state: 'gemini-start', at: now, topic, mode, minutes, by: session.by })
     return { v: 1, ok: true, session: geminiSessionView(now) }
@@ -5016,7 +5064,7 @@ export function apply(ctx) {
   /** 该不该巡逻一次：来回刷（15 分钟里切了 8 次以上）、今天娱乐超过 90 分钟还在玩、或者到了巡逻时段。 */
   function patrolSignal(phone, now, tz) {
     const gs = loadGearState()
-    if (now - (Number(gs.patrolAt) || 0) < 90 * 60_000) return null
+    if (now - (Number(gs.patrolAt) || 0) < 25 * 60_000) return null
     const recent = fronts.filter((f) => now - f.at <= 15 * 60_000)
     // 手机自己数的切换次数更准（/plan 有节流，插件这边会漏）。
     const sw = phone?.switches
@@ -5024,10 +5072,16 @@ export function apply(ctx) {
     const distinct = sw ? sw.distinct15m : new Set(recent.map((f) => f.app)).size
     if (switches >= 8) return { why: '他 15 分钟里在 ' + distinct + ' 个 App 之间来回切了 ' + switches + ' 次，像是在无目的地刷' }
     const fun = funToday(phone)
-    if (phone?.fun && fun >= 90) return { why: '他今天娱乐已经 ' + fun + ' 分钟了，现在还在' + (phone.label || phone.app) }
+    const activeBout = runningBoutNow()
+    if (phone?.fun && (fun >= 45 || (!activeBout && fun >= 30))) {
+      return { why: '他今天娱乐已经 ' + fun + ' 分钟了，现在还在' + (phone.label || phone.app) }
+    }
+    if (phone?.screenOn && !phone.fun && !activeBout && Number(phone.minutes) >= 20) {
+      return { why: '他亮屏停留 ' + Number(phone.minutes) + ' 分钟但尚未开局，适合主动问一句或帮他开一局' }
+    }
     const hour = phone?.local ? Number(phone.local.slice(0, 2)) : Math.floor(zoneMinuteOfDay(now, tz) / 60)
-    // 巡逻是她不等他、自己来看一眼并动手的时刻：一天三次太少，白天每两三个小时来一次。
-    const slots = Array.isArray(config.patrolHours) ? config.patrolHours.map(Number) : [9, 11, 14, 16, 19]
+    // 白天每小时左右巡检一次，主动发话并把未决的事推成局（21 点留给晚间对账）。
+    const slots = Array.isArray(config.patrolHours) ? config.patrolHours.map(Number) : [8, 9, 10, 11, 13, 14, 15, 16, 17, 19, 20]
     const day = new Date(now).toISOString().slice(0, 10)
     const slotKey = day + ':' + hour
     if (slots.includes(hour) && gs.patrolSlot !== slotKey && phone?.screenOn) return { why: '到了 ' + hour + ' 点的巡逻时段，看看他该干的事动了没有', slot: slotKey }
@@ -5099,6 +5153,8 @@ export function apply(ctx) {
           recap: recaps[recaps.length - 1] || null,
           gear: effectiveGear(config, now) === 'busy' ? config.gearWhat : null,
         })
+        const ld = loadLadderDoc()
+        if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
         saveGemini({ ...g, session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: role } })
         record({ state: 'gemini-start', at: now, topic, mode, minutes, by: role })
         return { ok: true, text: '背景：\n' + brief + '\n\n下一步：\n' + geminiSteps(), brief }
@@ -5207,12 +5263,17 @@ export function apply(ctx) {
       },
       output: toolOutput,
       execute: (args = {}) => {
+        const now = Date.now()
         const g = loadGemini()
-        if (!g.session) return { ok: false, text: '现在没有进行中的 Gemini 连麦。' }
-        const topic = String(g.session.topic || '')
-        const minutes = g.session.startedAt ? Math.max(0, Math.round((Date.now() - Number(g.session.startedAt)) / 60_000)) : undefined
+        const ld = loadLadderDoc()
+        if (!g.session && !ld.cell) return { ok: false, text: '现在没有进行中的 Gemini 连麦。' }
+        const topic = String(g.session?.topic || '')
+        const minutes = g.session?.startedAt ? Math.max(0, Math.round((now - Number(g.session.startedAt)) / 60_000)) : undefined
         saveGemini({ ...g, session: null })
-        record({ state: 'gemini-end', at: Date.now(), by: role, minutes, reason: String(args.reason || '').slice(0, 80) || undefined })
+        if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
+        presetRt.strictOff(now, role)
+        forceUnlockUntil = now + 90_000
+        record({ state: 'gemini-end', at: now, by: role, minutes, reason: String(args.reason || '').slice(0, 80) || undefined })
         return { ok: true, text: '连麦结束了' + (topic ? '（' + topic + '）' : '') + (minutes ? '，约 ' + minutes + ' 分钟' : '') + '，手机不再只许 Gemini。' }
       },
     }
@@ -5900,11 +5961,14 @@ export function apply(ctx) {
   function ladderE1Prime(now = Date.now()) {
     const doc = loadLadderDoc()
     if (doc.cell !== CELL || !(doc.cellUntil > now)) return null
+    const rawGem = loadGemini().session
+    // 只有升级阶梯（by === 'ladder'）拉起的审讯舱才受 E1′ 监督；主动开的 Gemini 训练模式绝不升格成全机锁。
+    if (!rawGem || rawGem.by !== 'ladder') return null
     const gem = geminiSessionView(now)
     const fg = String(lastPhone?.app || '')
     const r = evaluateEPrime({
       now,
-      cellAt: Number(loadGemini().session?.startedAt) || 0,
+      cellAt: Number(rawGem.startedAt) || 0,
       geminiForeground: Boolean(gem && fg && gem.allow.includes(fg)),
       hasGemini: geminiPackages().length > 0,
     })
@@ -6409,6 +6473,7 @@ export function apply(ctx) {
         return send(res, r.status, r.body)
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
+      if (req.method === 'GET' && path === '/bouts') return send(res, 200, boutsGetRoute())
       if (req.method === 'GET' && path === '/clock') return send(res, 200, { v: 1, ok: true, tasks: clockKernel.list() })
       if (req.method === 'GET' && path === '/plan/day') return send(res, 200, planDayRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/brain') return send(res, 200, brainRoute({ action: 'view' }))
@@ -6547,7 +6612,7 @@ export function apply(ctx) {
     // 行为雷达 0ms 先行判定：晨间开机直奔娱乐 / 纯游戏连玩 / 未收录短视频与信息流 / 租约偏航（静音/免打扰时段不越权抢跑）
     const radarAllowed = config.control !== false && body?.skipRadar !== true && !(Number(config.muteUntil) > now) && !inQuiet(now, config.quietStart, config.quietEnd, tz)
     const inJudgeGrace = Number(loadBrain()?.graceUntil) > now && trustNow(now).band !== 'low' && !(refuseUntilAt(now) > now)
-    const radar = radarAllowed
+    const rawRadar = radarAllowed
       ? evalBehaviorRadar({
           phone,
           declaredApps: appsOf(),
@@ -6559,9 +6624,17 @@ export function apply(ctx) {
           graceActive: inJudgeGrace,
           runningBout: runningBoutNow(),
           activeLease: config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null,
+          funTotalToday: funToday(phone),
         })
       : { triggered: false }
+    const radar = rawRadar.triggered && rawRadar.kind === 'unplanned-nudge' &&
+      now - (Number(loadGearState().radarNudgeAt) || 0) < 15 * 60_000
+      ? { triggered: false }
+      : rawRadar
     if (radar.triggered) {
+      if (radar.kind === 'unplanned-nudge') {
+        saveGearState({ ...loadGearState(), radarNudgeAt: now })
+      }
       if (radar.revokeLease) commit({ taskLease: null })
       if (Array.isArray(radar.tempBlockApps) && radar.tempBlockApps.length) {
         const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && Number(b.until) > now && !radar.tempBlockApps.includes(b.app))
@@ -6828,7 +6901,7 @@ export function apply(ctx) {
       nextSpeaker = { role: thinker, reason: 'night', at: now }
     } else if (canTalk && !gem.inside) {
       const gs = loadGearState()
-      const patrol = gearNow === 'free' && config.proactiveTools !== false ? patrolSignal(phone, now, tz) : null
+      const patrol = gearNow === 'free' && config.proactiveTools !== false && !lastRhythm?.reviewGate ? patrolSignal(phone, now, tz) : null
       if (gem.recap && config.proactiveTools !== false) {
         nextSpeaker = { role: thinker, reason: 'gemini-recap', at: now, mark: { recappedFor: Number(gem.state.inSince) },
           gemini: { minutes: Math.round((Number(gem.state.lastInAt) - Number(gem.state.inSince)) / 60_000), topic: gem.state.session?.topic } }
@@ -6892,6 +6965,10 @@ export function apply(ctx) {
     // 一早第一球：今天还没开过口、屏幕亮着——不等骰子和间隔，先开球定今天的锚。
     if (!out.speak && (out.reason === 'dice' || out.reason === 'cooldown') && recent.counts.generated === 0 && phone?.screenOn && !inConversation(sessionId, now) && gearNow !== 'busy') {
       Object.assign(out, { speak: true, reason: 'morning', nextCheckAt: now })
+    }
+    // 行为触发兜底：即使之前 3 条通知未回进入 no-take，只要此刻确实在娱乐分心且距上次发球满 25 分钟，仍恢复主动提醒。
+    if (!out.speak && out.reason === 'no-take' && canTalk && !gem.inside && phone?.screenOn && worthObserving(phone) && !inConversation(sessionId, now) && gearNow !== 'busy' && now - (recent.lastAt || 0) >= 25 * 60_000) {
+      Object.assign(out, { speak: true, reason: 'observe-override', nextCheckAt: now + 60_000 })
     }
     // 待命计时器在走：到 10 分钟要回来开锁，别等下一次定期检查。他喊了安静、或者已经三球没接要退避 3 小时，都不抢。
     const backoff = out.reason === 'muted' || out.reason === 'quiet' || out.reason === 'disabled' || out.reason === 'no-take'
@@ -6976,6 +7053,7 @@ export function apply(ctx) {
       gear: effectiveGear(config, now),
       // Gemini / 外部 Agent 租约互动舱：这段时间只许白名单包，其余 App 由手机直接锁；应急通行时让路。
       session: emergencyActive ? null : sessionNow(now),
+      ...(forceUnlockUntil > now || onBreak(now) ? { clearWorkSession: true } : {}),
       // D4：预约的下一场连麦（手机据此 arm 闹钟；到点调 /gemini/due 取 launch）。
       geminiSchedule: (() => {
         const s = loadGeminiSchedule()
@@ -7352,14 +7430,22 @@ export function apply(ctx) {
   let live = null
 
   function boutsSnapshot() {
-    const db = openBoutsDb(memoryPath())
+    const ownDb = !live?.db
+    const db = live?.db || openBoutsDb(memoryPath())
+    const protocols = builtinProtocols().filter((x) => x.ok).map((x) => x.protocol)
+    const liveView = live ? live.official.view() : null
+    if (!db) {
+      return buildBoutsSnapshot({
+        now: Date.now(), bouts: [], todayBouts: [], protocols, live: liveView,
+        doneToday: 0, emptyToday: 0, escalations: 0, slackBeats: 0, beats: [], todayVerdicts: [],
+      })
+    }
     try {
       const now = Date.now()
       const dayStart = startOfDay(now, zoneOr(config.timeZone))
       const all = listBouts(db, { limit: 200 })
       const today = listBouts(db, { dayStart, limit: 100 })
       const closedToday = today.filter((x) => x.status === 'closed')
-      // 「敷衍」在账上就是代码判没过的那几拍；不另立指标，免得两处口径打架。
       let failed = 0
       const beats = []
       const verdicts = []
@@ -7369,20 +7455,16 @@ export function apply(ctx) {
         verdicts.push(...rows)
         beats.push(...listBeats(db, bout.id))
       }
-      // 磁贴和常驻通知在 Kotlin 侧，读不了 sqlite：顺手落一份摘要给它们（BoutsTileService 读这个文件）。
-      // 拍数和 running 上面都已经算出来了，不额外查库。只在算快照时刷新——定时器自己推进的拍
-      // 要等下次开面板才上磁贴。shortcut: 面板渲染时刷新，介意延迟就在定时器里也调一次。
-      const protocols = builtinProtocols().filter((x) => x.ok).map((x) => x.protocol)
       writeJson(
         stateFile('bouts-status.json'),
-        boutsTileStatus({ now, beats, bouts: all, protocols, live: live ? live.official.view() : null }),
+        boutsTileStatus({ now, beats, bouts: all, protocols, live: liveView }),
       )
       return buildBoutsSnapshot({
         now,
         bouts: all,
         todayBouts: today,
         protocols,
-        live: live ? live.official.view() : null,
+        live: liveView,
         doneToday: closedToday.filter((x) => x.closeReason === 'done').length,
         emptyToday: closedToday.filter((x) => x.closeReason !== 'done').length,
         escalations: closedToday.filter((x) => x.closeReason === 'escalated').length,
@@ -7390,11 +7472,19 @@ export function apply(ctx) {
         beats,
         todayVerdicts: verdicts,
       })
+    } catch (error) {
+      console.error('[companion] boutsSnapshot 失败：' + String((error && error.message) || error))
+      return buildBoutsSnapshot({
+        now: Date.now(), bouts: [], todayBouts: [], protocols, live: liveView,
+        doneToday: 0, emptyToday: 0, escalations: 0, slackBeats: 0, beats: [], todayVerdicts: [],
+      })
     } finally {
-      try {
-        db?.close?.()
-      } catch {
-        // 关不掉不影响读出来的数
+      if (ownDb) {
+        try {
+          db?.close?.()
+        } catch {
+          // 关不掉不影响读出来的数
+        }
       }
     }
   }
@@ -7636,6 +7726,44 @@ export function apply(ctx) {
     return { v: 1, ok: Boolean(r.ok), toast: String(r.toast || '') }
   }
 
+  function boutsGetRoute() {
+    const now = Date.now()
+    const dayData = planDayRoute({ action: 'list' })
+    const strictInfo = presetRt.sessionView(now)
+    const v = live && !live.official.view().closed ? live.official.view() : null
+    const allow = strictInfo?.allow || [
+      ...(Array.isArray(live?.apps?.need) ? live.apps.need : []),
+      ...(Array.isArray(live?.apps?.allow) ? live.apps.allow : []),
+    ]
+    const running = v
+      ? {
+          id: v.boutId || v.id || '',
+          protocol: live.protocol?.id || '',
+          title: live.packet?.goal || live.protocol?.name || live.protocol?.id || '专注进行中',
+          strict: Boolean(strictInfo),
+          until: Number(strictInfo?.until) || (live.openedAt + (Number(live.protocol?.budget?.minutes) || 45) * 60_000),
+          allow: [...new Set(allow)],
+        }
+      : null
+    const protocols = builtinProtocols()
+      .filter((x) => x.ok)
+      .map((x) => ({
+        id: x.protocol.id,
+        name: x.protocol.name,
+        desc: x.protocol.budget?.note || x.protocol.desc || ('建议时长 ' + (x.protocol.budget?.minutes || 0) + ' 分钟'),
+        minutes: x.protocol.budget?.minutes || 0,
+      }))
+    return {
+      v: 1,
+      ok: true,
+      running,
+      strict: Boolean(strictInfo),
+      queue: dayData.plan?.items || [],
+      protocols,
+      snapshot: boutsSnapshot(),
+    }
+  }
+
   /**
    * POST /bouts 的语音这一路（J9）：念、听、判、下一拍，四步都由手机驱动，状态机还在局官手里。
    *
@@ -7655,11 +7783,33 @@ export function apply(ctx) {
     }
     // 第九轮：计划界面开局时一并带上这一局的必需 / 允许应用（严格模式和「切出」按它判）；
     // 第三项起再带工作包（局官第一句就念第一步）。
-    if (action === 'open') {
-      const r = startBout(String(body?.protocolId || ''), { apps: body?.apps, packet: body?.packet, department: body?.department, by: 'panel' })
+    if (action === 'open' || action === 'start') {
+      let protocolId = String(body?.protocolId || body?.protocol || '')
+      let apps = body?.apps && typeof body.apps === 'object'
+        ? body.apps
+        : (Array.isArray(body?.allow) ? { need: body.allow, allow: body.allow } : undefined)
+      let packet = body?.packet
+      let goal = body?.title
+      if ((!protocolId || !apps) && body?.id) {
+        const queued = (planDayRoute({ action: 'list' }).plan?.items || []).find((it) => String(it?.id || '') === String(body.id))
+        if (queued) {
+          if (!protocolId) protocolId = String(queued.protocolId || '')
+          if (!apps && (queued.need?.length || queued.allow?.length)) apps = { need: queued.need || [], allow: queued.allow || [] }
+          if (!packet && queued.packet) packet = queued.packet
+          if (!goal && queued.title) goal = queued.title
+        }
+      }
+      const r = startBout(protocolId, { apps, packet, department: body?.department, goal, by: body?.by || 'panel' })
+      if (r.ok && body?.strict === true && apps && ([...(apps.need || []), ...(apps.allow || [])].length > 0)) {
+        presetRt.strictNow(Date.now(), String(goal || '面板严格局'), 'panel')
+      }
       return { v: 1, ...r }
     }
-    if (action === 'close') {
+    if (action === 'strict') {
+      const r = presetRt.strictNow(Date.now(), String(body?.why || '面板切为严格模式'), 'panel')
+      return { v: 1, ...r }
+    }
+    if (action === 'close' || action === 'finish') {
       return { v: 1, ...closeBoutNow() }
     }
     if (!['ask', 'spoken', 'answer', 'fallback'].includes(action)) {

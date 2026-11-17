@@ -77,11 +77,15 @@ object InterceptRuntime {
     fun config(): InterceptConfig = guard?.config ?: InterceptConfig()
     fun releaseMs(): Long = config().releaseMs
     fun effectiveLockMode(): String {
-        val strictSession = runCatching {
-            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.isStrictSession()
-        }.getOrDefault(false)
-        if (strictSession) return InterceptRules.MODE_STRICT
-        return guard?.effectiveLockMode() ?: InterceptRules.normalizeLockMode(config().lockMode)
+        val raw = guard?.effectiveLockMode() ?: InterceptRules.normalizeLockMode(config().lockMode)
+        if (raw == InterceptRules.MODE_STRICT) return InterceptRules.MODE_STRICT
+        if (raw == InterceptRules.MODE_LINKED) {
+            val strictSession = runCatching {
+                io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.isStrictSession()
+            }.getOrDefault(false)
+            if (strictSession) return InterceptRules.MODE_STRICT
+        }
+        return raw
     }
     fun activeReleasesCount(): Int = guard?.activeReleasesCount() ?: 0
 

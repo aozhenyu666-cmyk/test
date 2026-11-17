@@ -95,7 +95,12 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     setState(() {
       _loading = false;
       final b = results[0];
-      if (b is Map<String, dynamic>) _bouts = b;
+      if (b is Map<String, dynamic>) {
+        _bouts = b;
+        if (!silent && _banner != null && _banner!.startsWith('局插件未响应')) _banner = null;
+      } else if (!silent) {
+        _banner = '局插件未响应，下拉刷新重试或前往诊断页重启引擎';
+      }
       final c = results[1];
       if (c is List<Map<String, dynamic>>) _clocks = c;
     });
@@ -318,7 +323,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                 iconColor: colors.success,
                 title: '收工 · 提交验收',
                 subtitle: '通知墙与姐妹按实际产出核算本局',
-                onTap: _busy ? null : () => unawaited(_sendBoutCommand({'action': 'finish'}, toast: '已发起收工验收')),
+                onTap: _busy ? null : () => unawaited(_sendBoutCommand({'action': 'close'}, toast: '已发起收工验收')),
               ),
             ],
           ),
@@ -387,11 +392,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                   onPressed: _busy
                       ? null
                       : () => unawaited(_sendBoutCommand({
-                            'action': 'start',
-                            'protocol': _selectedProtocol,
+                            'action': 'open',
+                            'protocolId': _selectedProtocol,
                             'title': _goalCtrl.text.trim().isEmpty ? '专注推进' : _goalCtrl.text.trim(),
                             'minutes': _selectedMinutes,
-                            'allow': _selectedAllow.toList(),
+                            'apps': {'need': _selectedAllow.toList(), 'allow': _selectedAllow.toList()},
                             'strict': _strictMode,
                           }, toast: '已开启 $_selectedMinutes 分钟专注局')),
                   icon: const Icon(AppIcons.play),
@@ -428,7 +433,12 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     icon: const Icon(AppIcons.play),
                     onPressed: _busy
                         ? null
-                        : () => unawaited(_sendBoutCommand({'action': 'start', 'id': item['id']})),
+                        : () => unawaited(_sendBoutCommand({
+                              'action': 'open',
+                              'id': item['id'],
+                              'protocolId': item['protocolId'] ?? item['protocol'] ?? 'execute',
+                              'title': item['title'] ?? '队列开局',
+                            })),
                   ),
                 ),
             ],
