@@ -48,7 +48,7 @@ function ladderServe(requestId, at, serveType, silence) {
   return { ...serve(requestId, at, serveType), silence }
 }
 
-test('连续三次没接：这一轮停下', () => {
+test('阶梯走到最高级或连续 5 次没接：这一轮停下', () => {
   const entries = [
     serve('r1', T0, 'observe'),
     ladderServe('r2', T0 + 5 * 60_000, 'chat', 'lighter'),
@@ -56,7 +56,12 @@ test('连续三次没接：这一轮停下', () => {
   ]
   const s = silenceState(entries, { sessionId: 's', now: T0 + 40 * 60_000 })
   assert.equal(s.stage, 'stop')
-  assert.equal(s.noTake, NO_TAKE_LIMIT)
+  assert.equal(s.noTake, 3)
+
+  const five = Array.from({ length: NO_TAKE_LIMIT }, (_, i) => serve('s' + i, T0 + i * 60_000, 'observe'))
+  const s5 = silenceState(five, { sessionId: 's', now: T0 + 6 * 60_000 })
+  assert.equal(s5.stage, 'stop')
+  assert.equal(s5.noTake, NO_TAKE_LIMIT)
 })
 
 test('5 分钟补了轻球还没接：15 分钟（从第一球算）换渠道，不再补第二个轻球', () => {

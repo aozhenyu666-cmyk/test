@@ -108,6 +108,7 @@ export function apply(ctx) {
 
   const disposers = []
   const lastText = new Map()   // sid -> 这一轮用户刚说的话（检索线索）
+  const lastPrevText = new Map() // sid -> 上一句用户说过的话（短回复时拼进检索，防失忆）
   const dialogSeen = new Map() // 同一句的去重窗口（引擎可能对同一条消息发两次事件）
   let dialogTrimmedAt = 0
   const mounted = new Map()    // sid -> { agent, offs }
@@ -334,6 +335,8 @@ export function apply(ctx) {
         // 整段「这不是他说的话……」去对记忆，几乎什么都对不上。
         const txt = userTextOf(payload)
         if (!txt) return
+        const prev = lastText.get(sid) || ''
+        if (prev && prev !== txt && prev.length >= 6) lastPrevText.set(sid, prev)
         lastText.set(sid, txt)
         const s = db()
         if (!s) return
@@ -391,7 +394,9 @@ export function apply(ctx) {
     const s = db()
     if (!s) return ''
     try {
-      const query = lastText.get(sid) || ''
+      const cur = lastText.get(sid) || ''
+      const prev = cur.length <= 8 ? (lastPrevText.get(sid) || '') : ''
+      const query = prev ? (cur ? cur + ' ' + prev : prev) : cur
       const cached = recallCache.get(sid)
       // 同一次请求里 text() 会被调好几遍（宿主在装配阶段会重复求值）：
       // 1.5 秒内且线索没变就复用，避免重复检索和重复落盘。

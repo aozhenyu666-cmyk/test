@@ -94,10 +94,10 @@ test('C4 fish_index 在任一状态都拿得到（它是被收起能力的出口
   }
 })
 
-test('C14 挂出来的工具就是 toolsFor 那一套（表写得对不算，真挂上才算）', async () => {
+test('C14 关掉 fullToolAccess 时挂出来的工具就是 toolsFor 那一套（严格分态兼容）', async () => {
   await withHome(async (home) => {
     for (const row of STATE_TABLE) {
-      const { sis, big } = mountPair(home, {}, row.id)
+      const { sis, big } = mountPair(home, { fullToolAccess: false }, row.id)
       const got = Object.keys(sis.tools).sort()
       assert.deepEqual(got, [...toolsFor(row.id)].sort(), row.id + ' 挂出来的和表不一致')
       assert.ok(got.length <= MAX_TOOLS_PER_STATE, row.id + ' 挂了 ' + got.length + ' 个')
@@ -107,9 +107,9 @@ test('C14 挂出来的工具就是 toolsFor 那一套（表写得对不算，真
   })
 })
 
-test('C15 主状态一变，手上的工具跟着换（旧的注销、新的挂上）', async () => {
+test('C15 fullToolAccess 关闭时主状态一变，手上的工具跟着换（旧的注销、新的挂上）', async () => {
   await withHome(async (home) => {
-    const { sis } = mountPair(home, {}, 'standby')
+    const { sis } = mountPair(home, { fullToolAccess: false }, 'standby')
     assert.ok(sis.tools.mount_close, '待命该有挂载卡三件套')
     assert.equal(sis.tools.gemini_end, undefined, '待命不该有共脑工具')
     setStatePin('brain')
@@ -117,6 +117,67 @@ test('C15 主状态一变，手上的工具跟着换（旧的注销、新的挂�
     assert.equal(sis.tools.mount_close, undefined, '切到共脑后待命那套要注销')
     assert.equal(Object.keys(sis.tools).sort().join(','), [...toolsFor('brain')].sort().join(','))
   })
+})
+
+test('C16 默认全权限放开：两姐妹在待命与深夜都挂满 33 个全部工具', async () => {
+  await withHome(async (home) => {
+    const { sis, big } = mountPair(home, {}, 'night')
+    assert.equal(Object.keys(sis.tools).length, ALL_TOOLS.length)
+    assert.equal(Object.keys(big.tools).length, ALL_TOOLS.length)
+    assert.ok(sis.tools.open_bout && sis.tools.notes_vault && sis.tools.gemini_live)
+  })
+})
+
+test('C17 扩容与分块：Cognitive OS + 我.md + 判断.md 拆块留存，不再被预算器整块抛弃', async () => {
+  await withHome(async (home) => {
+    const vault = join(home, 'vault')
+    mkdirSync(join(vault, '大肥鱼'), { recursive: true })
+    mkdirSync(join(vault, '03_Thinking_Models'), { recursive: true })
+    writeFileSync(join(vault, '00_Index.md'), '# Index\n- 核心地图\n')
+    writeFileSync(join(vault, '03_Thinking_Models', '第一性筛选漏斗.md'), '# 第一性筛选漏斗\n只看高成本信号。')
+    writeFileSync(join(vault, '大肥鱼', '我.md'), '目标：每天先把硬骨头写完 400 字；红线：23 点后禁游。')
+    writeFileSync(join(vault, '大肥鱼', '判断.md'), '- 他口头上说查资料但 B站超 20 分钟必在逃避。')
+    const { big } = mountPair(home, { notesPath: vault }, 'standby')
+    const text = big.contexts[0].text()
+    assert.match(text, /第一性筛选漏斗/)
+    assert.match(text, /硬骨头写完 400 字/)
+    assert.match(text, /B站超 20 分钟必在逃避/)
+    const last = readFileSync(join(home, 'companion', 'ctx-budget.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).pop()
+    assert.ok(last.kept.includes('kb-self') && last.kept.includes('kb-cog') && last.kept.includes('kb-judge'), JSON.stringify(last))
+  })
+})
+
+test('C18 心情桥接与单点联动：维度情绪进状态层，未绑定的 feiyu-mood 自动同步姐妹会话', async () => {
+  await withHome(async (home) => {
+    mkdirSync(join(home, 'feiyu-mood'), { recursive: true })
+    writeFileSync(join(home, 'feiyu-mood', 'state.json'), JSON.stringify({
+      lastActive: 's1',
+      moods: {
+        s1: { mood: 64, dims: { jealous: 32, worry: 18 }, lastReason: '刚才一直回别人没理我' },
+      },
+    }))
+    const { sis } = mountPair(home, {}, 'standby')
+    const text = sis.contexts[0].text()
+    assert.match(text, /底色心情 64\/100（吃醋 32、担心 18）/)
+    assert.match(text, /有点小醋意/)
+    const moodCfg = JSON.parse(readFileSync(join(home, 'feiyu-mood', 'config.json'), 'utf8'))
+    assert.equal(moodCfg.autoLinked, true)
+    assert.equal(moodCfg.targetSession, 'session-sis')
+    assert.equal(moodCfg.slots.length, 2)
+    assert.deepEqual(moodCfg.slots.map((s) => s.sessions[0]), ['session-sis', 'session-big'])
+  })
+})
+
+test('C19 stochasticLivingLines 概率分化：有时带日常与内心OS，有时留白', async () => {
+  const { stochasticLivingLines } = await import('../lib/vibe.js')
+  const outs = Array.from({ length: 40 }, (_, i) => stochasticLivingLines({ role: 'companion', seed: 100 + i, hour: 15, briefReply: i === 0 }))
+  const withSlice = outs.filter((o) => Boolean(o.lifeSlice)).length
+  const withOs = outs.filter((o) => Boolean(o.innerOs)).length
+  const withTool = outs.filter((o) => Boolean(o.spontaneousTool)).length
+  assert.ok(withSlice > 5 && withSlice < 35, '日常切片应当有波动而非 100% 死读：' + withSlice)
+  assert.ok(withOs > 5 && withOs < 35, '内心OS应当有波动：' + withOs)
+  assert.ok(withTool > 2 && withTool < 28, '随机自发动作应当稀疏出现：' + withTool)
+  assert.match(outs[0].casualShortHint || '', /日常短回勿上纲上线/)
 })
 
 test('C5 人设每轮不超过 2400 字符（妹妹）', async () => {

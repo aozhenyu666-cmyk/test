@@ -207,7 +207,7 @@ export function depthBudget(depth, budget) {
   const base = budget || {}
   const perLayer = { ...(base.perLayer || {}) }
   // 只压内容层：状态层是"现在什么状态"，压掉就说胡话了。
-  const content = Number(perLayer.content) || 500
+  const content = Number(perLayer.content) || 1800
   perLayer.content = Math.max(60, Math.round(content * f))
   return { ...base, perLayer }
 }

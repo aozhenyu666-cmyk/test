@@ -584,6 +584,14 @@ class InterceptGuard(
         true
     }
 
+    fun addWhitelist(packages: Collection<String>): Int = synchronized(lock) {
+        val cleaned = packages.asSequence().map { it.trim() }.filter { it.isNotEmpty() && it !in config.whitelist }.toList()
+        if (cleaned.isEmpty()) return@synchronized 0
+        config = config.copy(whitelist = config.whitelist + cleaned)
+        persist()
+        cleaned.size
+    }
+
     fun removeWhitelist(packageName: String): Boolean = synchronized(lock) {
         val clean = packageName.trim()
         if (clean.isEmpty() || clean !in config.whitelist) return@synchronized false

@@ -562,5 +562,72 @@ test('Cognitive OS 六区联调：大小鱼注入、02待审隔离、01原始流
   })
 })
 
+test('Today 工作台接口（GET /today + POST /today/start 默认严格锁 + /today/task + allow/relax + 双时序 superseded_by）', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { mode: 'coach' })
+    const h = t.h.handler()
+
+    // 1) 空闲状态 GET /today 返回简报与 HEARTBEAT_OK
+    const t0 = await call(h, 'GET', '/today')
+    assert.equal(t0.status, 200)
+    assert.equal(t0.body.ok, true)
+    assert.equal(t0.body.heartbeat, 'HEARTBEAT_OK')
+    assert.ok(Array.isArray(t0.body.defaultAllow) && t0.body.defaultAllow.includes('md.obsidian'))
+
+    // 2) Omi 式全局工具 add_today_task + HTTP POST /today/task 加入主线清单
+    const taskTool = t.h.globalTools.add_today_task || t.big.tools.add_today_task
+    assert.ok(taskTool, '应注册全局工具 add_today_task')
+    const rTool = taskTool.execute({ title: '完成架构重构校验', minutes: 50 })
+    assert.equal(rTool.ok, true)
+    const tTask = await call(h, 'POST', '/today/task', { action: 'add', title: '补充回归单测', minutes: 30 })
+    assert.equal(tTask.status, 200)
+    assert.equal(tTask.body.ok, true)
+    assert.equal(tTask.body.tasks.length, 2)
+
+    // 3) POST /today/start 默认严格锁，且保留自定义白名单
+    const started = await call(h, 'POST', '/today/start', {
+      goal: 'Today首屏联调收尾',
+      minutes: 45,
+      allow: ['md.obsidian', 'org.mozilla.firefox'],
+    })
+    assert.equal(started.status, 200)
+    assert.equal(started.body.ok, true)
+    assert.equal(started.body.strict, true)
+
+    const t1 = await call(h, 'GET', '/today')
+    assert.equal(t1.body.running?.title, 'Today首屏联调收尾')
+    assert.equal(t1.body.strict, true)
+    assert.equal(t1.body.heartbeat, 'ACTIVE')
+    assert.ok(t1.body.defaultAllow.includes('org.mozilla.firefox'))
+
+    // 4) 运行中 POST /bouts action=allow 热改白名单 + action=relax 切温和
+    const allowRes = await call(h, 'POST', '/bouts', {
+      action: 'allow',
+      allow: ['md.obsidian', 'com.tencent.mm'],
+    })
+    assert.equal(allowRes.status, 200)
+    assert.equal(allowRes.body.ok, true)
+    const bAfterAllow = await call(h, 'GET', '/bouts')
+    assert.ok(bAfterAllow.body.running.allow.includes('com.tencent.mm'))
+
+    const relaxRes = await call(h, 'POST', '/bouts', { action: 'relax' })
+    assert.equal(relaxRes.status, 200)
+    assert.equal(relaxRes.body.strict, false)
+    const bAfterRelax = await call(h, 'GET', '/bouts')
+    assert.equal(bAfterRelax.body.strict, false)
+
+    // 5) 双时序 superseded_by：同主题 [日程·明早] 新安排自动作废旧条
+    const m1 = await call(h, 'POST', '/memory/import', {
+      facts: [{ text: '[日程·明早] 9点写文档', source: 'today', replaceKey: '[日程·明早]' }],
+    })
+    assert.equal(m1.body.imported >= 1, true)
+    const m2 = await call(h, 'POST', '/memory/import', {
+      facts: [{ text: '[日程·明早] 改到下午2点写文档', source: 'today', replaceKey: '[日程·明早]' }],
+    })
+    assert.equal(m2.body.superseded >= 1, true)
+  })
+})
+
+
 
 

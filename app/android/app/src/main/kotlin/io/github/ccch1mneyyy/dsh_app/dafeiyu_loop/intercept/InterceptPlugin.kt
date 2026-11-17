@@ -61,6 +61,14 @@ class InterceptPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 InterceptRuntime.setConfig(context, InterceptRuntime.config().copy(pauseUntilWall = 0))
                 result.success(status())
             }
+            "addWhitelist" -> {
+                InterceptRuntime.ensure(context)
+                val pkgs = (call.argument<List<*>>("packages") ?: emptyList<Any?>())
+                    .mapNotNull { it?.toString()?.trim() }
+                    .filter { it.isNotEmpty() }
+                InterceptRuntime.addWhitelist(pkgs)
+                result.success(status())
+            }
             "removeWhitelist" -> {
                 InterceptRuntime.ensure(context)
                 val pkg = call.argument<String>("packageName") ?: ""

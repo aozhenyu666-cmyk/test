@@ -22,14 +22,11 @@ export const LADDER = [
   { atMs: 15 * 60_000, stage: 'channel' },
 ]
 
-/**
- * 连续这么多次没接，本轮就停下，不再追：原球 + 轻球 + 换渠道那一球，三次。
- * 以前是 2，可阶梯每一级都要发一球，2 次就停意味着 15 分钟换渠道那一级在正常时序下永远走不到。
- */
-export const NO_TAKE_LIMIT = 3
+/** 连续这么多次没接，本轮就先停一下，不再追。 */
+export const NO_TAKE_LIMIT = 5
 
-/** 停下之后歇多久重新开始：最后一球过去这么久，旧账清零，按新的一轮算。 */
-export const REST_MS = 3 * 3_600_000
+/** 停下之后歇多久重新开始：最后一球过去 1 小时，旧账清零，按新的一轮算。 */
+export const REST_MS = 60 * 60_000
 
 /** "更轻"的球：小挑战和闲聊。观点挑衅、复盘这些更重，没接球时先不用。 */
 export const LIGHTER_TYPES = ['challenge', 'chat']

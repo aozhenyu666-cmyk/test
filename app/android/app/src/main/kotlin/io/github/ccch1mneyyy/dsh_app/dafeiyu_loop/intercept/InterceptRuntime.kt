@@ -93,6 +93,12 @@ object InterceptRuntime {
     }
     fun activeReleasesCount(): Int = guard?.activeReleasesCount() ?: 0
 
+    fun addWhitelist(packages: Collection<String>): Int {
+        val count = guard?.addWhitelist(packages) ?: 0
+        if (count > 0) LoopRuntime.configChanged()
+        return count
+    }
+
     fun removeWhitelist(packageName: String): Boolean {
         val ok = guard?.removeWhitelist(packageName) == true
         if (ok) LoopRuntime.configChanged()

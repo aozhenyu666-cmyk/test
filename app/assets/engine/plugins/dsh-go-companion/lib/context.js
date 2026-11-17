@@ -15,7 +15,7 @@ try {
   DatabaseSync = null
 }
 
-/** feiyu-mood/state.json：{ moods: { key: { mood, ... } }, lastActive } */
+/** feiyu-mood/state.json：{ moods: { key: { mood, dims, lastReason } }, lastActive } */
 export function readMood(home) {
   try {
     const file = join(home, 'feiyu-mood', 'state.json')
@@ -27,6 +27,50 @@ export function readMood(home) {
     const mood = Number(state && state.mood)
     if (!Number.isFinite(mood)) return null
     return { mood: Math.max(0, Math.min(100, Math.round(mood))) }
+  } catch {
+    return null
+  }
+}
+
+const MOOD_DIM_LABELS = [
+  ['happy', '开心'],
+  ['calm', '踏实'],
+  ['sweet', '甜蜜'],
+  ['heartache', '心疼'],
+  ['worry', '担心'],
+  ['sad', '难过'],
+  ['jealous', '吃醋'],
+]
+
+/**
+ * 读取 feiyu-mood 的复合情绪摘要（主情绪分 + 显著维度 + 最近缘由）。
+ * 缺文件或坏 JSON 返回 null，不影响主流程。
+ */
+export function readMoodSummary(home) {
+  try {
+    const file = join(home, 'feiyu-mood', 'state.json')
+    if (!existsSync(file)) return null
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    const moods = raw && raw.moods && typeof raw.moods === 'object' ? raw.moods : {}
+    const key = typeof raw.lastActive === 'string' && raw.lastActive ? raw.lastActive : Object.keys(moods)[0]
+    const state = key ? moods[key] : null
+    const mood = Number(state && state.mood)
+    if (!Number.isFinite(mood)) return null
+    const rawDims = state?.dims && typeof state.dims === 'object' ? state.dims : {}
+    const dims = {}
+    const topDims = []
+    for (const [k, label] of MOOD_DIM_LABELS) {
+      const val = Math.max(0, Math.min(100, Math.round(Number(rawDims[k]) || 0)))
+      dims[k] = val
+      if (val >= 15) topDims.push({ key: k, label, value: val })
+    }
+    topDims.sort((a, b) => b.value - a.value)
+    return {
+      mood: Math.max(0, Math.min(100, Math.round(mood))),
+      dims,
+      topDims: topDims.slice(0, 2),
+      lastReason: typeof state?.lastReason === 'string' ? state.lastReason.replace(/\s+/g, ' ').trim().slice(0, 120) : '',
+    }
   } catch {
     return null
   }

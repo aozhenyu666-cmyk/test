@@ -244,10 +244,10 @@ class _ProactivePageState extends State<ProactivePage> {
 
   // ---- 大肥鱼自己的参数（插件 /config） ---------------------------------------------------
 
-  static const _partnerGapSteps = [10, 15, 20, 30, 45, 60, 90];
-  static const _coachGapSteps = [3, 5, 8, 10, 15, 20, 30];
-  static const _hourlySteps = [2, 3, 4, 6, 8, 10, 12];
-  static const _dailySteps = [6, 10, 20, 40, 0];
+  static const _partnerGapSteps = [3, 5, 10, 15, 25, 45, 60];
+  static const _coachGapSteps = [2, 3, 5, 8, 15, 25];
+  static const _hourlySteps = [6, 12, 20, 30, 0];
+  static const _dailySteps = [12, 24, 36, 48, 0];
 
   int _companionInt(String key, int fallback) {
     final v = _sessions.config[key];
@@ -286,9 +286,9 @@ class _ProactivePageState extends State<ProactivePage> {
     final gapKey = coach ? 'coachMinGapMs' : 'minGapMs';
     final hourKey = coach ? 'coachHourlyMax' : 'hourlyMax';
     final dayKey = coach ? 'coachDailyMax' : 'dailyMax';
-    final gap = _companionInt(gapKey, coach ? 8 * 60000 : 45 * 60000) ~/ 60000;
-    final hourly = _companionInt(hourKey, coach ? 6 : 3);
-    final daily = _companionInt(dayKey, coach ? 40 : 6);
+    final gap = _companionInt(gapKey, coach ? 4 * 60000 : 8 * 60000) ~/ 60000;
+    final hourly = _companionInt(hourKey, coach ? 15 : 0);
+    final daily = _companionInt(dayKey, 0);
     final voiceOn = _sessions.config['voice'] == true;
     return [
       ListPageRow(
@@ -317,7 +317,7 @@ class _ProactivePageState extends State<ProactivePage> {
         title: '每小时最多',
         subtitle: '你接住之后接着聊的不算，被冷落后补的几球也不算',
         subtitleMaxLines: 2,
-        value: '$hourly 次',
+        value: hourly <= 0 ? '不限' : '$hourly 次',
         onTap: () => unawaited(_companion({hourKey: _nextStep(_hourlySteps, hourly)})),
       ),
       ListPageRow(

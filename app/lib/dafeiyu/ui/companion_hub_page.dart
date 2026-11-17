@@ -14,6 +14,7 @@ import '../../state/sessions_state.dart' show currentSessionProvider;
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
 import '../../ui/common/status_chip.dart';
+import '../../ui/common/tile_grid.dart';
 import '../../ui/pets/pet_settings_page.dart';
 import 'deposit_page.dart';
 import 'intercept_page.dart';
@@ -426,20 +427,17 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
           onTap: () => unawaited(_refresh()),
           onFooterTap: () => _openPage(const WallPage()),
         ),
-        ListPageCard(
-          title: '快捷动作',
+        TileGrid(
+          columns: 2,
+          spacing: 12,
+          padding: EdgeInsets.zero,
           children: [
-            ListPageRow(
+            FeatureCard(
               icon: AppIcons.today,
-              iconColor: planNeedsGate ? colors.warning : Theme.of(context).colorScheme.primary,
+              tint: planNeedsGate ? 4 : 1,
+              badge: bouts != null ? '进局' : (boutCount > 0 ? '$boutCount 局' : '去排局'),
               title: '今日的局',
-              subtitle: bouts != null
-                  ? '直接进入实时「局」原生面板，开始本拍推局与验收'
-                  : (boutCount > 0
-                      ? '伴侣面板加载中 · 点击同步或进入今日 $boutCount 局计划'
-                      : '先排定今日几局与必需/允许应用，再开「局」更顺畅'),
-              subtitleMaxLines: 2,
-              value: bouts != null ? '进局' : (boutCount > 0 ? '$boutCount 局' : '去排局'),
+              subtitle: bouts != null ? '进入实时原生推进面' : '排定今日几局与白名单',
               onTap: () {
                 if (bouts != null) {
                   _openPage(NativePanelPage(panel: bouts, sessionId: currentSession));
@@ -449,34 +447,37 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
                 }
               },
             ),
-            ListPageRow(
+            FeatureCard(
               icon: AppIcons.voice,
-              iconColor: Theme.of(context).colorScheme.primary,
+              tint: 3,
+              badge: '连麦',
               title: '局官语音交互',
-              subtitle: '当前正在进行的局，由局官念题并语音作答',
-              subtitleMaxLines: 2,
+              subtitle: '局官念题与实时语音作答',
               onTap: () => _openPage(const BoutVoicePage()),
             ),
-            ListPageRow(
-              icon: AppIcons.agentLoop,
-              title: _actionBusy ? '正在唤醒大肥鱼…' : '立即触发一次状态巡检',
-              subtitle: '手动让主动内核与伴侣插件对齐当前屏幕与节奏',
-              subtitleMaxLines: 2,
-              onTap: _actionBusy ? null : () => unawaited(_triggerTick()),
-            ),
-            ListPageRow(
-              icon: AppIcons.today,
-              iconColor: Theme.of(context).colorScheme.primary,
-              title: '摇一骰 · 轻思考微干预',
-              subtitle: (_shakeDice?['enabled'] != false)
-                  ? '摇一摇手机即出六骰悬浮窗；也可以点这里马上摇一骰'
-                  : '摇一摇触发已关闭，点此先手动摇一骰（可随时开启）',
-              subtitleMaxLines: 2,
-              value: _shakeDice?['lastDice'] is num && (_shakeDice!['lastDice'] as num) > 0
-                  ? '上次 骰${_shakeDice!['lastDice']}'
+            FeatureCard(
+              icon: AppIcons.overlayBall,
+              tint: 5,
+              badge: _shakeDice?['lastDice'] is num && (_shakeDice!['lastDice'] as num) > 0
+                  ? '骰${_shakeDice!['lastDice']}'
                   : '摇一骰',
+              title: '摇一骰 · 轻思考微干预',
+              subtitle: (_shakeDice?['enabled'] != false) ? '亮屏轻晃两下即出浮窗' : '手动摇一骰触发',
               onTap: _actionBusy ? null : () => unawaited(_rollDiceNow()),
             ),
+            FeatureCard(
+              icon: AppIcons.agentLoop,
+              tint: 0,
+              badge: _actionBusy ? '巡检中' : '唤醒',
+              title: _actionBusy ? '正在唤醒大肥鱼…' : '立即触发一次状态巡检',
+              subtitle: '主动内核对齐屏幕与节奏',
+              onTap: _actionBusy ? null : () => unawaited(_triggerTick()),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        ListPageCard(
+          children: [
             ListPageRow(
               icon: AppIcons.verified,
               iconColor: (_shakeDice?['enabled'] != false) ? colors.success : null,

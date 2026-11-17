@@ -51,29 +51,58 @@ export function judgeDigest(dir, max = 800) {
 
 /** 拼进两人的聊天人设。兼容 Cognitive OS 六区知识库（00_Index / 03_Thinking_Models / 04 / 05 / 06 / 02）。 */
 export function knowledgeLines(dir, role, opts = {}) {
+  return knowledgeBlocks(dir, role, opts).map((b) => b.text)
+}
+
+/**
+ * 拆成独立小块进预算器（2026-11）：防止单一 1000+ 字大块被 fitBudget 整块丢弃。
+ * 返回顺序按重要性：kb-self（12）> kb-cog（10）> kb-judge（8）> kb-rule（5）。
+ */
+export function knowledgeBlocks(dir, role, opts = {}) {
   const self = selfDigest(dir)
-  const judge = judgeDigest(dir, role === 'strategist' ? 800 : 300)
-  const lines = []
+  const judge = judgeDigest(dir, role === 'strategist' ? 650 : 280)
+  const blocks = []
   if (self) {
-    lines.push('他自己写的规则（' + KB_DIR + '/' + SELF_FILE + '，以它为准；跟别的说法冲突时：他写的 > 他最近亲口说的 > 记忆 > 你们的推断）：', self)
+    blocks.push({
+      id: 'kb-self',
+      priority: 12,
+      text: '他自己写的规则（' + KB_DIR + '/' + SELF_FILE + '，冲突时以它为准）：\n' + self.slice(0, 750),
+    })
   } else {
-    lines.push('他还没写 ' + KB_DIR + '/' + SELF_FILE + '（他的目标、硬安排、红线、希望你们怎么对他）。' +
-      (role === 'strategist' ? '找个他不忙的时候，用 kb_write file=self 按你知道的起草一版，跟他说一声让他改；文件已经存在就不能覆盖。' : '提醒姐姐去起草，或者让他自己写。'))
+    blocks.push({
+      id: 'kb-self',
+      priority: 12,
+      text: '他还没写 ' + KB_DIR + '/' + SELF_FILE + '（目标、红线、希望怎么对他）。' +
+        (role === 'strategist' ? '抽空用 kb_write file=self 起草一版让他改。' : '提醒姐姐起草或让他自己写。'),
+    })
   }
-  if (judge) lines.push((role === 'strategist' ? '你之前写下的判断（' : '姐姐写下的对他的判断（') + KB_DIR + '/' + JUDGE_FILE + '，他可能改过，以文件为准）：', judge)
   const cogDir = typeof opts?.notesDir === 'string' ? opts.notesDir.trim() : ''
   if (cogDir) {
     const cog = cognitiveOsDigest(cogDir, {
-      maxPerZone: role === 'strategist' ? 5 : 2,
-      limitChars: role === 'strategist' ? 1400 : 480,
+      maxPerZone: role === 'strategist' ? 4 : 2,
+      limitChars: role === 'strategist' ? 750 : 380,
     })
     if (cog.present && cog.text) {
-      lines.push('Cognitive OS 六区体系（来自 Obsidian 主库，你是 Overseer 的参谋；遵守实然优先、侦察先于开方、不篡改 01_Inbox_Raw 原始素材）：')
-      lines.push(cog.text)
+      blocks.push({
+        id: 'kb-cog',
+        priority: 10,
+        text: 'Cognitive OS 体系（先查旧账、实然优先、侦察先于开方、不篡改 01_Inbox_Raw）：\n' + cog.text,
+      })
     }
   }
-  lines.push('笔记库的规矩：你们只能写 ' + KB_DIR + '/、Gemini/ 或在确认后按原始留档追加 01_Inbox_Raw/；别的目录只读，绝不改；日记、私密目录不读。读屏和相册看到的东西只用来当下说一句，不记进记忆或笔记。')
-  return lines
+  if (judge) {
+    blocks.push({
+      id: 'kb-judge',
+      priority: 8,
+      text: (role === 'strategist' ? '你之前写下的判断（' : '姐姐写下的对他的判断（') + KB_DIR + '/' + JUDGE_FILE + '）：\n' + judge,
+    })
+  }
+  blocks.push({
+    id: 'kb-rule',
+    priority: 5,
+    text: '笔记库边界：仅可写 ' + KB_DIR + '/、Gemini/ 与追加 01_Inbox_Raw/；其余只读，日记/私密目录不读。',
+  })
+  return blocks
 }
 
 /**

@@ -207,3 +207,16 @@ test('tokens：短句也能出检索词', () => {
   assert.equal(tokens('的').size, 0)
   assert.ok(tokens('deadline 周五').has('deadline'))
 })
+
+test('近义词簇联想：换说法也能召回相关记忆，且精确命中分严格更高', () => {
+  const doc = emptyDoc()
+  remember(doc, { text: '昨晚凌晨两点还在失眠，最近压力大', scope: 'global' }, T0)
+  remember(doc, { text: '平时喜欢打羽毛球和吃芒果', scope: 'global' }, T0)
+  const hits = search(doc, { query: '心情焦虑睡不好', scope: 'global' }, T0)
+  assert.ok(hits.items.length >= 1, '换种问法也能命中睡眠/焦虑记忆')
+  assert.match(hits.items[0].text, /失眠/)
+  assert.ok(!hits.items.some((h) => h.text.includes('芒果')), '无关记忆不乱凑')
+  remember(doc, { text: '最近心情焦虑睡不好，脑子停不下来', scope: 'global' }, T0 + 1000)
+  const ranked = search(doc, { query: '心情焦虑睡不好', scope: 'global' }, T0 + 2000)
+  assert.match(ranked.items[0].text, /心情焦虑睡不好/)
+})

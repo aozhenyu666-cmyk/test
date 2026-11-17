@@ -49,8 +49,10 @@ class _FakePlanChannel extends ProactiveChannel {
 
 class _FakeLoopChannel extends LoopChannel {
   @override
-  Future<List<LoopApp>> apps() async => const [
-        LoopApp('md.obsidian', 'Obsidian'),
+  Future<List<LoopApp>> apps() async => [
+        for (var i = 0; i < 60; i++) LoopApp('com.noise.app$i', '干扰工具 $i'),
+        const LoopApp('md.obsidian', 'Obsidian'),
+        const LoopApp('com.tencent.mm', '微信'),
       ];
 }
 
@@ -92,5 +94,39 @@ void main() {
     expect(ch.submitted, isNotNull);
     final pkt = ch.submitted!.first['packet'] as Map<String, Object?>;
     expect(pkt['accept'], {'kind': 'evidence', 'what': '保存周报.md 并提交截图'});
+  });
+
+  testWidgets('PlanPage 固定高度白名单多选弹窗支持搜索且确认按钮不被裁切失效', (tester) async {
+    final ch = _FakePlanChannel();
+    await pumpPhone(tester, PlanPage(channel: ch, loop: _FakeLoopChannel()));
+    await settlePhone(tester);
+
+    await tester.tap(find.text('允许应用'));
+    await settlePhone(tester);
+
+    expect(find.byKey(const ValueKey('plan-app-confirm')), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, '微信');
+    await settlePhone(tester);
+    await tester.tap(find.byKey(const ValueKey('plan-app-com.tencent.mm')));
+    await settlePhone(tester);
+
+    await tester.tap(find.byKey(const ValueKey('plan-app-confirm')));
+    await settlePhone(tester);
+
+    expect(find.text('Obsidian、微信'), findsOneWidget);
+
+    await tester.tap(find.text('验收方式'));
+    await settlePhone(tester);
+    await tester.tap(find.text(PlanRow.acceptNames['evidence']!));
+    await settlePhone(tester);
+    await tester.enterText(find.byType(TextField).last, 'Obsidian 已更新并保存');
+    await tester.tap(find.text('完成'));
+    await settlePhone(tester);
+
+    await tester.tap(find.text('就按这一份来'));
+    await settlePhone(tester);
+    expect(ch.submitted, isNotNull);
+    final allow = (ch.submitted!.first['allow'] as List).cast<String>();
+    expect(allow, containsAll(['md.obsidian', 'com.tencent.mm']));
   });
 }

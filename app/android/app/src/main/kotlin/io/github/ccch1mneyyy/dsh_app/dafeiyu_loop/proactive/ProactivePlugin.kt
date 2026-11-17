@@ -306,6 +306,17 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/memory/import", body)
             }
             "handoffPacket" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/handoff", null)
+            "todayStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/today", null)
+            "todayStart" -> {
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/today/start", body)
+            }
+            "todayTask" -> {
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/today/task", body)
+            }
             else -> result.notImplemented()
         }
     }

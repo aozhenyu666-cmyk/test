@@ -15,8 +15,8 @@ export const LAYERS = ['constraint', 'state', 'content']
  * 见 docs/dafeiyu/第七轮进度.md 的 P0-3、A1 两节。
  */
 export const DEFAULT_BUDGET = {
-  total: 2400,
-  perLayer: { constraint: 2100, state: 1000, content: 500 },
+  total: 5600,
+  perLayer: { constraint: 1800, state: 2400, content: 1800 },
 }
 
 const charsOf = (block) => String(block.text).length

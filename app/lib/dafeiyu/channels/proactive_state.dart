@@ -760,6 +760,76 @@ class ProactiveChannel {
       return null;
     }
   }
+
+  /// 获取 Today 今日总揽工作台聚合状态（GET /today）。
+  Future<Map<String, dynamic>?> todayStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('todayStatus');
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 一句话直接开干（POST /today/start），默认开启严格锁。
+  Future<Map<String, dynamic>?> todayStart({
+    required String goal,
+    int minutes = 45,
+    bool strict = true,
+    List<String>? allow,
+    String protocolId = 'execute',
+  }) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('todayStart', <String, Object?>{
+        'goal': goal,
+        'minutes': minutes,
+        'strict': strict,
+        'allow': ?allow,
+        'protocolId': protocolId,
+      });
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 增删 Today 主线任务清单（POST /today/task）。
+  Future<Map<String, dynamic>?> todayTask({
+    String action = 'add',
+    String? title,
+    String? id,
+    int? index,
+    int minutes = 45,
+    List<String>? allow,
+    bool top = false,
+  }) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('todayTask', <String, Object?>{
+        'action': action,
+        'title': ?title,
+        'id': ?id,
+        'index': ?index,
+        'minutes': minutes,
+        'allow': ?allow,
+        'top': top,
+      });
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
 }
 
 /// 大肥鱼与独立守护 App「大肥鱼哨兵」之间的互信绑定状态。

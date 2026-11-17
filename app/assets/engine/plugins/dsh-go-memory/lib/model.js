@@ -85,6 +85,58 @@ const STOP = new Set([
 ])
 const STOP_BIGRAMS = new Set(['可以', '什么', '怎么', '为什', '因为', '所以', '但是', '如果', '这个', '那个', '就是', '不是', '我们', '你们', '他们', '她们'])
 
+const SYNONYM_CLUSTERS = [
+  ['睡眠', '失眠', '睡不着', '睡不好', '熬夜', '晚睡', '早起', '困', '通宵', '睡觉', '午睡'],
+  ['工作', '上班', '加班', '打工', '岗位', '任务', '项目', '正事', '忙碌'],
+  ['摸鱼', '偷懒', '拖延', '走神', '分心', '滑水', '摆烂', '犯懒'],
+  ['学习', '考试', '申论', '行测', '刷题', '复习', '背书', '真题', '备考', '上岸'],
+  ['焦虑', '心慌', '烦躁', '压力', '崩溃', '难受', '内耗', '紧绷', '失落'],
+  ['开心', '高兴', '愉快', '爽', '得意', '轻松', '顺心', '不错'],
+  ['娱乐', '手机', '抖音', 'b站', '小红书', '游戏', '刷视频', '短视频', '手游'],
+  ['吃饭', '早餐', '午饭', '晚饭', '外卖', '夜宵', '饥饿', '胃口'],
+  ['饮品', '咖啡', '美式', '奶茶', '喝水', '浓茶', '珍珠'],
+  ['运动', '跑步', '锻炼', '健身', '散步', '五公里', '流汗'],
+  ['人际', '朋友', '兄弟', '同事', '社交', '酒局', '聚餐', '聊天'],
+  ['伙伴', '姐妹', '鱼丸', '鲸澜', '大肥鱼', '小鱼', '大鱼', '搭档'],
+  ['笔记', 'obsidian', '双链', '复盘', '总结', '记录', '知识库', '碎记'],
+  ['控制', '锁定', '严格', '放风', '休息', '番茄', '闹钟', '专注', '拒绝'],
+  ['承诺', '约定', '答应', '保证', '立项', '收口', '期限'],
+  ['习惯', '作息', '饮食', '作弊', '违禁', '红线', '底线'],
+  ['金钱', '花钱', '预算', '报酬', '工资', '开销', '省钱'],
+  ['情绪', '心情', '脾气', '火气', '耐心', '吃醋', '心疼', '甜蜜'],
+  ['连麦', '语音', '通话', 'gemini', '口语', '讨论'],
+  ['写作', '初稿', '文章', '汇报', '文稿', '方案'],
+  ['阅读', '看书', '历史', '博弈', '围棋', '论文'],
+  ['宠物', '仓鼠', '芝麻', '猫', '狗'],
+  ['身体', '生病', '感冒', '头疼', '胃痛', '累', '疲惫'],
+  ['天气', '下雨', '打雷', '降温', '刮风', '太阳'],
+  ['周末', '放假', '休息日', '过节', '假期'],
+  ['计划', '规划', '日程', '安排', '路径', '目标'],
+  ['筛选', '试探', '信号', '利益', '筹码', '盲区'],
+  ['反驳', '质疑', '站不住', '讲理', '推演', '决策'],
+]
+
+const SYNONYM_MAP = (() => {
+  const m = new Map()
+  for (let i = 0; i < SYNONYM_CLUSTERS.length; i++) {
+    for (const w of SYNONYM_CLUSTERS[i]) {
+      const k = w.toLowerCase()
+      if (!m.has(k)) m.set(k, new Set())
+      m.get(k).add(i)
+    }
+  }
+  return m
+})()
+
+function clusterIdsOf(text) {
+  const s = String(text || '').toLowerCase()
+  const ids = new Set()
+  for (const [kw, groups] of SYNONYM_MAP) {
+    if (s.includes(kw)) for (const g of groups) ids.add(g)
+  }
+  return ids
+}
+
 export function tokens(text) {
   const out = new Set()
   const s = String(text || '').toLowerCase()
@@ -101,17 +153,42 @@ export function tokens(text) {
   return out
 }
 
-/** 0..1 的相关度：检索词覆盖 + 原文包含整句的加分。 */
+/** 0..1 的相关度：字面检索词覆盖 + 近义词簇部分匹配 + 单字兜底 + 原文包含整句加分。 */
 export function relevance(query, text) {
   const q = tokens(query)
-  if (!q.size) return 0
   const t = tokens(text)
+  const tText = String(text || '')
   let hit = 0
   for (const tok of q) if (t.has(tok)) hit += 1
-  const cover = hit / q.size
+
+  const qClusters = clusterIdsOf(query)
+  const tClusters = clusterIdsOf(tText)
+  let clusterBonus = 0
+  if (qClusters.size && tClusters.size) {
+    let shared = 0
+    for (const cid of qClusters) if (tClusters.has(cid)) shared += 1
+    if (shared > 0) clusterBonus = Math.min(0.45, (shared / qClusters.size) * 0.45)
+  }
+
+  // 当字面 2-gram 与近义词簇都没撞上时，补一层去停用词的单汉字模糊召回（权重封顶 0.25）。
+  let charFallback = 0
+  if (hit === 0 && clusterBonus === 0) {
+    const qChars = [...new Set(String(query || '').replace(/[^\u4e00-\u9fff]/g, ''))].filter((c) => !STOP.has(c))
+    const tCharSet = new Set(tText.replace(/[^\u4e00-\u9fff]/g, ''))
+    if (qChars.length && tCharSet.size) {
+      let matchedChars = 0
+      for (const c of qChars) if (tCharSet.has(c)) matchedChars += 1
+      if (matchedChars >= 2 || (qChars.length === 1 && matchedChars === 1)) {
+        charFallback = Math.min(0.25, (matchedChars / qChars.length) * 0.25)
+      }
+    }
+  }
+
+  if (!q.size && clusterBonus === 0 && charFallback === 0) return 0
+  const cover = q.size ? hit / q.size : 0
   const qn = normalizeText(query).toLowerCase()
-  const whole = qn.length >= 2 && normalizeText(text).toLowerCase().includes(qn) ? 0.25 : 0
-  return Math.min(1, cover * 0.9 + whole)
+  const whole = qn.length >= 2 && normalizeText(tText).toLowerCase().includes(qn) ? 0.25 : 0
+  return Math.min(1, Math.max(cover * 0.9 + whole, clusterBonus + whole * 0.5, charFallback) + (hit > 0 ? clusterBonus * 0.35 : 0))
 }
 
 // ── 打分与衰减 ────────────────────────────────────────────────────────────

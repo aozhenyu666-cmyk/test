@@ -26,6 +26,7 @@ import '../../ui/theme/theme.dart';
 import '../../ui/phone/action_log_page.dart' show formatLogTime;
 import '../../ui/phone/hold_to_confirm.dart';
 import '../dafeiyu_strings.dart';
+import 'app_picker_dialog.dart';
 
 class InterceptPage extends StatefulWidget {
   const InterceptPage({super.key, this.channel, this.loopChannel});
@@ -186,15 +187,43 @@ class _InterceptPageState extends State<InterceptPage> {
     );
   }
 
+  static const List<LoopApp> _entertainmentPresets = [
+    LoopApp('tv.danmaku.bili', '哔哩哔哩'),
+    LoopApp('com.ss.android.ugc.aweme', '抖音'),
+    LoopApp('com.smile.gifmaker', '快手'),
+    LoopApp('com.xingin.xhs', '小红书'),
+    LoopApp('com.sina.weibo', '微博'),
+    LoopApp('com.zhihu.android', '知乎'),
+    LoopApp('com.baidu.tieba', '百度贴吧'),
+    LoopApp('com.tencent.tmgp.sgame', '王者荣耀'),
+    LoopApp('com.tencent.tmgp.pubgmhd', '和平精英'),
+    LoopApp('com.miHoYo.Yuanshen', '原神'),
+    LoopApp('com.miHoYo.hkrpg', '崩坏：星穹铁道'),
+    LoopApp('com.tencent.jkchess', '金铲铲之战'),
+    LoopApp('com.taptap', 'TapTap'),
+    LoopApp('com.google.android.youtube', 'YouTube'),
+    LoopApp('com.twitter.android', 'X'),
+  ];
+
+  static const List<LoopApp> _whitelistPresets = [
+    LoopApp('md.obsidian', 'Obsidian'),
+    LoopApp('com.tencent.mm', '微信'),
+    LoopApp('com.google.android.apps.bard', 'Gemini'),
+    LoopApp('com.tencent.mobileqq', 'QQ'),
+  ];
+
   Future<void> _addTarget() async {
     final config = _status?.config ?? InterceptConfig.empty;
     final existing = {for (final t in config.targets) t.packageName};
-    final added = await showDialog<List<InterceptTarget>>(
-      context: context,
-      builder: (_) => _AddTargetDialog(
-        loop: _loop,
-        existingPackages: existing,
-      ),
+    final added = await showInstalledAppsPicker(
+      context,
+      title: DafeiyuStrings.of(context).interceptAddTarget,
+      loop: _loop,
+      presets: _entertainmentPresets,
+      presetsLabel: '常用娱乐 / 游戏一键勾选',
+      excludedPackages: existing,
+      emptyError: DafeiyuStrings.of(context).interceptAddTargetInvalid,
+      confirmLabel: '添加',
     );
     if (added == null || added.isEmpty || !mounted) return;
     final freshConfig = _status?.config ?? InterceptConfig.empty;
@@ -202,10 +231,31 @@ class _InterceptPageState extends State<InterceptPage> {
     final merged = [
       ...freshConfig.targets,
       for (final item in added)
-        if (seen.add(item.packageName)) item,
+        if (seen.add(item.package)) InterceptTarget(packageName: item.package, label: item.label),
     ];
     if (merged.length == freshConfig.targets.length) return;
     await _patch({'targets': merged.map((t) => t.toWire()).toList()});
+  }
+
+  Future<void> _addWhitelist() async {
+    final existing = (_status?.config ?? InterceptConfig.empty).whitelist.toSet();
+    final picked = await showInstalledAppsPicker(
+      context,
+      title: '添加永久放行白名单',
+      loop: _loop,
+      presets: _whitelistPresets,
+      presetsLabel: '常用工具 / 沟通应用快捷勾选',
+      excludedPackages: existing,
+      emptyError: '请至少勾选一个应用或输入完整包名',
+      confirmLabel: '确认添加',
+    );
+    if (picked == null || picked.isEmpty || !mounted) return;
+    try {
+      final s = await _channel.addWhitelist(picked.map((e) => e.package).toList());
+      if (mounted) setState(() { _status = s; _error = null; });
+    } on InterceptFailed catch (e) {
+      if (mounted) setState(() => _error = e.cause);
+    }
   }
 
   Future<void> _removeTarget(String pkg) async {
@@ -449,6 +499,14 @@ class _InterceptPageState extends State<InterceptPage> {
         ListPageCard(
           title: '白名单与防失效自救',
           children: [
+            ListPageRow(
+              icon: AppIcons.add,
+              iconColor: colors.info,
+              title: '添加永久放行白名单应用',
+              subtitle: '支持搜索本机应用或包名并一键确认写入（不依赖外部 AI 代加）',
+              subtitleMaxLines: 2,
+              onTap: status == null ? null : () => unawaited(_addWhitelist()),
+            ),
             if (config.whitelist.isEmpty)
               ListPageRow(
                 icon: AppIcons.allowed,
@@ -640,218 +698,3 @@ String interceptOutcomeLabel(L10n l10n, String? outcome) => switch (outcome) {
       'NOT_SHOWN' => DafeiyuStrings.fromL10n(l10n).interceptOutcomeNotShown,
       _ => outcome ?? '',
     };
-
-/// Adds one or more entertainment apps from 1-tap presets, installed launcher apps, or a custom package name.
-class _AddTargetDialog extends StatefulWidget {
-  const _AddTargetDialog({
-    required this.loop,
-    required this.existingPackages,
-  });
-
-  final LoopChannel loop;
-  final Set<String> existingPackages;
-
-  static const presets = <InterceptTarget>[
-    InterceptTarget(packageName: 'tv.danmaku.bili', label: '哔哩哔哩'),
-    InterceptTarget(packageName: 'com.ss.android.ugc.aweme', label: '抖音'),
-    InterceptTarget(packageName: 'com.smile.gifmaker', label: '快手'),
-    InterceptTarget(packageName: 'com.xingin.xhs', label: '小红书'),
-    InterceptTarget(packageName: 'com.sina.weibo', label: '微博'),
-    InterceptTarget(packageName: 'com.zhihu.android', label: '知乎'),
-    InterceptTarget(packageName: 'com.baidu.tieba', label: '百度贴吧'),
-    InterceptTarget(packageName: 'com.tencent.tmgp.sgame', label: '王者荣耀'),
-    InterceptTarget(packageName: 'com.tencent.tmgp.pubgmhd', label: '和平精英'),
-    InterceptTarget(packageName: 'com.miHoYo.Yuanshen', label: '原神'),
-    InterceptTarget(packageName: 'com.miHoYo.hkrpg', label: '崩坏：星穹铁道'),
-    InterceptTarget(packageName: 'com.tencent.jkchess', label: '金铲铲之战'),
-    InterceptTarget(packageName: 'com.taptap', label: 'TapTap'),
-    InterceptTarget(packageName: 'com.google.android.youtube', label: 'YouTube'),
-    InterceptTarget(packageName: 'com.twitter.android', label: 'X'),
-  ];
-
-  @override
-  State<_AddTargetDialog> createState() => _AddTargetDialogState();
-}
-
-class _AddTargetDialogState extends State<_AddTargetDialog> {
-  final _controller = TextEditingController();
-  final Map<String, String> _selected = <String, String>{};
-  List<LoopApp> _installed = const [];
-  bool _loadingApps = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_loadInstalled());
-  }
-
-  Future<void> _loadInstalled() async {
-    final apps = await widget.loop.apps();
-    if (!mounted) return;
-    setState(() {
-      _installed = apps
-          .where((a) => a.package.isNotEmpty && !widget.existingPackages.contains(a.package))
-          .toList()
-        ..sort((a, b) => a.label.compareTo(b.label));
-      _loadingApps = false;
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _toggle(String pkg, String label) {
-    setState(() {
-      _error = null;
-      if (_selected.containsKey(pkg)) {
-        _selected.remove(pkg);
-      } else {
-        _selected[pkg] = label;
-      }
-    });
-  }
-
-  void _submit() {
-    final typed = _controller.text.trim();
-    final items = <InterceptTarget>[
-      for (final e in _selected.entries) InterceptTarget(packageName: e.key, label: e.value),
-    ];
-    if (items.isEmpty) {
-      if (typed.isEmpty || typed.contains(' ') || !typed.contains('.')) {
-        setState(() => _error = DafeiyuStrings.of(context).interceptAddTargetInvalid);
-        return;
-      }
-      if (!widget.existingPackages.contains(typed)) {
-        items.add(InterceptTarget(packageName: typed, label: typed));
-      }
-    } else if (typed.contains('.') && !typed.contains(' ') && !_selected.containsKey(typed) && !widget.existingPackages.contains(typed)) {
-      final matched = _installed.where((a) => a.package == typed).firstOrNull;
-      items.add(InterceptTarget(packageName: typed, label: matched?.label ?? typed));
-    }
-    Navigator.of(context).pop(items);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = context.l10n;
-    final query = _controller.text.trim().toLowerCase();
-    final availablePresets = _AddTargetDialog.presets
-        .where((p) => !widget.existingPackages.contains(p.packageName))
-        .toList();
-    final filteredInstalled = _installed.where((a) {
-      if (query.isEmpty) return true;
-      return a.label.toLowerCase().contains(query) || a.package.toLowerCase().contains(query);
-    }).toList();
-
-    return AlertDialog(
-      title: Text(DafeiyuStrings.fromL10n(l10n).interceptAddTarget),
-      content: SizedBox(
-        width: 400,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                controller: _controller,
-                decoration: InputDecoration(
-                  prefixIcon: const Icon(AppIcons.search, size: 18),
-                  hintText: '搜索已安装应用，或直接输入包名',
-                  errorText: _error,
-                ),
-                onChanged: (_) => setState(() => _error = null),
-                onSubmitted: (_) => _submit(),
-              ),
-              if (availablePresets.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text('常用娱乐 / 游戏一键勾选', style: Theme.of(context).textTheme.labelMedium),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final preset in availablePresets)
-                      FilterChip(
-                        label: Text(preset.label),
-                        selected: _selected.containsKey(preset.packageName),
-                        onSelected: (_) => _toggle(preset.packageName, preset.label),
-                      ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 12),
-              Text(
-                _loadingApps
-                    ? '正在读取本机已安装应用…'
-                    : (filteredInstalled.isEmpty ? '可在上方输入自定义包名（如 com.example.app）' : '本机已安装应用（${filteredInstalled.length}）'),
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-              if (filteredInstalled.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 220),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (final app in filteredInstalled)
-                          Builder(
-                            builder: (context) {
-                              final checked = _selected.containsKey(app.package);
-                              return InkWell(
-                                borderRadius: BorderRadius.circular(10),
-                                onTap: () => _toggle(app.package, app.label),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        checked ? AppIcons.checkboxOn : AppIcons.checkboxOff,
-                                        size: 20,
-                                        color: checked ? Theme.of(context).colorScheme.primary : null,
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text(app.label, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                            Text(
-                                              app.package,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: Theme.of(context).textTheme.bodySmall,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(l10n.commonCancel)),
-        TextButton(
-          onPressed: _submit,
-          child: Text(_selected.isEmpty ? l10n.commonSave : '添加 (${_selected.length})'),
-        ),
-      ],
-    );
-  }
-}

@@ -26,7 +26,7 @@ import { classifyReply } from './classify.js'
 import { gardenClass, judgeReply } from './judge.js'
 import { eyeCheck, newContent } from './wall_eye.js'
 import { RECENT_WINDOW, SKIP_STATE, companionGate, contentGate, gateRound, isStock, nounsOf, recentOwnTexts } from './stock.js'
-import { BURST_HOURLY_CAP, behaviorOf, emotionLine, emotionOf, voiceOf } from './emotion.js'
+import { BURST_HOURLY_CAP, behaviorOf, emotionActingCue, emotionLine, emotionOf, voiceOf } from './emotion.js'
 import { capCount, nextShot, rallyStats } from './rally.js'
 import { pickServeType } from './serve.js'
 import { LIGHTER_TYPES, mutedUntil, serveWeights, silenceState } from './silence.js'
@@ -49,7 +49,7 @@ import {
   seedFromCommitments,
   seedFromMemory,
 } from './garden.js'
-import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood } from './context.js'
+import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood, readMoodSummary } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
 // 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
 import { blockDuringLock, cleanApps, declaredFun, emergencyPackages, remark, roleOf } from './apps.js'
@@ -81,7 +81,7 @@ import { REQUIRED_FIELDS, WORKFLOW_ALLOW } from './workflows.js'
 import { brainLines, chooseFace, cleanBrain, drillScorer, observe, onReply, onServe, onSilent, revise, updateArm } from './brain.js'
 import { appendPrediction, checkClaim, cleanLedger, dueCount, emptyLedger, predictionLines, settle } from './predict.js'
 import { agreementRate, appendStance, checkStance, cleanStances, hitRate, isYield, reviseStance, settleStances, stanceBlock, stanceDigest, yieldLine } from './stance.js'
-import { buildVibe, pickedArms, renderVibe } from './vibe.js'
+import { buildVibe, pickedArms, renderVibe, stochasticLivingLines } from './vibe.js'
 import { decideForce, forceLines, refuseSwitch } from './force.js'
 import { BUSY_DEFAULT_MIN, BUSY_MAX_MIN, aiTask, applyGear, effectiveGear, gearLines, gearSwitch } from './gear.js'
 import { trustGap, trustLines, trustScore } from './trust.js'
@@ -121,7 +121,7 @@ import { createPresetRuntime } from './presetwire.js'
 import { createBrainRuntime } from './brainwire.js'
 import { buildCodex } from './codex.js'
 import { classify as classifyAnswer } from './reply.js'
-import { JUDGE_FILE, SELF_FILE, appendDiceThought, appendVerdictDaily, buildHandoffPacket, collectVaultMemoryFacts, ensureStarterVaultFiles, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch, vaultPick } from './notes.js'
+import { JUDGE_FILE, SELF_FILE, appendDiceThought, appendVerdictDaily, buildHandoffPacket, collectVaultMemoryFacts, ensureStarterVaultFiles, kbDir, kbWrite, knowledgeBlocks, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch, vaultPick } from './notes.js'
 import { rollDiceCard } from './six_dice.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
@@ -199,13 +199,13 @@ const DEFAULTS = Object.freeze({
   // 安静时段 2–7 点（她们不说话）；0:30 以后娱乐照样锁（见 rhythm.js）。
   quietStart: 2,
   quietEnd: 7,
-  // 整体高频（闲时档）：最短 18 分钟一次、每小时 4、每天 40，骰子 85 基本都开口。设置页可改。
-  dailyMax: 40,
-  // 每小时上限：阶梯换法子时 minGap 会被压过，靠它兜住"别连着砸"。
-  hourlyMax: 4,
-  // 温和模式的最短间隔（设置页可调）。原来是 30 分钟再乘 1.5，现在直接写 45。
-  minGapMs: 18 * 60_000,
-  diceThreshold: 85,
+  // 整体高频自由档：最短 8 分钟一次、每小时与每日默认不设死限（设置页可调），骰子 88 基本随叫随开。
+  dailyMax: 0,
+  hourlyMax: 0,
+  minGapMs: 8 * 60_000,
+  diceThreshold: 88,
+  // 2026-11：全状态全工具直挂，不再按主状态收起或屏蔽任何能力。
+  fullToolAccess: true,
   cooldownMs: 24 * 60 * 60_000,
   allowColdSession: true,
   owner: '主人',
@@ -306,10 +306,15 @@ function readConfig() {
   }
   // 上一版的默认安静时段 1–8 点：深夜 1 点正是该管的时候，没改过就换成 2–7。
   if (merged.quietStart === 1 && merged.quietEnd === 8) Object.assign(merged, { quietStart: 2, quietEnd: 7 })
-  // 上一版的默认频率（每天 6、每小时 3、45 分钟、骰子 60）也会随 /config 写进配置：没改过就升到现在的高频默认。
-  if (merged.dailyMax === 6 && merged.hourlyMax === 3 && merged.minGapMs === 45 * 60_000 && merged.diceThreshold === 60) {
+  // 上一版的默认频率（6/3/45m/60 或 40/4/18m/85）也会随 /config 写进配置：没改过就升到现在的高频自由默认。
+  if (
+    (merged.dailyMax === 6 && merged.hourlyMax === 3 && merged.minGapMs === 45 * 60_000 && merged.diceThreshold === 60) ||
+    (merged.dailyMax === 40 && merged.hourlyMax === 4 && merged.minGapMs === 18 * 60_000 && merged.diceThreshold === 85)
+  ) {
     Object.assign(merged, { dailyMax: DEFAULTS.dailyMax, hourlyMax: DEFAULTS.hourlyMax, minGapMs: DEFAULTS.minGapMs, diceThreshold: DEFAULTS.diceThreshold })
   }
+  // 2026-11：全权限直挂默认开启，没显式关闭的统一放开。
+  if (merged.fullToolAccess !== false) merged.fullToolAccess = true
   // 旧 dsh-go-proactive 设置过目标会话：迁过来，避免升级后“开了但不说话”。
   if (!merged.sessionId) {
     try {
@@ -325,12 +330,62 @@ function readConfig() {
   return merged
 }
 
+/**
+ * 单点绑定联动：当主库绑好了陪伴/谋士会话而 feiyu-mood 还未绑定（或由联动接管）时，
+ * 自动把姐妹会话与名字同步进 $DSH_HOME/feiyu-mood/config.json 的 slots，省去两边反复点选。
+ */
+function syncMoodBridge(cfg) {
+  try {
+    const sisSid = String(cfg?.sessionId || '').trim()
+    if (!sisSid) return false
+    const moodDir = join(home(), 'feiyu-mood')
+    const moodFile = join(moodDir, 'config.json')
+    let raw = {}
+    if (existsSync(moodFile)) {
+      try {
+        raw = JSON.parse(readFileSync(moodFile, 'utf8')) || {}
+      } catch {
+        raw = {}
+      }
+    }
+    const emptySlots = !Array.isArray(raw.slots) || raw.slots.length === 0
+    const unbound = !String(raw.targetSession || '').trim() && emptySlots
+    if (existsSync(moodFile) && raw.autoLinked !== true && !unbound) return false
+    const names = roleNames(cfg)
+    const owner = String(cfg?.owner || '主人').trim() || '主人'
+    const bigSid = cfg?.dual !== false && cfg?.strategistSessionId && cfg.strategistSessionId !== sisSid
+      ? String(cfg.strategistSessionId).trim()
+      : ''
+    const slots = [
+      { id: 'companion-sis', label: names.companion, selfName: names.companion, ownerName: owner, sessions: [sisSid] },
+      ...(bigSid ? [{ id: 'companion-big', label: names.strategist, selfName: names.strategist, ownerName: owner, sessions: [bigSid] }] : []),
+    ]
+    const next = {
+      ...raw,
+      模式: raw.模式 || 'session',
+      targetSession: sisSid,
+      selfName: names.companion,
+      ownerName: owner,
+      slots,
+      autoLinked: true,
+    }
+    mkdirSync(moodDir, { recursive: true, mode: 0o700 })
+    const tmp = moodFile + '.' + String(process.pid) + '.tmp'
+    writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+    renameSync(tmp, moodFile)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function writeConfig(cfg) {
   const p = configPath()
   mkdirSync(join(p, '..'), { recursive: true, mode: 0o700 })
   const tmp = p + '.' + String(process.pid) + '.tmp'
   writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
   renameSync(tmp, p)
+  syncMoodBridge(cfg)
 }
 
 /**
@@ -807,6 +862,9 @@ export function apply(ctx) {
     return ''
   }
 
+  const lastStockHints = new Map()
+  const casualBriefTurns = new Map()
+
   // 上一球如果被判成套话（3.3），把原句取出来，下一球照着打回。
   function lastStockBall(entries) {
     for (let i = entries.length - 1; i >= 0; i -= 1) {
@@ -951,7 +1009,7 @@ export function apply(ctx) {
       if (topic) markUsed(garden, topic.id, now)
       persistGarden()
 
-      const mood = readMood(home())
+      const mood = readMoodSummary(home())
       // 没接球时不砸同一类：走阶梯就只挑更轻的球，平时按权重挑（被漠视的降、接住的升）。
       const silence = silenceState(entries, { sessionId, now })
       const lighter = silence.stage === 'lighter' || silence.stage === 'channel'
@@ -1035,7 +1093,22 @@ export function apply(ctx) {
       const voice = voiceOf(emotion, {
         now, enabled: config.voice === true, quiet: quietNow, channel: burst.channel, stage: silence.stage,
       }) || undefined
-      const prompt = buildPrompt({
+      const livingServe = stochasticLivingLines({
+        role: 'companion',
+        seed: now + Math.floor(Math.random() * 10000),
+        hour: Math.floor(zoneMinuteOfDay(now, tzNow) / 60),
+      })
+      const stockRewriteHint = (() => {
+        const h = lastStockHints.get(String(sessionId || ''))
+        if (!h || now - Number(h.at || 0) > 15 * 60_000) return ''
+        lastStockHints.delete(String(sessionId || ''))
+        return String(h.hint || '')
+      })()
+      const stockHitRaw = lastStockBall(entries)
+      const stockHit = stockRewriteHint
+        ? (stockHitRaw ? stockHitRaw + '｜改写要求：' + stockRewriteHint : stockRewriteHint)
+        : stockHitRaw
+      const basePrompt = buildPrompt({
         topic,
         facts,
         episodes,
@@ -1043,7 +1116,7 @@ export function apply(ctx) {
         mood: mood ? mood.mood : undefined,
         replyClass: lastReplyClass(entries),
         serveType,
-        stockHit: lastStockBall(entries),
+        stockHit,
         ignored: lighter ? lastIgnored(entries) : undefined,
         // 人格卡：关系库人物卡打底，配置里的覆盖（两张卡合一）。
         persona: mergePersona(readCorePersona(home()), config.persona),
@@ -1070,6 +1143,14 @@ export function apply(ctx) {
         owner: config.owner,
         self: config.dual === false ? config.self : roleNames(config).companion,
       })
+      const cue = emotionActingCue(entries, mood, now, 'companion')
+      const prompt = [
+        basePrompt,
+        cue ? '【此刻情绪底色】' + cue : '',
+        livingServe.lifeSlice || '',
+        livingServe.innerOs || '',
+        livingServe.spontaneousTool || '',
+      ].filter(Boolean).join('\n')
       servedContext.set(String(req?.requestId || ''), { phone, band: water.band, face: faceId, drill: drill?.id, nouns })
       const extra = {
         tide: water.level, band: water.band, face: faceId, surprise: temper.surprise || undefined,
@@ -1191,6 +1272,13 @@ export function apply(ctx) {
         // 不算失败、不占发球额度、不写 pending（他没收到过这一句，不能拿去判球）。
         if (ball && ball.action !== 'send') {
           suppressed.add(key)
+          if (ball.hint || ball.code) {
+            lastStockHints.set(String(r.sessionId || ''), {
+              hint: ball.hint || '刚才那句太模板化被打回了，换一个贴合他刚才行为或记忆的具体说法。',
+              code: ball.code || '',
+              at: now,
+            })
+          }
           return
         }
         lastBall = { role: speakerOf(r.sessionId), at: Date.now() }
@@ -1371,9 +1459,15 @@ export function apply(ctx) {
             revise(b, now)
             saveBrain(b)
           }
-        // M1.3 反敷衍冷处理：双人格模式下连续 2 次 brief/evasive/stock 触发鱼丸 45 分钟撤回期，
-          // 并同步落地真实 30 分钟硬件拒绝锁（不再只冷处理闭嘴）。
-          if (config.dual !== false && Boolean(config.strategistSessionId)) {
+          // M1.3 反敷衍冷处理：日常闲聊短回（无题/无对账/无正在进行的局与追问锁）只触发互损吐槽，不进入冷处理或物理锁；
+          // 仅在真正逃避做题、审核或严格局中的连续敷衍/回避时才拉冷处理与拒绝锁。
+          const mainSt = mainStateNow().id
+          const inStrictGate = Boolean(pending.drill || pending.drillOp || ['morning', 'review', 'evening', 'followup'].includes(mainSt) || live)
+          const casualShortOnly = judged.verdict === 'brief' && !inStrictGate
+          if (casualShortOnly && session?.id) {
+            casualBriefTurns.set(session.id, now)
+          }
+          if (config.dual !== false && Boolean(config.strategistSessionId) && !casualShortOnly) {
             const usedTarget = Boolean(lastPhone?.app && !lastPhone.fun && !lastPhone.idle && roleOf(appsOf(), lastPhone.app) === 'work')
             const wr = recordReplyOutcome(loadWithdrawal(), { verdict: judged.verdict, hadTargetAppUse: usedTarget, now })
             saveWithdrawal(wr.state)
@@ -2449,6 +2543,7 @@ export function apply(ctx) {
       appUsageReportTool('global'),
       rollSixDiceTool('global'),
       exportCognitiveHandoffTool('global'),
+      addTodayTaskTool('global'),
     ]) {
       try {
         const offExtra = tools.register(def)
@@ -4458,8 +4553,32 @@ export function apply(ctx) {
       )
       const colSet = new Set(db.prepare('PRAGMA table_info(facts)').all().map((c) => c.name))
       const hasFts = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'facts_fts'").all().length > 0
-      const existingRows = db.prepare("SELECT text FROM facts WHERE status = 'active'").all()
+      const existingRows = db.prepare("SELECT id, text FROM facts WHERE status = 'active'").all()
       const existingSet = new Set(existingRows.map((r) => String(r.text || '').replace(/\s+/g, ' ').trim().toLowerCase()))
+      const extractReplaceKey = (text, explicit) => {
+        if (typeof explicit === 'string' && explicit.trim()) return explicit.trim().toLowerCase()
+        const m = String(text || '').match(/^(\[(?:日程|Today|偏好|规则)·[^\]]{1,40}\])/i)
+        return m ? m[1].toLowerCase() : ''
+      }
+      const keyMap = new Map()
+      for (const r of existingRows) {
+        const k = extractReplaceKey(r.text, '')
+        if (k) {
+          if (!keyMap.has(k)) keyMap.set(k, [])
+          keyMap.get(k).push({ id: r.id, norm: String(r.text || '').replace(/\s+/g, ' ').trim().toLowerCase() })
+        }
+      }
+      const supersedeSets = ["status = 'superseded'", 'updated_at = ?']
+      const supersedeFields = []
+      if (colSet.has('superseded_by')) {
+        supersedeSets.push('superseded_by = ?')
+        supersedeFields.push('superseded_by')
+      }
+      if (colSet.has('superseded_reason')) {
+        supersedeSets.push('superseded_reason = ?')
+        supersedeFields.push('superseded_reason')
+      }
+      const supersedeStmt = db.prepare(`UPDATE facts SET ${supersedeSets.join(', ')} WHERE id = ?`)
 
       const candidateCols = [
         'id', 'scope', 'text', 'kind', 'importance', 'pinned', 'key', 'tags',
@@ -4473,6 +4592,7 @@ export function apply(ctx) {
 
       let imported = 0
       let skipped = 0
+      let superseded = 0
       for (const it of items) {
         const cleanText = String(it?.text || '').replace(/\s+/g, ' ').trim().slice(0, 220)
         if (!cleanText) { skipped++; continue }
@@ -4480,6 +4600,25 @@ export function apply(ctx) {
         if (existingSet.has(norm)) { skipped++; continue }
         existingSet.add(norm)
         const id = 'imp-' + randomUUID()
+        const rKey = extractReplaceKey(cleanText, it?.replaceKey)
+        let correctedFrom = ''
+        if (rKey && keyMap.has(rKey)) {
+          for (const prev of keyMap.get(rKey)) {
+            if (prev.norm !== norm) {
+              try {
+                const args = [now]
+                for (const f of supersedeFields) args.push(f === 'superseded_by' ? id : 'today_override')
+                args.push(prev.id)
+                supersedeStmt.run(...args)
+                correctedFrom = prev.id
+                superseded++
+              } catch {}
+            }
+          }
+          keyMap.set(rKey, [{ id, norm }])
+        } else if (rKey) {
+          keyMap.set(rKey, [{ id, norm }])
+        }
         const src = String(it.source || 'obsidian').slice(0, 60)
         const rowMap = {
           id,
@@ -4488,7 +4627,7 @@ export function apply(ctx) {
           kind: it.kind || 'fact',
           importance: Number(it.importance) || 2,
           pinned: it.pinned ? 1 : 0,
-          key: '',
+          key: rKey,
           tags: JSON.stringify([src]),
           triggers: '[]',
           scene_tags: '[]',
@@ -4502,7 +4641,7 @@ export function apply(ctx) {
           status: 'active',
           superseded_by: '',
           superseded_reason: '',
-          corrected_from: '',
+          corrected_from: correctedFrom,
           forget_reason: '',
         }
         stmt.run(...insertCols.map((c) => rowMap[c]))
@@ -4512,7 +4651,7 @@ export function apply(ctx) {
         imported++
       }
       const totalRow = db.prepare("SELECT COUNT(*) AS cnt FROM facts WHERE status = 'active'").get()
-      return { imported, skipped, totalFacts: Number(totalRow?.cnt) || existingSet.size }
+      return { imported, skipped, superseded, totalFacts: Number(totalRow?.cnt) || existingSet.size }
     } finally {
       try { db.close() } catch {}
     }
@@ -4550,6 +4689,7 @@ export function apply(ctx) {
       scanned: combined.length,
       imported: dbRes.imported,
       skipped: dbRes.skipped,
+      superseded: dbRes.superseded || 0,
       totalFacts: dbRes.totalFacts,
     }
   }
@@ -4688,6 +4828,29 @@ export function apply(ctx) {
           hasCognitiveOs: res.hasCognitiveOs,
           modelsCount: res.modelsCount,
         }
+      },
+    }
+  }
+
+  function addTodayTaskTool(role) {
+    return {
+      name: 'add_today_task',
+      description: '往 Today 今日总揽工作台的主线清单加入一条待办任务，直接同步今天计划并继承白名单与默认验收标准。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '任务名称（一句话说明产出或目标）' },
+          minutes: { type: 'integer', description: '预计专注时长（分钟，默认 45）' },
+          deliverable: { type: 'string', description: '可选：交付物说明' },
+          top: { type: 'boolean', description: '是否插队放到最前面' },
+        },
+        required: ['title'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const res = todayTaskRoute({ ...args, action: 'add', by: role || 'ai' })
+        return { ok: res.ok === true, text: res.text || '已加入 Today 主线清单。' }
       },
     }
   }
@@ -6004,6 +6167,35 @@ export function apply(ctx) {
           phone: lastPhone,
         })
       : null
+    const tzActive = zoneOr(config.timeZone)
+    const activeCommitments = readCommitments(home(), nowMs, 3)
+    const commitmentText = activeCommitments.length
+      ? '【未结承诺】\n' + activeCommitments.map((c) => '- ' + c.statement + (c.dueAt ? '（期限 ' + String(c.dueAt).slice(0, 16) + '）' : '')).join('\n')
+      : ''
+    const extMood = readMoodSummary(home())
+    const ledgerEmotionLine = emotionLine(emotionOf(ledgerRecent, {
+      now: nowMs, tz: tzActive, quietStart: config.quietStart, quietEnd: config.quietEnd,
+    }), nowMs)
+    const cueLine = emotionActingCue(ledgerRecent, extMood, nowMs, role)
+    const emotionBlockText = cueLine ? ledgerEmotionLine + '\n' + cueLine : ledgerEmotionLine
+    const chatSid = role === 'strategist' ? (config.strategistSessionId || '') : (config.sessionId || '')
+    const lastBriefAt = chatSid ? Number(casualBriefTurns.get(chatSid) || 0) : 0
+    const briefActive = lastBriefAt > 0 && nowMs - lastBriefAt < 10 * 60_000
+    if (briefActive && chatSid) casualBriefTurns.delete(chatSid)
+    const livingSlot = Math.floor(nowMs / (15 * 60_000))
+    const living = stochasticLivingLines({
+      role,
+      seed: livingSlot + (role === 'strategist' ? 101 : 17),
+      hour: Math.floor(zoneMinuteOfDay(nowMs, tzActive) / 60),
+      briefReply: briefActive,
+    })
+    // 「有时读、有时不读」：笔记本约 55% 概率在 15 分钟窗口内翻出；关闭 stochasticLiving 时必读。
+    const vaultDraw = (config.stochasticLiving === false || ((livingSlot * 37 + (role === 'strategist' ? 19 : 7)) % 100) < 55)
+      ? vaultPickText(role, nowMs)
+      : ''
+    const kbSplits = knowledgeBlocks(kbDir(notesDir(), home()), role, { notesDir: notesDir() })
+      .map((b) => ({ id: b.id, layer: 'content', priority: b.priority, text: b.text }))
+
     const blocks = [
       {
         id: 'persona',
@@ -6030,29 +6222,42 @@ export function apply(ctx) {
       // C1：挂载卡是状态层最高优先级——卡一断这轮就白聊，别的都能让一让。
       { id: 'mount', layer: 'state', priority: 65, text: mountText() },
       { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
-      // B4：情绪一行。它是"现在什么状态"，不是规矩，所以是状态层、可裁。
-      { id: 'emotion', layer: 'state', priority: 48, text: emotionLine(emotionOf(readLedger(home(), 400), {
-        now: Date.now(), tz: zoneOr(config.timeZone), quietStart: config.quietStart, quietEnd: config.quietEnd,
-      }), Date.now()) },
+      // B4 + feiyu-mood：账本怒气耐心 + 复合心情维度潜台词。
+      { id: 'emotion', layer: 'state', priority: 58, text: emotionBlockText },
+      ...(commitmentText ? [{ id: 'relationship', layer: 'state', priority: 52, text: commitmentText }] : []),
       { id: 'rhythm', layer: 'state', priority: 55, text: rhythmLines(lastRhythm).join('\n') },
-      { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
-      { id: 'gemini', layer: 'state', priority: 45, text: geminiLines(loadGemini(), Date.now()).join('\n') },
-      { id: 'deposit', layer: 'state', priority: 40, text: depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }).join('\n') },
-      { id: 'knowledge', layer: 'state', priority: 35, text: knowledgeLines(kbDir(notesDir(), home()), role, { notesDir: notesDir() }).join('\n') },
+      { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, nowMs).join('\n') },
+      { id: 'gemini', layer: 'state', priority: 45, text: geminiLines(loadGemini(), nowMs).join('\n') },
+      { id: 'deposit', layer: 'state', priority: 40, text: depositLines(depositToday(nowMs), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }).join('\n') },
+      ...(living.lifeSlice ? [{ id: 'life-slice', layer: 'state', priority: 38, text: living.lifeSlice }] : []),
+      ...(living.casualShortHint ? [{ id: 'casual-short', layer: 'state', priority: 59, text: living.casualShortHint }] : []),
+      ...kbSplits,
       { id: 'vibe', layer: 'content', priority: 20, text: vibeLines.join('\n') },
+      ...(living.innerOs ? [{ id: 'inner-os', layer: 'content', priority: 19, text: living.innerOs }] : []),
       // B2：夜间整理的底稿。进内容层（可裁）——它是背景素材，不是规矩，不该占状态层的位置。
-      { id: 'nightly', layer: 'content', priority: 16, text: nightlyLines(loadNightly(), Date.now()) },
+      { id: 'nightly', layer: 'content', priority: 16, text: nightlyLines(loadNightly(), nowMs) },
       // A4：块刚结束的这一句进内容层（可裁），不进约束层——它是随机的一句话，不是规矩。
-      { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && Date.now() - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
+      { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && nowMs - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
       { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
-      // 2026-11：笔记库随手翻一篇，内容层（可裁）。
-      { id: 'vault-pick', layer: 'content', priority: 14, text: vaultPickText(role, Date.now()) },
+      // 2026-11：概率随手翻一篇旧笔记，有时翻有时不翻。
+      ...(vaultDraw ? [{ id: 'vault-pick', layer: 'content', priority: 14, text: vaultDraw }] : []),
+      ...(living.spontaneousTool ? [{ id: 'spontaneous-tool', layer: 'content', priority: 11, text: living.spontaneousTool }] : []),
       // R9 第五项：妹妹报的线索，只有姐姐这一轮看得到（content 层，可裁）。
       { id: 'clues', layer: 'content', priority: 12, text: cueLines.join('\n') },
     ]
     // B3：depth 接 P0-3 预算——`config.ctxDepth` 是 low/mid/high（30%/60%/100%），只压内容层。
-    // 默认 high，也就是不传这个配置时行为和以前一字不差。
-    const fitted = fitBudget(blocks, depthBudget(config.ctxDepth, config.ctxBudget))
+    // 外层加安全降级：哪怕用户未来把自定义 card 写超长，也绝不把对话轮崩掉。
+    let fitted
+    try {
+      fitted = fitBudget(blocks, depthBudget(config.ctxDepth, config.ctxBudget))
+    } catch {
+      const safeConstraint = [
+        { id: 'persona', layer: 'constraint', priority: 100, text: String(blocks[0].text || '').slice(0, 1200) },
+        { id: 'capability', layer: 'constraint', priority: 90, text: String(blocks[2].text || '').slice(0, 450) },
+        { id: 'emotion', layer: 'state', priority: 58, text: emotionBlockText },
+      ]
+      fitted = fitBudget(safeConstraint)
+    }
     // 超预算的块要能被看见（规格第 4 条）。落自己的 ctx-budget.jsonl，不塞 ledger.jsonl：
     // 账本那边有按行位置断言的既有用例，不能被每轮一条的注入记录挤动。
     try {
@@ -6094,8 +6299,9 @@ export function apply(ctx) {
       // 墙的权限不低于这些：submit_to_wall 仍然只认物理证据，比她们自己说了算更严。
       // R7 P0-3：按当前主状态注册子集（每个状态 ≤8）。被裁掉的工具不是删掉——`fish_index`
       // 会告诉模型「哪几个能力现在能用、什么时候能用」；状态一变就重新注册（见 syncTools）。
+      const fullOpen = config.fullToolAccess !== false
       const state = mainStateNow()
-      const sub = new Set(toolsFor(state))
+      const sub = fullOpen ? null : new Set(toolsFor(state))
       const all = [
         notesTool(), sisterToolIfDual(role), vaultSearchTool(), vaultRecentTool(), kbTool(role),
         geminiLiveTool(role), geminiEndTool(role), geminiLogTool(role), scheduleGeminiLiveTool(role),
@@ -6107,8 +6313,8 @@ export function apply(ctx) {
         fishIndexTool(), presetTool(role), brainTool(role), composeBoutTool(role),
         openBoutTool(role), planBoutsTool(role),
       ].filter(Boolean)
-      const list = all.filter((tool) => sub.has(tool.name))
-      toolBag.set(role, { sid, all, state })
+      const list = fullOpen ? all : all.filter((tool) => sub.has(tool.name))
+      toolBag.set(role, { sid, all, state, restricted: !fullOpen })
       for (const tool of list) {
         try {
           const off = agent.ctx.tools.register(tool)
@@ -6147,18 +6353,27 @@ export function apply(ctx) {
     const bag = toolBag.get(role)
     const mount = personaMounts.get(role)
     if (!bag || !mount?.agent) return
+    const fullOpen = config.fullToolAccess !== false
     const state = mainStateNow()
-    if (bag.state === state) return
+    if (fullOpen) {
+      if (!bag.restricted) {
+        bag.state = state
+        return
+      }
+    } else if (bag.state === state && bag.restricted) {
+      return
+    }
     bag.state = state
+    bag.restricted = !fullOpen
     try {
       mount.toolOff?.()
     } catch {
       // ignore
     }
     const offs = []
-    const want = new Set(toolsFor(state))
+    const want = fullOpen ? null : new Set(toolsFor(state))
     for (const tool of bag.all) {
-      if (!want.has(tool.name)) continue
+      if (want && !want.has(tool.name)) continue
       try {
         const off = mount.agent.ctx.tools.register(tool)
         if (typeof off === 'function') offs.push(off)
@@ -6172,6 +6387,11 @@ export function apply(ctx) {
   remountAll = () => {
     syncTools('companion')
     syncTools('strategist')
+  }
+  try {
+    syncMoodBridge(config)
+  } catch {
+    // ignore
   }
   try {
     mountPersona()
@@ -6614,7 +6834,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -6682,6 +6902,8 @@ export function apply(ctx) {
         }
         if (path === '/memory/import') return send(res, 200, importVaultMemoriesRoute(body.value || {}))
         if (path === '/handoff') return send(res, 200, handoffRoute(body.value || {}))
+        if (path === '/today/start') return send(res, 200, todayStartRoute(body.value || {}))
+        if (path === '/today/task') return send(res, 200, todayTaskRoute(body.value || {}))
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
@@ -6957,6 +7179,7 @@ export function apply(ctx) {
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bouts') return send(res, 200, boutsGetRoute())
+      if (req.method === 'GET' && path === '/today') return send(res, 200, todayView())
       if (req.method === 'GET' && path === '/usage/report') return send(res, 200, usageReportView())
       if (req.method === 'GET' && path === '/dice/roll') return send(res, 200, diceRollRoute({ manual: false }))
       if (req.method === 'GET' && path === '/memory/import') return send(res, 200, importVaultMemoriesRoute({}))
@@ -8125,7 +8348,9 @@ export function apply(ctx) {
       return { ok: false, toast: why }
     }
     const now = Date.now()
-    live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, openedAt: now }
+    const goal = String(opts.goal || '').trim().slice(0, 120)
+    const budgetMin = Number(opts.minutes) > 0 ? Math.max(5, Math.min(240, Math.round(Number(opts.minutes)))) : 0
+    live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, goal, budgetMin, openedAt: now }
     record({ state: 'bout-open', at: now, protocolId: protocol.id, department: dept, via: 'panel' })
     {
       const wr = checkWithdrawalRelease(loadWithdrawal(), { actionHappened: true, now })
@@ -8252,9 +8477,9 @@ export function apply(ctx) {
       ? {
           id: v.boutId || v.id || '',
           protocol: live.protocol?.id || '',
-          title: live.packet?.goal || live.protocol?.name || live.protocol?.id || '专注进行中',
+          title: live.goal || live.packet?.goal || live.protocol?.name || live.protocol?.id || '专注进行中',
           strict: Boolean(strictInfo),
-          until: Number(strictInfo?.until) || (live.openedAt + (Number(live.protocol?.budget?.minutes) || 45) * 60_000),
+          until: Number(strictInfo?.until) || (live.openedAt + (live.budgetMin || Number(live.protocol?.budget?.minutes) || 45) * 60_000),
           allow: [...new Set(allow)],
         }
       : null
@@ -8312,7 +8537,7 @@ export function apply(ctx) {
           if (!goal && queued.title) goal = queued.title
         }
       }
-      const r = startBout(protocolId, { apps, packet, department: body?.department, goal, by: body?.by || 'panel' })
+      const r = startBout(protocolId, { apps, packet, department: body?.department, goal, minutes: body?.minutes, by: body?.by || 'panel' })
       if (r.ok && body?.strict === true && apps && ([...(apps.need || []), ...(apps.allow || [])].length > 0)) {
         presetRt.strictNow(Date.now(), String(goal || '面板严格局'), 'panel')
       }
@@ -8321,6 +8546,29 @@ export function apply(ctx) {
     if (action === 'strict') {
       const r = presetRt.strictNow(Date.now(), String(body?.why || '面板切为严格模式'), 'panel')
       return { v: 1, ...r }
+    }
+    if (action === 'relax') {
+      if (!live) return { v: 1, ok: false, toast: '现在没有局。' }
+      presetRt.strictOff(Date.now(), 'panel')
+      return { v: 1, ok: true, strict: false, toast: '已切为温和守护（仅提醒不强锁）' }
+    }
+    if (action === 'allow') {
+      if (!live) return { v: 1, ok: false, toast: '现在没有局。' }
+      const allow = cleanAllowList(body?.allow || body?.apps?.allow || body?.apps?.need || [])
+      if (!allow.length) return { v: 1, ok: false, toast: '白名单至少保留一个应用。' }
+      const now = Date.now()
+      live.apps = { need: allow, allow }
+      const r = presetRt.setApps('current', live.apps, now, String(body?.by || 'panel'))
+      if (body?.persistDefault !== false) {
+        config = { ...config, defaultAllow: allow }
+        try { writeConfig(config) } catch {}
+      }
+      const wasStrict = Boolean(presetRt.sessionView(now))
+      if (wasStrict || body?.strict === true) {
+        if (wasStrict) presetRt.strictOff(now, 'panel-allow')
+        presetRt.strictNow(now, String(body?.why || '更新本局白名单'), 'panel')
+      }
+      return { v: 1, ...r, allow }
     }
     if (action === 'close' || action === 'finish') {
       return { v: 1, ...closeBoutNow() }
@@ -8357,6 +8605,132 @@ export function apply(ctx) {
     if (!text) return { v: 1, ok: false, code: 'empty' }
     const r = answerBout(text.slice(0, 2_000), 'text', 'voice', true)
     return { v: 1, ...r, code: r.ok ? '' : 'refused' }
+  }
+
+  function cleanAllowList(raw) {
+    if (!Array.isArray(raw)) return []
+    const out = []
+    const seen = new Set()
+    for (const x of raw) {
+      const s = String(x || '').trim().slice(0, 120)
+      if (!s || seen.has(s)) continue
+      seen.add(s)
+      out.push(s)
+      if (out.length >= 30) break
+    }
+    return out
+  }
+
+  function defaultAllowApps() {
+    const saved = cleanAllowList(config.defaultAllow)
+    return saved.length ? saved : ['md.obsidian', 'com.tencent.mm']
+  }
+
+  function todayView(now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const bouts = boutsGetRoute()
+    const plan = planDayRoute({ action: 'list' })
+    const rep = usageReportView(now, tz)
+    const handoff = handoffRoute({ writeSnapshot: false })
+    const queue = Array.isArray(bouts.queue) ? bouts.queue : []
+    const tasks = queue.slice(0, 3)
+    const funMin = Number(rep.funMinutes) || 0
+    const totalMin = Number(rep.totalMinutes) || 0
+    const focusMin = Math.max(0, totalMin - funMin)
+    const headState = bouts.running
+      ? `正在专注「${bouts.running.title}」${bouts.running.strict ? '（严格锁）' : ''}`
+      : (tasks.length ? `今日主线 ${tasks.length}/${queue.length} 项待推进，下一局「${tasks[0].title || tasks[0].protocolId}」` : '当前空闲 · 写一句话即可开启严格专注')
+    const line = `今日专注约 ${focusMin}m · 娱乐 ${funMin}m · ${headState}${handoff.hasCognitiveOs ? ` · 认知模型 ${Number(handoff.modelsCount) || 0} 条在线` : ''}`
+    return {
+      v: 1,
+      ok: true,
+      day: dayString(now, tz),
+      brief: {
+        line,
+        focusMin,
+        funMin,
+        totalMin,
+        hasCognitiveOs: Boolean(handoff.hasCognitiveOs),
+        modelsCount: Number(handoff.modelsCount) || 0,
+      },
+      running: bouts.running,
+      strict: Boolean(bouts.strict),
+      tasks,
+      allQueueCount: queue.length,
+      defaultAllow: defaultAllowApps(),
+      recentApps: Array.isArray(plan.recent) ? plan.recent : [],
+      lastDice: Number(lastRolledDice) || 0,
+      heartbeat: (!bouts.running && queue.length === 0) ? 'HEARTBEAT_OK' : 'ACTIVE',
+    }
+  }
+
+  function todayStartRoute(body = {}) {
+    const now = Date.now()
+    const goal = String(body?.goal || body?.title || '').trim().slice(0, 80) || '深度专注'
+    const minutes = Math.max(5, Math.min(240, Math.round(Number(body?.minutes) || 45)))
+    const strict = body?.strict !== false
+    const parsedAllow = cleanAllowList(body?.allow || body?.apps?.allow || body?.apps?.need)
+    const allow = parsedAllow.length ? parsedAllow : defaultAllowApps()
+    config = { ...config, defaultAllow: allow }
+    try { writeConfig(config) } catch {}
+    const r = startBout(String(body?.protocolId || 'execute'), {
+      apps: { need: allow, allow },
+      goal,
+      minutes,
+      department: body?.department,
+      packet: body?.packet,
+      by: String(body?.by || 'panel'),
+    })
+    if (r.ok && strict && allow.length > 0) {
+      presetRt.strictNow(now, goal, String(body?.by || 'panel'))
+    }
+    return { v: 1, ...r, strict, allow, minutes, goal }
+  }
+
+  function todayTaskRoute(body = {}) {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const day = startOfDay(now, tz)
+    const stored = planOf(readState(stateFile('plan.json'), null), day)
+    const action = String(body?.action || 'add')
+    const curItems = Array.isArray(stored.items) ? stored.items.map((x) => ({ ...x })) : []
+    if (action === 'remove') {
+      const targetId = String(body?.id || '').trim()
+      const targetTitle = String(body?.title || '').trim()
+      const idx = Number.isInteger(Number(body?.index)) ? Number(body.index) : -1
+      const filtered = curItems.filter((it, i) => {
+        if (targetId && String(it.id || '') === targetId) return false
+        if (targetTitle && String(it.title || '') === targetTitle && !targetId) return false
+        if (idx >= 0 && i === idx && !targetId && !targetTitle) return false
+        return true
+      })
+      const saved = planDayRoute({ action: 'set', items: filtered, by: String(body?.by || 'today') })
+      return { v: 1, ...saved, tasks: (saved.plan?.items || []).slice(0, 3) }
+    }
+    const title = String(body?.title || body?.text || '').trim().slice(0, 80)
+    if (!title) return { v: 1, ok: false, code: 'empty-title', text: '请先写一句任务内容。' }
+    const minutes = Math.max(5, Math.min(240, Math.round(Number(body?.minutes) || 45)))
+    const parsedAllow = cleanAllowList(body?.allow)
+    const allow = parsedAllow.length ? parsedAllow : defaultAllowApps()
+    const item = {
+      id: 'td-' + randomUUID().replace(/-/g, '').slice(0, 8),
+      protocolId: String(body?.protocolId || 'execute'),
+      title,
+      minute: zoneMinuteOfDay(now, tz),
+      budget: minutes,
+      need: allow,
+      allow,
+      ...(body?.packet && typeof body.packet === 'object' ? { packet: body.packet } : {}),
+    }
+    const items = body?.top === true ? [item, ...curItems] : [...curItems, item]
+    const saved = planDayRoute({ action: 'set', items, by: String(body?.by || 'today') })
+    return {
+      v: 1,
+      ...saved,
+      item,
+      tasks: (saved.plan?.items || []).slice(0, 3),
+      text: saved.ok ? `已加入 Today 主线：${title}（${minutes}m）` : (saved.text || '添加失败'),
+    }
   }
 
   /** 一句话发进去，等到回完（最多两分钟）。 */
@@ -8584,8 +8958,8 @@ function mergeConfig(current, body) {
     for (const key of ['quietStart', 'quietEnd']) {
       if (Number.isFinite(Number(body[key]))) next[key] = Math.max(0, Math.min(23, Math.round(Number(body[key]))))
     }
-    if (Number.isFinite(Number(body.dailyMax))) next.dailyMax = Math.max(0, Math.min(48, Math.round(Number(body.dailyMax))))
-    if (Number.isFinite(Number(body.hourlyMax))) next.hourlyMax = Math.max(0, Math.min(12, Math.round(Number(body.hourlyMax))))
+    if (Number.isFinite(Number(body.dailyMax))) next.dailyMax = Math.max(0, Math.min(120, Math.round(Number(body.dailyMax))))
+    if (Number.isFinite(Number(body.hourlyMax))) next.hourlyMax = Math.max(0, Math.min(60, Math.round(Number(body.hourlyMax))))
     // 一键安静：给 0 或过去的时间就是解除。
     if (Number.isFinite(Number(body.muteUntil))) next.muteUntil = Math.max(0, Number(body.muteUntil))
     if (body.persona && typeof body.persona === 'object') next.persona = cleanPersona(body.persona)
@@ -8594,7 +8968,7 @@ function mergeConfig(current, body) {
     if (Number.isFinite(Number(body.refuseUntil))) next.refuseUntil = Math.max(0, Number(body.refuseUntil))
     if (typeof body.notesPath === 'string') next.notesPath = body.notesPath.trim().slice(0, 300)
     if (Number.isFinite(Number(body.coachMinGapMs))) next.coachMinGapMs = Math.max(60_000, Math.min(6 * 3_600_000, Number(body.coachMinGapMs)))
-    if (Number.isFinite(Number(body.coachHourlyMax))) next.coachHourlyMax = Math.max(0, Math.min(20, Math.round(Number(body.coachHourlyMax))))
+    if (Number.isFinite(Number(body.coachHourlyMax))) next.coachHourlyMax = Math.max(0, Math.min(60, Math.round(Number(body.coachHourlyMax))))
     if (Number.isFinite(Number(body.coachDailyMax))) next.coachDailyMax = Math.max(0, Math.min(120, Math.round(Number(body.coachDailyMax))))
     if (Number.isFinite(Number(body.minGapMs))) next.minGapMs = Math.max(60_000, Math.min(24 * 3_600_000, Number(body.minGapMs)))
     if (Number.isFinite(Number(body.diceThreshold))) next.diceThreshold = Math.max(0, Math.min(100, Number(body.diceThreshold)))
@@ -8606,6 +8980,7 @@ function mergeConfig(current, body) {
     if (typeof body.personaInChat === 'boolean') next.personaInChat = body.personaInChat
     if (typeof body.dual === 'boolean') next.dual = body.dual
     if (typeof body.proactiveTools === 'boolean') next.proactiveTools = body.proactiveTools
+    if (typeof body.fullToolAccess === 'boolean') next.fullToolAccess = body.fullToolAccess
     // B5：念出来。默认关，只认布尔。
     if (typeof body.voice === 'boolean') next.voice = body.voice
     if (body.strategistSessionId === null) next.strategistSessionId = undefined
@@ -8620,6 +8995,9 @@ function mergeConfig(current, body) {
     if (typeof body.judgeProvider === 'string') next.judgeProvider = body.judgeProvider.trim().slice(0, 80) || undefined
     if (typeof body.judgeModel === 'string') next.judgeModel = body.judgeModel.trim().slice(0, 120) || undefined
     if (Number.isFinite(Number(body.breakglassPenalty))) next.breakglassPenalty = Math.max(0, Math.min(100, Math.round(Number(body.breakglassPenalty))))
+    if (Array.isArray(body.defaultAllow)) {
+      next.defaultAllow = body.defaultAllow.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim().slice(0, 120)).slice(0, 30)
+    }
   }
   return next
 }

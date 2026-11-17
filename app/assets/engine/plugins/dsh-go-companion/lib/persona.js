@@ -115,11 +115,11 @@ export function effectiveMode(config, now) {
   return modeOr(config?.mode)
 }
 
-/** 教练模式自己的一套频率：乒乓式高频，设置里可调。伙伴模式沿用 minGap×1.5 / hourlyMax / dailyMax。 */
+/** 教练模式自己的一套频率：高频自由档（设置里可调），伙伴模式默认 8 分钟 / 不限小时与日上限。 */
 export const COACH_LIMITS = Object.freeze({
-  coachMinGapMs: 8 * 60_000,
-  coachHourlyMax: 6,
-  coachDailyMax: 40,
+  coachMinGapMs: 4 * 60_000,
+  coachHourlyMax: 15,
+  coachDailyMax: 0,
 })
 
 function limitOr(raw, fallback) {
@@ -139,7 +139,7 @@ export function modeLimits(config, mode) {
   }
   return {
     // 设置页填多少就是多少（以前这里悄悄乘 1.5，页面上的数字和实际对不上）。
-    minGapMs: limitOr(c.minGapMs, 45 * 60_000),
+    minGapMs: limitOr(c.minGapMs, 8 * 60_000),
     hourlyMax: limitOr(c.hourlyMax, 0),
     dailyMax: limitOr(c.dailyMax, 0),
   }

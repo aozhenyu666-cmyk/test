@@ -169,7 +169,7 @@ test('忙完：妹妹来迎接一次；"忙完了"提前收工也关掉拒绝模
 
 test('第四轮 R4-2 + R7 P0-3：两姐妹逐状态工具完全一致；那些能力没被砍，只是按主状态收起', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    const t = setup(home, { fullToolAccess: false })
     // P0-3 起工具按主状态挂子集（每态 ≤8 个）。R4-2 的「两边权限一样」照旧成立，
     // 只是要逐状态核：任何状态下两姐妹挂出来的必须是同一套，且每个能力至少在一个状态下挂得出来
     // ——挂不出来的就等于被砍了，那是不许的。
@@ -292,12 +292,12 @@ test('trackGemini：短暂进出不算一段；在里面时不复盘', () => {
   assert.equal(trackGemini(long.state, wechat, now + 4 * 60_000).recap, true)
 })
 
-test('旧的低频默认（每天 6 次、45 分钟）升级成高频默认；他自己改过的不动', async () => {
+test('旧的低频默认（每天 6 次、45 分钟）升级成高频自由默认；他自己改过的不动', async () => {
   await withHome(async (home) => {
     setup(home, { dailyMax: 6, hourlyMax: 3, minGapMs: 45 * 60_000, diceThreshold: 60 })
     const res = await call(host({ [SIS]: agentOf(SIS) }).handler(), 'POST', '/dsh-go-companion/v1/config', {})
-    assert.equal(res.body.config.dailyMax, 40)
-    assert.equal(res.body.config.minGapMs, 18 * 60_000)
+    assert.equal(res.body.config.dailyMax, 0)
+    assert.equal(res.body.config.minGapMs, 8 * 60_000)
   })
   await withHome(async (home) => {
     setup(home, { dailyMax: 6, hourlyMax: 3, minGapMs: 30 * 60_000, diceThreshold: 60 })

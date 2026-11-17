@@ -372,6 +372,12 @@ class InterceptChannel {
   Future<InterceptStatus> resume() async =>
       InterceptStatus.from(await _call<Object?>('resume'));
 
+  Future<InterceptStatus> addWhitelist(List<String> packages) async {
+    final cleaned = packages.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet().toList();
+    if (cleaned.isEmpty) return status();
+    return InterceptStatus.from(await _call<Object?>('addWhitelist', {'packages': cleaned}));
+  }
+
   Future<InterceptStatus> removeWhitelist(String packageName) async =>
       InterceptStatus.from(await _call<Object?>('removeWhitelist', {'packageName': packageName}));
 

@@ -4,12 +4,9 @@ import { fitBudget, DEFAULT_BUDGET, LAYERS, INJECT_OPEN, INJECT_CLOSE, stripInje
 
 const b = (id, layer, priority, n) => ({ id, layer, priority, text: 'x'.repeat(n) })
 
-test('B14 默认预算：总量 2400，三层 2100/1000/500', () => {
-  assert.equal(DEFAULT_BUDGET.total, 2400)
-  // 约束层默认 2100 而不是规格写的 900：底稿 826/1004 + 能力 354/390 + 议程 333 已经到 1513/1727，
-  // A1 又加了立场块（上限 200），姐姐那边只剩 73 字余量会每轮抛错（约束层永不裁、超了抛）。
-  // 理由写在 lib/budget.js 的注释里；总量 2400 这个验收硬指标没动。
-  assert.deepEqual(DEFAULT_BUDGET.perLayer, { constraint: 2100, state: 1000, content: 500 })
+test('B14 默认预算：总量 5600，三层 1800/2400/1800', () => {
+  assert.equal(DEFAULT_BUDGET.total, 5600)
+  assert.deepEqual(DEFAULT_BUDGET.perLayer, { constraint: 1800, state: 2400, content: 1800 })
   assert.deepEqual(LAYERS, ['constraint', 'state', 'content'])
 })
 
@@ -21,39 +18,38 @@ test('B1 约束层永不裁：三个约束块全带', () => {
 })
 
 test('B2 约束层超 perLayer.constraint 就抛错，不悄悄截断', () => {
-  const blocks = [b('c1', 'constraint', 100, 1400), b('c2', 'constraint', 90, 800)]
+  const blocks = [b('c1', 'constraint', 100, 1100), b('c2', 'constraint', 90, 800)]
   assert.throws(() => fitBudget(blocks), (error) => {
     assert.equal(error.reason, 'constraint-over-budget')
-    assert.equal(error.chars, 2200)
-    assert.equal(error.budget, 2100)
+    assert.equal(error.chars, 1900)
+    assert.equal(error.budget, 1800)
     assert.deepEqual(error.blocks, ['c1', 'c2'])
     return true
   })
 })
 
-test('B3 约束层刚好装满不抛错（边界 2100）', () => {
-  const out = fitBudget([b('c1', 'constraint', 100, 2100)])
+test('B3 约束层刚好装满不抛错（边界 1800）', () => {
+  const out = fitBudget([b('c1', 'constraint', 100, 1800)])
   assert.deepEqual(out.kept, ['c1'])
 })
 
-test('B4 约束层 2101 就抛错（边界 +1）', () => {
-  assert.throws(() => fitBudget([b('c1', 'constraint', 100, 2101)]), /约束层超预算/)
+test('B4 约束层 1801 就抛错（边界 +1）', () => {
+  assert.throws(() => fitBudget([b('c1', 'constraint', 100, 1801)]), /约束层超预算/)
 })
 
 test('B5 状态层按 priority 降序装，装不下的整块丢', () => {
   const out = fitBudget([
-    b('low', 'state', 10, 600),
-    b('high', 'state', 90, 600),
-    b('mid', 'state', 50, 600),
+    b('low', 'state', 10, 1400),
+    b('high', 'state', 90, 1400),
+    b('mid', 'state', 50, 1400),
   ])
-  // 状态层上限 1000：只有 high 进得去，mid/low 整块丢
+  // 状态层上限 2400：只有 high 进得去，mid/low 整块丢
   assert.deepEqual(out.kept, ['high'])
   assert.deepEqual(out.dropped, [{ id: 'mid', reason: 'layer' }, { id: 'low', reason: 'layer' }])
 })
 
 test('B6 状态层不做半截截断：差一个字也整块丢', () => {
-  // 状态块落地时包首尾标记，标记本身也算预算：900 + 标记 + 那 1 个字 = 仍超不过 1000 上限
-  const out = fitBudget([b('s1', 'state', 90, 900), b('s2', 'state', 80, 200)])
+  const out = fitBudget([b('s1', 'state', 90, 2200), b('s2', 'state', 80, 300)])
   assert.deepEqual(out.kept, ['s1'])
   assert.deepEqual(out.dropped, [{ id: 's2', reason: 'layer' }])
 })
@@ -67,16 +63,16 @@ test('B7 内容层最后装：总量被前面吃完时一条都不带', () => {
   assert.deepEqual(out.dropped, [{ id: 'k1', reason: 'total' }])
 })
 
-test('B8 内容层自己超 500 就连一条都装不下', () => {
-  const out = fitBudget([{ id: 'k1', layer: 'content', priority: 10, text: 'y'.repeat(501) }])
+test('B8 内容层自己超 1800 就连一条都装不下', () => {
+  const out = fitBudget([{ id: 'k1', layer: 'content', priority: 10, text: 'y'.repeat(1801) }])
   assert.deepEqual(out.kept, [])
   assert.deepEqual(out.dropped, [{ id: 'k1', reason: 'layer' }])
 })
 
 test('B9 内容层按优先级抢剩下的预算', () => {
   const out = fitBudget([
-    { id: 'k-low', layer: 'content', priority: 1, text: 'y'.repeat(480) },
-    { id: 'k-high', layer: 'content', priority: 99, text: 'y'.repeat(480) },
+    { id: 'k-low', layer: 'content', priority: 1, text: 'y'.repeat(1000) },
+    { id: 'k-high', layer: 'content', priority: 99, text: 'y'.repeat(1000) },
   ])
   assert.deepEqual(out.kept, ['k-high'])
   assert.deepEqual(out.dropped, [{ id: 'k-low', reason: 'layer' }])

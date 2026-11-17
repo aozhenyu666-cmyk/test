@@ -88,7 +88,7 @@ export function plan(input) {
       nextCheckAt: fromTopic > now ? fromTopic : now + 6 * 3_600_000,
     }
   }
-  const threshold = Math.min(100, Math.max(0, Number(c.diceThreshold ?? 60)))
+  const threshold = Math.min(100, Math.max(0, Number(c.diceThreshold ?? 88)))
   const roll = Number.isFinite(Number(input.roll)) ? Number(input.roll) : randomInt(1000) / 10
   // 下一次检查：按 minGap 来（教练 8 分钟、伙伴 45 分钟）；没配 minGap 才退回 30 分钟。最少 5 分钟。
   const next = now + Math.max(minGap > 0 ? minGap : 30 * 60_000, 5 * 60_000)

@@ -6,21 +6,21 @@ import kotlin.random.Random
 data class SchedulerConfig(
     val enabled: Boolean = false,
     /** A random gap in [minIntervalMs, maxIntervalMs] between attempts. */
-    val minIntervalMs: Long = 45 * 60_000L,
-    val maxIntervalMs: Long = 3 * 3_600_000L,
+    val minIntervalMs: Long = 5 * 60_000L,
+    val maxIntervalMs: Long = 25 * 60_000L,
     /** Quiet hours as minutes of the local day; equal values switch them off. Crossing midnight is fine. */
     val quietStartMinute: Int = 23 * 60,
     val quietEndMinute: Int = 8 * 60,
     /** Deliveries per local day (posted surfaces, seen or not). 0 = no limit. */
-    val dailyMax: Int = 6,
+    val dailyMax: Int = 0,
     /** Right after the person used DSH or answered, wait at least this long. */
-    val userActiveDeferMs: Long = 20 * 60_000L,
+    val userActiveDeferMs: Long = 2 * 60_000L,
     /** Each confirmed-but-ignored message multiplies the next gap by this… */
     val ignoredBackoff: Double = 2.0,
     /** …up to this factor. */
     val maxBackoffFactor: Double = 8.0,
     /** After this many confirmed-and-ignored in a row, stop until the person shows up. 0 = never. */
-    val pauseAfterIgnored: Int = 3,
+    val pauseAfterIgnored: Int = 6,
     val priority: Priority = Priority.NORMAL,
     /** How long a scheduled attempt may wait in the coordinator. */
     val eventTtlMs: Long = 15 * 60_000L,

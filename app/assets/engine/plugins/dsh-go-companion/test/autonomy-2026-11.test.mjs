@@ -177,7 +177,7 @@ test('计划草案只有时段没有内容：鲸澜自己来填（一小时最�
 
 test('笔记库：随手翻一篇进人设（系统产出不翻、太短的不翻），新旧都有机会', async () => {
   await withHome(async (home) => {
-    const t = setup(home)
+    const t = setup(home, { stochasticLiving: false })
     mkdirSync(join(t.vault, '大肥鱼', '每日'), { recursive: true })
     writeFileSync(join(t.vault, '大肥鱼', '每日', '2026-11-15.md'), '系统写的每日文件'.repeat(10))
     writeFileSync(join(t.vault, '短.md'), '太短')

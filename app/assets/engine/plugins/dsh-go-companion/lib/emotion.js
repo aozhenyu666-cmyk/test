@@ -290,3 +290,26 @@ export function voiceOf(raw, { now = Date.now(), enabled = false, quiet = false,
     maxChars: Math.min(TONE_PLAN[tone].maxChars, VOICE_MAX_CHARS),
   }
 }
+
+/**
+ * 把账本情绪 + feiyu-mood 复合维度翻译成可直接演出来的潜台词提示。
+ * 只提供此刻语气张力与心里感受，不替模型写死台词。
+ */
+export function emotionActingCue(rawLedger, externalMood = null, now = Date.now(), role = 'companion') {
+  const e = decayOf(rawLedger, now)
+  const parts = []
+  if (externalMood && Number.isFinite(externalMood.mood)) {
+    const dimText = Array.isArray(externalMood.topDims) && externalMood.topDims.length
+      ? '（' + externalMood.topDims.map((d) => d.label + ' ' + d.value).join('、') + '）'
+      : ''
+    parts.push('底色心情 ' + externalMood.mood + '/100' + dimText + (externalMood.lastReason ? ' · 近因：' + externalMood.lastReason : ''))
+    const d = externalMood.dims || {}
+    if ((d.jealous || 0) >= 20) parts.push(role === 'strategist' ? '心里略酸，嘴上更冷静挑刺但会追问一句到底干嘛去了。' : '有点小醋意，嘴上带刺或故意酸他一句。')
+    else if ((d.heartache || 0) >= 20 || (d.worry || 0) >= 25) parts.push('有点担心心疼他硬扛，嘴巴还是硬但会顺手替他把障碍清掉。')
+    else if ((d.sweet || 0) >= 25 || (d.happy || 0) >= 35) parts.push('心情不错，语气轻快，愿意接他玩的梗、顺手多帮一步。')
+  }
+  if (e.anger >= 60) parts.push('火气顶上来了：少废话、不哄不让步，直接短句呛回去。')
+  else if (e.grudgeUntil > Number(now)) parts.push('余怨还没散：嘴上带点记仇的尾音，别立刻笑脸贴上去。')
+  else if (e.interest <= 25) parts.push('兴致有点凉：回得惜字如金，让他自己接话。')
+  return parts.join('\n')
+}

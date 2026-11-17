@@ -1,6 +1,7 @@
 import 'package:dsh_app/dafeiyu/channels/intercept_channel.dart';
 import 'package:dsh_app/dafeiyu/channels/loop_channel.dart';
 import 'package:dsh_app/dafeiyu/ui/intercept_page.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -67,6 +68,14 @@ void main() {
         case 'clearWhitelist':
           clearWhitelistCalls++;
           wireConfig = {...wireConfig, 'whitelist': <String>[]};
+          return buildWireStatus();
+        case 'addWhitelist':
+          final pkgs = ((call.arguments as Map)['packages'] as List).cast<String>();
+          final cur = (wireConfig['whitelist'] as List).cast<String>();
+          wireConfig = {
+            ...wireConfig,
+            'whitelist': {...cur, ...pkgs}.toList(),
+          };
           return buildWireStatus();
         case 'restoreLockNow':
           restoreLockCalls++;
@@ -142,5 +151,36 @@ void main() {
     final targets = (wireConfig['targets'] as List).cast<Map>();
     final packages = targets.map((e) => e['packageName']).toSet();
     expect(packages, containsAll(['tv.danmaku.bili', 'com.tencent.tmgp.sgame', 'com.demo.game']));
+  });
+
+  testWidgets('InterceptPage whitelist multi-select dialog search and confirm button reliably adds packages', (tester) async {
+    final loop = _FakeLoopChannel([
+      for (var i = 0; i < 60; i++) LoopApp('com.noise.app$i', '干扰工具 $i'),
+      const LoopApp('md.obsidian', 'Obsidian'),
+      const LoopApp('org.mozilla.firefox', 'Firefox 浏览器'),
+    ]);
+
+    await pumpPhone(
+      tester,
+      InterceptPage(channel: InterceptChannel(), loopChannel: loop),
+    );
+
+    await tester.scrollUntilVisible(find.text('添加永久放行白名单应用'), 200);
+    await tester.tap(find.text('添加永久放行白名单应用'));
+    await settlePhone(tester);
+
+    expect(find.text('常用工具 / 沟通应用快捷勾选'), findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('app-picker-search')), 'Firefox');
+    await settlePhone(tester);
+    await tester.tap(find.text('Firefox 浏览器'));
+    await settlePhone(tester);
+    await tester.tap(find.text('Obsidian'));
+    await settlePhone(tester);
+
+    await tester.tap(find.byKey(const ValueKey('app-picker-confirm')));
+    await settlePhone(tester);
+
+    final whitelist = (wireConfig['whitelist'] as List).cast<String>();
+    expect(whitelist, containsAll(['org.mozilla.firefox', 'md.obsidian']));
   });
 }

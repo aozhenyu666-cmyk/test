@@ -202,3 +202,102 @@ export function renderVibe(picks, feed = {}) {
 export function pickedArms(picks) {
   return (picks || []).map((p) => p.arm).filter((a) => ARMS.includes(a))
 }
+
+const LIFE_SLICES = {
+  companion: {
+    morning: [
+      '刚眯着眼摸到手机看了一眼时间，差点睡过头，嘴里咬着面包含糊回你。',
+      '在给仓鼠芝麻换木屑，它刚刚又把瓜子壳踢了一笼子。',
+      '点了一杯冰美式配半糖奶茶双拼（别问，问就是醒脑用）。',
+    ],
+    afternoon: [
+      '刚吸了一口半糖去冰加珍珠的奶茶，顺手刷到个沙雕切片笑出声。',
+      '午后有点犯懒但手痒想找点乐子，在纠结要不要挑一局简单人机虐一下。',
+      '刚才桌面差点全乱，随手理了一下，看见你一直没动静就过来戳两下。',
+    ],
+    evening: [
+      '晚饭躲过一劫没吃到香菜，这会儿心情颇好，正好盯你收尾。',
+      '刚打完一局匹配，队友迷得我血压升高，急需找人吐槽两句回回血。',
+      '天黑了点，屋里只留了盏小台灯，边嗑瓜子边看你那边画面。',
+    ],
+    lateNight: [
+      '凌晨眼睛已经半眯了，说话会更短更黏糊——快交代完事去睡。',
+      '困得直打哈欠，但芝麻刚在跑轮里飙车吵醒了我，顺便抓包看看你在干嘛。',
+    ],
+  },
+  strategist: {
+    morning: [
+      '晨跑五公里刚冲完澡，黑咖啡还烫着，脑子正好是最清楚的时候。',
+      '早上看了一局古谱，拆了两个常见定式的假象；说重点吧，我听着。',
+    ],
+    afternoon: [
+      '下午茶时间，手边是一杯凉透了的美式和一本博弈论旧笔记。',
+      '刚合上两页历史案例——很多败局不是算错，是不肯止损；你那边呢？',
+    ],
+    evening: [
+      '夜跑刚回来收了汗，正在复盘今天几处高成本信号的误判。',
+      '晚上安静下来反而适合摊牌聊真问题——少绕弯子，把牌面放桌上。',
+    ],
+    lateNight: [
+      '深夜还在醒着，通常只有两件事：要么没收口，要么在逃避明确决定。',
+      '快熄灯了，长话短说——先定明天第一步，剩下的明天睁眼再推。',
+    ],
+  },
+}
+
+const SPONTANEOUS_NUDGES = {
+  companion: [
+    '（随机灵机一动）要是觉得现在气氛适合顺手整点活，不妨自己挑一件做：查一眼 memory_search 翻出旧梗、看一眼 mcp__phone__now 突击抓包、用 remember 记一句他刚才的嘴硬，或者直接给他设个 25 分钟专心小闹钟。不适合就当我没说。',
+    '（随机灵机一动）这一轮可以皮一下：先顺着刚才记忆里没接的话茬回马枪一句，或者用 remember_note / 碎记把他的现眼瞬间钉进小本本。',
+  ],
+  strategist: [
+    '（随机参谋动作）若发现他当下的说法和最近日程/历史旧账对不上，直接用 vault_search 或 memory_search 翻一条原话拍在桌面上对照，不必只凭感觉聊。',
+    '（随机参谋动作）如果这轮聊到了关键卡点，直接用 open_bout / plan_bouts 或 remember（importance: 2）把第一步钉死并留撤回出口。',
+  ],
+}
+
+function lcgNext(s) {
+  let x = (Math.imul(Number(s) || 1, 0x9e3779b9) + 1013904223) >>> 0
+  x = Math.imul(x ^ (x >>> 16), 0x85ebca6b) >>> 0
+  x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35) >>> 0
+  const n = (x ^ (x >>> 16)) >>> 0
+  return { next: n, unit: n / 4294967296 }
+}
+
+/**
+ * 「有时读、有时不读」的活人感概率注入引擎（2026-11）：
+ * 用确定性种子驱动独立掷骰，避免每次回复都在背同套脚本。
+ */
+export function stochasticLivingLines({ role = 'companion', seed = 1, hour = 12, briefReply = false } = {}) {
+  const rKey = role === 'strategist' ? 'strategist' : 'companion'
+  const h = Number.isFinite(Number(hour)) ? ((Math.round(Number(hour)) % 24) + 24) % 24 : 12
+  const period = h >= 6 && h < 12 ? 'morning' : h >= 12 && h < 18 ? 'afternoon' : h >= 18 && h < 24 ? 'evening' : 'lateNight'
+  const pool = LIFE_SLICES[rKey][period]
+
+  const g1 = lcgNext(seed + (rKey === 'strategist' ? 97 : 13))
+  const g2 = lcgNext(g1.next + 31)
+  const g3 = lcgNext(g2.next + 53)
+  const g4 = lcgNext(g3.next + 71)
+
+  const blocks = {}
+  // 55% 概率带入当前时段的鲜活个人生活切片，避开与上一槽位撞车。
+  if (g1.unit < 0.55 && pool.length) {
+    const prevIdx = Math.floor(lcgNext(Math.max(1, seed - 1) + (rKey === 'strategist' ? 97 : 13)).unit * pool.length)
+    let idx = Math.floor(g2.unit * pool.length)
+    if (pool.length > 1 && idx === prevIdx) idx = (idx + 1) % pool.length
+    blocks.lifeSlice = '【此刻小日常】' + pool[idx]
+  }
+  // 55% 概率激活「口是心非 / 内心OS 反差」提示。
+  if (g3.unit < 0.55) {
+    blocks.innerOs = INNER_OS
+  }
+  // 35% 概率激发自发微动作灵感（有时翻旧账/查手机/记小事，有时就纯粹干聊）。
+  if (g4.unit < 0.35) {
+    const nPool = SPONTANEOUS_NUDGES[rKey]
+    blocks.spontaneousTool = nPool[Math.floor(g4.unit * 100) % nPool.length]
+  }
+  if (briefReply) {
+    blocks.casualShortHint = '【日常短回勿上纲上线】他这句很短只是随口接话，不是挑衅或敷衍——顺手调侃一句或接个梗就行，绝不翻脸拉冷处理。'
+  }
+  return blocks
+}

@@ -15,6 +15,7 @@ import '../../l10n/l10n.dart';
 import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
 import '../../ui/common/app_sheet.dart';
+import 'app_picker_dialog.dart';
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/sheet_title_bar.dart';
 import '../../ui/shell/page_frame.dart';
@@ -262,27 +263,46 @@ class _PlanPageState extends State<PlanPage> {
   }
 
   Future<void> _pickApps(int index, {required bool need}) async {
-    if (_apps.isEmpty) {
-      _say('读不到已安装的 App。装过什么只有系统知道，这一页不猜。');
-      return;
+    final loop = widget.loop;
+    if (_apps.isEmpty && loop != null) {
+      final fetched = await loop.apps().catchError((_) => const <LoopApp>[]);
+      if (mounted && fetched.isNotEmpty) {
+        setState(() => _apps = fetched);
+      }
     }
+    if (!mounted) return;
     final row = _rows[index];
-    final picked = await showAppSheet<List<String>>(
-      context,
-      isScrollControlled: true,
-      builder: (_) => _AppPickerSheet(
+    final current = need ? row.need : row.allow;
+    List<String>? picked;
+    if (_apps.isEmpty) {
+      final manual = await showInstalledAppsPicker(
+        context,
         title: need ? '这一局要用哪些 App（必需）' : '严格模式下放行哪些 App（允许）',
-        apps: _apps,
-        recent: _recent,
-        selected: need ? row.need : row.allow,
-      ),
-    );
+        loop: loop ?? LoopChannel(),
+        initialSelected: current,
+        recentPackages: _recent,
+        allowEmpty: true,
+      );
+      picked = manual?.map((a) => a.package).toList();
+    } else {
+      picked = await showAppSheet<List<String>>(
+        context,
+        heightFactor: 0.82,
+        dismissal: SheetDismissal.button,
+        builder: (_) => _AppPickerSheet(
+          title: need ? '这一局要用哪些 App（必需）' : '严格模式下放行哪些 App（允许）',
+          apps: _apps,
+          recent: _recent,
+          selected: current,
+        ),
+      );
+    }
     if (picked == null || !mounted) return;
     setState(() {
       final target = need ? row.need : row.allow;
       target
         ..clear()
-        ..addAll(picked);
+        ..addAll(picked!);
     });
   }
 
@@ -804,16 +824,30 @@ class _AppPickerSheet extends StatefulWidget {
 }
 
 class _AppPickerSheetState extends State<_AppPickerSheet> {
+  final TextEditingController _search = TextEditingController();
   late final Set<String> _picked = {...widget.selected};
 
-  /// 最近用过的在前（同一个包名只留第一次出现），其余按名字排。
-  List<LoopApp> get _sorted {
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// 已选与最近用过的在前，其余按名字排，并按搜索词过滤。
+  List<LoopApp> get _filtered {
     final rank = <String, int>{};
     for (var i = 0; i < widget.recent.length; i += 1) {
       rank.putIfAbsent(widget.recent[i], () => i);
     }
-    final list = [...widget.apps];
+    final q = _search.text.trim().toLowerCase();
+    final list = widget.apps.where((a) {
+      if (q.isEmpty) return true;
+      return a.label.toLowerCase().contains(q) || a.package.toLowerCase().contains(q);
+    }).toList();
     list.sort((a, b) {
+      final sa = _picked.contains(a.package) ? 0 : 1;
+      final sb = _picked.contains(b.package) ? 0 : 1;
+      if (sa != sb) return sa.compareTo(sb);
       final ra = rank[a.package] ?? 1 << 20;
       final rb = rank[b.package] ?? 1 << 20;
       return ra != rb ? ra.compareTo(rb) : a.label.compareTo(b.label);
@@ -824,69 +858,86 @@ class _AppPickerSheetState extends State<_AppPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final apps = _sorted;
+    final apps = _filtered;
     return SafeArea(
       top: false,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SheetTitleBar(widget.title),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                children: [
-                  SheetGroup(
-                    children: [
-                      for (final app in apps)
-                        InkWell(
-                          key: ValueKey('plan-app-${app.package}'),
-                          onTap: () => setState(
-                            () => _picked.contains(app.package) ? _picked.remove(app.package) : _picked.add(app.package),
-                          ),
-                          child: SizedBox(
-                            height: 56,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      app.label,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: theme.textTheme.bodyLarge?.copyWith(fontSize: 15),
-                                    ),
-                                  ),
-                                  Icon(
-                                    _picked.contains(app.package) ? AppIcons.radioOn : AppIcons.radioOff,
-                                    size: 22,
-                                    color: _picked.contains(app.package)
-                                        ? theme.colorScheme.primary
-                                        : DshColors.of(context).textTertiary,
-                                  ),
-                                ],
-                              ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetTitleBar(widget.title),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(SheetTitleBar.inset, 0, SheetTitleBar.inset, 8),
+            child: TextField(
+              controller: _search,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(AppIcons.search, size: 18),
+                hintText: '搜索应用名或包名…',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: SheetTitleBar.inset),
+              itemCount: apps.length,
+              itemBuilder: (_, idx) {
+                final app = apps[idx];
+                final checked = _picked.contains(app.package);
+                return InkWell(
+                  key: ValueKey('plan-app-${app.package}'),
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => setState(
+                    () => checked ? _picked.remove(app.package) : _picked.add(app.package),
+                  ),
+                  child: SizedBox(
+                    height: 54,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              app.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyLarge?.copyWith(fontSize: 15),
                             ),
                           ),
-                        ),
-                    ],
+                          Icon(
+                            checked ? AppIcons.radioOn : AppIcons.radioOff,
+                            size: 22,
+                            color: checked
+                                ? theme.colorScheme.primary
+                                : DshColors.of(context).textTertiary,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ],
-              ),
+                );
+              },
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(SheetTitleBar.inset, 12, SheetTitleBar.inset, 16),
-              child: FilledButton(
-                onPressed: () => Navigator.of(context).pop(_picked.toList()),
-                child: Text(context.l10n.commonDone),
-              ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(SheetTitleBar.inset, 10, SheetTitleBar.inset, 16),
+            child: Row(
+              children: [
+                OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(context.l10n.commonCancel),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    key: const ValueKey('plan-app-confirm'),
+                    onPressed: () => Navigator.of(context).pop(_picked.toList()),
+                    child: Text('确认 (${_picked.length})'),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

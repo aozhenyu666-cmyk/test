@@ -259,8 +259,8 @@ test('plan：掷骰没中时，教练模式 8 分钟后再看，不被写死的 
 
 // ---------------------------------------------------------------- 3. 教练模式高频 + 回合内不占额度
 
-test('教练模式自己一套频率：8 分钟 / 每小时 6 / 每天 40；伙伴按设置原样', () => {
-  assert.deepEqual(modeLimits({}, 'coach'), { minGapMs: 8 * 60_000, hourlyMax: 6, dailyMax: 40 })
+test('教练模式自己一套频率：4 分钟 / 每小时 15 / 每日不限；伙伴按设置原样', () => {
+  assert.deepEqual(modeLimits({}, 'coach'), { minGapMs: 4 * 60_000, hourlyMax: 15, dailyMax: 0 })
   assert.deepEqual(modeLimits({ coachHourlyMax: 10 }, 'coach').hourlyMax, 10)
   const partner = modeLimits({ minGapMs: 30 * 60_000, hourlyMax: 3, dailyMax: 6 }, 'partner')
   assert.deepEqual(partner, { minGapMs: 30 * 60_000, hourlyMax: 3, dailyMax: 6 }, '设多少就是多少')
