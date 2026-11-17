@@ -101,6 +101,27 @@ export function cleanPhone(raw) {
       }))
     : []
   const local = typeof raw.local === 'string' && /^\d{2}:\d{2}$/.test(raw.local) ? raw.local : ''
+  const timeSlots = Array.isArray(raw.timeSlots)
+    ? raw.timeSlots
+      .filter((sl) => sl && typeof sl === 'object' && typeof sl.slot === 'string' && /^\d{2}:\d{2}-\d{2}:\d{2}$/.test(sl.slot))
+      .slice(0, 12)
+      .map((sl) => ({
+        slot: sl.slot,
+        minutes: minutesOf(sl.minutes),
+        switches: Math.max(0, Math.min(500, Math.round(Number(sl.switches) || 0))),
+        top: Array.isArray(sl.top)
+          ? sl.top.slice(0, 4).map((a) => {
+            const p = pkgOf(a?.app)
+            if (!p) return null
+            return { app: p, label: labelOf(p, a?.label), minutes: minutesOf(a?.minutes) }
+          }).filter(Boolean)
+          : [],
+      }))
+    : []
+  const calcTotal = today.reduce((sum, t) => sum + t.minutes, 0)
+  const totalMinutes = Number.isFinite(Number(raw.totalMinutes)) && Number(raw.totalMinutes) > 0
+    ? Math.max(calcTotal, Math.min(1440, Math.round(Number(raw.totalMinutes))))
+    : calcTotal
   const out = {
     app,
     label: app ? labelOf(app, raw.label) : '',
@@ -109,9 +130,12 @@ export function cleanPhone(raw) {
     screenOn: raw.screenOn !== false,
     charging: raw.charging === true,
     mediaPlaying: raw.mediaPlaying === true,
+    geminiVoiceActive: raw.geminiVoiceActive === true,
     screenText: typeof raw.screenText === 'string' && raw.screenText.trim() ? raw.screenText.trim().slice(0, 1500) : '',
     local,
     today,
+    totalMinutes,
+    ...(timeSlots.length ? { timeSlots } : {}),
     switches: cleanSwitches(raw.switches),
     ...(installedApps.length ? { installedApps } : {}),
   }
@@ -189,8 +213,16 @@ export function phoneLines(phone) {
   if (top.length) {
     facts.push(
       '今天手机用得最多：' +
-        top.map((t) => t.label + ' ' + t.minutes + ' 分钟' + (t.opens ? '（打开 ' + t.opens + ' 次）' : '')).join('、'),
+        top.map((t) => t.label + ' ' + t.minutes + ' 分钟' + (t.opens ? '（打开 ' + t.opens + ' 次）' : '')).join('、') +
+        '（全天合计 ' + (phone.totalMinutes || top.reduce((s, t) => s + t.minutes, 0)) + ' 分钟）',
     )
+  }
+  if (Array.isArray(phone.timeSlots) && phone.timeSlots.length) {
+    const recentSlots = phone.timeSlots.slice(-4).map((sl) => {
+      const tops = (sl.top || []).slice(0, 2).map((a) => a.label + a.minutes + 'm').join('/')
+      return sl.slot + ' ' + sl.minutes + 'm' + (sl.switches >= 4 ? '(切' + sl.switches + '次)' : '') + (tops ? '[' + tops + ']' : '')
+    })
+    facts.push('分时段调用：' + recentSlots.join('；'))
   }
   if (phone.charging) facts.push('手机正在充电')
   if (phone.local) facts.push('他那边现在 ' + phone.local)

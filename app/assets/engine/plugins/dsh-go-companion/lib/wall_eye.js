@@ -68,20 +68,32 @@ export function parseEye(raw, text = '') {
 /**
  * 读一遍。返回 { judged, pass, why, quote }；judged=false 表示没读成（调用方按代码结论走）。
  */
-export async function eyeCheck({ stream, provider, model, task, evidence, text, timeoutMs = EYE_TIMEOUT_MS }) {
+export async function eyeCheck({ stream, provider, model, task, evidence, text, imageBase64 = '', imageMimeType = 'image/png', timeoutMs = EYE_TIMEOUT_MS }) {
   if (typeof stream !== 'function' || !provider || !model) return { judged: false, pass: true, why: '没有可用的模型' }
-  if (!String(text || '').trim()) return { judged: false, pass: true, why: '读不到新写的内容' }
+  const hasImage = typeof imageBase64 === 'string' && imageBase64.length > 20
+  if (!String(text || '').trim() && !hasImage) return { judged: false, pass: true, why: '读不到新写的内容' }
   let timer
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve(null), Math.max(1, Number(timeoutMs) || EYE_TIMEOUT_MS))
   })
+  const content = [
+    ...(hasImage ? [{ type: 'image', data: imageBase64, mimeType: imageMimeType || 'image/png' }] : []),
+    {
+      type: 'text',
+      text: eyeUser({
+        task,
+        evidence,
+        text: String(text || '').trim() || '（本次核验提交截图，请结合画面判断是否真实完成指定任务）',
+      }),
+    },
+  ]
   const run = (async () => {
     let out = ''
     for await (const chunk of stream({
       provider,
       model,
       system: eyeSystem(),
-      messages: [{ role: 'user', content: [{ type: 'text', text: eyeUser({ task, evidence, text }) }] }],
+      messages: [{ role: 'user', content }],
       maxTokens: 1200,
       temperature: 0,
     })) {

@@ -20,6 +20,7 @@ export function evalBehaviorRadar({
   runningBout = null,
   activeLease = null,
   funTotalToday = 0,
+  penalty = null,
 } = {}) {
   const out = {
     triggered: false,
@@ -91,13 +92,18 @@ export function evalBehaviorRadar({
     }
   }
 
-  // 2) 全天任何时段：纯游戏连续 >= 5 分钟
-  if ((appCat === 'game' || isPureGame(phone.app, phone.label)) && mins >= 5) {
+  const hourNow = Math.floor(mod / 60)
+  const isHighRiskHour = Array.isArray(penalty?.highRiskHours) && penalty.highRiskHours.includes(hourNow)
+  const gameMinLimit = isHighRiskHour ? 3 : 5
+  const driftMinLimit = isHighRiskHour ? 6 : 12
+
+  // 2) 全天任何时段：纯游戏连续 >= 5 分钟（高危黑历史时段收紧至 >= 3 分钟）
+  if ((appCat === 'game' || isPureGame(phone.app, phone.label)) && mins >= gameMinLimit) {
     return {
       ...out,
       triggered: true,
       kind: 'game-binge',
-      reason: '游戏连刷已满 ' + mins + ' 分钟',
+      reason: (isHighRiskHour ? '[高危时段加重] ' : '') + '游戏连刷已满 ' + mins + ' 分钟',
       tempBlockApps: [phone.app],
       refuseMinutes: 60,
       forceLevel: 4,
@@ -107,10 +113,42 @@ export function evalBehaviorRadar({
     }
   }
 
-  // 3) 短视频 / 未收录信息流 / 系统浏览器连刷 >= 12 分钟，或 15m 内切了 >= 8 次还在游走
+  // 3) 短视频 / 未收录信息流 / 系统浏览器连刷 >= 12 分钟（高危时段 >= 6 分钟）
   const in15m = Number(phone.switches?.in15m) || 0
+  const distinct15m = Number(phone.switches?.distinct15m) || 0
   const isFeedOrFun = appCat === 'fun' || phone.fun || Boolean(installedMeta?.bypass)
-  const driftLong = isFeedOrFun && mins >= 12 && !(activeLease && activeLease.app === phone.app)
+  const driftLong = isFeedOrFun && mins >= driftMinLimit && !(activeLease && activeLease.app === phone.app)
+
+  // 3.1) 中立 App 碎片游走摩擦模态（优先于单点强锁）：无局且 15m 内在 >=4 个非工作应用间切 >=8 次、每次 <10 分钟，
+  // 仅冷却最近游走的应用 15 分钟，绝不误杀基础/系统/工作应用
+  if (!driftLong && !runningBout && phone.screenOn && in15m >= 8 && distinct15m >= 4 && mins < 10 && !inBoutAllow && !(activeLease && activeLease.app === phone.app)) {
+    const recentPkgs = (Array.isArray(phone.switches?.recent) ? phone.switches.recent : [])
+      .map((r) => String(r?.app || ''))
+      .filter(Boolean)
+    const hopped = []
+    for (const p of [...new Set([phone.app, ...recentPkgs])]) {
+      const cat = classifyApp(p, { declaredApps })
+      if (cat === 'emergency' || cat === 'work' || p.includes('dsh_app') || p.includes('bard') || p.includes('googlequicksearchbox')) continue
+      if (!hopped.includes(p)) hopped.push(p)
+      if (hopped.length >= 3) break
+    }
+    if (hopped.length >= 2) {
+      return {
+        ...out,
+        triggered: true,
+        kind: 'neutral-hop',
+        reason: '15 分钟在 ' + distinct15m + ' 个中立应用间来回切换 ' + in15m + ' 次碎片游走',
+        tempBlockApps: hopped,
+        refuseMinutes: 15,
+        forceLevel: 3,
+        forceWhy: '15 分钟在多个中立 App 间来回切了 ' + in15m + ' 次，先冷却这几个游走应用 15 分钟（正常工具与工作照旧；真要用请向我申报用途与时长）。',
+        speaker: 'strategist',
+        ballReason: 'radar-neutral-hop',
+      }
+    }
+  }
+
+  // 3.2) 其余连刷信息流或局内/少数应用高频横跳
   const highBounce = in15m >= 8 && !inBoutAllow && isDualUseApp(phone.app)
   if (driftLong || highBounce) {
     return {

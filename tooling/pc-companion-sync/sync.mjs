@@ -119,6 +119,7 @@ export async function collectAndPush({
   }
 
   let pushed = false
+  let mobileState = null
   if (companionUrl) {
     const res = await fetchFn(companionUrl, {
       method: 'POST',
@@ -127,9 +128,25 @@ export async function collectAndPush({
     })
     if (!res.ok) throw new Error(`Companion push HTTP ${res.status}`)
     pushed = true
+    // 手机 -> PC 双向联动：顺带拉取手机 /bouts 与 /wall 状态，识别严格锁与娱乐风险
+    const base = String(companionUrl).replace(/\/(event|plan)\/?$/, '')
+    if (base && base !== companionUrl) {
+      try {
+        const bRes = await fetchFn(`${base}/bouts`)
+        if (bRes.ok) mobileState = await bRes.json()
+      } catch {
+        // 反向查询失败不影响心跳主链路
+      }
+    }
   }
 
-  return { ok: true, payload, pushed, buckets: { winBucket, afkBucket } }
+  return {
+    ok: true,
+    payload,
+    pushed,
+    ...(mobileState ? { mobileBout: { running: Boolean(mobileState.running), strict: Boolean(mobileState.strict) } } : {}),
+    buckets: { winBucket, afkBucket },
+  }
 }
 
 function parseArgs(argv) {

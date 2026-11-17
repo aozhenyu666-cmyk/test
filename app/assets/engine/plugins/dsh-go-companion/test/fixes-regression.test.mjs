@@ -14,8 +14,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { apply, setStatePin } from '../lib/index.js'
 import { GEMINI_PACKAGES } from '../lib/gemini.js'
 import { evalBehaviorRadar } from '../lib/behavior_radar.js'
-import { cleanPhone } from '../lib/phone.js'
+import { cleanPhone, phoneLines } from '../lib/phone.js'
 import { createPresetRuntime } from '../lib/presetwire.js'
+import { listScreenshots } from '../lib/wall_auditor.js'
 
 const SIS = 'session-sis'
 const BIG = 'session-big'
@@ -268,3 +269,111 @@ test('phone.today 保留 24 项高打开记录，行为雷达在累计娱乐超 
     assert.equal(p.body.behaviorRadar?.kind, 'game-binge')
   })
 })
+
+test('分时段使用报告、declare_app_intent 审批与重罚限额、neutral-hop 防误杀、Gemini 语音模态检测及截图去重', async () => {
+  await withHome(async (home) => {
+    const t = setup(home, { diceThreshold: 100 })
+    const slotPhone = {
+      app: 'md.obsidian',
+      label: 'Obsidian',
+      minutes: 15,
+      fun: false,
+      screenOn: true,
+      local: '15:10',
+      totalMinutes: 85,
+      geminiVoiceActive: false,
+      today: [
+        { app: 'md.obsidian', label: 'Obsidian', minutes: 45, opens: 4 },
+        { app: 'tv.danmaku.bili', label: 'B站', minutes: 25, opens: 6, fun: true },
+        { app: 'com.tencent.mm', label: '微信', minutes: 15, opens: 8 },
+      ],
+      timeSlots: [
+        { slot: '12:00-14:00', minutes: 35, switches: 5, top: [{ app: 'tv.danmaku.bili', label: 'B站', minutes: 25 }] },
+        { slot: '14:00-16:00', minutes: 50, switches: 3, top: [{ app: 'md.obsidian', label: 'Obsidian', minutes: 45 }] },
+      ],
+      switches: {
+        in90s: 2,
+        apps90s: ['微信', 'Obsidian'],
+        in15m: 9,
+        distinct15m: 5,
+        in60m: 12,
+        distinct60m: 5,
+        recent: [
+          { pkg: 'com.tencent.mm', agoMs: 5_000 },
+          { pkg: 'tv.danmaku.bili', agoMs: 15_000 },
+          { pkg: 'com.xingin.xhs', agoMs: 30_000 },
+          { pkg: 'com.eg.android.AlipayGphone', agoMs: 45_000 },
+        ],
+      },
+    }
+    const cleaned = cleanPhone(slotPhone)
+    assert.equal(cleaned.totalMinutes, 85)
+    assert.equal(cleaned.timeSlots.length, 2)
+    assert.ok(phoneLines(cleaned).some((l) => l.includes('分时段调用') && l.includes('12:00-14:00')))
+
+    // 上报一次全量使用数据，再通过 GET /usage/report 与 app_usage_report 工具检索
+    await t.plan(slotPhone)
+    const repRoute = await call(t.h.handler(), 'GET', '/usage/report')
+    assert.equal(repRoute.status, 200)
+    assert.equal(repRoute.body.totalMinutes, 85)
+    assert.equal(repRoute.body.timeSlots.length, 2)
+    const repTool = t.h.globalTools.app_usage_report.execute({})
+    assert.equal(repTool.ok, true)
+    assert.match(repTool.text, /12:00-14:00/)
+
+    // 触发一次 game-binge 重罚后，declare_app_intent 审批时长被限缩
+    await t.plan({
+      app: 'com.miHoYo.Yuanshen',
+      label: '原神',
+      minutes: 6,
+      fun: true,
+      screenOn: true,
+      local: '15:12',
+      today: [{ app: 'com.miHoYo.Yuanshen', label: '原神', minutes: 6, fun: true }],
+    })
+    const intentTool = t.h.globalTools.declare_app_intent
+    assert.ok(intentTool, '应注册 declare_app_intent 全局工具')
+    const gameIntent = intentTool.execute({ app: '原神', intent: '打活动', requestedMinutes: 20, decision: 'approve', reason: '想放松' })
+    assert.equal(gameIntent.ok, false, '纯游戏申报必须硬拒绝')
+    const biliIntent = intentTool.execute({
+      app: 'B站',
+      intent: '看高数网课第三章',
+      requestedMinutes: 30,
+      deliverable: '提交笔记截图',
+      decision: 'approve',
+      reason: '需要看公开课但因今日已有严重违规仅限缩放行',
+    }, { sessionId: BIG })
+    assert.equal(biliIntent.ok, true)
+    assert.match(biliIntent.text, /15 分钟|限额|压缩/, '重罚后高危上限应将 30 分钟申报缩减到 15 分钟')
+
+    // 中立 App 碎片游走：仅冷却游走软件，不发 allow=[] 全机锁
+    const hopRes = evalBehaviorRadar({
+      phone: {
+        app: 'com.xingin.xhs',
+        label: '小红书',
+        minutes: 2,
+        fun: false,
+        screenOn: true,
+        switches: { in15m: 9, distinct15m: 5, recent: [{ app: 'com.tencent.mm' }, { app: 'com.xingin.xhs' }] },
+      },
+      runningBout: null,
+      now: Date.UTC(2026, 10, 17, 7, 15, 0),
+    })
+    assert.equal(hopRes.triggered, true)
+    assert.equal(hopRes.kind, 'neutral-hop')
+    assert.equal(hopRes.forceLevel, 3)
+
+    // 截图 SHA-256 去重：同一内容两份截图仅通过一次
+    const shotDir = join(home, 'shots')
+    mkdirSync(shotDir, { recursive: true })
+    const f1 = join(shotDir, 'a.png')
+    const f2 = join(shotDir, 'b.png')
+    writeFileSync(f1, Buffer.from('same-image-bytes'))
+    writeFileSync(f2, Buffer.from('same-image-bytes'))
+    const firstPass = listScreenshots([shotDir], 0)
+    assert.equal(firstPass.length, 1, '同哈希截图在同批扫描中应去重')
+    const secondPass = listScreenshots([shotDir], 0, { seenHashes: [firstPass[0].sha256] })
+    assert.equal(secondPass.length, 0, '已提交过的截图哈希再提交应被拦截')
+  })
+})
+

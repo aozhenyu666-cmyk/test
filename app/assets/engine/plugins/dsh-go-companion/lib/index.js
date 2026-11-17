@@ -2339,12 +2339,114 @@ export function apply(ctx) {
     record({ state: 'tighten', at: now, for: today, reason: String(reason || '').slice(0, 200), by: String(by || 'ai').slice(0, 20) })
     return { ok: true, text: '收紧了：今天娱乐锁到零点，明天恢复默认。' }
   }
+  // 第十轮：重罚与黑历史账本（quotaDebtMin 扣除自由放风配额；leaseCapMin 压缩白名单租约上限；highRiskHours 收紧次日高危时段阈值）
+  function loadPenalty(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const day = dayString(now, tz)
+    const raw = readState(stateFile('penalty.json'), null) || {}
+    const highRiskHours = Array.isArray(raw.highRiskHours)
+      ? raw.highRiskHours.map(Number).filter((h) => Number.isInteger(h) && h >= 0 && h < 24).slice(-6)
+      : []
+    if (raw.day && raw.day !== day) {
+      const carryDebt = Math.min(60, Math.round((Number(raw.quotaDebtMin) || 0) * 0.5))
+      const rolled = {
+        v: 1,
+        day,
+        quotaDebtMin: carryDebt,
+        leaseCapMin: carryDebt > 0 ? Math.min(30, Number(raw.leaseCapMin) || 30) : 60,
+        highRiskHours,
+        breachesToday: 0,
+        lastBreachAt: Number(raw.lastBreachAt) || 0,
+      }
+      writeJson(stateFile('penalty.json'), rolled)
+      return rolled
+    }
+    return {
+      v: 1,
+      day,
+      quotaDebtMin: Math.max(0, Math.min(180, Math.round(Number(raw.quotaDebtMin) || 0))),
+      leaseCapMin: Math.max(10, Math.min(60, Math.round(Number(raw.leaseCapMin) || 60))),
+      highRiskHours,
+      breachesToday: Math.max(0, Math.round(Number(raw.breachesToday) || 0)),
+      lastBreachAt: Number(raw.lastBreachAt) || 0,
+    }
+  }
+  function savePenalty(p) {
+    writeJson(stateFile('penalty.json'), p)
+  }
+  function recordBreachPenalty(severity = 'moderate', now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const p = loadPenalty(now, tz)
+    const addDebt = severity === 'severe' ? 30 : 15
+    const nextCap = severity === 'severe' ? 15 : Math.min(p.leaseCapMin, 20)
+    const hour = Math.floor(zoneMinuteOfDay(now, tz) / 60)
+    const nextHours = [...p.highRiskHours.filter((h) => h !== hour), hour].slice(-6)
+    const next = {
+      ...p,
+      quotaDebtMin: Math.min(180, p.quotaDebtMin + addDebt),
+      leaseCapMin: nextCap,
+      highRiskHours: nextHours,
+      breachesToday: p.breachesToday + 1,
+      lastBreachAt: now,
+    }
+    savePenalty(next)
+    try {
+      const curEarned = todayEarned(now, tz)
+      if (Number(curEarned.earnedMin) > Number(curEarned.spentMin)) {
+        const spentNext = Math.min(Number(curEarned.earnedMin), (Number(curEarned.spentMin) || 0) + addDebt)
+        saveEarned({ ...curEarned, spentMin: spentNext })
+      }
+    } catch {
+      // ignore earned deduction error
+    }
+    record({ state: 'penalty-breach', at: now, severity, addDebt, quotaDebtMin: next.quotaDebtMin, leaseCapMin: next.leaseCapMin, hour })
+    return next
+  }
+  function reliefPenaltyOnPass(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const p = loadPenalty(now, tz)
+    if (p.quotaDebtMin <= 0 && p.leaseCapMin >= 60) return p
+    const next = {
+      ...p,
+      quotaDebtMin: Math.max(0, p.quotaDebtMin - 10),
+      leaseCapMin: Math.min(60, p.leaseCapMin + 15),
+    }
+    savePenalty(next)
+    return next
+  }
+  function usageReportView(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const p = loadPenalty(now, tz)
+    const phone = lastPhone
+    const today = Array.isArray(phone?.today) ? phone.today : []
+    const totalMinutes = Number(phone?.totalMinutes) || today.reduce((s, t) => s + (Number(t.minutes) || 0), 0)
+    const funMinutes = funToday(phone)
+    const timeSlots = Array.isArray(phone?.timeSlots) ? phone.timeSlots : []
+    const lease = config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null
+    return {
+      v: 1,
+      ok: true,
+      at: now,
+      local: phone?.local || '',
+      totalMinutes,
+      funMinutes,
+      front: phone?.app ? { app: phone.app, label: phone.label || phone.app, minutes: phone.minutes || 0, fun: phone.fun === true } : null,
+      today,
+      timeSlots,
+      switches: phone?.switches ? { in90s: phone.switches.in90s, in15m: phone.switches.in15m, distinct15m: phone.switches.distinct15m, in60m: phone.switches.in60m } : null,
+      penalty: p,
+      activeLease: lease,
+    }
+  }
+
   const toolOutput = {
     schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, text: { type: 'string' } } },
     render: (_a, v) => [{ type: 'text', text: String((v && v.text) || '') }],
   }
   if (tools && typeof tools.register === 'function') {
-    for (const def of [dispatchControlTool('global'), clockManageTool('global'), grantTaskLeaseTool('strategist')]) {
+    for (const def of [
+      dispatchControlTool('global'),
+      clockManageTool('global'),
+      grantTaskLeaseTool('strategist'),
+      declareIntentTool('global'),
+      appUsageReportTool('global'),
+    ]) {
       try {
         const offExtra = tools.register(def)
         if (typeof offExtra === 'function') ctx.effect?.(() => offExtra)
@@ -2514,9 +2616,10 @@ export function apply(ctx) {
     const base = loadBaseline()
     const today = base.day === day
     const since = today && Number(base.at) > 0 ? Number(base.at) : startOfDay(now, tz)
+    const seenHashes = readLedger(home(), 400).filter((e) => e?.state === 'screenshot-hash' && e.sha256).map((e) => String(e.sha256))
     return {
       now, since, notesDir: notesDir(), stat: statOf,
-      screenshots: listScreenshots(SCREENSHOT_DIRS, since),
+      screenshots: listScreenshots(SCREENSHOT_DIRS, since, { seenHashes }),
       usage: Array.isArray(lastPhone?.today) ? lastPhone.today : [],
       files: today && base.files && typeof base.files === 'object' ? base.files : {},
     }
@@ -2538,21 +2641,37 @@ export function apply(ctx) {
     if (!task) return { fail: { data: ['今天立项的事：' + (state.tasks.map((t, i) => (i + 1) + '. ' + t.task).join('；') || '无')], missing: ['说清交的是第几件（task），或者交截图 / App 时长（evidence）'] } }
     return { task, idx, state, ctx, r: auditOne(task, ctx) }
   }
-  /** 这一次交墙要不要让墙的眼睛读：交的是验收、文件证据在代码层已经过了、没关掉这一层。 */
+  /** 这一次交墙要不要让墙的眼睛读：交的是验收、代码层已经过了（文本增长或新截图）、没关掉这一层。 */
   function eyeWanted(kind, args, now) {
     if (kind !== 'review' || config.wallEye === false) return false
     const t = reviewTarget(args, now)
-    return !t.fail && Boolean(t.r?.pass && t.r.file)
+    return !t.fail && Boolean(t.r?.pass && (t.r.file || (t.ctx?.screenshots?.length && t.ctx.screenshots[0]?.path)))
   }
-  /** 交验收前先让墙的眼睛读一遍（只在文件证据已经过了的时候读）。没读成就是 null。 */
+  /** 交验收前先让墙的眼睛读/看一遍（文本或截图多模态审读）。没读成就是 null。 */
   async function wallEye(args, now) {
     if (!eyeWanted('review', args, now)) return null
     const t = reviewTarget(args, now)
     const before = Number(t.ctx.files?.[t.task.task]?.size) || 0
-    const text = newContent(t.r.file, before)
+    const text = t.r.file ? newContent(t.r.file, before) : ''
+    let imageBase64 = ''
+    let imageMimeType = 'image/png'
+    const shot = !t.r.file ? t.ctx?.screenshots?.[0] : null
+    if (shot?.path) {
+      if (shot.sha256) record({ state: 'screenshot-hash', at: now, sha256: shot.sha256, name: shot.name })
+      try {
+        const raw = readFileSync(shot.path)
+        if (raw.length > 0 && raw.length <= 2 * 1024 * 1024) {
+          imageBase64 = raw.toString('base64')
+          imageMimeType = /\.jpe?g$/i.test(shot.path) ? 'image/jpeg' : /\.webp$/i.test(shot.path) ? 'image/webp' : 'image/png'
+        }
+      } catch {
+        // 读图失败则按代码时间与张数结论走
+      }
+    }
     const target = judgeTargetOf(ctx, config.strategistSessionId || config.sessionId, config) || {}
-    const eye = await eyeCheck({ stream: streamOf(), provider: target.provider, model: target.model, task: t.task.task, evidence: t.task.evidence, text })
+    const eye = await eyeCheck({ stream: streamOf(), provider: target.provider, model: target.model, task: t.task.task, evidence: t.task.evidence, text, imageBase64, imageMimeType })
     if (!eye.judged) record({ state: 'wall-eye', at: now, judged: false, why: eye.why })
+    if (eye.judged && eye.pass) reliefPenaltyOnPass(now, zoneOr(config.timeZone))
     return eye
   }
   function auditOne(task, ctx) {
@@ -4212,6 +4331,111 @@ export function apply(ctx) {
           action: 'notify',
         }, now)
         return { ok: true, text: `已定好 ${mins} 分钟后的精确闹钟「${t.label}」（id=${t.id}）。` }
+      },
+    }
+  }
+
+  /**
+   * 固定白名单 + 向 AI 申报审批制调度工具：用户输入用途与预期时长，由 AI 结合今日统计与惩罚上限分析并批复/缩减/拒绝。
+   */
+  function declareIntentTool(role) {
+    return {
+      name: 'declare_app_intent',
+      description: '用户主动向 AI 申报打开某个软件的用途、所需时长和预期交付物。AI 结合今日 APP 分时段使用统计与惩罚限额做分析：' +
+        'approve=按申报批出限时租约；reduce=缩减时长并附条件放行；deny=拒绝放行并保持锁定监督。纯游戏永远强硬拒绝。',
+      parameters: {
+        type: 'object',
+        properties: {
+          app: { type: 'string', description: '申报打开的软件中文名或包名' },
+          intent: { type: 'string', description: '具体要做什么事（如：查数学笔记、回复导师微信）' },
+          requestedMinutes: { type: 'integer', minimum: 5, maximum: 60, description: '申报需要几分钟' },
+          deliverable: { type: 'string', description: '到点交付什么成果供墙或姐妹验收' },
+          decision: { type: 'string', enum: ['approve', 'reduce', 'deny'], description: 'AI 分析后的审批裁决' },
+          approvedMinutes: { type: 'integer', minimum: 5, maximum: 60, description: 'decision=reduce 时实际批准分钟数' },
+          reason: { type: 'string', description: '结合今日时长数据与规则给出的审批/拒绝理由' },
+        },
+        required: ['app', 'intent', 'decision', 'reason'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}, execCtx = {}) => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const callerSid = execCtx?.agent?.session?.id || execCtx?.agent?.id || execCtx?.sessionId || ''
+        const callerRole = role === 'global' ? (callerSid ? speakerOf(callerSid) : 'strategist') : role
+        const installedApps = Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : []
+        const { resolved } = resolveAppNames([args.app], { installedApps, declaredApps: appsOf() })
+        const pkg = resolved[0]
+        if (!pkg) return { ok: false, text: '没识别出申报的软件名：' + String(args.app || '') }
+        const intent = String(args.intent || '').trim().slice(0, 120)
+        const deliverable = String(args.deliverable || '').trim().slice(0, 120)
+        const reason = String(args.reason || '').trim().slice(0, 140)
+        if (isPureGame(pkg, args.app)) {
+          recordBreachPenalty('moderate', now, tz)
+          return { ok: false, text: '审批拒绝：纯游戏不在用途申报审批白名单内（已按试探规则记录监督）。' }
+        }
+        const penalty = loadPenalty(now, tz)
+        if (args.decision === 'deny') {
+          record({ state: 'intent-decision', at: now, by: callerRole, app: pkg, decision: 'deny', intent, reason })
+          return { ok: true, text: `已拒绝「${args.app}」的使用申请（${reason}），保持当前锁机监督。` }
+        }
+        const reqMin = Math.max(5, Math.min(60, Math.round(Number(args.requestedMinutes) || 15)))
+        const wantMin = args.decision === 'reduce'
+          ? Math.max(5, Math.min(reqMin, Math.round(Number(args.approvedMinutes) || 10)))
+          : reqMin
+        const grantedMin = Math.min(wantMin, penalty.leaseCapMin)
+        const until = now + grantedMin * 60_000
+        commit({
+          taskLease: {
+            app: pkg,
+            allow: [pkg],
+            until,
+            goal: intent + (deliverable ? '（交付：' + deliverable + '）' : ''),
+            verifyHints: [],
+            by: callerRole,
+          },
+        })
+        record({
+          state: 'intent-decision',
+          at: now,
+          by: callerRole,
+          app: pkg,
+          decision: grantedMin < reqMin ? 'reduce' : args.decision,
+          minutes: grantedMin,
+          intent,
+          deliverable,
+          reason,
+        })
+        const capHint = grantedMin < wantMin ? `（因当前违规欠账/限额，实际由 ${wantMin} 分钟压缩至 ${grantedMin} 分钟）` : ''
+        return {
+          ok: true,
+          text: `已审批开放 ${pkg} ${grantedMin} 分钟${capHint}，用于「${intent}」；到点按「${deliverable || '口头/截图复盘'}」验收，偏离娱乐流将立即回收锁住。`,
+        }
+      },
+    }
+  }
+
+  /**
+   * 完整 APP 分时段统计与惩罚账本查询工具。
+   */
+  function appUsageReportTool(role) {
+    return {
+      name: 'app_usage_report',
+      description: '查看今天完整 APP 使用时长、各软件打开次数、2 小时分时段调用分布、15 分钟频繁切换次数，以及当前惩罚欠账与高危黑历史时段。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => {
+        const rep = usageReportView(Date.now(), zoneOr(config.timeZone))
+        const topLines = (rep.today || []).slice(0, 10)
+          .map((t) => `${t.label || t.app} ${t.minutes}分钟` + (t.opens ? `/${t.opens}次` : '') + (t.fun ? '[娱乐]' : ''))
+          .join('、') || '暂无记录（请检查使用情况访问权限）'
+        const slotLines = (rep.timeSlots || [])
+          .map((s) => `${s.slot}: 总${s.minutes}分(切${s.switches}次) [${(s.top || []).map((a) => a.label + a.minutes + 'm').join(',')}]`)
+          .join('；') || '暂无分时段分布'
+        const text = `今日屏幕合计 ${rep.totalMinutes} 分钟（娱乐 ${rep.funMinutes} 分钟）。\n` +
+          `各软件明细：${topLines}\n分时段调用：${slotLines}\n` +
+          `惩罚状态：配额欠账 ${rep.penalty.quotaDebtMin} 分钟，租约上限 ${rep.penalty.leaseCapMin} 分钟，高危时段 ${(rep.penalty.highRiskHours || []).join('/') || '无'}`
+        return { ok: true, text, report: rep }
       },
     }
   }
@@ -6474,6 +6698,7 @@ export function apply(ctx) {
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bouts') return send(res, 200, boutsGetRoute())
+      if (req.method === 'GET' && path === '/usage/report') return send(res, 200, usageReportView())
       if (req.method === 'GET' && path === '/clock') return send(res, 200, { v: 1, ok: true, tasks: clockKernel.list() })
       if (req.method === 'GET' && path === '/plan/day') return send(res, 200, planDayRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/brain') return send(res, 200, brainRoute({ action: 'view' }))
@@ -6612,6 +6837,7 @@ export function apply(ctx) {
     // 行为雷达 0ms 先行判定：晨间开机直奔娱乐 / 纯游戏连玩 / 未收录短视频与信息流 / 租约偏航（静音/免打扰时段不越权抢跑）
     const radarAllowed = config.control !== false && body?.skipRadar !== true && !(Number(config.muteUntil) > now) && !inQuiet(now, config.quietStart, config.quietEnd, tz)
     const inJudgeGrace = Number(loadBrain()?.graceUntil) > now && trustNow(now).band !== 'low' && !(refuseUntilAt(now) > now)
+    const penaltyNow = loadPenalty(now, tz)
     const rawRadar = radarAllowed
       ? evalBehaviorRadar({
           phone,
@@ -6625,6 +6851,7 @@ export function apply(ctx) {
           runningBout: runningBoutNow(),
           activeLease: config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null,
           funTotalToday: funToday(phone),
+          penalty: penaltyNow,
         })
       : { triggered: false }
     const radar = rawRadar.triggered && rawRadar.kind === 'unplanned-nudge' &&
@@ -6634,6 +6861,11 @@ export function apply(ctx) {
     if (radar.triggered) {
       if (radar.kind === 'unplanned-nudge') {
         saveGearState({ ...loadGearState(), radarNudgeAt: now })
+      }
+      if (radar.kind === 'game-binge' || radar.kind === 'lease-drift' || radar.kind === 'morning-first-play') {
+        if (now - (Number(penaltyNow.lastBreachAt) || 0) >= 10 * 60_000) {
+          recordBreachPenalty(radar.kind === 'game-binge' || radar.kind === 'lease-drift' ? 'severe' : 'moderate', now, tz)
+        }
       }
       if (radar.revokeLease) commit({ taskLease: null })
       if (Array.isArray(radar.tempBlockApps) && radar.tempBlockApps.length) {
@@ -6949,10 +7181,25 @@ export function apply(ctx) {
       }
       if (nextSpeaker) Object.assign(out, { speak: true, reason: 'strategist-' + nextSpeaker.reason, nextCheckAt: now })
     }
-    // 他在 Gemini 里连麦：谁都不插嘴；两分钟看一次，好知道他什么时候出来（出来了要读回那段对话）。
+    // 他在 Gemini 里连麦：默认不插嘴；若客户端明确上报处于文字而非语音模态满 3 分钟，或活跃会话每 10 分钟到抽检点，主动监督提醒。
     if (gem.inside) {
-      nextSpeaker = null
-      Object.assign(out, { speak: false, reason: 'in-gemini', nextCheckAt: now + 2 * 60_000 })
+      const gsGem = loadGearState()
+      const hasVoiceReport = body?.phone && Object.prototype.hasOwnProperty.call(body.phone, 'geminiVoiceActive')
+      const inSince = Number(gem.state.inSince) || now
+      if (hasVoiceReport && body.phone.geminiVoiceActive === false && canTalk && !desk.inFlight() &&
+        now - inSince >= 3 * 60_000 && now - (Number(gsGem.gemVoiceWarnAt) || 0) >= 8 * 60_000) {
+        saveGearState({ ...gsGem, gemVoiceWarnAt: now })
+        nextSpeaker = { role: thinker, reason: 'gemini-voice-check', at: now }
+        Object.assign(out, { speak: true, reason: 'gemini-voice-check', nextCheckAt: now + 60_000 })
+      } else if (hasVoiceReport && body.phone.geminiVoiceActive === true && gem.session && canTalk && !desk.inFlight() &&
+        now - inSince >= 10 * 60_000 && now - (Number(gsGem.gemCheckpointAt) || inSince) >= 10 * 60_000) {
+        saveGearState({ ...gsGem, gemCheckpointAt: now })
+        nextSpeaker = { role: thinker, reason: 'gemini-checkpoint', at: now, note: { topic: gem.session.topic || '' } }
+        Object.assign(out, { speak: true, reason: 'gemini-checkpoint', nextCheckAt: now + 60_000 })
+      } else {
+        nextSpeaker = null
+        Object.assign(out, { speak: false, reason: 'in-gemini', nextCheckAt: now + 2 * 60_000 })
+      }
     }
     // 有一球正在路上（接下了、还没生成完）：再说开口就会连发两球（手机每次切 App 都会问一次）。
     desk.sweep()
@@ -7038,6 +7285,7 @@ export function apply(ctx) {
       ...(pullBackRes.pullBack ? { emergencyPullBack: { triggered: true, reason: pullBackRes.reason, expiredAt: pullBackRes.expiredAt } } : {}),
       ...(elasticRes ? { elasticBuffer: { ...elasticRes, ...(schedulingFloor ? { schedulingFloor } : {}) } } : {}),
       trust: { score: trust.score, band: trust.band },
+      penalty: penaltyNow,
       // 临时封禁名单：手机把这些也当娱乐 App 管。
       block: blockedNow(now),
       // A6：每个锁都要能解释。这是「哪个 App 被哪条预案锁的」那一句，锁页直接显示。
@@ -7660,6 +7908,7 @@ export function apply(ctx) {
       let earnt = ''
       if (passed) {
         const tz = zoneOr(config.timeZone)
+        reliefPenaltyOnPass(now, tz)
         const before = todayEarned(now, tz)
         const next = earnedRt.addForPass(before, config, now, before.day)
         saveEarned(next)
@@ -7667,6 +7916,8 @@ export function apply(ctx) {
           earnt = '放风 +' + next.lastAdd + ' 分钟（今天还剩 ' + earnedRt.leftOf(next) + ' 分钟）'
           record({ state: 'earned', at: now, add: next.lastAdd, left: earnedRt.leftOf(next) })
         }
+      } else if (r.state === 'escalated') {
+        recordBreachPenalty('moderate', now, zoneOr(config.timeZone))
       }
       dropLive()
       return {

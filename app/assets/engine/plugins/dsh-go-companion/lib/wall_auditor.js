@@ -12,7 +12,8 @@
 // 纯函数为主：文件状态、截图列表、使用记录都由调用方传进来，方便单测；
 // 真实读盘的两个小工具（statOf / listScreenshots）放在文件末尾。
 
-import { readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildStrokePlan, evaluateSixDiceSlot, evaluateStroke, slotsForStage } from './six_dice.js'
 import { candidateNotesForLinking, writeBidirectionalWikiLinks } from './notes.js'
@@ -246,9 +247,10 @@ export function statOf(path) {
   }
 }
 
-/** 列出 since 之后的截图（只看文件名像图片的）。读不到的目录跳过。 */
-export function listScreenshots(dirs = SCREENSHOT_DIRS, since = 0) {
+/** 列出 since 之后的截图（只看文件名像图片的，附带 SHA-256 去重避免同一张旧图重复混关）。读不到的目录跳过。 */
+export function listScreenshots(dirs = SCREENSHOT_DIRS, since = 0, { seenHashes = null } = {}) {
   const out = []
+  const localSeen = new Set(Array.isArray(seenHashes) ? seenHashes : [])
   for (const dir of dirs) {
     let names = []
     try {
@@ -258,8 +260,18 @@ export function listScreenshots(dirs = SCREENSHOT_DIRS, since = 0) {
     }
     for (const name of names) {
       if (!/\.(png|jpe?g|webp)$/i.test(name)) continue
-      const st = statOf(join(dir, name))
-      if (st && st.mtimeMs >= since) out.push({ name, mtimeMs: st.mtimeMs })
+      const fullPath = join(dir, name)
+      const st = statOf(fullPath)
+      if (!st || st.mtimeMs < since || st.size <= 0) continue
+      let sha256 = ''
+      try {
+        sha256 = createHash('sha256').update(readFileSync(fullPath)).digest('hex')
+      } catch {
+        sha256 = ''
+      }
+      if (sha256 && localSeen.has(sha256)) continue
+      if (sha256) localSeen.add(sha256)
+      out.push({ name, mtimeMs: st.mtimeMs, path: fullPath, ...(sha256 ? { sha256 } : {}) })
     }
   }
   return out

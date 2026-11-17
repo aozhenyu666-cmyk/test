@@ -1898,11 +1898,23 @@ object ProactiveRuntime {
     private var usageDayCache: Pair<Long, io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReport?>? = null
     private fun usageTodayReport(wall: Long): io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReport? = runCatching {
         usageDayCache?.let { if (wall - it.first < 20_000L) return@runCatching it.second }
-        val mins = minuteOfDay(wall).coerceAtLeast(1)
-        val report = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReader.usage(app, mins, wall)
+        val dayStart = BeijingClock.startOfDay(wall)
+        val report = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReader.dailyReport(app, dayStart, wall)
+            ?: io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.UsageReader.usage(app, minuteOfDay(wall).coerceAtLeast(1), wall)
         usageDayCache = wall to report
         report
     }.getOrNull()
+
+    private fun isVoiceModalityActive(frontPkgNow: String?, screenText: String?): Boolean = runCatching {
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return@runCatching false
+        val inComm = am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION || am.mode == android.media.AudioManager.MODE_IN_CALL
+        val recActive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            am.activeRecordingConfigurations.isNotEmpty()
+        } else false
+        val textLive = frontPkgNow != null && frontPkgNow in GEMINI_PACKAGES && !screenText.isNullOrBlank() &&
+            (screenText.contains("Live") || screenText.contains("正在聆听") || screenText.contains("静音") || screenText.contains("结束语音"))
+        inComm || recActive || textLive
+    }.getOrDefault(false)
 
     private fun phoneContext(): Map<String, Any?>? = runCatching {
         val now = SystemClock.elapsedRealtime()
@@ -1945,6 +1957,22 @@ object ProactiveRuntime {
         val screenText = runCatching {
             io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.MaskedSummaryHelper.maskedSummary(1500)
         }.getOrNull()
+        val geminiVoiceActive = isVoiceModalityActive(front, screenText)
+        val totalMinutes = today.sumOf { (it["minutes"] as? Number)?.toLong() ?: 0L }
+        val timeSlots = usage?.timeSlots.orEmpty().map { slot ->
+            linkedMapOf<String, Any?>(
+                "slot" to slot.slot,
+                "minutes" to slot.minutes,
+                "switches" to slot.switches,
+                "top" to slot.top.map { item ->
+                    linkedMapOf<String, Any?>(
+                        "app" to item.packageName,
+                        "label" to (item.label ?: label(item.packageName) ?: item.packageName),
+                        "minutes" to item.minutes,
+                    )
+                },
+            )
+        }
         val usage60m = usageRecent60m(wall)
         linkedMapOf<String, Any?>(
             "app" to front,
@@ -1954,10 +1982,13 @@ object ProactiveRuntime {
             "screenOn" to s.screenOn,
             "charging" to s.charging,
             "mediaPlaying" to mediaPlaying,
+            "geminiVoiceActive" to geminiVoiceActive,
             "screenText" to screenText,
             "foregroundDebugOn" to io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(app),
             "local" to String.format(java.util.Locale.US, "%02d:%02d", minuteOfDay(wall) / 60, minuteOfDay(wall) % 60),
             "today" to today,
+            "totalMinutes" to totalMinutes,
+            "timeSlots" to timeSlots,
             "installedApps" to cachedInstalledApps(wall),
             // 走神前兆：90 秒 / 15 分钟 / 60 分钟内切了几次 App、切过哪些。
             "switches" to synchronized(switches) {
