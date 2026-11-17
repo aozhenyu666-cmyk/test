@@ -89,18 +89,29 @@ class CompanionRoles {
   }
 
   /// [role] 该用的那份设置。
-  CompanionVoiceSettings settingsFor(VoiceRole role) {
+  /// [forceConfigured] 为 true 时用于「设置页试听」：只要外接音源参数填齐，即使总开关关着也直接按外接音源测通。
+  CompanionVoiceSettings settingsFor(VoiceRole role, {bool forceConfigured = false}) {
     final settings = _settings;
+    final canUseExternal = settings != null &&
+        settings.configured &&
+        settings.source != CompanionVoiceSource.system &&
+        (settings.on || forceConfigured);
     // 没配置、关了、或选了手机自带：给一份 source=system 的设置，播放器自己认得这条路，
     // 不假装配好了，也不报错。
-    if (settings == null || !external) return const CompanionVoiceSettings();
+    if (!canUseExternal) return const CompanionVoiceSettings();
     final voice = _voices[role] ?? '';
     // 没选过音色：跟随服务默认，不动别的字段。
     if (voice.isEmpty) return settings;
     return switch (settings.source) {
-      // 预设服务的音色是预设里的 id；OpenAI 兼容服务只有 openaiVoice 一个位置。
-      CompanionVoiceSource.preset => settings.copyWith(presetVoices: {...settings.presetVoices, settings.preset: voice}),
-      CompanionVoiceSource.openai => settings.copyWith(openaiVoice: voice),
+      // 预设服务的音色按当前 preset 校验：切过服务后若角色里存的还是旧服务音色 id，自动回退该 preset 默认音色（voiceclone data: URI 除外）。
+      CompanionVoiceSource.preset => () {
+        final allowed = settings.presetInfo.voices.any((v) => v.id == voice) ||
+            (settings.presetInfo.clones && voice.startsWith('data:'));
+        final picked = allowed ? voice : settings.presetInfo.voices.first.id;
+        return settings.copyWith(presetVoices: {...settings.presetVoices, settings.preset: picked});
+      }(),
+      // OpenAI 兼容服务不能接收 base64 voiceclone data: URI，其余开放给自定义/硅基等音色 id。
+      CompanionVoiceSource.openai => voice.startsWith('data:') ? settings : settings.copyWith(openaiVoice: voice),
       _ => settings,
     };
   }
@@ -136,8 +147,9 @@ class CompanionRoles {
 
   Stream<CompanionVoiceEvent> get events => _speaker.events;
 
-  /// 设置页试听：按 [role] 的音色念一句。null 表示真念了，否则是不能念的原因。
-  Future<String?> preview(VoiceRole role, String text) => _speaker.preview(settingsFor(role), text);
+  /// 设置页试听：按 [role] 的音色念一句（外接已配好时即使总开关关着也真发请求测通）。null 表示真念了，否则是不能念的原因。
+  Future<String?> preview(VoiceRole role, String text) =>
+      _speaker.preview(settingsFor(role, forceConfigured: true), text);
 }
 
 /// 等 [id] 这一句念完。null＝念完了（或按字数估的那段时间到了）；'voice-out'＝报错了。

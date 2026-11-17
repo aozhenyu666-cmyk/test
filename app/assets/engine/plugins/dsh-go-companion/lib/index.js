@@ -121,7 +121,7 @@ import { createPresetRuntime } from './presetwire.js'
 import { createBrainRuntime } from './brainwire.js'
 import { buildCodex } from './codex.js'
 import { classify as classifyAnswer } from './reply.js'
-import { JUDGE_FILE, SELF_FILE, appendDiceThought, appendVerdictDaily, collectVaultMemoryFacts, ensureStarterVaultFiles, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch, vaultPick } from './notes.js'
+import { JUDGE_FILE, SELF_FILE, appendDiceThought, appendVerdictDaily, buildHandoffPacket, collectVaultMemoryFacts, ensureStarterVaultFiles, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch, vaultPick } from './notes.js'
 import { rollDiceCard } from './six_dice.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
@@ -2448,6 +2448,7 @@ export function apply(ctx) {
       declareIntentTool('global'),
       appUsageReportTool('global'),
       rollSixDiceTool('global'),
+      exportCognitiveHandoffTool('global'),
     ]) {
       try {
         const offExtra = tools.register(def)
@@ -4526,7 +4527,7 @@ export function apply(ctx) {
         ? { text: t, source: 'manual-import', pinned: t.includes('📌') ? 1 : 0, importance: t.includes('📌') ? 4 : 2, kind: 'fact' }
         : t))
       : []
-    const vaultFacts = collectVaultMemoryFacts(targetKb)
+    const vaultFacts = collectVaultMemoryFacts(targetKb, { notesDir: notesDir() })
     const combined = [...vaultFacts, ...extraFacts]
     const dbRes = insertFactsIntoMemoryDb(combined, now)
     if (dbRes.imported > 0 || starter.createdFiles.length > 0) {
@@ -4605,7 +4606,7 @@ export function apply(ctx) {
     const name = String(input?.name || '').trim()
     const appLabel = String(input?.appLabel || lastPhone?.label || '').trim()
     record({ state: 'dice-thought', at: now, dice, name, text: thought, appLabel })
-    const noteFile = appendDiceThought(kbDir(notesDir(), home()), { dice, name, thought }, now, tz)
+    const noteFile = appendDiceThought(kbDir(notesDir(), home()), { dice, name, thought }, now, tz, { notesDir: notesDir() })
     const dbRes = insertFactsIntoMemoryDb([
       {
         text: `[六骰思考·骰${dice}${name ? ' ' + name : ''}] ${thought}`.slice(0, 220),
@@ -4637,6 +4638,55 @@ export function apply(ctx) {
           ok: true,
           text: `🎲 摇出【骰${card.dice} · ${card.name}】${card.anchor ? '（锚点：' + card.anchor + '）' : ''}\n问题：${card.ask}`,
           card,
+        }
+      },
+    }
+  }
+
+  function handoffRoute(input = {}) {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    let facts = []
+    let db = null
+    try {
+      db = openMemoryDb(memoryPath())
+      if (db) {
+        const cand = loadCandidates(db, { sessionId: config.sessionId, now })
+        facts = backgroundFacts(cand, 8)
+      }
+    } catch {
+      // ignore memory read error
+    } finally {
+      try { db?.close?.() } catch {}
+    }
+    const running = live?.official?.view?.() || null
+    const pkt = buildHandoffPacket({
+      kb: kbDir(notesDir(), home()),
+      notesDir: notesDir() || '',
+      phone: lastPhone,
+      bout: running ? { title: running.title || running.protocolId, strict: running.strict === true } : null,
+      memoryFacts: facts,
+      now,
+      tz,
+      writeSnapshot: input?.writeSnapshot !== false,
+    })
+    return { v: 1, ...pkt }
+  }
+
+  function exportCognitiveHandoffTool(role) {
+    return {
+      name: 'export_cognitive_handoff',
+      description: '生成「Cognitive OS × 大肥鱼」跨 AI 通用交接上下文（整合 03_Thinking_Models / 05_Projects_And_Plans / 02_Staging_Review / 我.md / 记忆事实 / 六骰思维碎记），可同步给 鱼丸/鲸澜 或直接复制给 Gemini Live / Antigravity 等外部 AI。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => {
+        const res = handoffRoute({ writeSnapshot: true })
+        return {
+          ok: true,
+          text: res.markdown,
+          file: res.file,
+          hasCognitiveOs: res.hasCognitiveOs,
+          modelsCount: res.modelsCount,
         }
       },
     }
@@ -5877,7 +5927,7 @@ export function apply(ctx) {
     const mainState = mainStateNow()
     const stateLines = [...trustLines(trustNow()), ...rhythmLines(lastRhythm), ...gearLines(config, Date.now()), ...geminiLines(loadGemini(), Date.now()),
       ...depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }),
-      ...agendaLines(mainState), ...knowledgeLines(kbDir(notesDir(), home()), role)]
+      ...agendaLines(mainState), ...knowledgeLines(kbDir(notesDir(), home()), role, { notesDir: notesDir() })]
     const notes = notesFor(role).map((n) => (n.from === 'companion' ? names.companion : names.strategist) + '刚跟你递话（' +
       zoneHm(Number(n.at), zoneOr(config.timeZone)) + '）："' + n.text + '"')
     const noteLines = notes.length ? ['姐妹之间的悄悄话（他看不到，自然地用上就行）：', ...notes.map((t) => '- ' + t)] : []
@@ -5988,7 +6038,7 @@ export function apply(ctx) {
       { id: 'gear', layer: 'state', priority: 50, text: gearLines(config, Date.now()).join('\n') },
       { id: 'gemini', layer: 'state', priority: 45, text: geminiLines(loadGemini(), Date.now()).join('\n') },
       { id: 'deposit', layer: 'state', priority: 40, text: depositLines(depositToday(Date.now()), Boolean(lastRhythm?.reviewGate), { tasks: dailyToday().tasks }).join('\n') },
-      { id: 'knowledge', layer: 'state', priority: 35, text: knowledgeLines(kbDir(notesDir(), home()), role).join('\n') },
+      { id: 'knowledge', layer: 'state', priority: 35, text: knowledgeLines(kbDir(notesDir(), home()), role, { notesDir: notesDir() }).join('\n') },
       { id: 'vibe', layer: 'content', priority: 20, text: vibeLines.join('\n') },
       // B2：夜间整理的底稿。进内容层（可裁）——它是背景素材，不是规矩，不该占状态层的位置。
       { id: 'nightly', layer: 'content', priority: 16, text: nightlyLines(loadNightly(), Date.now()) },
@@ -6564,7 +6614,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -6631,6 +6681,7 @@ export function apply(ctx) {
           return send(res, out.ok ? 200 : 400, out)
         }
         if (path === '/memory/import') return send(res, 200, importVaultMemoriesRoute(body.value || {}))
+        if (path === '/handoff') return send(res, 200, handoffRoute(body.value || {}))
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
@@ -6909,6 +6960,7 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/usage/report') return send(res, 200, usageReportView())
       if (req.method === 'GET' && path === '/dice/roll') return send(res, 200, diceRollRoute({ manual: false }))
       if (req.method === 'GET' && path === '/memory/import') return send(res, 200, importVaultMemoriesRoute({}))
+      if (req.method === 'GET' && path === '/handoff') return send(res, 200, handoffRoute({}))
       if (req.method === 'GET' && path === '/clock') return send(res, 200, { v: 1, ok: true, tasks: clockKernel.list() })
       if (req.method === 'GET' && path === '/plan/day') return send(res, 200, planDayRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/brain') return send(res, 200, brainRoute({ action: 'view' }))

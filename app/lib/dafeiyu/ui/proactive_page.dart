@@ -129,6 +129,15 @@ class _ProactivePageState extends State<ProactivePage> {
       builder: (sheet) => _SessionList(sessions: sessions),
     );
     if (picked == null) return;
+    final strategistId = sessions.config['strategistSessionId'] as String?;
+    if (picked.isNotEmpty && strategistId != null && picked == strategistId) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('姐姐和妹妹要用两个不同的会话：先在 DSH 里新建一个对话，再回来选')),
+        );
+      }
+      return;
+    }
     // An empty id means "no target", which the plugin stores as null.
     await _channel.setAgentSession(picked.isEmpty ? null : picked);
     await _refresh();

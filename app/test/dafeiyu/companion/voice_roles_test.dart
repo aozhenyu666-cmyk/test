@@ -67,11 +67,39 @@ void main() {
       expect(roles.settingsFor(VoiceRole.official).presetVoice, '冰糖');
     });
 
-    test('OpenAI 兼容服务只有一档声音，按角色换', () {
+    test('OpenAI 兼容服务只有一档声音，按角色换；拒绝透传 data: clone URI', () {
       const openai = CompanionVoiceSettings(on: true, source: CompanionVoiceSource.openai, openaiVoice: 'alloy');
-      final roles = CompanionRoles(_quietSpeaker(), openai, const {VoiceRole.companion: 'coral'});
+      final roles = CompanionRoles(_quietSpeaker(), openai, const {
+        VoiceRole.companion: 'coral',
+        VoiceRole.strategist: 'data:audio/wav;base64,AAAA',
+      });
       expect(roles.settingsFor(VoiceRole.official).openaiVoice, 'alloy');
       expect(roles.settingsFor(VoiceRole.companion).openaiVoice, 'coral');
+      expect(roles.settingsFor(VoiceRole.strategist).openaiVoice, 'alloy');
+    });
+
+    test('切预设后旧预设的音色 ID 不应跨服务污染（自动回退当前预设默认音色）', () {
+      const bailian = CompanionVoiceSettings(
+        on: true,
+        source: CompanionVoiceSource.preset,
+        preset: 'bailian',
+        presetKeys: {'bailian': 'sk-test'},
+      );
+      final roles = CompanionRoles(_quietSpeaker(), bailian, const {
+        VoiceRole.companion: '冰糖', // 来自 MiMo 预设
+        VoiceRole.strategist: 'Ethan', // 百炼合法音色
+      });
+      expect(roles.settingsFor(VoiceRole.companion).presetVoice, 'Cherry');
+      expect(roles.settingsFor(VoiceRole.strategist).presetVoice, 'Ethan');
+    });
+
+    test('总开关关闭但已填好外接密钥时，设置页试听（forceConfigured）仍按外接服务发声', () {
+      final offButReady = _preset.copyWith(on: false);
+      final roles = CompanionRoles(_quietSpeaker(), offButReady, const {VoiceRole.companion: '茉莉'});
+      expect(roles.settingsFor(VoiceRole.companion).source, CompanionVoiceSource.system);
+      final previewCfg = roles.settingsFor(VoiceRole.companion, forceConfigured: true);
+      expect(previewCfg.source, CompanionVoiceSource.preset);
+      expect(previewCfg.presetVoice, '茉莉');
     });
   });
 

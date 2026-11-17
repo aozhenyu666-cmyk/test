@@ -49,8 +49,8 @@ export function judgeDigest(dir, max = 800) {
   return t.split('\n').filter((l) => l.trim()).join('\n').slice(0, max)
 }
 
-/** 拼进两人的聊天人设。 */
-export function knowledgeLines(dir, role) {
+/** 拼进两人的聊天人设。兼容 Cognitive OS 六区知识库（00_Index / 03_Thinking_Models / 04 / 05 / 06 / 02）。 */
+export function knowledgeLines(dir, role, opts = {}) {
   const self = selfDigest(dir)
   const judge = judgeDigest(dir, role === 'strategist' ? 800 : 300)
   const lines = []
@@ -61,7 +61,18 @@ export function knowledgeLines(dir, role) {
       (role === 'strategist' ? '找个他不忙的时候，用 kb_write file=self 按你知道的起草一版，跟他说一声让他改；文件已经存在就不能覆盖。' : '提醒姐姐去起草，或者让他自己写。'))
   }
   if (judge) lines.push((role === 'strategist' ? '你之前写下的判断（' : '姐姐写下的对他的判断（') + KB_DIR + '/' + JUDGE_FILE + '，他可能改过，以文件为准）：', judge)
-  lines.push('笔记库的规矩：你们只能写 ' + KB_DIR + '/ 和 Gemini/；别的目录只读，绝不改；日记、私密目录不读。读屏和相册看到的东西只用来当下说一句，不记进记忆或笔记。')
+  const cogDir = typeof opts?.notesDir === 'string' ? opts.notesDir.trim() : ''
+  if (cogDir) {
+    const cog = cognitiveOsDigest(cogDir, {
+      maxPerZone: role === 'strategist' ? 5 : 2,
+      limitChars: role === 'strategist' ? 1400 : 480,
+    })
+    if (cog.present && cog.text) {
+      lines.push('Cognitive OS 六区体系（来自 Obsidian 主库，你是 Overseer 的参谋；遵守实然优先、侦察先于开方、不篡改 01_Inbox_Raw 原始素材）：')
+      lines.push(cog.text)
+    }
+  }
+  lines.push('笔记库的规矩：你们只能写 ' + KB_DIR + '/、Gemini/ 或在确认后按原始留档追加 01_Inbox_Raw/；别的目录只读，绝不改；日记、私密目录不读。读屏和相册看到的东西只用来当下说一句，不记进记忆或笔记。')
   return lines
 }
 
@@ -218,6 +229,7 @@ function stripMarkdown(text, max) {
 }
 
 function isSystemVaultFile(rel) {
+  const base = rel.split('/').pop() || ''
   return rel.startsWith(KB_DIR + '/每日/') ||
     rel.startsWith(KB_DIR + '/' + WALL_DIR + '/') ||
     rel.startsWith(KB_DIR + '/' + IMPORT_DIR + '/') ||
@@ -225,7 +237,9 @@ function isSystemVaultFile(rel) {
     rel === KB_DIR + '/长期规划.md' ||
     rel === KB_DIR + '/' + SELF_FILE ||
     rel === KB_DIR + '/' + JUDGE_FILE ||
-    rel === KB_DIR + '/思维碎记.md'
+    rel === KB_DIR + '/思维碎记.md' ||
+    rel === KB_DIR + '/AI交接快照.md' ||
+    base.startsWith('_')
 }
 
 /** 最近改过的笔记（摘要只读，不含日记/私密与系统模板/墙日志）。 */
@@ -639,40 +653,56 @@ export function ensureStarterVaultFiles(kb, now = Date.now()) {
  * 自动跳过隐私目录、占位空行、说明文档；`📌` 或 我.md/判断.md 条目标记为高优先级常驻（pinned=1, importance=4），其余为 importance=2。
  * @returns {Array<{text:string, source:string, pinned:number, importance:number, kind:string}>}
  */
-export function collectVaultMemoryFacts(kb, { limit = 160 } = {}) {
-  if (!kb || !existsSync(kb)) return []
+export function collectVaultMemoryFacts(kb, { limit = 160, notesDir = '' } = {}) {
+  if (!kb) return []
   const sources = []
-  const pushFile = (abs, priorityCore) => {
+  const pushFile = (abs, priorityCore, sourcePrefix = 'obsidian') => {
     if (!existsSync(abs)) return
     const name = abs.split(/[\\/]/).pop() || ''
-    if (/^README/i.test(name) || isPrivateName(abs)) return
-    sources.push({ abs, priorityCore, name })
+    if (/^README/i.test(name) || name.startsWith('_') || isPrivateName(abs)) return
+    sources.push({ abs, priorityCore, name, sourcePrefix })
   }
-  pushFile(join(kb, SELF_FILE), true)
-  pushFile(join(kb, JUDGE_FILE), true)
-  const importDir = join(kb, IMPORT_DIR)
-  if (existsSync(importDir)) {
+  if (existsSync(kb)) {
+    pushFile(join(kb, SELF_FILE), true)
+    pushFile(join(kb, JUDGE_FILE), true)
+    const importDir = join(kb, IMPORT_DIR)
+    if (existsSync(importDir)) {
+      try {
+        for (const f of walkVault(importDir, { maxDepth: 3, maxFiles: 80 })) {
+          pushFile(f.path, false)
+        }
+      } catch {
+        // ignore
+      }
+    }
     try {
-      for (const f of walkVault(importDir, { maxDepth: 3, maxFiles: 80 })) {
-        pushFile(f.path, false)
+      for (const e of readdirSync(kb, { withFileTypes: true })) {
+        if (!e.isFile() || !e.name.endsWith('.md')) continue
+        if (e.name === '思维碎记.md' || (e.name.startsWith('记忆') && e.name !== '记忆.md')) {
+          pushFile(join(kb, e.name), false)
+        }
       }
     } catch {
       // ignore
     }
   }
-  try {
-    for (const e of readdirSync(kb, { withFileTypes: true })) {
-      if (!e.isFile() || !e.name.endsWith('.md')) continue
-      if (e.name === '思维碎记.md' || (e.name.startsWith('记忆') && e.name !== '记忆.md')) {
-        pushFile(join(kb, e.name), false)
-      }
-    }
-  } catch {
-    // ignore
-  }
   const seen = new Set()
   const out = []
   const cap = Math.max(10, Math.min(400, Number(limit) || 160))
+  const pushFact = (text, source, pinned, kind) => {
+    const cleanText = String(text || '').replace(/📌/g, '').replace(/\s+/g, ' ').trim().slice(0, 220)
+    if (cleanText.length < 8 || /（把你最近|（写下你最/.test(cleanText)) return
+    const norm = cleanText.toLowerCase()
+    if (seen.has(norm) || out.length >= cap) return
+    seen.add(norm)
+    out.push({
+      text: cleanText,
+      source: String(source).slice(0, 60),
+      pinned: pinned ? 1 : 0,
+      importance: pinned ? 4 : 2,
+      kind: kind || (pinned ? 'rule' : 'fact'),
+    })
+  }
   for (const src of sources) {
     const raw = readText(src.abs, 24_000).replace(/^---[\s\S]*?---\s*/, '')
     if (!raw) continue
@@ -682,32 +712,136 @@ export function collectVaultMemoryFacts(kb, { limit = 160 } = {}) {
       if (!line || line.startsWith('#') || line.startsWith('>') || line.startsWith('<!--') || line.startsWith('```')) continue
       const bullet = line.match(/^(?:[-*+]|\d+[.)])\s+(.+)$/)
       if (!bullet) continue
-      let text = bullet[1].trim()
-      const hasPin = text.includes('📌')
-      text = text.replace(/📌/g, '').replace(/\s+/g, ' ').trim()
-      // 跳过纯待填占位示例行
-      if (text.length < 8 || /（把你最近|（写下你最/.test(text)) continue
-      text = text.slice(0, 220)
-      const norm = text.toLowerCase()
-      if (seen.has(norm)) continue
-      seen.add(norm)
-      const pinned = src.priorityCore || hasPin ? 1 : 0
-      out.push({
-        text,
-        source: `obsidian:${src.name}`,
-        pinned,
-        importance: pinned ? 4 : 2,
-        kind: src.priorityCore ? 'rule' : 'fact',
-      })
+      const hasPin = bullet[1].includes('📌')
+      pushFact(bullet[1], `${src.sourcePrefix}:${src.name}`, src.priorityCore || hasPin, src.priorityCore ? 'rule' : 'fact')
+    }
+  }
+  // 联动 Cognitive OS 六区中已验证的知识资产（不导入 02_Staging_Review 未拍板草稿，严守三层防污染）
+  const cogRoot = String(notesDir || '').trim()
+  if (cogRoot && existsSync(cogRoot)) {
+    for (const zone of ['03_Thinking_Models', '04_People_And_Context', '05_Projects_And_Plans', '06_Decision_Ledger']) {
+      const zDir = join(cogRoot, zone)
+      if (!existsSync(zDir)) continue
+      for (const item of readZoneCards(zDir, zone, 20)) {
+        if (out.length >= cap) break
+        if (item.status === 'pending_overseer' || item.status === 'template') continue
+        const label = zone === '03_Thinking_Models' ? '模型' : zone === '04_People_And_Context' ? '人物' : zone === '05_Projects_And_Plans' ? '谋划' : '决策'
+        if (item.summary) {
+          pushFact(`[${label}·${item.title}] ${item.summary}`, `cos:${zone}`, zone === '03_Thinking_Models' || item.status === 'verified', zone === '03_Thinking_Models' ? 'model' : 'fact')
+        }
+      }
     }
   }
   return out
 }
 
-/** 追加一条六骰实时思考微记录到 大肥鱼/思维碎记.md。 */
-export function appendDiceThought(kb, { dice = 1, name = '', thought = '' } = {}, now = Date.now(), tz = 'Asia/Shanghai') {
+/** 解析 Markdown YAML Frontmatter 轻量字段（title/category/status/updated/summary）。 */
+export function parseFrontmatterMeta(raw) {
+  const text = String(raw || '')
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  if (!m) return {}
+  const meta = {}
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = line.match(/^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.+)$/)
+    if (!kv) continue
+    const k = kv[1].trim()
+    const v = kv[2].trim().replace(/^['"]|['"]$/g, '')
+    meta[k] = v
+  }
+  return meta
+}
+
+function readZoneCards(zoneAbsDir, zoneName, maxItems = 6) {
+  if (!zoneAbsDir || !existsSync(zoneAbsDir)) return []
+  const items = []
+  try {
+    for (const f of walkVault(zoneAbsDir, { maxDepth: 2, maxFiles: 60 })) {
+      const base = f.rel.split('/').pop() || ''
+      if (!base.endsWith('.md') || base.startsWith('_') || /^README/i.test(base) || isPrivateName(f.rel)) continue
+      const raw = readText(f.path, 16_000)
+      const meta = parseFrontmatterMeta(raw)
+      if (meta.status === 'template' || meta.status === 'archived') continue
+      const title = clean(meta.title || base.replace(/\.md$/i, ''), 60)
+      let summary = clean(meta.summary || '', 150)
+      if (!summary) {
+        summary = stripMarkdown(raw, 130)
+      }
+      items.push({
+        zone: zoneName,
+        rel: `${zoneName}/${f.rel}`,
+        title,
+        status: clean(meta.status || 'active', 24),
+        updated: clean(meta.updated || '', 20),
+        summary,
+        mtime: f.mtime,
+      })
+    }
+  } catch {
+    return []
+  }
+  items.sort((a, b) => b.mtime - a.mtime)
+  return items.slice(0, maxItems)
+}
+
+export const COGNITIVE_ZONES = Object.freeze([
+  '01_Inbox_Raw',
+  '02_Staging_Review',
+  '03_Thinking_Models',
+  '04_People_And_Context',
+  '05_Projects_And_Plans',
+  '06_Decision_Ledger',
+])
+
+/**
+ * 读取 Obsidian 里的 Cognitive OS 六区知识库结构摘要，供 大小鱼 与 外部 AI 交接上下文共用。
+ */
+export function cognitiveOsDigest(notesDir, { maxPerZone = 4, limitChars = 1800 } = {}) {
+  const empty = { present: false, indexTitle: '', models: [], plans: [], people: [], decisions: [], pending: [], text: '' }
+  if (!notesDir || !existsSync(notesDir)) return empty
+  const hasZone = existsSync(join(notesDir, '03_Thinking_Models')) ||
+    existsSync(join(notesDir, '02_Staging_Review')) ||
+    existsSync(join(notesDir, '00_Index.md'))
+  if (!hasZone) return empty
+
+  const indexRaw = readText(join(notesDir, '00_Index.md'), 6000)
+  const indexMeta = parseFrontmatterMeta(indexRaw)
+  const models = readZoneCards(join(notesDir, '03_Thinking_Models'), '03_Thinking_Models', maxPerZone)
+  const plans = readZoneCards(join(notesDir, '05_Projects_And_Plans'), '05_Projects_And_Plans', maxPerZone)
+  const people = readZoneCards(join(notesDir, '04_People_And_Context'), '04_People_And_Context', maxPerZone)
+  const decisions = readZoneCards(join(notesDir, '06_Decision_Ledger'), '06_Decision_Ledger', maxPerZone)
+  const pending = readZoneCards(join(notesDir, '02_Staging_Review'), '02_Staging_Review', maxPerZone)
+
+  const lines = []
+  const pushSection = (heading, arr) => {
+    if (!arr.length) return
+    lines.push(heading)
+    for (const it of arr) {
+      lines.push(`- [${it.status}] ${it.title}${it.summary ? '：' + it.summary : ''}`)
+    }
+  }
+  pushSection('已验证思维模型 (03_Thinking_Models):', models)
+  pushSection('在推谋划与项目 (05_Projects_And_Plans):', plans)
+  pushSection('人物与圈层档案 (04_People_And_Context):', people)
+  pushSection('决策账本 (06_Decision_Ledger):', decisions)
+  pushSection('待 Overseer 拍板草稿 (02_Staging_Review，未转正前仅供参考勿当定论):', pending)
+
+  return {
+    present: true,
+    indexTitle: clean(indexMeta.title || '00_Index', 80),
+    models,
+    plans,
+    people,
+    decisions,
+    pending,
+    text: lines.join('\n').slice(0, limitChars),
+  }
+}
+
+/** 追加一条六骰实时思考微记录到 大肥鱼/思维碎记.md，并在 Cognitive OS 存在 01_Inbox_Raw/ 时同步写入当日只增不改原始观察流。 */
+export function appendDiceThought(kb, { dice = 1, name = '', thought = '' } = {}, now = Date.now(), tz = 'Asia/Shanghai', opts = {}) {
   const cleanText = clean(thought, 260)
   if (!kb || !cleanText) return ''
+  let written = ''
   try {
     mkdirSync(kb, { recursive: true })
     const file = join(kb, '思维碎记.md')
@@ -718,9 +852,109 @@ export function appendDiceThought(kb, { dice = 1, name = '', thought = '' } = {}
     const time = hm(now, tz)
     const label = dice ? `骰${dice}·${name || '思考'}` : (name || '思考')
     appendFileSync(file, `- ${day} ${time} [${label}] ${cleanText}\n`, 'utf8')
-    return file
+    written = file
+
+    const rootVault = typeof opts?.notesDir === 'string' ? opts.notesDir.trim() : ''
+    const inboxDir = rootVault ? join(rootVault, '01_Inbox_Raw') : ''
+    if (inboxDir && existsSync(inboxDir)) {
+      const rawFile = join(inboxDir, `${day}_六骰现场碎记.md`)
+      if (!existsSync(rawFile)) {
+        writeFileSync(
+          rawFile,
+          `---\ntitle: "${day} · 手机六骰现场碎记（自动原始留档）"\ncategory: raw\nstatus: raw\ncreated: ${day}\nupdated: ${day}\ntags:\n  - 现场碎记\n  - 六骰\nsources: []\nsummary: "大肥鱼六骰悬浮窗即时捕获的现场念头与微反思原始流（只增不改）。"\n---\n\n# ${day} · 现场碎记\n\n`,
+          'utf8',
+        )
+      }
+      appendFileSync(rawFile, `- ${time} [${label}] ${cleanText}\n`, 'utf8')
+    }
+    return written
   } catch {
-    return ''
+    return written
+  }
+}
+
+/**
+ * 生成一份 100% 自包含的「Cognitive OS × 大肥鱼」跨 AI 通用交接胶囊：
+ * 既可注入 鱼丸/鲸澜 上下文，也可一键复制给 Gemini Live / Antigravity / Claude / ChatGPT 任何外部 AI 零失真接力。
+ */
+export function buildHandoffPacket({ kb, notesDir = '', phone = null, bout = null, memoryFacts = [], now = Date.now(), tz = 'Asia/Shanghai', writeSnapshot = true } = {}) {
+  const day = dayString(now, tz)
+  const time = hm(now, tz)
+  const self = kb ? selfDigest(kb) : ''
+  const judge = kb ? judgeDigest(kb, 700) : ''
+  const cog = cognitiveOsDigest(notesDir, { maxPerZone: 5, limitChars: 1800 })
+  const thoughtsRaw = kb ? readText(join(kb, '思维碎记.md'), 4000) : ''
+  const recentThoughts = thoughtsRaw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('- '))
+    .slice(-6)
+
+  const lines = [
+    `# Cognitive OS × 大肥鱼 · 跨 AI 交接上下文 (${day} ${time})`,
+    '',
+    '> 无论你是 **鱼丸/鲸澜（大肥鱼双姐妹）**，还是 **Gemini Live / Antigravity / ChatGPT / Claude 外部对话**：',
+    '> 请严格遵守以下认知纪律与个人背景，直接接续当前现场状态，严禁输出正确废话与盲目闭环。',
+    '',
+    '## 1. Cognitive OS 三大底层铁律（不可违背）',
+    '1. **实然优先于应然**：严禁“注意分寸/多沟通/保持自律”类正确废话；拆解高成本信号、激励机制与人性阻力。',
+    '2. **侦察先于开方**：关键暗信息（筹码、底线、近期摩擦、真实动机）不明时，先抛 2–3 个观测问题或给出「若 A 则 X / 若 B 则 Y」条件分支。',
+    '3. **Overseer 督导与三层防污染**：用户是最终拍板人（Overseer）；`01_Inbox_Raw/` 原始留档只增不改；待拍板判断标 `pending_overseer` 进 `02_Staging_Review/`，确认后再进 `03_Thinking_Models/`。',
+    '',
+    '## 2. 我的规则与红线 (`大肥鱼/我.md` & `判断.md`)',
+    self || '（暂未填写 大肥鱼/我.md）',
+    ...(judge ? ['', '### 判断准则', judge] : []),
+    '',
+    '## 3. Cognitive OS 六区知识资产',
+    cog.present && cog.text ? cog.text : '（当前挂载的 Obsidian 目录暂未检测到 Cognitive OS 03_Thinking_Models/00_Index 结构，可先将 打包交接蓝图 部署至当前 Vault）',
+  ]
+
+  if (Array.isArray(memoryFacts) && memoryFacts.length) {
+    lines.push('', '## 4. 长期记忆关键事实（SQLite Top 条目）')
+    for (const f of memoryFacts.slice(0, 8)) {
+      lines.push(`- ${clean(f, 160)}`)
+    }
+  }
+
+  lines.push('', '## 5. 此刻手机现场与最新六骰思维流')
+  if (bout?.title || bout?.protocolId) {
+    lines.push(`- 当前正在进行的局：${bout.title || bout.protocolId}${bout.strict ? ' [严格锁]' : ''}`)
+  }
+  if (phone?.app) {
+    lines.push(`- 最近前台应用：${phone.label || phone.app}（停留 ${Number(phone.minutes) || 0} 分钟${phone.fun ? '·娱乐' : ''}），今日屏幕累计 ${Number(phone.totalMinutes) || 0} 分钟`)
+  }
+  if (recentThoughts.length) {
+    lines.push('- 最近六骰思考记录：', ...recentThoughts)
+  } else {
+    lines.push('- 最近六骰思考记录：暂无')
+  }
+
+  lines.push(
+    '',
+    '## 6. 给接收方 AI 的启动指令',
+    '- 若是 **Gemini Live 语音切磋**：不要替我总结完，用「六骰提问（1事实 / 2推演 / 3比较 / 4关键未知 / 5依据 / 6替代解释）」每次只追问 1 个卡点，逼我自己讲透。',
+    '- 若是 **深度分析 / 谋划（Antigravity / 鲸澜）**：先核对第 3 节既有模型与旧账，再给反直觉拆解与上中下三路径推演。',
+  )
+
+  const markdown = lines.join('\n').slice(0, 3800) + '\n'
+  let file = ''
+  if (writeSnapshot && kb) {
+    try {
+      mkdirSync(kb, { recursive: true })
+      file = join(kb, 'AI交接快照.md')
+      writeFileSync(file, markdown, 'utf8')
+    } catch {
+      file = ''
+    }
+  }
+  return {
+    ok: true,
+    markdown,
+    file,
+    hasCognitiveOs: cog.present,
+    modelsCount: cog.models.length,
+    plansCount: cog.plans.length,
+    pendingCount: cog.pending.length,
   }
 }
 

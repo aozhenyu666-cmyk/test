@@ -17,7 +17,7 @@ import { evalBehaviorRadar } from '../lib/behavior_radar.js'
 import { cleanPhone, phoneLines } from '../lib/phone.js'
 import { createPresetRuntime } from '../lib/presetwire.js'
 import { listScreenshots } from '../lib/wall_auditor.js'
-import { collectVaultMemoryFacts, ensureStarterVaultFiles, vaultRecentNotes } from '../lib/notes.js'
+import { buildHandoffPacket, cognitiveOsDigest, collectVaultMemoryFacts, ensureStarterVaultFiles, knowledgeLines, vaultRecentNotes } from '../lib/notes.js'
 import { rollDiceCard } from '../lib/six_dice.js'
 import { loadCandidates } from '../lib/topics.js'
 
@@ -458,5 +458,109 @@ test('摇一摇六骰抽卡与思考保存、Obsidian 个人记忆模板生成�
     assert.match(toolOut.text, /骰\d/)
   })
 })
+
+test('Cognitive OS 六区联调：大小鱼注入、02待审隔离、01原始流反写、/handoff 跨AI交接胶囊与双账号/模态/音色全检', async () => {
+  await withHome(async (home) => {
+    const vault = join(home, 'cog-vault')
+    for (const dir of [
+      '01_Inbox_Raw',
+      '02_Staging_Review',
+      '03_Thinking_Models',
+      '04_People_And_Context',
+      '05_Projects_And_Plans',
+      '06_Decision_Ledger',
+      '大肥鱼',
+    ]) {
+      mkdirSync(join(vault, dir), { recursive: true })
+    }
+    writeFileSync(join(vault, '00_Index.md'), '---\ntitle: "个人认知总控台"\nstatus: verified\n---\n# Index\n', 'utf8')
+    writeFileSync(
+      join(vault, '03_Thinking_Models', '关系筛选漏斗.md'),
+      '---\ntitle: "关系筛选漏斗与打闹磨合机制"\ncategory: thinking-model\nstatus: verified\nupdated: 2026-11-17\nsummary: "相敬如宾是高防御弱连接，适度互损测试玻璃心边界才是强连接筛选器"\n---\n',
+      'utf8',
+    )
+    writeFileSync(
+      join(vault, '02_Staging_Review', '未定稿待审模型.md'),
+      '---\ntitle: "未拍板临时猜想"\ncategory: thinking-model\nstatus: pending_overseer\nsummary: "待 Overseer 拍板，绝不应自动转正进正式事实库"\n---\n',
+      'utf8',
+    )
+    writeFileSync(
+      join(vault, '05_Projects_And_Plans', 'v4作战室.md'),
+      '---\ntitle: "大肥鱼×CognitiveOS联调"\ncategory: project-plan\nstatus: active\nsummary: "用 AI交接快照 打通手机双姐妹与PC端外置大脑"\n---\n',
+      'utf8',
+    )
+
+    // 1) cognitiveOsDigest & knowledgeLines 注入（大小鱼共享六区视角）
+    const cog = cognitiveOsDigest(vault)
+    assert.equal(cog.present, true)
+    assert.equal(cog.models.length, 1)
+    assert.equal(cog.pending.length, 1)
+    const klBig = knowledgeLines(join(vault, '大肥鱼'), 'strategist', { notesDir: vault }).join('\n')
+    const klSis = knowledgeLines(join(vault, '大肥鱼'), 'companion', { notesDir: vault }).join('\n')
+    assert.match(klBig, /关系筛选漏斗与打闹磨合机制/)
+    assert.match(klBig, /实然优先/)
+    assert.match(klSis, /关系筛选漏斗与打闹磨合机制/)
+
+    // 2) collectVaultMemoryFacts 严格隔离 02_Staging_Review，仅导入已验证模型与项目卡
+    const collected = collectVaultMemoryFacts(join(vault, '大肥鱼'), { notesDir: vault })
+    assert.ok(collected.some((f) => f.text.includes('关系筛选漏斗')))
+    assert.ok(!collected.some((f) => f.text.includes('未拍板临时猜想')), '待审区绝不可污染正式事实库')
+
+    // 3) 启动插件，验证 /memory/import + /dice/thought 反写 01_Inbox_Raw + GET /handoff + export_cognitive_handoff
+    const t = setup(home, { notesPath: vault, mode: 'coach', judgeProvider: 'deepseek', judgeModel: 'deepseek-chat' })
+    const h = t.h.handler()
+    const imp = await call(h, 'POST', '/memory/import', {})
+    assert.equal(imp.status, 200)
+    assert.equal(imp.body.ok, true)
+
+    const thoughtRes = await call(h, 'POST', '/dice/thought', {
+      dice: 6,
+      name: '替代解释',
+      thought: '他表面答应但总拖延，可能不是懒，而是不想承担第一责任人成本',
+      appLabel: 'Obsidian',
+    })
+    assert.equal(thoughtRes.status, 200)
+    const todayRawFiles = vaultRecentNotes(vault, { limit: 10 }).map((r) => r.rel)
+    assert.ok(todayRawFiles.some((r) => r.startsWith('01_Inbox_Raw/') && r.endsWith('_六骰现场碎记.md')), '六骰想法应只增不改归档进 01_Inbox_Raw')
+
+    const ho = await call(h, 'GET', '/handoff')
+    assert.equal(ho.status, 200)
+    assert.equal(ho.body.ok, true)
+    assert.equal(ho.body.hasCognitiveOs, true)
+    assert.match(ho.body.markdown, /实然优先于应然/)
+    assert.match(ho.body.markdown, /关系筛选漏斗与打闹磨合机制/)
+    assert.match(ho.body.markdown, /不想承担第一责任人成本/)
+    assert.ok(readFileSync(join(vault, '大肥鱼', 'AI交接快照.md'), 'utf8').includes('跨 AI 交接上下文'))
+
+    const hoTool = t.h.globalTools.export_cognitive_handoff || t.big.tools.export_cognitive_handoff
+    assert.ok(hoTool, '应注册全局工具 export_cognitive_handoff')
+    assert.equal(hoTool.execute().hasCognitiveOs, true)
+
+    // 4) 账号路由 & 模态检查（鱼丸 companion vs 鲸澜 strategist、coach vs partner、judgeModel、dual=false）
+    const st = await call(h, 'GET', '/status')
+    assert.equal(st.status, 200)
+    assert.equal(st.body.config.sessionId, SIS)
+    assert.equal(st.body.config.judgeProvider, 'deepseek')
+    assert.equal(st.body.config.judgeModel, 'deepseek-chat')
+
+    // /say 按 role=strategist 送到大鱼，默认送到小鱼（异步受理返回 202）
+    const sayBig = await call(h, 'POST', '/say', { role: 'strategist', text: '把当前三路径推演摆出来' })
+    assert.equal(sayBig.status, 202)
+    await new Promise((r) => setTimeout(r, 25))
+    assert.match(JSON.stringify(t.big.sent.at(-1) ?? ''), /把当前三路径推演摆出来/)
+    const saySis = await call(h, 'POST', '/say', { role: 'companion', text: '我准备开一局了' })
+    assert.equal(saySis.status, 202)
+    await new Promise((r) => setTimeout(r, 25))
+    assert.match(JSON.stringify(t.sis.sent.at(-1) ?? ''), /我准备开一局了/)
+
+    // 切换 mode=partner -> coach，检查配置持久化与响应
+    const cfgPatch = await call(h, 'POST', '/config', { mode: 'partner', voice: true })
+    assert.equal(cfgPatch.status, 200)
+    assert.equal(cfgPatch.body.config.mode, 'partner')
+    const cfgCoach = await call(h, 'POST', '/config', { mode: 'coach' })
+    assert.equal(cfgCoach.body.config.mode, 'coach')
+  })
+})
+
 
 

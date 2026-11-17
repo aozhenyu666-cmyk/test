@@ -218,10 +218,12 @@ class _VoiceSettingsPageState extends ConsumerState<VoiceSettingsPage> {
                   onTap: () {
                     final idx = companionVoicePresets.indexWhere((p) => p.id == settings.presetInfo.id);
                     final nextPreset = companionVoicePresets[(idx + 1) % companionVoicePresets.length];
+                    final nextKeys = Map<String, String>.from(settings.presetKeys);
+                    nextKeys[settings.presetInfo.id] = _keyCtrl.text.trim();
                     _hydrated = false;
                     unawaited(
                       ref.read(companionVoiceSettingsProvider.notifier).update(
-                        settings.copyWith(preset: nextPreset.id),
+                        settings.copyWith(preset: nextPreset.id, presetKeys: nextKeys, presetStyle: _styleCtrl.text.trim()),
                       ),
                     );
                   },
@@ -305,21 +307,32 @@ class _VoiceSettingsPageState extends ConsumerState<VoiceSettingsPage> {
             children: [
               for (final role in VoiceRole.values)
                 Builder(builder: (context) {
-                  final eff = settings.source == CompanionVoiceSource.preset ? settings.presetInfo.voices.first.id : settings.openaiVoice;
+                  final eff = settings.source == CompanionVoiceSource.preset
+                      ? settings.presetInfo.voices.first.id
+                      : settings.openaiVoice;
                   final picked = roleMap[role] ?? '';
-                  final displayVoice = picked.isNotEmpty ? picked : eff;
+                  final validPreset = settings.source != CompanionVoiceSource.preset ||
+                      settings.presetInfo.voices.any((v) => v.id == picked) ||
+                      (settings.presetInfo.clones && picked.startsWith('data:'));
+                  final displayVoice = (picked.isNotEmpty && validPreset) ? picked : eff;
+                  final canPickVoice = settings.source == CompanionVoiceSource.preset ||
+                      settings.source == CompanionVoiceSource.openai;
                   return ListPageRow(
                     icon: AppIcons.voice,
                     iconColor: role == VoiceRole.companion
                         ? colors.warning
                         : (role == VoiceRole.strategist ? colors.info : colors.success),
                     title: _roleTitle(role),
-                    subtitle: settings.source == CompanionVoiceSource.system ? '系统本地语音合成 · 点击试听' : '音色：$displayVoice（点击更换）',
+                    subtitle: switch (settings.source) {
+                      CompanionVoiceSource.system => '系统本地语音合成 · 点击试听',
+                      CompanionVoiceSource.custom => '自定义 HTTP 语音接口 · 点击试听',
+                      _ => '音色：$displayVoice（点击更换）',
+                    },
                     trailing: TextButton(
                       onPressed: () => unawaited(_previewRole(role, settings)),
                       child: const Text('试听'),
                     ),
-                    onTap: settings.source == CompanionVoiceSource.system
+                    onTap: !canPickVoice
                         ? () => unawaited(_previewRole(role, settings))
                         : () => unawaited(_pickVoiceForRole(role, settings, displayVoice)),
                   );

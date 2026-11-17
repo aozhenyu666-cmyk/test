@@ -746,6 +746,20 @@ class ProactiveChannel {
       return null;
     }
   }
+
+  /// 生成并拉取「Cognitive OS × 大肥鱼」跨 AI 通用交接上下文（GET /handoff）。
+  Future<Map<String, dynamic>?> handoffPacket() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('handoffPacket');
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
 }
 
 /// 大肥鱼与独立守护 App「大肥鱼哨兵」之间的互信绑定状态。

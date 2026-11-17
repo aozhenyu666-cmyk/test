@@ -305,6 +305,7 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/memory/import", body)
             }
+            "handoffPacket" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/handoff", null)
             else -> result.notImplemented()
         }
     }

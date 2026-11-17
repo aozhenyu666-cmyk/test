@@ -1,7 +1,10 @@
 import 'package:dsh_app/dafeiyu/channels/proactive_state.dart';
 import 'package:dsh_app/dafeiyu/ui/companion_hub_page.dart';
+import 'package:dsh_app/dafeiyu/ui/voice_settings_page.dart';
 import 'package:dsh_app/dafeiyu/ui/wall_page.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../phone/harness.dart';
 
@@ -24,6 +27,7 @@ class _FakeHubChannel extends ProactiveChannel {
   int focusCalls = 0;
   int rollDiceCalls = 0;
   int importMemoryCalls = 0;
+  int handoffCalls = 0;
   bool shakeEnabled = true;
   GuardianPairingStatus guardian = const GuardianPairingStatus(installed: true, paired: false, sameCert: false);
 
@@ -46,6 +50,12 @@ class _FakeHubChannel extends ProactiveChannel {
   Future<Map<String, dynamic>?> importMemoryNow({List<String>? facts}) async {
     importMemoryCalls++;
     return {'ok': true, 'imported': 6, 'totalFacts': 12, 'createdFiles': const <String>[], 'kbDir': '/sdcard/Vault/大肥鱼'};
+  }
+
+  @override
+  Future<Map<String, dynamic>?> handoffPacket() async {
+    handoffCalls++;
+    return {'ok': true, 'markdown': '# Cognitive OS × 大肥鱼 交接', 'hasCognitiveOs': true, 'modelsCount': 2};
   }
 
   @override
@@ -182,5 +192,34 @@ void main() {
     await tester.tap(find.text('生成记忆模板并导入 Obsidian 数据库'));
     await settlePhone(tester);
     expect(ch.importMemoryCalls, 1);
+
+    await tester.scrollUntilVisible(find.text('复制跨 AI 交接上下文（Cognitive OS）'), 200);
+    await tester.tap(find.text('复制跨 AI 交接上下文（Cognitive OS）'));
+    await settlePhone(tester);
+    expect(ch.handoffCalls, 1);
+  });
+
+  testWidgets('VoiceSettingsPage switches voice sources and preserves preset API key on cycle', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await pumpPhone(tester, const VoiceSettingsPage());
+
+    expect(find.text('系统 TTS'), findsOneWidget);
+    expect(find.text('MiMo 预设'), findsOneWidget);
+    expect(find.text('OpenAI'), findsOneWidget);
+    expect(find.text('自定义'), findsOneWidget);
+
+    await tester.tap(find.text('MiMo 预设'));
+    await settlePhone(tester);
+    expect(find.text('预设服务'), findsOneWidget);
+
+    // 填入 MiMo 密钥后切换预设服务，应保留旧预设密钥且切换正常
+    await tester.enterText(find.byType(TextField).first, 'mimo-key-123');
+    await tester.tap(find.text('预设服务'));
+    await settlePhone(tester);
+
+    // 切到自定义模式，三角色行保持可点（试听路径不误弹 OpenAI 选音色对话框）
+    await tester.tap(find.text('自定义'));
+    await settlePhone(tester);
+    expect(find.text('自定义 HTTP 语音接口 · 点击试听'), findsNWidgets(3));
   });
 }

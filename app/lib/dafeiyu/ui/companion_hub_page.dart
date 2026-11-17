@@ -162,6 +162,31 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     }
   }
 
+  Future<void> _copyHandoffPacket() async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      final res = await _channel.handoffPacket();
+      if (!mounted) return;
+      final md = res?['markdown'] is String ? (res!['markdown'] as String).trim() : '';
+      if (res?['ok'] == true && md.isNotEmpty) {
+        await Clipboard.setData(ClipboardData(text: md));
+        if (!mounted) return;
+        final models = res?['modelsCount'] ?? 0;
+        final cos = res?['hasCognitiveOs'] == true ? '已联动六区模型($models条)' : '大肥鱼规则+手机现场';
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('已复制跨 AI 交接上下文（$cos），可直接粘贴给 Gemini / Antigravity / 任意对话')),
+        );
+      } else {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('暂未连上伴侣引擎，无法导出交接上下文')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
   Future<void> _enableStorage() async {
     setState(() => _actionBusy = true);
     final res = await _channel.enablePhoneStorage(restart: true);
@@ -592,6 +617,14 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               subtitleMaxLines: 2,
               value: '立即导入',
               onTap: _actionBusy ? null : () => unawaited(_importMemoryNow()),
+            ),
+            ListPageRow(
+              icon: AppIcons.copy,
+              title: '复制跨 AI 交接上下文（Cognitive OS）',
+              subtitle: '汇总三铁律、03_Thinking_Models、我.md 与六骰碎记，一键粘贴给 Gemini / 外部 AI',
+              subtitleMaxLines: 2,
+              value: '一键复制',
+              onTap: _actionBusy ? null : () => unawaited(_copyHandoffPacket()),
             ),
             ListPageRow(
               icon: AppIcons.restart,
