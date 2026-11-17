@@ -18,14 +18,14 @@ class LockModeRegressionTest {
         val store = MemorySnapshotStore()
         val guard = InterceptGuard(store, InterceptLedgerBook(store).also { it.recover() }, { now }) { "e-1" }
             .also { it.recover(now) }
-        guard.strictLinkedActive = { true }
+        guard.withStrictLink { true }
         guard.setConfig(InterceptConfig(enabled = true, lockMode = InterceptRules.MODE_TRAINING), now)
         assertEquals(InterceptRules.MODE_TRAINING, guard.effectiveLockMode())
 
         guard.setConfig(InterceptConfig(enabled = true, lockMode = InterceptRules.MODE_LINKED), now)
         assertEquals(InterceptRules.MODE_STRICT, guard.effectiveLockMode())
 
-        guard.strictLinkedActive = { false }
+        guard.withStrictLink { false }
         assertEquals(InterceptRules.MODE_TRAINING, guard.effectiveLockMode())
     }
 

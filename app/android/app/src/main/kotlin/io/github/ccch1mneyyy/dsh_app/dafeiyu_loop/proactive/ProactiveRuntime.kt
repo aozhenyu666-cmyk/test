@@ -1922,7 +1922,8 @@ object ProactiveRuntime {
         val allPkgs = (nowTodayMap.keys + usageMap.keys).distinct()
         val today = allPkgs.mapNotNull { pkg ->
             val uRow = usageMap[pkg]
-            val mins = maxOf(nowTodayMap[pkg] ?: 0L, uRow?.minutes ?: 0L)
+            val nowMins = (nowTodayMap[pkg] as? Number)?.toLong() ?: 0L
+            val mins = maxOf(nowMins, uRow?.minutes ?: 0L)
             val op = opens?.get(pkg) ?: uRow?.opens
             if (mins <= 0L && (op ?: 0) <= 0) return@mapNotNull null
             linkedMapOf<String, Any?>(
