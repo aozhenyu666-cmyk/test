@@ -16,6 +16,7 @@ import { AUDIT_DIR, WALL_DIR } from './vault_wall.js'
 export const SELF_FILE = '我.md'
 export const JUDGE_FILE = '判断.md'
 export const KB_DIR = '大肥鱼'
+export const IMPORT_DIR = '导入'
 /** 单行化 + 截断；裁决/任务文本统一走这里。 */
 const clean = (s, max) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max)
 /** 不读的目录（名字里含这些就跳过）。 */
@@ -216,15 +217,23 @@ function stripMarkdown(text, max) {
   return body.slice(0, max)
 }
 
-/** 最近改过的笔记（摘要只读，不含日记/私密）。 */
+function isSystemVaultFile(rel) {
+  return rel.startsWith(KB_DIR + '/每日/') ||
+    rel.startsWith(KB_DIR + '/' + WALL_DIR + '/') ||
+    rel.startsWith(KB_DIR + '/' + IMPORT_DIR + '/') ||
+    rel === KB_DIR + '/记忆.md' ||
+    rel === KB_DIR + '/长期规划.md' ||
+    rel === KB_DIR + '/' + SELF_FILE ||
+    rel === KB_DIR + '/' + JUDGE_FILE ||
+    rel === KB_DIR + '/思维碎记.md'
+}
+
+/** 最近改过的笔记（摘要只读，不含日记/私密与系统模板/墙日志）。 */
 export function vaultRecentNotes(notesDir, { limit = 3, now = Date.now(), exclude = [] } = {}) {
   if (!notesDir) return []
   const skip = new Set(exclude)
-  // 墙自己的审计日志也在这里写（vaultAudit）。它是系统产出，不是他写的话，
-  // 混进"最近改过的"会把真笔记挤下去 —— 球就会拿一条审计记录当话题素材。
-  const auditPrefix = KB_DIR + '/' + WALL_DIR + '/' + AUDIT_DIR + '/'
   return walkVault(notesDir)
-    .filter((f) => !f.rel.startsWith(KB_DIR + '/每日/') && !f.rel.startsWith(auditPrefix) && f.rel !== KB_DIR + '/记忆.md' && f.rel !== KB_DIR + '/长期规划.md' && !skip.has(f.rel))
+    .filter((f) => !isSystemVaultFile(f.rel) && !skip.has(f.rel))
     .sort((a, b) => b.mtime - a.mtime)
     .slice(0, Math.max(1, Math.min(8, limit)))
     .map((f) => ({ rel: f.rel, mtime: f.mtime, summary: stripMarkdown(readText(f.path, VAULT_READ_BYTES), 220) }))
@@ -233,15 +242,13 @@ export function vaultRecentNotes(notesDir, { limit = 3, now = Date.now(), exclud
 /**
  * 从笔记库里随手翻一篇（2026-11）。她们以前只在主动发球时看「最近改过的 3 篇」，
  * 平时聊天里笔记库是空的。这里按 seed 稳定地挑一篇：一半概率挑最近两周的，一半挑更老的，
- * 像人一样偶尔想起很久以前写过的东西。系统产出（每日、审计、记忆、长期规划）不挑；正文太短的不挑。
+ * 像人一样偶尔想起很久以前写过的东西。系统产出（每日、审计、记忆、长期规划、模板导入）不挑；正文太短的不挑。
  * @returns {{rel:string, mtime:number, excerpt:string}|null}
  */
 export function vaultPick(notesDir, { seed = 0, now = Date.now(), exclude = [] } = {}) {
   if (!notesDir) return null
   const skip = new Set(exclude)
-  const auditPrefix = KB_DIR + '/' + WALL_DIR + '/' + AUDIT_DIR + '/'
-  const files = walkVault(notesDir).filter((f) => !f.rel.startsWith(KB_DIR + '/每日/') && !f.rel.startsWith(auditPrefix) &&
-    f.rel !== KB_DIR + '/记忆.md' && f.rel !== KB_DIR + '/长期规划.md' && !skip.has(f.rel))
+  const files = walkVault(notesDir).filter((f) => !isSystemVaultFile(f.rel) && !skip.has(f.rel))
   if (!files.length) return null
   const fresh = files.filter((f) => now - f.mtime < 14 * 86_400_000)
   const old = files.filter((f) => now - f.mtime >= 14 * 86_400_000)
@@ -537,8 +544,6 @@ export function writeBidirectionalWikiLinks({
   }
   return { notePath, backlinkedFiles, forwardLinks: linkTargets.map((t) => wikiLink(t)) }
 }
-
-export const IMPORT_DIR = '导入'
 
 const STARTER_SELF_MD = `# 我.md（个人目标、硬安排与红线）
 

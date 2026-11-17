@@ -17,7 +17,7 @@ import { evalBehaviorRadar } from '../lib/behavior_radar.js'
 import { cleanPhone, phoneLines } from '../lib/phone.js'
 import { createPresetRuntime } from '../lib/presetwire.js'
 import { listScreenshots } from '../lib/wall_auditor.js'
-import { collectVaultMemoryFacts, ensureStarterVaultFiles } from '../lib/notes.js'
+import { collectVaultMemoryFacts, ensureStarterVaultFiles, vaultRecentNotes } from '../lib/notes.js'
 import { rollDiceCard } from '../lib/six_dice.js'
 import { loadCandidates } from '../lib/topics.js'
 
@@ -406,6 +406,13 @@ test('摇一摇六骰抽卡与思考保存、Obsidian 个人记忆模板生成�
     const collected = collectVaultMemoryFacts(kb)
     assert.ok(collected.some((f) => f.text.includes('早上清醒期')))
     assert.ok(!collected.some((f) => f.text.includes('隐私条目')), '日记目录必须被跳过')
+
+    // 确认系统生成的 大肥鱼/导入/ 等模板文件不会挤占 vaultRecentNotes 的真实笔记前排
+    mkdirSync(join(notesRoot, '项目'), { recursive: true })
+    writeFileSync(join(notesRoot, '项目', '真实笔记.md'), '# 真实笔记\n\n这是用户自己在写的核心笔记正文，不应被模板挤出前三。\n', 'utf8')
+    const recent = vaultRecentNotes(notesRoot, { limit: 3 })
+    assert.ok(recent.some((r) => r.rel === '项目/真实笔记.md'), '真实笔记必须在 recent 前列')
+    assert.ok(!recent.some((r) => r.rel.startsWith('大肥鱼/导入/') || r.rel === '大肥鱼/我.md' || r.rel === '大肥鱼/判断.md'), '模板/系统文件不占最近笔记位')
 
     // 3) 启动插件，将 notesPath 指向 notesRoot，测试 /memory/import + /dice/roll + /dice/thought + roll_six_dice
     const t = setup(home, { notesPath: notesRoot })
