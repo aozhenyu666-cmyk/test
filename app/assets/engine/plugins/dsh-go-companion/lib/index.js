@@ -6901,7 +6901,7 @@ export function apply(ctx) {
       nextSpeaker = { role: thinker, reason: 'night', at: now }
     } else if (canTalk && !gem.inside) {
       const gs = loadGearState()
-      const patrol = gearNow === 'free' && config.proactiveTools !== false && !lastRhythm?.reviewGate ? patrolSignal(phone, now, tz) : null
+      const patrol = gearNow === 'free' && config.proactiveTools !== false && !lastRhythm?.reviewGate && (!silence || silence.stage === 'none') ? patrolSignal(phone, now, tz) : null
       if (gem.recap && config.proactiveTools !== false) {
         nextSpeaker = { role: thinker, reason: 'gemini-recap', at: now, mark: { recappedFor: Number(gem.state.inSince) },
           gemini: { minutes: Math.round((Number(gem.state.lastInAt) - Number(gem.state.inSince)) / 60_000), topic: gem.state.session?.topic } }
@@ -7003,8 +7003,8 @@ export function apply(ctx) {
       }
     }
     if (!out.speak) nextSpeaker = null
-    // 若行为雷达在 0ms 先行锁机，优先于骰子/冷却唤起对应姐妹解释锁机原因（Gemini 审讯拉起、静音、免打扰时不抢戏）
-    if (radar.triggered && out.reason !== 'gemini-drift' && !out.geminiSchedule && out.reason !== 'muted' && out.reason !== 'quiet' && out.reason !== 'disabled' && !desk.inFlight() && !inConversation(sessionId, now)) {
+    // 若行为雷达在 0ms 先行锁机，优先于骰子/冷却唤起对应姐妹解释锁机原因（无锁的轻量唤起不打断进行中的 silence 阶梯）
+    if (radar.triggered && !(radar.forceLevel === 0 && silence?.stage && silence.stage !== 'none') && out.reason !== 'gemini-drift' && !out.geminiSchedule && out.reason !== 'muted' && out.reason !== 'quiet' && out.reason !== 'disabled' && !desk.inFlight() && !inConversation(sessionId, now)) {
       const targetRole = radar.speaker === 'strategist' && config.dual !== false && config.strategistSessionId ? 'strategist' : 'companion'
       nextSpeaker = { role: targetRole, reason: radar.ballReason || 'radar-drift', at: now, note: radar.forceWhy }
       Object.assign(out, { speak: true, reason: radar.ballReason || 'radar-drift', nextCheckAt: now })
