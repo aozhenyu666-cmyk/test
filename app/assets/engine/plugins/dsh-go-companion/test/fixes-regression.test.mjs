@@ -20,6 +20,7 @@ import { listScreenshots } from '../lib/wall_auditor.js'
 import { buildHandoffPacket, cognitiveOsDigest, collectVaultMemoryFacts, ensureStarterVaultFiles, knowledgeLines, vaultRecentNotes } from '../lib/notes.js'
 import { rollDiceCard } from '../lib/six_dice.js'
 import { loadCandidates } from '../lib/topics.js'
+import { startOfDay } from '../lib/tz.js'
 
 const SIS = 'session-sis'
 const BIG = 'session-big'
@@ -259,6 +260,15 @@ test('phone.today 保留 24 项高打开记录，行为雷达在累计娱乐超 
 
   await withHome(async (home) => {
     const t = setup(home, { diceThreshold: 0 }) // 即使骰子为 0，一定触发器仍须置 speak=true
+    const now = Date.now()
+    // 即使在早间 05:00–11:00 运行单测，也先标记今日已立项，避免 morning-first-play 抢先触发而遮蔽 game-binge 分支。
+    writeFileSync(join(home, 'companion', 'plan.json'), JSON.stringify({
+      v: 1,
+      day: startOfDay(now, 'Asia/Shanghai'),
+      accepted: true,
+      at: now - 60_000,
+      items: [{ id: 'p-1', protocolId: 'execute', title: '晚间复盘', minute: 23 * 60 + 50, budget: 30 }],
+    }))
     const p = await t.plan({
       app: 'com.miHoYo.Yuanshen',
       label: '原神',
