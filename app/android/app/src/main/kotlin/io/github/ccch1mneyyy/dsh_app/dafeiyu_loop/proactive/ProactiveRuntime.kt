@@ -2299,7 +2299,7 @@ object ProactiveRuntime {
         if (power?.isInteractive == false || kg?.isKeyguardLocked == true) return
         if (VisibleSurface.holder() != null) return
         val snap = NowFeed.snapshot(SystemClock.elapsedRealtime())
-        if (snap.app == null || snap.app == app.packageName || snap.sinceMs < GENTLE_DICE_IDLE_MS) return
+        if (snap.app == null || snap.app == app.packageName || snap.appMinutes * 60_000L < GENTLE_DICE_IDLE_MS) return
         triggerShakeDice(manual = false)
     }
 
