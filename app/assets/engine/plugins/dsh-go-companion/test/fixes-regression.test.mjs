@@ -6,7 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -17,6 +17,9 @@ import { evalBehaviorRadar } from '../lib/behavior_radar.js'
 import { cleanPhone, phoneLines } from '../lib/phone.js'
 import { createPresetRuntime } from '../lib/presetwire.js'
 import { listScreenshots } from '../lib/wall_auditor.js'
+import { collectVaultMemoryFacts, ensureStarterVaultFiles } from '../lib/notes.js'
+import { rollDiceCard } from '../lib/six_dice.js'
+import { loadCandidates } from '../lib/topics.js'
 
 const SIS = 'session-sis'
 const BIG = 'session-big'
@@ -376,4 +379,77 @@ test('分时段使用报告、declare_app_intent 审批与重罚限额、neutral
     assert.equal(secondPass.length, 0, '已提交过的截图哈希再提交应被拦截')
   })
 })
+
+test('摇一摇六骰抽卡与思考保存、Obsidian 个人记忆模板生成与去重导入 fish-memory.sqlite', async () => {
+  await withHome(async (home) => {
+    // 1) six_dice.rollDiceCard 避开刚摇过的一骰并带出 Gemini 话术
+    const firstCard = rollDiceCard({ excludeDice: 2, topic: '高数错题', appLabel: 'Obsidian', anchor: '每周二复盘积分表', seed: 0 })
+    assert.notEqual(firstCard.dice, 2)
+    assert.match(firstCard.geminiPrompt, /高数错题/)
+    assert.match(firstCard.geminiPrompt, /每周二复盘积分表/)
+
+    // 2) ensureStarterVaultFiles 幂等生成模板，绝不覆盖用户已写过的 我.md
+    const notesRoot = join(home, 'obsidian-vault')
+    const kb = join(notesRoot, '大肥鱼')
+    mkdirSync(kb, { recursive: true })
+    writeFileSync(join(kb, '我.md'), '# 我.md\n- 📌 每天 19:00 前完成两道算法题\n', 'utf8')
+    const init1 = ensureStarterVaultFiles(kb)
+    assert.equal(init1.ok, true)
+    assert.ok(readFileSync(join(kb, '我.md'), 'utf8').includes('19:00 前完成两道算法题'), '已有 我.md 绝对不可覆盖')
+    assert.ok(init1.createdFiles.some((p) => p.endsWith('判断.md')))
+    assert.ok(init1.createdFiles.some((p) => p.endsWith('记忆模板_个人画像与偏好.md')))
+
+    // 放入隐私目录验证绝不被收集，放入 导入/ 验证会被导入
+    mkdirSync(join(kb, '导入', '日记'), { recursive: true })
+    writeFileSync(join(kb, '导入', '日记', 'secret.md'), '- 绝不能导入的隐私条目，超过八个字测试\n', 'utf8')
+    writeFileSync(join(kb, '导入', '我的学习规律.md'), '- 📌 我在早上清醒期适合先啃硬代码架构而不是看微信\n- 连续刷两个以上工具栏容易滑向信息松弛\n', 'utf8')
+    const collected = collectVaultMemoryFacts(kb)
+    assert.ok(collected.some((f) => f.text.includes('早上清醒期')))
+    assert.ok(!collected.some((f) => f.text.includes('隐私条目')), '日记目录必须被跳过')
+
+    // 3) 启动插件，将 notesPath 指向 notesRoot，测试 /memory/import + /dice/roll + /dice/thought + roll_six_dice
+    const t = setup(home, { notesPath: notesRoot })
+    const h = t.h.handler()
+    const imp1 = await call(h, 'POST', '/memory/import', {})
+    assert.equal(imp1.status, 200, JSON.stringify(imp1.body))
+    assert.equal(imp1.body.ok, true)
+    assert.ok(imp1.body.imported >= 4, '至少应导入模板与自定义条目')
+
+    // 再次导入必须严格去重
+    const imp2 = await call(h, 'POST', '/memory/import', {})
+    assert.equal(imp2.status, 200)
+    assert.equal(imp2.body.imported, 0, '重复导入应全部去重跳过')
+
+    // 验证两姐妹共用记忆库 loadCandidates 已立即读到导入的事实
+    const memDb = new DatabaseSync(join(home, 'fish-memory', 'fish-memory.sqlite'))
+    try {
+      const cands = loadCandidates(memDb, { sessionId: SIS, now: Date.now() })
+      assert.ok(cands.facts.some((f) => f.text.includes('19:00 前完成两道算法题') || f.text.includes('早上清醒期')))
+    } finally {
+      memDb.close()
+    }
+
+    // 测试 /dice/roll 与 /dice/thought 以及全局工具 roll_six_dice
+    const rolled = await call(h, 'POST', '/dice/roll', { manual: true, appLabel: 'B站' })
+    assert.equal(rolled.status, 200)
+    assert.ok(rolled.body.dice >= 1 && rolled.body.dice <= 6)
+
+    const saved = await call(h, 'POST', '/dice/thought', {
+      dice: rolled.body.dice,
+      name: rolled.body.name,
+      thought: '我刚刚其实是在逃避写线性代数的第三问',
+      appLabel: 'B站',
+    })
+    assert.equal(saved.status, 200)
+    assert.equal(saved.body.saved, true)
+    assert.ok(readFileSync(join(kb, '思维碎记.md'), 'utf8').includes('逃避写线性代数的第三问'))
+
+    const diceTool = t.h.globalTools.roll_six_dice || t.big.tools.roll_six_dice
+    assert.ok(diceTool, '应注册全局工具 roll_six_dice')
+    const toolOut = diceTool.execute({ topic: '线性代数第三问' })
+    assert.equal(toolOut.ok, true)
+    assert.match(toolOut.text, /骰\d/)
+  })
+})
+
 

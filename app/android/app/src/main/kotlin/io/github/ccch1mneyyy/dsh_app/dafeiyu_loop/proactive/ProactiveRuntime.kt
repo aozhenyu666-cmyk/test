@@ -5,7 +5,14 @@ import android.app.AlarmManager
 import android.content.pm.ApplicationInfo
 import android.app.KeyguardManager
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -186,6 +193,7 @@ object ProactiveRuntime {
         runCatching { LoopRuntime.reconcileWithKernel(c::find) }
         applySwitches()
         watchTasks()
+        initShakeDice(app)
         if (sessionActive()) scheduleSessionActiveTick()
         arm()
         return c
@@ -233,6 +241,7 @@ object ProactiveRuntime {
         val c = coordinator ?: return
         val s = scheduler ?: return
         watchTasks()
+        maybeGentleDiceIntervene()
         applySwitches()
         dispatch(c.setGate(gate()))
         // P2: while the companion answers /plan, its answer is the whole schedule. The local
@@ -1015,7 +1024,10 @@ object ProactiveRuntime {
     }
 
     /** 亮屏：只记账。晨间门开不开由插件按作息判定，所以顺手问一次 `/plan`。 */
-    fun onScreenOn() = postEvent("screen-on") { consultPlanSoon(minGapMs = 0L) }
+    fun onScreenOn() = postEvent("screen-on") {
+        updateShakeSensor(true)
+        consultPlanSoon(minGapMs = 0L)
+    }
 
     /**
      * 他打开了被拦的 App：挂着的义务按这次动作再问一次（插件只问一次，做过 `askedAt`）。
@@ -2159,5 +2171,214 @@ object ProactiveRuntime {
                 ),
             )
         }
+    }
+
+    // ------------------------------------------------------------------ 摇一摇六骰子（M2 轻干预）
+
+    private const val DICE_PREFS = "dsh_proactive_dice"
+    private const val KEY_SHAKE_ENABLED = "shake_enabled"
+    private const val SHAKE_G_THRESHOLD = 1.35f
+    private const val SHAKE_GAP_MIN_MS = 120L
+    private const val SHAKE_WINDOW_MS = 700L
+    private const val SHAKE_COOLDOWN_MS = 2_500L
+    private const val GENTLE_DICE_IDLE_MS = 45 * 60_000L
+
+    private val LOCAL_DICE_FALLBACK = listOf(
+        Triple(1, "事实提取", "不看原话，用一句说清刚才这条内容到底交待了哪一个事实？"),
+        Triple(2, "预判推演", "顺着当前这一步往下走，接下来最可能发生什么结果或坑？"),
+        Triple(3, "联想比较", "这跟你做过的哪一类旧题/旧案例最像？关键差别在哪？"),
+        Triple(4, "关键提问", "整段里哪一个还没弄清的未知条件，一旦变了结论就会翻盘？"),
+        Triple(5, "依据与结论", "你刚才下的判断依据了哪条硬事实？如果只靠它，能稳推出什么？"),
+        Triple(6, "替代解释", "别急着认第一个结论：如果最顺嘴那个解释错了，还能怎么解释？"),
+    )
+
+    @Volatile private var shakeReceiverReady = false
+    @Volatile private var shakeSensorRegistered = false
+    @Volatile private var lastDiceRollAt = 0L
+    @Volatile private var lastDiceId = 0
+    @Volatile private var lastShakeTriggerAt = 0L
+    @Volatile private var lastShakeSpikeAt = 0L
+    @Volatile private var shakeSpikeCount = 0
+
+    private val shakeListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (!shakeDiceEnabled()) return
+            val x = event.values.getOrNull(0) ?: return
+            val y = event.values.getOrNull(1) ?: return
+            val z = event.values.getOrNull(2) ?: return
+            val gForce = kotlin.math.sqrt(x * x + y * y + z * z) / SensorManager.GRAVITY_EARTH
+            val delta = kotlin.math.abs(gForce - 1.0f)
+            if (delta < SHAKE_G_THRESHOLD) return
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastShakeTriggerAt < SHAKE_COOLDOWN_MS) return
+            if (now - lastShakeSpikeAt < SHAKE_GAP_MIN_MS) return
+            if (now - lastShakeSpikeAt > SHAKE_WINDOW_MS) shakeSpikeCount = 0
+            lastShakeSpikeAt = now
+            shakeSpikeCount++
+            if (shakeSpikeCount >= 2) {
+                shakeSpikeCount = 0
+                lastShakeTriggerAt = now
+                main.post { triggerShakeDice(manual = false) }
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
+    private fun initShakeDice(context: Context) {
+        if (!shakeReceiverReady) {
+            shakeReceiverReady = true
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_USER_PRESENT)
+            }
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, intent: Intent?) {
+                    when (intent?.action) {
+                        Intent.ACTION_SCREEN_OFF -> updateShakeSensor(false)
+                        Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> updateShakeSensor(true)
+                    }
+                }
+            }
+            runCatching {
+                if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                else context.registerReceiver(receiver, filter)
+            }
+        }
+        val interactive = runCatching { (context.getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive != false }.getOrDefault(true)
+        updateShakeSensor(interactive)
+    }
+
+    fun shakeDiceEnabled(): Boolean {
+        if (!::app.isInitialized) return true
+        return app.getSharedPreferences(DICE_PREFS, Context.MODE_PRIVATE).getBoolean(KEY_SHAKE_ENABLED, true)
+    }
+
+    fun setShakeDiceEnabled(context: Context, enabled: Boolean): Boolean {
+        ensure(context)
+        app.getSharedPreferences(DICE_PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_SHAKE_ENABLED, enabled).apply()
+        val interactive = runCatching { (app.getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive != false }.getOrDefault(true)
+        updateShakeSensor(interactive && enabled)
+        return shakeDiceEnabled()
+    }
+
+    fun shakeDiceStatus(context: Context): Map<String, Any?> {
+        ensure(context)
+        return linkedMapOf(
+            "enabled" to shakeDiceEnabled(),
+            "listening" to shakeSensorRegistered,
+            "lastDice" to lastDiceId,
+            "lastRollAt" to lastDiceRollAt,
+        )
+    }
+
+    private fun updateShakeSensor(screenInteractive: Boolean) {
+        if (!::app.isInitialized) return
+        val sm = app.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val want = screenInteractive && shakeDiceEnabled()
+        if (want && !shakeSensorRegistered) {
+            val accel = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) ?: return
+            if (sm.registerListener(shakeListener, accel, SensorManager.SENSOR_DELAY_UI)) {
+                shakeSensorRegistered = true
+            }
+        } else if (!want && shakeSensorRegistered) {
+            runCatching { sm.unregisterListener(shakeListener) }
+            shakeSensorRegistered = false
+            shakeSpikeCount = 0
+        }
+    }
+
+    /** 定时温和微干预：亮屏使用久了还没摇过骰子、且没有别的弹窗时，轻提示一面六骰子。 */
+    private fun maybeGentleDiceIntervene() {
+        if (!::app.isInitialized || !shakeDiceEnabled() || !proactiveEnabled()) return
+        val now = System.currentTimeMillis()
+        if (lastDiceRollAt > 0L && now - lastDiceRollAt < GENTLE_DICE_IDLE_MS) return
+        val power = app.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val kg = app.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        if (power?.isInteractive == false || kg?.isKeyguardLocked == true) return
+        if (VisibleSurface.holder() != null) return
+        val snap = NowFeed.snapshot(SystemClock.elapsedRealtime())
+        if (snap.app == null || snap.app == app.packageName || snap.sinceMs < GENTLE_DICE_IDLE_MS) return
+        triggerShakeDice(manual = false)
+    }
+
+    /** 触发一次摇六骰浮窗（manual=true 允许在 App 内或锁屏外手动触发）。 */
+    fun triggerShakeDice(manual: Boolean = true, done: ((Map<String, Any?>) -> Unit)? = null) {
+        if (!::app.isInitialized) {
+            done?.invoke(linkedMapOf("ok" to false, "error" to "not-initialized"))
+            return
+        }
+        val power = app.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val kg = app.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        if (!manual && (power?.isInteractive == false || kg?.isKeyguardLocked == true)) {
+            done?.invoke(linkedMapOf("ok" to false, "error" to "screen-locked"))
+            return
+        }
+        if (VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT)) {
+            done?.invoke(linkedMapOf("ok" to false, "error" to "lock-active"))
+            return
+        }
+        val snap = NowFeed.snapshot(SystemClock.elapsedRealtime())
+        val appLabel = snap.app?.let { pkg ->
+            runCatching {
+                val pm = app.packageManager
+                pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+            }.getOrDefault(pkg)
+        }.orEmpty()
+        fetchPluginRoute(
+            routeCallback { res ->
+                val hasPluginCard = res["ok"] == true && res["dice"] is Number
+                val diceNum = if (hasPluginCard) (res["dice"] as Number).toInt() else {
+                    val pool = LOCAL_DICE_FALLBACK.filter { it.first != lastDiceId }
+                    pool.random().first
+                }
+                val fallback = LOCAL_DICE_FALLBACK.firstOrNull { it.first == diceNum } ?: LOCAL_DICE_FALLBACK.first()
+                val name = (res["name"] as? String).orEmpty().ifBlank { fallback.second }
+                val ask = (res["ask"] as? String).orEmpty().ifBlank { fallback.third }
+                val anchor = (res["anchor"] as? String).orEmpty()
+                val geminiPrompt = (res["geminiPrompt"] as? String).orEmpty().ifBlank {
+                    "[六骰思维干预 · 骰$diceNum $name] 请用这题追问我、别替我代答：$ask"
+                }
+                lastDiceId = diceNum
+                lastDiceRollAt = System.currentTimeMillis()
+                main.post {
+                    val shown = ProactiveOverlay.showDice(
+                        dice = diceNum,
+                        name = name,
+                        ask = ask,
+                        anchor = anchor,
+                        appLabel = appLabel,
+                        geminiPrompt = geminiPrompt,
+                        onSubmitThought = { thought, reply ->
+                            fetchPluginRoute(
+                                routeCallback { saveRes ->
+                                    val saved = saveRes["ok"] == true
+                                    reply(saved, (saveRes["error"] as? Map<*, *>)?.get("message") as? String)
+                                },
+                                "POST",
+                                "/dice/thought",
+                                linkedMapOf<String, Any?>("dice" to diceNum, "name" to name, "ask" to ask, "thought" to thought, "appLabel" to appLabel),
+                            )
+                        },
+                        onReroll = { triggerShakeDice(manual = true) },
+                    )
+                    if (!shown && manual) {
+                        Toast.makeText(app, "🎲 骰$diceNum · $name：$ask（开启悬浮窗权限可直接在任意界面弹出）", Toast.LENGTH_LONG).show()
+                    }
+                    done?.invoke(linkedMapOf<String, Any?>(
+                        "ok" to true,
+                        "shown" to shown,
+                        "dice" to diceNum,
+                        "name" to name,
+                        "ask" to ask,
+                        "anchor" to anchor,
+                    ))
+                }
+            },
+            "POST",
+            "/dice/roll",
+            linkedMapOf<String, Any?>("excludeDice" to lastDiceId, "manual" to manual, "appLabel" to appLabel),
+        )
     }
 }

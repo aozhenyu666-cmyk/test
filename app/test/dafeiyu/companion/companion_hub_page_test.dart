@@ -22,7 +22,31 @@ class _FakeHubChannel extends ProactiveChannel {
 
   int tickCalls = 0;
   int focusCalls = 0;
+  int rollDiceCalls = 0;
+  int importMemoryCalls = 0;
+  bool shakeEnabled = true;
   GuardianPairingStatus guardian = const GuardianPairingStatus(installed: true, paired: false, sameCert: false);
+
+  @override
+  Future<Map<String, dynamic>?> shakeDiceStatus() async => {'enabled': shakeEnabled, 'lastDice': 3};
+
+  @override
+  Future<bool?> setShakeDice(bool enabled) async {
+    shakeEnabled = enabled;
+    return shakeEnabled;
+  }
+
+  @override
+  Future<Map<String, dynamic>?> rollDiceNow() async {
+    rollDiceCalls++;
+    return {'ok': true, 'dice': 4, 'name': '关键提问', 'ask': '哪个未知条件变了会翻盘？'};
+  }
+
+  @override
+  Future<Map<String, dynamic>?> importMemoryNow({List<String>? facts}) async {
+    importMemoryCalls++;
+    return {'ok': true, 'imported': 6, 'totalFacts': 12, 'createdFiles': const <String>[], 'kbDir': '/sdcard/Vault/大肥鱼'};
+  }
 
   @override
   Future<GuardianPairingStatus?> guardianStatus() async => guardian;
@@ -144,5 +168,19 @@ void main() {
 
     expect(find.byType(CompanionHubPage), findsOneWidget);
     expect(find.text('大肥鱼中枢'), findsWidgets);
+  });
+
+  testWidgets('triggers six-dice roll and Obsidian memory import', (tester) async {
+    final ch = _FakeHubChannel();
+    await pumpPhone(tester, CompanionHubPage(channel: ch));
+
+    await tester.tap(find.text('摇一骰 · 轻思考微干预'));
+    await settlePhone(tester);
+    expect(ch.rollDiceCalls, 1);
+
+    await tester.scrollUntilVisible(find.text('生成记忆模板并导入 Obsidian 数据库'), 200);
+    await tester.tap(find.text('生成记忆模板并导入 Obsidian 数据库'));
+    await settlePhone(tester);
+    expect(ch.importMemoryCalls, 1);
   });
 }

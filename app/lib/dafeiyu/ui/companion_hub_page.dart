@@ -54,6 +54,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   Map<String, Object?>? _planDay;
   GuardianPairingStatus? _guardian;
   Map<String, dynamic>? _phoneStorage;
+  Map<String, dynamic>? _shakeDice;
   int _clockCount = 0;
 
   @override
@@ -91,12 +92,74 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     final extras = await Future.wait<Object?>([
       _channel.phoneStorageStatus().catchError((_) => null),
       _channel.clockList().catchError((_) => const <Map<String, dynamic>>[]),
+      _channel.shakeDiceStatus().catchError((_) => null),
     ]);
     if (!mounted) return;
     setState(() {
       _phoneStorage = extras[0] is Map<String, dynamic> ? extras[0] as Map<String, dynamic> : null;
       _clockCount = extras[1] is List ? (extras[1] as List).length : 0;
+      _shakeDice = extras[2] is Map<String, dynamic> ? extras[2] as Map<String, dynamic> : null;
     });
+  }
+
+  Future<void> _rollDiceNow() async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      final res = await _channel.rollDiceNow();
+      if (!mounted) return;
+      final dice = res?['dice'];
+      final name = res?['name'] ?? '';
+      final ask = res?['ask'] ?? '';
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            dice != null ? '🎲 骰$dice · $name：$ask' : '已触发六骰思维微干预',
+          ),
+        ),
+      );
+      unawaited(_refreshExtras());
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  Future<void> _toggleShakeDice() async {
+    if (_actionBusy) return;
+    final current = _shakeDice?['enabled'] != false;
+    setState(() => _actionBusy = true);
+    try {
+      final next = await _channel.setShakeDice(!current);
+      if (!mounted) return;
+      unawaited(_refreshExtras());
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text((next ?? !current) ? '已开启手机「摇一摇六骰子」触发器' : '已暂停摇一摇六骰触发器')),
+      );
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  Future<void> _importMemoryNow() async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      final res = await _channel.importMemoryNow();
+      if (!mounted) return;
+      final imported = res?['imported'] ?? 0;
+      final total = res?['totalFacts'] ?? 0;
+      final created = res?['createdFiles'] is List ? (res!['createdFiles'] as List).length : 0;
+      final kbDir = res?['kbDir'] ?? '';
+      final msg = res?['ok'] == true
+          ? '记忆库已同步：新增 $imported 条（共 $total 条可用），新建模板 $created 份\n目录：$kbDir'
+          : '请先开启伴侣引擎与存储权限后再导入记忆';
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 5)),
+      );
+      unawaited(_refresh());
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
   }
 
   Future<void> _enableStorage() async {
@@ -376,6 +439,31 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               subtitleMaxLines: 2,
               onTap: _actionBusy ? null : () => unawaited(_triggerTick()),
             ),
+            ListPageRow(
+              icon: AppIcons.today,
+              iconColor: Theme.of(context).colorScheme.primary,
+              title: '摇一骰 · 轻思考微干预',
+              subtitle: (_shakeDice?['enabled'] != false)
+                  ? '摇一摇手机即出六骰悬浮窗；也可以点这里马上摇一骰'
+                  : '摇一摇触发已关闭，点此先手动摇一骰（可随时开启）',
+              subtitleMaxLines: 2,
+              value: _shakeDice?['lastDice'] is num && (_shakeDice!['lastDice'] as num) > 0
+                  ? '上次 骰${_shakeDice!['lastDice']}'
+                  : '摇一骰',
+              onTap: _actionBusy ? null : () => unawaited(_rollDiceNow()),
+            ),
+            ListPageRow(
+              icon: AppIcons.verified,
+              iconColor: (_shakeDice?['enabled'] != false) ? colors.success : null,
+              title: '摇一摇六骰悬浮监听',
+              subtitle: '亮屏时轻晃两下手机自动弹出六骰思考卡片（不占权限、可复制给 Gemini）',
+              subtitleMaxLines: 2,
+              badge: StatusChip(
+                tone: (_shakeDice?['enabled'] != false) ? StatusTone.ok : StatusTone.idle,
+                label: (_shakeDice?['enabled'] != false) ? '监听中' : '已暂停',
+              ),
+              onTap: _actionBusy ? null : () => unawaited(_toggleShakeDice()),
+            ),
           ],
         ),
         const SizedBox(height: 16),
@@ -495,6 +583,15 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
                 label: (_phoneStorage?['granted'] == true) ? '已挂载' : '需授权',
               ),
               onTap: _actionBusy ? null : () => unawaited(_enableStorage()),
+            ),
+            ListPageRow(
+              icon: AppIcons.files,
+              iconColor: Theme.of(context).colorScheme.primary,
+              title: '生成记忆模板并导入 Obsidian 数据库',
+              subtitle: '在 大肥鱼/导入/ 生成模板数据库文件并一键去重写入记忆库，让鱼丸和鲸澜马上记住你',
+              subtitleMaxLines: 2,
+              value: '立即导入',
+              onTap: _actionBusy ? null : () => unawaited(_importMemoryNow()),
             ),
             ListPageRow(
               icon: AppIcons.restart,

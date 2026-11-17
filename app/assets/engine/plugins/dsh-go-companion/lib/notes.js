@@ -518,7 +518,7 @@ export function writeBidirectionalWikiLinks({
   })
   const backlinkTag = wikiLink(title)
   const backlinkedFiles = []
-  for (const c of picks) {
+    for (const c of picks) {
     const rawRel = String(c?.path || c?.rel || '').trim()
     if (!rawRel) continue
     if (PRIVATE_DIRS.some((p) => rawRel.includes(p))) continue
@@ -536,5 +536,186 @@ export function writeBidirectionalWikiLinks({
     }
   }
   return { notePath, backlinkedFiles, forwardLinks: linkTargets.map((t) => wikiLink(t)) }
+}
+
+export const IMPORT_DIR = '导入'
+
+const STARTER_SELF_MD = `# 我.md（个人目标、硬安排与红线）
+
+> 这份文件决定「鱼丸」和「鲸澜」怎么对你。**只写事实与硬规则**，你随时在 Obsidian 修改后会自动同步进她们的记忆库。
+
+## 1. 当前阶段核心目标
+- 📌 核心主线：（把你最近 1–3 个月最重要的 1~2 件事写在这里）
+- 📌 每日最低交付：（例如：每天至少完成 2 局 45 分钟核心推进 / 输出 1 份可执行记录）
+
+## 2. 每日硬作息与红线
+- 📌 睡眠红线：晚上 23:30 后不开高刺激短视频/游戏，强制收工
+- 📌 高危诱因：刚打开手机的前 3 分钟、切出工作软件后漫无目的点中立软件轮流刷 10 分钟
+- 📌 必须锁死的软件：（写下你最容易失控的娱乐软件名称）
+
+## 3. 对鱼丸与鲸澜的要求
+- 鱼丸（妹妹）：当我卡住或摇骰子时，用轻快但具体的一句提问拉回注意力，别泛泛安慰
+- 鲸澜（姐姐）：发现我在多个中立软件间来回切换凑时长时，直接戳破并把问题收窄到一个最小动作
+`
+
+const STARTER_JUDGE_MD = `# 判断.md（调度与验收偏好）
+
+> 这里放系统与两姐妹对你的判别准则，你也可以随时增删改。
+
+- 对「走神切换」的判断：连续在非白名单/中立软件之间高频切换超过 5 次，比单纯打开一次娱乐更值得触发六骰提问
+- 对 Gemini Live 的要求：进入语音连麦前先带 1 个明确问题或六骰视角，聊完必须留下一句自己复述的结论
+- 弹性豁免原则：真正必要的查资料、工具软件、紧急联系不封死，但超时必须交一句当前产出的说明
+`
+
+const STARTER_IMPORT_README_MD = `# 如何往两姐妹记忆库导入你的个人资料
+
+把任何你想让「鱼丸」和「鲸澜」长期记住的笔记（Markdown \`.md\` 文件）放到当前目录 \`大肥鱼/导入/\` 里：
+
+1. 每条要记住的事实写成 \`- \` 开头的列表项（最好每条 10~120 字，说清一件事）。
+2. 在前面加上 \`📌 \` 的条目会作为**高优常驻核心记忆**直接进入每次对话上下文。
+3. 支持你把个人经历、学习进度、错题规律、项目背景、情绪触发点分文件写（比如 \`我的项目.md\`、\`习惯规律.md\`、\`专业知识.md\`）。
+4. 放好后，在 App「大肥鱼中枢 → 同步 Obsidian 记忆与模板」点一下，或者重启插件，就会自动去重写入本地 SQLite 记忆库（不会读取 \`日记/\`、\`Diary/\`、\`私密/\` 等隐私目录）。
+`
+
+const STARTER_IMPORT_MEMORY_MD = `# 个人记忆库模板（可自由复制或改写）
+
+> 下面这些条目是给你做示范与打底的。你可以直接改掉括号里的内容，也可以在下面继续新增 \`- \` 条目。
+
+## 个人画像与思维习惯
+- 📌 我需要外置的工作记忆骨架（例如六骰提问），避免一开口就想到哪说到哪
+- 我容易在「无明显任务边界的休息间隙」被本能接管注意力，越是疲惫越需要先写一句再决定要不要休息
+- 和 AI 语音对话时，如果我不先给定锚点，很容易顺着 AI 的附和发散偏航
+
+## 当前重要背景与关注主题
+- 📌 我正在使用大肥鱼 + Obsidian 构建个人的行动监督与思维训练闭环
+- 平时常用的深度工具是 Gemini Live 与 Obsidian，高危分散注意力场景是短视频与多软件轮切
+`
+
+/**
+ * 在 kbDir（Obsidian 的 大肥鱼/ 或回退目录）生成开箱即用的个人模板数据库文件。
+ * 严格幂等：只补齐缺失（或全空）的文件，绝不覆盖用户已经写过的内容。
+ * @returns {{ok:boolean, kbDir:string, importDir:string, createdFiles:string[], existingFiles:string[]}}
+ */
+export function ensureStarterVaultFiles(kb, now = Date.now()) {
+  if (!kb) return { ok: false, kbDir: '', importDir: '', createdFiles: [], existingFiles: [] }
+  const importDir = join(kb, IMPORT_DIR)
+  try {
+    mkdirSync(importDir, { recursive: true })
+  } catch {
+    return { ok: false, kbDir: kb, importDir, createdFiles: [], existingFiles: [] }
+  }
+  const files = [
+    [join(kb, SELF_FILE), STARTER_SELF_MD],
+    [join(kb, JUDGE_FILE), STARTER_JUDGE_MD],
+    [join(importDir, 'README_导入记忆说明.md'), STARTER_IMPORT_README_MD],
+    [join(importDir, '记忆模板_个人画像与偏好.md'), STARTER_IMPORT_MEMORY_MD],
+  ]
+  const createdFiles = []
+  const existingFiles = []
+  const stamp = `<!-- 初始化时间 ${ymd(now)} -->\n`
+  for (const [abs, body] of files) {
+    try {
+      const cur = existsSync(abs) ? readFileSync(abs, 'utf8').trim() : ''
+      if (!cur) {
+        writeFileSync(abs, stamp + body, 'utf8')
+        createdFiles.push(abs)
+      } else {
+        existingFiles.push(abs)
+      }
+    } catch {
+      // skip single file failure
+    }
+  }
+  return { ok: true, kbDir: kb, importDir, createdFiles, existingFiles }
+}
+
+/**
+ * 从 kbDir 下的 我.md、判断.md、导入/*.md、记忆*.md 提取可写入 fish-memory.sqlite 的结构化事实条目。
+ * 自动跳过隐私目录、占位空行、说明文档；`📌` 或 我.md/判断.md 条目标记为高优先级常驻（pinned=1, importance=4），其余为 importance=2。
+ * @returns {Array<{text:string, source:string, pinned:number, importance:number, kind:string}>}
+ */
+export function collectVaultMemoryFacts(kb, { limit = 160 } = {}) {
+  if (!kb || !existsSync(kb)) return []
+  const sources = []
+  const pushFile = (abs, priorityCore) => {
+    if (!existsSync(abs)) return
+    const name = abs.split(/[\\/]/).pop() || ''
+    if (/^README/i.test(name) || isPrivateName(abs)) return
+    sources.push({ abs, priorityCore, name })
+  }
+  pushFile(join(kb, SELF_FILE), true)
+  pushFile(join(kb, JUDGE_FILE), true)
+  const importDir = join(kb, IMPORT_DIR)
+  if (existsSync(importDir)) {
+    try {
+      for (const f of walkVault(importDir, { maxDepth: 3, maxFiles: 80 })) {
+        pushFile(f.path, false)
+      }
+    } catch {
+      // ignore
+    }
+  }
+  try {
+    for (const e of readdirSync(kb, { withFileTypes: true })) {
+      if (!e.isFile() || !e.name.endsWith('.md')) continue
+      if (e.name === '思维碎记.md' || (e.name.startsWith('记忆') && e.name !== '记忆.md')) {
+        pushFile(join(kb, e.name), false)
+      }
+    }
+  } catch {
+    // ignore
+  }
+  const seen = new Set()
+  const out = []
+  const cap = Math.max(10, Math.min(400, Number(limit) || 160))
+  for (const src of sources) {
+    const raw = readText(src.abs, 24_000).replace(/^---[\s\S]*?---\s*/, '')
+    if (!raw) continue
+    for (const rawLine of raw.split(/\r?\n/)) {
+      if (out.length >= cap) break
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#') || line.startsWith('>') || line.startsWith('<!--') || line.startsWith('```')) continue
+      const bullet = line.match(/^(?:[-*+]|\d+[.)])\s+(.+)$/)
+      if (!bullet) continue
+      let text = bullet[1].trim()
+      const hasPin = text.includes('📌')
+      text = text.replace(/📌/g, '').replace(/\s+/g, ' ').trim()
+      // 跳过纯待填占位示例行
+      if (text.length < 8 || /（把你最近|（写下你最/.test(text)) continue
+      text = text.slice(0, 220)
+      const norm = text.toLowerCase()
+      if (seen.has(norm)) continue
+      seen.add(norm)
+      const pinned = src.priorityCore || hasPin ? 1 : 0
+      out.push({
+        text,
+        source: `obsidian:${src.name}`,
+        pinned,
+        importance: pinned ? 4 : 2,
+        kind: src.priorityCore ? 'rule' : 'fact',
+      })
+    }
+  }
+  return out
+}
+
+/** 追加一条六骰实时思考微记录到 大肥鱼/思维碎记.md。 */
+export function appendDiceThought(kb, { dice = 1, name = '', thought = '' } = {}, now = Date.now(), tz = 'Asia/Shanghai') {
+  const cleanText = clean(thought, 260)
+  if (!kb || !cleanText) return ''
+  try {
+    mkdirSync(kb, { recursive: true })
+    const file = join(kb, '思维碎记.md')
+    if (!existsSync(file)) {
+      writeFileSync(file, '# 思维碎记（摇一摇六骰干预记录）\n\n> 每次摇骰后记下的一句真实想法，会自动同步给鱼丸与鲸澜。\n\n', 'utf8')
+    }
+    const day = dayString(now, tz)
+    const time = hm(now, tz)
+    const label = dice ? `骰${dice}·${name || '思考'}` : (name || '思考')
+    appendFileSync(file, `- ${day} ${time} [${label}] ${cleanText}\n`, 'utf8')
+    return file
+  } catch {
+    return ''
+  }
 }
 

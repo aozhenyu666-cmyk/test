@@ -690,6 +690,62 @@ class ProactiveChannel {
       return false;
     }
   }
+
+  /// 读取摇一摇六骰监听状态。
+  Future<Map<String, dynamic>?> shakeDiceStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('shakeDiceStatus');
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 开关手机摇一摇六骰子悬浮窗触发器。
+  Future<bool?> setShakeDice(bool enabled) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('setShakeDice', {'enabled': enabled});
+      if (raw is bool) return raw;
+      return null;
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 立即手动摇一颗六骰子并弹出思维微干预悬浮窗。
+  Future<Map<String, dynamic>?> rollDiceNow() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('rollDiceNow');
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 生成 Obsidian 个人模板数据库文件，并将 导入/*.md、我.md、判断.md 同步进 SQLite 记忆库。
+  Future<Map<String, dynamic>?> importMemoryNow({List<String>? facts}) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>(
+        'importMemoryNow',
+        facts != null ? <String, Object?>{'facts': facts} : const <String, Object?>{},
+      );
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
 }
 
 /// 大肥鱼与独立守护 App「大肥鱼哨兵」之间的互信绑定状态。

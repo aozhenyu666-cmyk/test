@@ -542,6 +542,22 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     final colors = DshColors.of(context);
     final headerActions = [
       IconButton(
+        tooltip: '摇一颗六骰思考干预',
+        icon: const Icon(AppIcons.today),
+        onPressed: _busy
+            ? null
+            : () async {
+                final res = await _channel.rollDiceNow();
+                if (!mounted) return;
+                final d = res?['dice'];
+                final n = res?['name'] ?? '';
+                final a = res?['ask'] ?? '';
+                setState(() {
+                  _banner = d != null ? '🎲 骰$d · $n：$a' : '已唤醒六骰思维微干预浮窗';
+                });
+              },
+      ),
+      IconButton(
         tooltip: '大肥鱼中枢与诊断',
         icon: const Icon(AppIcons.settings),
         onPressed: () => unawaited(CompanionHubPage.open(context, channel: _channel)),

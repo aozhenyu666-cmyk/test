@@ -294,6 +294,17 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.setEnabled(context, on)
                 result.success(io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(context))
             }
+            "shakeDiceStatus" -> result.success(ProactiveRuntime.shakeDiceStatus(context))
+            "setShakeDice" -> {
+                val on = call.argument<Boolean>("enabled") != false
+                result.success(ProactiveRuntime.setShakeDiceEnabled(context, on))
+            }
+            "rollDiceNow" -> ProactiveRuntime.triggerShakeDice(manual = true) { res -> result.success(res) }
+            "importMemoryNow" -> {
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/memory/import", body)
+            }
             else -> result.notImplemented()
         }
     }

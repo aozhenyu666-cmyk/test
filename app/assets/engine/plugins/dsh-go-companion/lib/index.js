@@ -121,7 +121,8 @@ import { createPresetRuntime } from './presetwire.js'
 import { createBrainRuntime } from './brainwire.js'
 import { buildCodex } from './codex.js'
 import { classify as classifyAnswer } from './reply.js'
-import { JUDGE_FILE, SELF_FILE, appendVerdictDaily, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch, vaultPick } from './notes.js'
+import { JUDGE_FILE, SELF_FILE, appendDiceThought, appendVerdictDaily, collectVaultMemoryFacts, ensureStarterVaultFiles, kbDir, kbWrite, knowledgeLines, longPlanDigest, scanUnfinished, syncVerdicts, vaultRecentNotes, vaultSearch, vaultPick } from './notes.js'
+import { rollDiceCard } from './six_dice.js'
 import { MORNING_CAP_MS, NIGHT_LOCK_TO, REVIEW_CAP_MS, ROLL_MS, absentAnchors, closeGate, localMinute, rhythmLines, trackRhythm } from './rhythm.js'
 import {
   FOLLOWUP_CAP_MS, FOLLOWUP_PENALTY, STANDBY_LOCK_MS, addObligation, checkVerdict, clearObligation, closeLock, followupView,
@@ -2446,6 +2447,7 @@ export function apply(ctx) {
       grantTaskLeaseTool('strategist'),
       declareIntentTool('global'),
       appUsageReportTool('global'),
+      rollSixDiceTool('global'),
     ]) {
       try {
         const offExtra = tools.register(def)
@@ -4440,6 +4442,206 @@ export function apply(ctx) {
     }
   }
 
+  let lastRolledDice = 0
+
+  function insertFactsIntoMemoryDb(items, now = Date.now()) {
+    if (!items.length) return { imported: 0, skipped: 0, totalFacts: 0 }
+    const db = openBoutsDb(memoryPath())
+    if (!db) return { imported: 0, skipped: items.length, totalFacts: 0 }
+    try {
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS facts (id TEXT PRIMARY KEY, scope TEXT NOT NULL, text TEXT NOT NULL, kind TEXT, ' +
+        'importance INTEGER, pinned INTEGER, key TEXT, tags TEXT, created_at INTEGER, updated_at INTEGER, ' +
+        'last_hit_at INTEGER, hits INTEGER, hit_bonus REAL, expires_at INTEGER, source TEXT, status TEXT, ' +
+        'superseded_by TEXT, superseded_reason TEXT, corrected_from TEXT, forget_reason TEXT)',
+      )
+      const colSet = new Set(db.prepare('PRAGMA table_info(facts)').all().map((c) => c.name))
+      const hasFts = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'facts_fts'").all().length > 0
+      const existingRows = db.prepare("SELECT text FROM facts WHERE status = 'active'").all()
+      const existingSet = new Set(existingRows.map((r) => String(r.text || '').replace(/\s+/g, ' ').trim().toLowerCase()))
+
+      const candidateCols = [
+        'id', 'scope', 'text', 'kind', 'importance', 'pinned', 'key', 'tags',
+        'triggers', 'scene_tags', 'created_at', 'updated_at', 'last_hit_at', 'hits',
+        'hit_bonus', 'expires_at', 'source', 'status', 'superseded_by',
+        'superseded_reason', 'corrected_from', 'forget_reason',
+      ]
+      const insertCols = candidateCols.filter((c) => colSet.has(c))
+      const stmt = db.prepare(`INSERT INTO facts (${insertCols.join(', ')}) VALUES (${insertCols.map(() => '?').join(', ')})`)
+      const ftsStmt = hasFts ? db.prepare('INSERT INTO facts_fts (id, scope, body) VALUES (?, ?, ?)') : null
+
+      let imported = 0
+      let skipped = 0
+      for (const it of items) {
+        const cleanText = String(it?.text || '').replace(/\s+/g, ' ').trim().slice(0, 220)
+        if (!cleanText) { skipped++; continue }
+        const norm = cleanText.toLowerCase()
+        if (existingSet.has(norm)) { skipped++; continue }
+        existingSet.add(norm)
+        const id = 'imp-' + randomUUID()
+        const src = String(it.source || 'obsidian').slice(0, 60)
+        const rowMap = {
+          id,
+          scope: 'global',
+          text: cleanText,
+          kind: it.kind || 'fact',
+          importance: Number(it.importance) || 2,
+          pinned: it.pinned ? 1 : 0,
+          key: '',
+          tags: JSON.stringify([src]),
+          triggers: '[]',
+          scene_tags: '[]',
+          created_at: now,
+          updated_at: now,
+          last_hit_at: 0,
+          hits: 0,
+          hit_bonus: 0,
+          expires_at: 0,
+          source: src,
+          status: 'active',
+          superseded_by: '',
+          superseded_reason: '',
+          corrected_from: '',
+          forget_reason: '',
+        }
+        stmt.run(...insertCols.map((c) => rowMap[c]))
+        if (ftsStmt) {
+          try { ftsStmt.run(id, 'global', cleanText) } catch {}
+        }
+        imported++
+      }
+      const totalRow = db.prepare("SELECT COUNT(*) AS cnt FROM facts WHERE status = 'active'").get()
+      return { imported, skipped, totalFacts: Number(totalRow?.cnt) || existingSet.size }
+    } finally {
+      try { db.close() } catch {}
+    }
+  }
+
+  function importVaultMemoriesRoute(input = {}) {
+    const now = Date.now()
+    const targetKb = kbDir(notesDir(), home())
+    const starter = ensureStarterVaultFiles(targetKb, now)
+    const extraFacts = Array.isArray(input?.facts)
+      ? input.facts.map((t) => (typeof t === 'string'
+        ? { text: t, source: 'manual-import', pinned: t.includes('📌') ? 1 : 0, importance: t.includes('📌') ? 4 : 2, kind: 'fact' }
+        : t))
+      : []
+    const vaultFacts = collectVaultMemoryFacts(targetKb)
+    const combined = [...vaultFacts, ...extraFacts]
+    const dbRes = insertFactsIntoMemoryDb(combined, now)
+    if (dbRes.imported > 0 || starter.createdFiles.length > 0) {
+      record({
+        state: 'memory-import',
+        at: now,
+        imported: dbRes.imported,
+        created: starter.createdFiles.length,
+        totalFacts: dbRes.totalFacts,
+      })
+    }
+    return {
+      v: 1,
+      ok: starter.ok,
+      kbDir: targetKb,
+      importDir: starter.importDir,
+      notesDir: notesDir() || '',
+      createdFiles: starter.createdFiles,
+      existingFiles: starter.existingFiles,
+      scanned: combined.length,
+      imported: dbRes.imported,
+      skipped: dbRes.skipped,
+      totalFacts: dbRes.totalFacts,
+    }
+  }
+
+  function diceRollRoute(input = {}) {
+    const now = Date.now()
+    let topic = String(input?.topic || '').trim()
+    let anchor = String(input?.anchor || '').trim()
+    const appLabel = String(input?.appLabel || lastPhone?.label || lastPhone?.app || '').trim()
+    let db = null
+    try {
+      db = openMemoryDb(memoryPath())
+      if (db) {
+        if (!topic) {
+          const running = live?.official?.view?.()
+          if (running?.title || running?.protocolId) topic = String(running.title || running.protocolId)
+        }
+        if (!anchor) {
+          const cand = loadCandidates(db, { sessionId: config.sessionId, now })
+          const facts = backgroundFacts(cand, 6)
+          if (facts.length) anchor = facts[Math.floor(Math.random() * facts.length)]
+        }
+      }
+    } catch {
+      // fallback without memory anchor
+    } finally {
+      try { db?.close?.() } catch {}
+    }
+    const card = rollDiceCard({
+      excludeDice: input?.excludeDice ?? lastRolledDice,
+      topic,
+      appLabel,
+      anchor,
+      seed: input?.seed ?? null,
+    })
+    lastRolledDice = card.dice
+    record({
+      state: 'dice-roll',
+      at: now,
+      dice: card.dice,
+      name: card.name,
+      manual: input?.manual !== false,
+      app: lastPhone?.app || '',
+    })
+    return { v: 1, ok: true, ...card }
+  }
+
+  function diceThoughtRoute(input = {}) {
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const thought = String(input?.thought || input?.text || '').replace(/\s+/g, ' ').trim().slice(0, 300)
+    if (!thought) return { v: 1, ok: false, error: { code: 'empty', message: 'thought is empty' } }
+    const dice = Number(input?.dice) || lastRolledDice || 1
+    const name = String(input?.name || '').trim()
+    const appLabel = String(input?.appLabel || lastPhone?.label || '').trim()
+    record({ state: 'dice-thought', at: now, dice, name, text: thought, appLabel })
+    const noteFile = appendDiceThought(kbDir(notesDir(), home()), { dice, name, thought }, now, tz)
+    const dbRes = insertFactsIntoMemoryDb([
+      {
+        text: `[六骰思考·骰${dice}${name ? ' ' + name : ''}] ${thought}`.slice(0, 220),
+        source: 'six-dice',
+        pinned: 0,
+        importance: 2,
+        kind: 'thought',
+      },
+    ], now)
+    return { v: 1, ok: true, saved: true, dice, name, text: thought, noteFile, imported: dbRes.imported }
+  }
+
+  function rollSixDiceTool(role) {
+    return {
+      name: 'roll_six_dice',
+      description: '帮用户摇一颗「六骰思维骰子」（1事实提取/2预判推演/3联想比较/4关键提问/5依据与结论/6替代解释），结合当前记忆锚点生成一句防走神微干预问题，避免代答。',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: '当前讨论主题或任务（可选）' },
+          anchor: { type: 'string', description: '指定记忆/笔记锚点（可选）' },
+        },
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args) => {
+        const card = diceRollRoute({ topic: args?.topic || '', anchor: args?.anchor || '', manual: true })
+        return {
+          ok: true,
+          text: `🎲 摇出【骰${card.dice} · ${card.name}】${card.anchor ? '（锚点：' + card.anchor + '）' : ''}\n问题：${card.ask}`,
+          card,
+        }
+      },
+    }
+  }
+
   function predictTool(role) {
     return {
       name: 'submit_prediction',
@@ -6362,7 +6564,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -6423,6 +6625,12 @@ export function apply(ctx) {
         if (path === '/event') return send(res, 200, eventRoute(body.value))
         if (path === '/session') return send(res, 200, sessionRoute(body.value))
         if (path === '/bouts') return send(res, 200, await boutsRoute(body.value))
+        if (path === '/dice/roll') return send(res, 200, diceRollRoute(body.value || {}))
+        if (path === '/dice/thought') {
+          const out = diceThoughtRoute(body.value || {})
+          return send(res, out.ok ? 200 : 400, out)
+        }
+        if (path === '/memory/import') return send(res, 200, importVaultMemoriesRoute(body.value || {}))
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
@@ -6699,6 +6907,8 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bouts') return send(res, 200, boutsGetRoute())
       if (req.method === 'GET' && path === '/usage/report') return send(res, 200, usageReportView())
+      if (req.method === 'GET' && path === '/dice/roll') return send(res, 200, diceRollRoute({ manual: false }))
+      if (req.method === 'GET' && path === '/memory/import') return send(res, 200, importVaultMemoriesRoute({}))
       if (req.method === 'GET' && path === '/clock') return send(res, 200, { v: 1, ok: true, tasks: clockKernel.list() })
       if (req.method === 'GET' && path === '/plan/day') return send(res, 200, planDayRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/brain') return send(res, 200, brainRoute({ action: 'view' }))
@@ -8298,6 +8508,19 @@ export function apply(ctx) {
     )
     console.error('[companion] routes ' + PREFIX)
   })
+
+  // 启动时确保 Obsidian 个人模板数据库文件就位，并把导入目录里的个人记忆条目自动同步进 SQLite（不阻塞插件加载）。
+  const initImportTimer = setTimeout(() => {
+    try {
+      const r = importVaultMemoriesRoute({})
+      if (r.imported > 0 || r.createdFiles.length > 0) {
+        console.error('[companion] memory auto-sync: imported=' + r.imported + ' created=' + r.createdFiles.length)
+      }
+    } catch {
+      // ignore startup import failure
+    }
+  }, 800)
+  initImportTimer.unref?.()
 }
 
 function mergeConfig(current, body) {

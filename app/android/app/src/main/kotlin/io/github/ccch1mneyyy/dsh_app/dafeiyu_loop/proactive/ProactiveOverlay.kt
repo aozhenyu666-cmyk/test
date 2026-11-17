@@ -1,5 +1,7 @@
 package io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
@@ -62,6 +64,7 @@ object ProactiveOverlay {
     private val main = Handler(Looper.getMainLooper())
     private var app: Context? = null
     private val live = LinkedHashMap<String, Card>()
+    private var liveDice: DiceCard? = null
 
     fun install(context: Context) {
         app = context.applicationContext
@@ -107,9 +110,55 @@ object ProactiveOverlay {
     fun withdrawAll() {
         live.values.toList().forEach { it.destroy() }
         live.clear()
+        dismissDice()
     }
 
     fun isShowing(token: String) = live.containsKey(token)
+
+    /** 摇一摇六骰子轻干预悬浮窗：独立于主动发球事件，随时可摇、可记一句思考、可复制话术切去 Gemini。 */
+    fun showDice(
+        dice: Int,
+        name: String,
+        ask: String,
+        anchor: String = "",
+        appLabel: String = "",
+        geminiPrompt: String = "",
+        onSubmitThought: (String, (Boolean, String?) -> Unit) -> Unit,
+        onReroll: () -> Unit,
+        onClose: () -> Unit = {},
+    ): Boolean {
+        val context = app ?: return false
+        dismissDice()
+        val host = host(context) ?: return false
+        val card = DiceCard(
+            app = context,
+            context = host.first,
+            type = host.second,
+            dice = dice,
+            name = name,
+            ask = ask,
+            anchor = anchor,
+            appLabel = appLabel,
+            geminiPrompt = geminiPrompt,
+            onSubmitThought = onSubmitThought,
+            onReroll = onReroll,
+            onClose = onClose,
+        )
+        return try {
+            card.attach()
+            liveDice = card
+            true
+        } catch (e: Exception) {
+            android.util.Log.i(TAG, "dice overlay add failed: ${e.javaClass.simpleName}")
+            card.destroy()
+            false
+        }
+    }
+
+    fun dismissDice() {
+        liveDice?.destroy()
+        liveDice = null
+    }
 
     /**
      * B4 连发的后续一段：追加到同一个窗口，不重置事件状态（[Card.adopt] 是「下一球」用的，
@@ -129,6 +178,7 @@ object ProactiveOverlay {
      */
     fun yieldForLock() {
         live.values.toList().forEach { it.foldForLock() }
+        dismissDice()
     }
 
     /** The accessibility service's own window context when it is on; else the overlay permission. */
@@ -648,4 +698,264 @@ object ProactiveOverlay {
 
     /** 回应窗口 20 分钟：到点收成气泡，不删掉。 */
     private const val COLLAPSE_AFTER_MS = 20 * 60_000L
+    private const val DICE_IDLE_TIMEOUT_MS = 3 * 60_000L
+
+    private class DiceCard(
+        private val app: Context,
+        private val context: Context,
+        private val type: Int,
+        private val dice: Int,
+        private val name: String,
+        private val ask: String,
+        private val anchor: String,
+        private val appLabel: String,
+        private val geminiPrompt: String,
+        private val onSubmitThought: (String, (Boolean, String?) -> Unit) -> Unit,
+        private val onReroll: () -> Unit,
+        private val onClose: () -> Unit,
+    ) {
+        private val palette = OverlayPalette.of(context)
+        private val wm = context.getSystemService(WindowManager::class.java)
+        private var root: View? = null
+        private var params: WindowManager.LayoutParams? = null
+        private var input: EditText? = null
+        private var statusView: TextView? = null
+        private var submitBtn: TextView? = null
+        private var typing = false
+        private var busy = false
+        private val idleTimeout = Runnable { close() }
+
+        fun attach() {
+            val view = buildView()
+            val p = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                y = context.dp(46f)
+                title = "大肥鱼六骰微干预"
+                softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+                if (Build.VERSION.SDK_INT >= 28) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+                if (Build.VERSION.SDK_INT >= 30) setFitInsetsTypes(0)
+                val maxW = (context.resources.displayMetrics.widthPixels * 0.92f).toInt()
+                width = minOf(maxW, context.dp(420f))
+            }
+            root = view
+            params = p
+            wm!!.addView(view, p)
+            main.postDelayed(idleTimeout, DICE_IDLE_TIMEOUT_MS)
+        }
+
+        private fun buildView(): View {
+            val card = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                val pad = context.dp(14f)
+                setPadding(pad, context.dp(12f), pad, context.dp(10f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(18f).toFloat()
+                    setColor(palette.fill)
+                    setStroke(context.dp(1.5f).coerceAtLeast(1), palette.accent)
+                }
+            }
+
+            val topRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            topRow.addView(TextView(context).apply {
+                text = "🎲 骰$dice · $name" + if (appLabel.isNotBlank()) "（$appLabel）" else ""
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextColor(palette.accent)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            topRow.addView(TextView(context).apply {
+                text = "收起"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(palette.muted)
+                setPadding(context.dp(8f), context.dp(4f), context.dp(4f), context.dp(4f))
+                isClickable = true
+                setOnClickListener { close() }
+            })
+            card.addView(topRow)
+
+            if (anchor.isNotBlank()) {
+                card.addView(TextView(context).apply {
+                    text = "锚点：$anchor"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextColor(palette.muted)
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                    setPadding(0, context.dp(4f), 0, 0)
+                })
+            }
+
+            card.addView(TextView(context).apply {
+                text = ask
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextColor(palette.ink)
+                setLineSpacing(0f, 1.25f)
+                setPadding(0, context.dp(6f), 0, context.dp(8f))
+            })
+
+            val status = TextView(context).apply {
+                text = ""
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(palette.accent)
+                visibility = View.GONE
+                setPadding(0, 0, 0, context.dp(6f))
+            }
+            statusView = status
+            card.addView(status)
+
+            val box = EditText(context).apply {
+                hint = "写一句当下思考（记进记忆 + Obsidian 碎记）…"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextColor(palette.ink)
+                setHintTextColor(palette.muted)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                maxLines = 3
+                setPadding(context.dp(10f), context.dp(8f), context.dp(10f), context.dp(8f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(12f).toFloat()
+                    setColor(palette.pressed)
+                }
+                setOnTouchListener { _, ev ->
+                    if (ev.action == MotionEvent.ACTION_DOWN && !typing) setTyping(true)
+                    main.removeCallbacks(idleTimeout)
+                    main.postDelayed(idleTimeout, DICE_IDLE_TIMEOUT_MS)
+                    false
+                }
+                setOnEditorActionListener { _, action, _ ->
+                    if (action == EditorInfo.IME_ACTION_DONE) { submitThought(); true } else false
+                }
+            }
+            input = box
+            card.addView(box, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+            val btnRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+                setPadding(0, context.dp(8f), 0, 0)
+            }
+            fun chip(label: String, accent: Boolean = false, onTap: () -> Unit) = TextView(context).apply {
+                text = label
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextColor(if (accent) palette.onAccent else palette.ink)
+                setPadding(context.dp(10f), context.dp(6f), context.dp(10f), context.dp(6f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(12f).toFloat()
+                    setColor(if (accent) palette.accent else palette.pressed)
+                }
+                isClickable = true
+                setOnClickListener {
+                    main.removeCallbacks(idleTimeout)
+                    main.postDelayed(idleTimeout, DICE_IDLE_TIMEOUT_MS)
+                    onTap()
+                }
+            }
+            btnRow.addView(chip("再摇一骰") {
+                if (busy) return@chip
+                onReroll()
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = context.dp(6f)
+            })
+            btnRow.addView(chip("复制给 Gemini") {
+                val clipText = geminiPrompt.ifBlank { "【骰$dice · $name】$ask" }
+                runCatching {
+                    val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("大肥鱼六骰提问", clipText))
+                    setStatus("已复制，切到 Gemini Live 粘贴即可")
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = context.dp(6f)
+            })
+            val saveBtn = chip("记一句思考", accent = true) { submitThought() }
+            submitBtn = saveBtn
+            btnRow.addView(saveBtn)
+            card.addView(btnRow)
+
+            return object : FrameLayout(context) {
+                override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                    if (event.keyCode == KeyEvent.KEYCODE_BACK && typing) {
+                        if (event.action == KeyEvent.ACTION_UP) setTyping(false)
+                        return true
+                    }
+                    return super.dispatchKeyEvent(event)
+                }
+            }.apply { addView(card) }
+        }
+
+        private fun submitThought() {
+            if (busy) return
+            val text = input?.text?.toString()?.trim().orEmpty()
+            if (text.isEmpty()) {
+                setStatus("先写几个字，哪怕一句大白话也算思考过")
+                if (!typing) setTyping(true)
+                return
+            }
+            busy = true
+            submitBtn?.alpha = 0.5f
+            setStatus("正在记入记忆库与 Obsidian 碎记…")
+            onSubmitThought(text) { ok, err ->
+                main.post {
+                    if (root == null) return@post
+                    busy = false
+                    submitBtn?.alpha = 1f
+                    if (ok) {
+                        setTyping(false)
+                        setStatus("✓ 已记录思考并同步给两姐妹")
+                        main.postDelayed({ close() }, 1_100L)
+                    } else {
+                        setStatus("写入失败：${err ?: "未知错误"}")
+                    }
+                }
+            }
+        }
+
+        private fun setStatus(msg: String?) {
+            statusView?.text = msg ?: ""
+            statusView?.visibility = if (msg.isNullOrBlank()) View.GONE else View.VISIBLE
+        }
+
+        private fun setTyping(on: Boolean) {
+            val v = root ?: return
+            val p = params ?: return
+            if (typing == on) return
+            typing = on
+            p.flags = if (on) p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            else p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            runCatching { wm?.updateViewLayout(v, p) }
+            val imm = context.getSystemService(InputMethodManager::class.java)
+            val box = input ?: return
+            if (on) {
+                box.requestFocus()
+                box.post { imm?.showSoftInput(box, InputMethodManager.SHOW_IMPLICIT) }
+            } else {
+                imm?.hideSoftInputFromWindow(box.windowToken, 0)
+                box.clearFocus()
+            }
+        }
+
+        private fun close() {
+            destroy()
+            onClose()
+        }
+
+        fun destroy() {
+            main.removeCallbacks(idleTimeout)
+            root?.let { runCatching { wm?.removeView(it) } }
+            root = null
+            if (liveDice === this) liveDice = null
+        }
+    }
 }

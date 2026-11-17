@@ -519,3 +519,44 @@ export async function evaluateStroke({
     scaffold_hints: [],
   }
 }
+
+/**
+ * 摇一摇六骰子（M2 轻量即时微干预）：随机抽一面骰（避开刚摇过的同一面），给出 1 句思考提问 + 可复制给 Gemini 的提示。
+ * @returns {{dice:number, id:string, name:string, ask:string, anchor:string, topic:string, appLabel:string, promptText:string, geminiPrompt:string}}
+ */
+export function rollDiceCard({ excludeDice = 0, topic = '', appLabel = '', anchor = '', seed = null } = {}) {
+  const all = [1, 2, 3, 4, 5, 6]
+  const excl = Number(excludeDice) || 0
+  const pool = all.filter((d) => d !== excl)
+  const picks = pool.length ? pool : all
+  const raw = seed == null ? Math.floor(Math.random() * picks.length) : Math.abs(Math.floor(Number(seed) || 0)) % picks.length
+  const dice = picks[raw]
+  const meta = SIX_DICE[dice] || SIX_DICE[1]
+  const cleanTopic = String(topic || '').replace(/\s+/g, ' ').trim().slice(0, 60)
+  const cleanApp = String(appLabel || '').replace(/\s+/g, ' ').trim().slice(0, 40)
+  const cleanAnchor = String(anchor || '').replace(/\s+/g, ' ').trim().slice(0, 100)
+  const ctxParts = []
+  if (cleanApp) ctxParts.push(`此刻在「${cleanApp}」`)
+  if (cleanTopic) ctxParts.push(`当前主线「${cleanTopic}」`)
+  if (cleanAnchor) ctxParts.push(`记忆锚点「${cleanAnchor}」`)
+  const prefix = ctxParts.length ? `${ctxParts.join(' · ')}：` : ''
+  const promptText = `${prefix}${meta.ask}`
+  const geminiPrompt = [
+    `[六骰思维干预 · 骰${dice} ${meta.name}]`,
+    cleanApp ? `当前环境：${cleanApp}` : '',
+    cleanTopic ? `当前主线：${cleanTopic}` : '',
+    cleanAnchor ? `锚点/背景：${cleanAnchor}` : '',
+    `请别直接替我给答案，用这题逼我自己思考并追问我：${meta.ask}`,
+  ].filter(Boolean).join('\n')
+  return {
+    dice,
+    id: meta.id,
+    name: meta.name,
+    ask: meta.ask,
+    anchor: cleanAnchor,
+    topic: cleanTopic,
+    appLabel: cleanApp,
+    promptText,
+    geminiPrompt,
+  }
+}
