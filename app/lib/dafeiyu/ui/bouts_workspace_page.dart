@@ -25,6 +25,7 @@ import 'intercept_page.dart';
 import 'plan_modality_page.dart';
 import 'strategy_horizons_page.dart';
 import 'usage_analytics_page.dart';
+import 'task_card.dart';
 
 enum _DetailTab { queue, protocols, clock }
 enum _HorizonTab { today, medium, long }
@@ -1714,6 +1715,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
 
     final sections = <Widget>[
       ?bannerWidget,
+      TaskCardPanel(channel: _channel),
       if (_loading)
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 40),

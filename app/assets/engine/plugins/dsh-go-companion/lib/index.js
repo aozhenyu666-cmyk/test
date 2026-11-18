@@ -154,6 +154,7 @@ import { buildLockDecision } from './lock_decision.js'
 import { driveMode, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
+import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
 import { noteExcerpts, reflectDue, reflectLines, reflectMarkdown, reflectSlot, reflectSystem, reflectUser, runReflect } from './reflect.js'
 import { resolveActiveSisterSkin } from './unified_arbiter.js'
 
@@ -2688,6 +2689,7 @@ export function apply(ctx) {
       clockManageTool('global'),
       grantTaskLeaseTool('strategist'),
       appTierTool(),
+      showCardTool('global'),
       declareIntentTool('global'),
       appUsageReportTool('global'),
       rollSixDiceTool('global'),
@@ -7114,7 +7116,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7186,6 +7188,7 @@ export function apply(ctx) {
         if (path === '/today/start') return send(res, 200, todayStartRoute(body.value || {}))
         if (path === '/today/task') return send(res, 200, todayTaskRoute(body.value || {}))
         if (path === '/rotate') return send(res, 200, rotateRoute(body.value || {}))
+        if (path === '/card') return send(res, 200, await cardRoute(body.value || {}))
         if (path === '/horizons') return send(res, 200, v4Hub.horizonsRoute(body.value || {}))
         if (path === '/bank') return send(res, 200, v4Hub.bankRoute(body.value || {}))
         if (path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
@@ -7771,9 +7774,14 @@ export function apply(ctx) {
     if (tk.event === 'start') {
       record({ state: 'takeover-start', at: now, why: tk.why, n: tk.state.count })
       commit({ aiWorkSession: { allow: takeoverAllow(), until: now + 45 * 60_000, strict: true, why: '接管：' + tk.why, by: 'takeover' } })
+      try {
+        const nextItem = planItems.filter((i) => !i.openedAt && !i.missed).sort((a, b) => Number(a.minute) - Number(b.minute))[0] || null
+        saveCard(takeoverCard({ why: tk.why, action: returnAction({ nextItem }), now }))
+      } catch {}
     } else if (tk.event === 'end') {
       record({ state: 'takeover-end', at: now, why: tk.why, minutes: Math.round((now - Number(st.takeover?.since || now)) / 60_000) })
       if (config.aiWorkSession?.by === 'takeover') commit({ aiWorkSession: null })
+      if (loadCard()?.by === 'takeover') saveCard(null)
     }
     const memo = { ...(st.memo || {}) }
     let drive = null
@@ -7901,6 +7909,78 @@ export function apply(ctx) {
     if (!h?.to || h.to !== roleSession(role)) return ''
     const turnsSince = readLedger(home(), 600).filter((e) => (e?.state === 'generated' || e?.state === 'human') && String(e.sessionId || '') === h.to && Number(e.at) >= Number(h.boundAt || h.at)).length
     return handoffLive({ ...h, at: Number(h.boundAt || h.at) }, { now, turnsSince }) ? h.text : ''
+  }
+
+  // ---------------------------------------------------------------- 2026-11-18 当下任务卡
+  const loadCard = () => readState(stateFile('card.json'), null)
+  const saveCard = (c) => writeJson(stateFile('card.json'), c)
+  const cardAppOk = (pkg) => ['work', 'dual'].includes(tierFnNow()(pkg))
+  function showCardTool(role) {
+    return {
+      name: 'show_card',
+      description: '把当下的任务画成一张卡给他看（显示在中枢和局工作台顶上）：标题、一句话目标、≤6 个步骤、倒计时分钟、交付物、验收方式、一句提示、≤3 个按钮。' +
+        '按钮只能是 start_next_bout（开今天计划里的下一局）/ connect_gemini（摇一骰带简报连 Gemini）/ open_app（app 填包名，只许工作或双用途 App）。' +
+        '说不清的任务、刚开的局、他问「我现在该干嘛」时用；同一时刻只有一张，新的盖旧的。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          goal: { type: 'string' },
+          steps: { type: 'array', items: { type: 'string' }, maxItems: 6 },
+          minutes: { type: 'integer', minimum: 1, maximum: 180 },
+          deliverable: { type: 'string' },
+          accept: { type: 'string' },
+          tip: { type: 'string' },
+          buttons: {
+            type: 'array', maxItems: 3,
+            items: { type: 'object', properties: { label: { type: 'string' }, action: { type: 'string', enum: ['start_next_bout', 'connect_gemini', 'open_app'] }, app: { type: 'string' } }, required: ['action'], additionalProperties: false },
+          },
+        },
+        required: ['title', 'steps'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const r = cleanCard(args, { now: Date.now(), by: role, appOk: cardAppOk })
+        if (!r.ok) return { ok: false, text: '卡没做成：' + r.problems.join('；') }
+        saveCard(r.card)
+        record({ state: 'card', at: Date.now(), by: role, title: r.card.title, steps: r.card.steps.length })
+        return { ok: true, text: '卡已经挂上了「' + r.card.title + '」' + (r.problems.length ? '（丢掉了：' + r.problems.join('；') + '）' : '') }
+      },
+    }
+  }
+  /** POST /card：get / step {index} / button {index} / clear。 */
+  async function cardRoute(body = {}) {
+    const now = Date.now()
+    const action = String(body?.action || 'get')
+    const cur = loadCard()
+    if (!cardLive(cur, now)) return { v: 1, ok: true, card: null }
+    if (action === 'clear') {
+      saveCard(null)
+      return { v: 1, ok: true, card: null }
+    }
+    if (action === 'step') {
+      const next = toggleStep(cur, Number(body?.index))
+      saveCard(next)
+      return { v: 1, ok: true, card: next }
+    }
+    if (action === 'button') {
+      const b = cur.buttons?.[Number(body?.index)]
+      if (!b) return { v: 1, ok: false, card: cur, toast: '没有这个按钮' }
+      record({ state: 'card-button', at: now, action: b.action })
+      if (b.action === 'open_app') return { v: 1, ok: true, card: cur, open: b.app }
+      if (b.action === 'connect_gemini') {
+        const roll = diceRollRoute({ manual: true, topic: cur.title })
+        return { v: 1, ok: true, card: cur, gemini: { topic: '骰' + roll.dice + ' · ' + roll.name, brief: String(roll.geminiPrompt || '') } }
+      }
+      if (b.action === 'start_next_bout') {
+        const items = (planDayRoute({ action: 'list' }).plan?.items || []).filter((i) => !i.openedAt && !i.missed).sort((a, c) => Number(a.minute) - Number(c.minute))
+        if (!items.length) return { v: 1, ok: false, card: cur, toast: '今天计划里没有还没开的局：让鲸澜现排一局' }
+        const r = await boutsRoute({ action: 'start', id: items[0].id, by: 'card' })
+        return { v: 1, ok: r?.ok === true, card: cur, toast: String(r?.toast || '') }
+      }
+    }
+    return { v: 1, ok: true, card: cur }
   }
 
   // ---------------------------------------------------------------- 2026-11-18 思考层

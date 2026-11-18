@@ -324,6 +324,20 @@ class ProactiveChannel {
     }
   }
 
+  /// 当下任务卡（`POST /card`）：get / step / button / clear。读不到返回 null。
+  Future<Map<String, dynamic>?> cardOp(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('cardOp', body);
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
   /// 会话换班（`POST /rotate`）：status / prepare / bound。读不到返回 null。
   Future<Map<String, dynamic>?> rotateOp(Map<String, Object?> body) async {
     try {

@@ -263,6 +263,8 @@ object BuiltinPluginGuest {
                 "lib/rotate.js",
                 // 2026-11-18 思考层
                 "lib/reflect.js",
+                // 2026-11-18 当下任务卡
+                "lib/card.js",
             ),
         ),
     )

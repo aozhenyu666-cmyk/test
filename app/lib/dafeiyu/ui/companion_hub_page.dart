@@ -22,6 +22,7 @@ import 'deposit_page.dart';
 import 'intercept_page.dart';
 import 'plan_modality_page.dart';
 import 'plan_page.dart';
+import 'task_card.dart';
 import 'proactive_page.dart';
 import 'sisters_page.dart';
 import 'strategy_horizons_page.dart';
@@ -533,6 +534,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               ),
             ),
           ),
+        TaskCardPanel(channel: _channel),
         if (_rotate != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 14),

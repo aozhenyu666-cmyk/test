@@ -346,6 +346,12 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/analytics", body)
             }
+            "cardOp" -> {
+                // 2026-11-18 当下任务卡：get / step / button / clear
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/card", body)
+            }
             "rotateOp" -> {
                 // 2026-11-18 会话换班：status / prepare（写交接）/ bound（新对话绑上）
                 val body = linkedMapOf<String, Any?>()
