@@ -682,6 +682,8 @@ object ProactiveRuntime {
     @Volatile private var breakUntil: Long = -1L
     fun breaking(): Boolean {
         if (!::app.isInitialized) return false
+        // 2026-11-18：本地紧急解除（通知栏 / adb）同样算放风，不依赖引擎。
+        if (LockSafety.disarmed(app)) return true
         if (breakUntil < 0) breakUntil = runCatching { app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).getLong("break", 0L) }.getOrDefault(0L)
         return System.currentTimeMillis() < breakUntil
     }
@@ -1389,14 +1391,39 @@ object ProactiveRuntime {
         }, "POST", "/event", linkedMapOf("type" to "defied", "app" to front, "label" to label, "source" to source))
     }
 
+    @Volatile private var lastSafetyNotifAt = 0L
+
+    /**
+     * 本地紧急解除（[LockSafety.disarm]）：放风到 [until]，撤掉记着的力度锁，再尽力告诉插件记账。
+     * 引擎不在也照样生效：放风只看本地 prefs。
+     */
+    fun onLocalDisarm(until: Long, reason: String, counted: Boolean) {
+        if (!::app.isInitialized) return
+        setBreakUntil(until)
+        force = null
+        forcedApp = null
+        runCatching {
+            fetchPluginRoute(routeCallback { }, "POST", "/event", linkedMapOf(
+                "type" to "disarm", "reason" to reason.take(80), "until" to until, "counted" to counted,
+            ))
+        }.onFailure { Log.w(TAG, "disarm report", it) }
+    }
+
     /** 说到做到: 赶 = back to the launcher first; then 锁 the app behind a drill. */
     private fun enforce(f: Force, fresh: Boolean = false) {
         if (!proactiveEnabled()) return
         if (breaking()) return
         // [fresh]: called with the foreground switch itself; NowFeed may not have caught up yet.
         if (f.app in NEVER_LOCK) return
+        // 锁机事故总闸：DSH 自己 / 桌面 / 系统界面 / 输入法 / 代理永远不锁（锁页本身就是 DSH）。
+        if (LockSafety.neverLock(app, f.app)) {
+            Log.i(TAG, "never-lock: skip force on ${f.app}")
+            return
+        }
         val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
         if (!fresh && front != f.app) return
+        // 测试模式：只提示「这里本来会锁」，不真锁。
+        if (LockSafety.shadowHit(app, f.app, f.why, "companion")) return
         if (f.refuse && VisibleSurface.isHeldBy(VisibleSurface.OWNER_PROACTIVE)) {
             // An overlay still holds the one-screen slot after its event closed (he chatted in it):
             // 拒绝模式 must not lose to that. The overlay window itself stays where it is.
@@ -1424,6 +1451,13 @@ object ProactiveRuntime {
         // page, an engine that is half up - used to read as "no refuse" and wiped the cached lock.
         if (lastPlanError == null && (map["v"] as? Number)?.toInt() != 1) lastPlanError = "bad-answer"
         if (lastPlanError != null) { companionPlan = null; arm(); return }
+        // 测试模式开关跟插件走（插件默认开；他在中枢或对姐妹说「结束测试模式」才关）。
+        (map["shadow"] as? Boolean)?.let { LockSafety.setShadow(app, it) }
+        val nowNotif = System.currentTimeMillis()
+        if (nowNotif - lastSafetyNotifAt > 5 * 60_000L) {
+            lastSafetyNotifAt = nowNotif
+            LockSafety.ensureNotification(app)
+        }
         // 力度：插件说"锁 / 赶"就执行（插件只决定，手机执行）；低于 3 就撤掉记着的那一次。
         val f = map["force"] as? Map<*, *>
         val level = (f?.get("level") as? Number)?.toInt() ?: 0

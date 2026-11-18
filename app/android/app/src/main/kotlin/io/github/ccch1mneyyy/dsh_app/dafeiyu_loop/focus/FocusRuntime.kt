@@ -206,6 +206,10 @@ object FocusRuntime {
     }
 
     private fun showBlock(block: FocusDecision.Block, now: Long) {
+        // 2026-11-18 锁机安全：紧急解除期间不锁；永不锁名单不锁；测试模式只提示。
+        val safety = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.LockSafety
+        if (safety.disarmed(app, now) || safety.neverLock(app, block.packageName)) return
+        if (safety.shadowHit(app, block.packageName, "专注模式外的应用", "focus")) return
         // 单核铁笼仲裁：若 ProactiveRuntime 专时 session 正在管，则让位给 InterceptPageActivity，绝不互抢 SurfaceSlot。
         val handledBySession = runCatching {
             val pr = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime

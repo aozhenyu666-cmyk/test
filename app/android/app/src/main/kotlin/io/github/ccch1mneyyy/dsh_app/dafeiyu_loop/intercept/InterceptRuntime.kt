@@ -20,6 +20,7 @@ import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.InterceptRules
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.Switches
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.VisibleSurface
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.LockSafety
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
 import java.io.File
 import java.util.UUID
@@ -134,6 +135,9 @@ object InterceptRuntime {
         if (packageName.isNullOrBlank()) return
         val now = System.currentTimeMillis()
         expireStale(now)
+        // 2026-11-18 锁机安全：紧急解除期间什么都不锁；桌面 / DSH 自己 / 系统界面永远不锁。
+        if (LockSafety.disarmed(app, now)) return
+        if (LockSafety.neverLock(app, packageName)) return
         // A lock that is still in force comes back whenever its app does (亮屏 / 回到游戏), even
         // with the person's own interception switch off: the lock is state, the page is only its face.
         if (resurface(packageName, null, now)) return
@@ -164,6 +168,10 @@ object InterceptRuntime {
         val g = ensure(context)
         val now = System.currentTimeMillis()
         expireStale(now)
+        if (LockSafety.disarmed(app, now) || LockSafety.neverLock(app, packageName)) {
+            Log.i(TAG, "companion lock refused for " + packageName + " (disarmed or never-lock)")
+            return false
+        }
         // A lock already in force: show it again if its page is not on screen (or let a superseded
         // one go and decide this app afresh).
         if (resurface(packageName, why, now)) return true
@@ -226,6 +234,7 @@ object InterceptRuntime {
         val pkg = g.openPackage()
         if (pkg == packageName) {
             if (screenBusy()) return true
+            if (LockSafety.shadowHit(app, packageName, why ?: openWhy, "resurface")) return true
             if (!takeScreen(open)) return true
             val label = openLabel ?: g.config.targetFor(packageName)?.label ?: packageName
             val ok = InterceptPageActivity.start(
@@ -269,6 +278,11 @@ object InterceptRuntime {
     }
 
     private fun show(block: InterceptDecision.Block, now: Long, why: String? = null) {
+        // 测试模式：决定照记，页面不弹——记成 NOT_SHOWN，免得占着一把「开着的锁」。
+        if (LockSafety.shadowHit(app, block.target.packageName, why, "intercept")) {
+            guard?.onUnavailable(block.eventId, "shadow", System.currentTimeMillis())
+            return
+        }
         // Race guard: onForeground already refused to decide while another feature held the screen,
         // so reaching here with the slot taken means a page claimed it in between. The decision has
         // been made by then, so the honest record is NOT_SHOWN rather than pretending the block happened.

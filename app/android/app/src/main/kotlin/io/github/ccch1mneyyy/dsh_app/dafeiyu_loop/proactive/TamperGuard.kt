@@ -62,6 +62,9 @@ object TamperGuard {
         if (now - lastAt < COOLDOWN_MS) return
         lastAt = now
         Log.i(TAG, "tamper: '$what' in $pkg")
+        // 紧急解除 / 测试模式期间不把他从设置里赶出去（测试时他得能关掉无障碍）。
+        if (LockSafety.disarmed(service)) return
+        if (LockSafety.shadowHit(service, pkg, "设置页自卫：$what", "tamper")) return
         runCatching { service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }
         Handler(service.mainLooper).postDelayed({
             runCatching { service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) }

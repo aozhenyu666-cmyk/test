@@ -36,6 +36,7 @@ class FocusPageActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        live.add(this)
         p = FocusTheme.of(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.statusBarColor = p.bgTop
@@ -53,6 +54,7 @@ class FocusPageActivity : Activity() {
     }
 
     override fun onDestroy() {
+        live.remove(this)
         main.removeCallbacksAndMessages(null)
         FocusRuntime.onPageGone()
         super.onDestroy()
@@ -388,6 +390,14 @@ class FocusPageActivity : Activity() {
         private const val EXTRA_PACKAGE = "focus.package"
         private const val EXTRA_LABEL = "focus.label"
         private const val EXTRA_SECONDS = "focus.seconds"
+
+        /** 正在显示的专注页（紧急解除时一并收掉）。只在主线程读写。 */
+        private val live = java.util.Collections.newSetFromMap(java.util.WeakHashMap<FocusPageActivity, Boolean>())
+
+        fun withdrawAll() {
+            live.toList().forEach { runCatching { it.finish() } }
+            live.clear()
+        }
 
         fun start(context: Context, pkg: String, label: String, seconds: Long): Boolean = runCatching {
             context.startActivity(

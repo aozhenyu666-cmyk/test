@@ -324,6 +324,18 @@ class ProactiveChannel {
     }
   }
 
+  /// 测试模式（影子锁）现在开没开：读插件的 publicConfig.lockShadow。null = 读不到（引擎没起）。
+  Future<bool?> lockShadow() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('companionConfig', const <String, Object?>{});
+      final cfg = raw is Map ? raw['config'] : null;
+      final v = cfg is Map ? cfg['lockShadow'] : null;
+      return v is bool ? v : null;
+    } on Exception {
+      return null;
+    }
+  }
+
   /// B5 试听：让手机用系统 TTS 念一句（`voiceTry`）。
   ///
   /// 返回 null = 真的念完了；否则是降级原因（`no-tts` / `dnd` / `muted` / `session`）。

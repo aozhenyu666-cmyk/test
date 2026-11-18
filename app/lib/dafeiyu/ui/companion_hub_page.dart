@@ -67,6 +67,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   Map<String, dynamic>? _analytics;
   Map<String, dynamic>? _storyline;
   int _clockCount = 0;
+  bool? _lockShadow;
 
   @override
   void initState() {
@@ -106,6 +107,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       _channel.shakeDiceStatus().catchError((_) => null),
       _channel.analyticsOp({'action': 'overview'}).catchError((_) => null),
       _channel.storylineOp({'action': 'get'}).catchError((_) => null),
+      _channel.lockShadow().catchError((_) => null),
     ]);
     if (!mounted) return;
     setState(() {
@@ -114,6 +116,17 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       _shakeDice = extras[2] is Map<String, dynamic> ? extras[2] as Map<String, dynamic> : null;
       _analytics = extras[3] is Map<String, dynamic> ? extras[3] as Map<String, dynamic> : null;
       _storyline = extras[4] is Map<String, dynamic> ? extras[4] as Map<String, dynamic> : null;
+      _lockShadow = extras[5] is bool ? extras[5] as bool : null;
+    });
+  }
+
+  Future<void> _setLockShadow(bool on) async {
+    setState(() => _actionBusy = true);
+    final ok = await _channel.setCompanionConfig({'lockShadow': on});
+    if (!mounted) return;
+    setState(() {
+      _actionBusy = false;
+      if (ok) _lockShadow = on;
     });
   }
 
@@ -464,6 +477,22 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
           onTap: () => unawaited(_refresh()),
           onFooterTap: () => _openPage(const WallPage()),
         ),
+        if (_lockShadow != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Card(
+              child: SwitchListTile(
+                title: const Text('测试模式（锁只提示，不真锁）'),
+                subtitle: Text(
+                  _lockShadow!
+                      ? '现在：锁不会落下，只弹「这里本来会锁」。测完关掉，锁才真的生效'
+                      : '现在：锁真的生效。被锁出不来时，下拉通知栏点「紧急解除」',
+                ),
+                value: _lockShadow!,
+                onChanged: _actionBusy ? null : (v) => unawaited(_setLockShadow(v)),
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.only(bottom: 14),
           child: SegmentedPill<_HubDeck>(

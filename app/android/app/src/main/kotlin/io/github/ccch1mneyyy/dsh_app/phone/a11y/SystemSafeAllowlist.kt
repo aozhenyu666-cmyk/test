@@ -51,6 +51,20 @@ object SystemSafeAllowlist {
         "com.miui.freeform",
         "com.oplus.exsystemservice",
         "com.coloros.floatassistant",
+        // iQOO / vivo（OriginOS）：控制中心、全局搜索、i 管家
+        "com.vivo.upslide",
+        "com.vivo.globalsearch",
+        "com.iqoo.secure",
+    )
+
+    /** 连 Gemini 必须先开的代理（NekoBox 等）。锁掉它等于锁掉连麦。 */
+    val PROXY_PACKAGES = setOf(
+        "moe.nb4a",
+        "io.nekohasekai.sfa",
+        "io.nekohasekai.sagernet",
+        "com.v2ray.ang",
+        "com.github.kr328.clash",
+        "com.github.metacubex.clash.meta",
     )
 
     /** OEM 文件管理 / 文档选择器 / 相册 / 相机（不再在严格模式中误伤导致无法导题或看材料）。 */
@@ -80,7 +94,7 @@ object SystemSafeAllowlist {
         "com.huawei.systemmanager",
     )
 
-    val SAFE_BASE = EMERGENCY_PACKAGES + SYSTEM_UI_AND_LAUNCHERS + FILE_AND_ESSENTIAL_TOOLS
+    val SAFE_BASE = EMERGENCY_PACKAGES + SYSTEM_UI_AND_LAUNCHERS + FILE_AND_ESSENTIAL_TOOLS + PROXY_PACKAGES
 
     fun isSelfPackage(pkg: String, ownPackage: String): Boolean {
         if (pkg.isBlank() || ownPackage.isBlank()) return false
@@ -94,5 +108,27 @@ object SystemSafeAllowlist {
         val low = p.lowercase()
         return low.endsWith(".launcher") || low.endsWith(".launcher2") ||
             low.contains("documentsui") || low.contains("filemanager") || low.contains("fileexplorer")
+    }
+
+    /**
+     * 2026-11-18 锁机事故的总闸：**任何一条锁入口落锁前都必须先问这里**。
+     *
+     * 命中就绝不落锁：DSH 自己（锁页本身就是 DSH，锁它会死循环）、默认桌面（[home] 由运行时解析
+     * 传进来）、系统界面、输入法（[ime]）、急事 App、代理、文件 / 相机等基础工具；包名为空也不锁。
+     */
+    fun neverLock(
+        pkg: String?,
+        ownPackage: String,
+        home: Set<String> = emptySet(),
+        ime: Set<String> = emptySet(),
+    ): Boolean {
+        val p = pkg?.trim().orEmpty()
+        if (p.isEmpty()) return true
+        if (isSelfPackage(p, ownPackage)) return true
+        if (p.startsWith("io.github.ccch1mneyyy.dsh_app")) return true
+        if (p in ime) return true
+        val low = p.lowercase()
+        if (low.contains("inputmethod") || low.contains("keyboard")) return true
+        return isSafeSystemOrHome(p, home)
     }
 }

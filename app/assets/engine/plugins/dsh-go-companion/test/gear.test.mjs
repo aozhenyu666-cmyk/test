@@ -189,7 +189,8 @@ test('第四轮 R4-2 + R7 P0-3：两姐妹逐状态工具完全一致；那些�
     // dafeiyu_control 还是只管收紧那一组：放松走 grant_break / request_relax，不在这个开关里。
     // R9 A：多了 strict_bout（这一局进严格模式）——也是收紧，局结束或破窗才解。
     setStatePin('morning')
-    assert.deepEqual(t.big.tools.dafeiyu_control.parameters.properties.action.enum.sort(), ['busy', 'mute', 'refuse', 'strict', 'strict_bout'])
+    // 2026-11-18：多了 live_locks（结束测试模式，锁真的落下）——同样只收紧；回测试模式只在中枢手动开。
+    assert.deepEqual(t.big.tools.dafeiyu_control.parameters.properties.action.enum.sort(), ['busy', 'live_locks', 'mute', 'refuse', 'strict', 'strict_bout'])
   })
 })
 

@@ -247,6 +247,8 @@ object BuiltinPluginGuest {
                 "lib/analytics_center.js",
                 "lib/intraday_storyline.js",
                 "lib/unified_arbiter.js",
+                // 2026-11-18 锁机安全：插件侧唯一的永不锁名单
+                "lib/never_lock.js",
             ),
         ),
     )

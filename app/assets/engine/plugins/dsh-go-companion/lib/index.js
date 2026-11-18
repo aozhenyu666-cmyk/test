@@ -146,6 +146,7 @@ import {
   issueAppLease, revokeAppLease,
 } from './external_agents.js'
 import { createV4Hub } from './v4_hub.js'
+import { isNeverLockPkg } from './never_lock.js'
 import { resolveActiveSisterSkin } from './unified_arbiter.js'
 
 /**
@@ -1813,7 +1814,7 @@ export function apply(ctx) {
     'com.tencent.map', 'com.eg.android.AlipayGphone', 'com.unionpay', 'io.github.ccch1mneyyy.dsh_app', 'io.github.ccch1mneyyy.dsh_app.fish']
   /** 临时封禁名单（block_apps 写的）：还没到期的包名。 */
   const blockedNow = (now) => (Array.isArray(config.blockExtra) ? config.blockExtra : [])
-    .filter((b) => b && Number(b.until) > now && !NEVER_BLOCK.includes(b.app)).map((b) => b.app)
+    .filter((b) => b && Number(b.until) > now && !NEVER_BLOCK.includes(b.app) && !isNeverLockPkg(b.app)).map((b) => b.app)
   const loadGemini = () => readState(stateFile('gemini.json'), {}) || {}
   const saveGemini = (g) => writeJson(stateFile('gemini.json'), g)
   // D4：预约的下一场 Gemini 连麦（一次性，发过就 fired）。
@@ -2650,12 +2651,13 @@ export function apply(ctx) {
       name: 'dafeiyu_control',
       description: '切换对他的管法（只能收紧，不能放松）：busy=忙时（不闲聊、娱乐 App 一开就锁；时长默认 40 分钟、最长 60，到点只让他报到一次，不评分不扣分）；' +
         'refuse=拒绝模式 minutes 分钟（娱乐 App 一开就锁）；mute=安静 minutes 分钟；strict=严格；' +
-        'strict_bout=这一局进严格模式（只剩本局声明的 App，其余立即锁，局结束或破窗才解）。他亲口要求或明确同意时才用。' +
+        'strict_bout=这一局进严格模式（只剩本局声明的 App，其余立即锁，局结束或破窗才解）；' +
+        'live_locks=结束测试模式，锁开始真的生效（测试模式里锁只提示不落）。他亲口要求或明确同意时才用。' +
         '放松（回到闲时、关拒绝、切回温和）这里不做：他想放松只能等对账后的申请窗口。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['busy', 'refuse', 'mute', 'strict', 'strict_bout'] },
+          action: { type: 'string', enum: ['busy', 'refuse', 'mute', 'strict', 'strict_bout', 'live_locks'] },
           minutes: { type: 'integer', minimum: 5, maximum: 480, description: 'busy / refuse / mute 的时长（分钟）' },
           what: { type: 'string', description: 'busy：他在忙什么（学习、做饭、写报告…）' },
         },
@@ -2685,6 +2687,9 @@ export function apply(ctx) {
         } else if (args.action === 'strict') {
           config = { ...config, mode: 'coach', modeUntil: 0 }
           text = '切到严格了。'
+        } else if (args.action === 'live_locks') {
+          config = { ...config, lockShadow: false }
+          text = '测试模式已结束：从现在起锁会真的落下。想回测试模式只能在伴侣中枢里手动开。'
         } else if (args.action === 'strict_bout') {
           const r = presetRt.strictNow(now, String(args.what || ''), 'tool')
           if (!r.ok) return { ok: false, text: r.text }
@@ -5559,6 +5564,17 @@ export function apply(ctx) {
       record({ state: 'overlay-closed', at: now, chatted: body?.chatted === true, muted: body?.muted === true, busy: body?.busy === true || undefined, app: typeof body?.app === 'string' ? body.app.slice(0, 120) : undefined })
       return { v: 1, ok: true }
     }
+    if (type === 'disarm') {
+      // 2026-11-18：手机本地紧急解除（通知栏要理由、每天 3 次；adb 不计次）。只记账，进今晚的日判。
+      record({
+        state: 'disarm',
+        at: now,
+        reason: String(body?.reason || '').slice(0, 80),
+        until: Number(body?.until) || 0,
+        counted: body?.counted !== false,
+      })
+      return { v: 1, ok: true }
+    }
     if (type === 'voice-out') {
       // B5：手机报"这一条到底念出来没有"。念了就 ok，没念就带降级原因——这是唯一能知道
       // 语音有没有真的响过的来源，插件自己不知道手机的音量和勿扰。
@@ -7334,6 +7350,7 @@ export function apply(ctx) {
     return {
       enabled: config.enabled,
       refuseUntil: Number(config.refuseUntil) > Date.now() ? Number(config.refuseUntil) : 0,
+      lockShadow: config.lockShadow !== false,
       sessionId: config.sessionId ?? null,
       quietStart: config.quietStart,
       quietEnd: config.quietEnd,
@@ -7940,6 +7957,8 @@ export function apply(ctx) {
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
       tide: { level: water.level, band: water.band, why: water.why },
+      // 测试模式：手机照常算锁，但只弹「这里本来会锁」的提示，不真锁。默认开，他自己关。
+      shadow: config.lockShadow !== false,
       autonomy: v4ContractTick.autonomy,
       planContract: v4ContractTick.contract,
       contractGraceWarning: v4ContractTick.graceWarning,
@@ -7948,7 +7967,8 @@ export function apply(ctx) {
       activeSisterSkin,
       ...(geminiAutoPull ? { geminiAutoPull } : {}),
       // release：只有他讲通了（宽限期内）或 3 分钟应急放行期间才放行大肥鱼加的锁。
-      force: { level: effectiveForceLevel, name: force.name, why: effectiveForceWhy, app: phone?.app || undefined,
+      // 锁机事故修复：前台是桌面 / DSH 自己 / 系统界面 / 代理时不给锁目标（手机没有目标就不落锁）。
+      force: { level: effectiveForceLevel, name: force.name, why: effectiveForceWhy, app: (phone?.app && !isNeverLockPkg(phone.app)) ? phone.app : undefined,
         release: effectiveForceRelease },
       ...(radar.triggered ? { behaviorRadar: { kind: radar.kind, reason: radar.reason } } : {}),
       clockTasks: clockKernel.list(),
@@ -9184,6 +9204,8 @@ function mergeConfig(current, body) {
     if (typeof body.personaInChat === 'boolean') next.personaInChat = body.personaInChat
     if (typeof body.dual === 'boolean') next.dual = body.dual
     if (typeof body.proactiveTools === 'boolean') next.proactiveTools = body.proactiveTools
+    // 测试模式（影子锁）：所有锁只提示「这里本来会锁」，不真锁。只认他手动开关（模型工具只能关）。
+    if (typeof body.lockShadow === 'boolean') next.lockShadow = body.lockShadow
     if (typeof body.fullToolAccess === 'boolean') next.fullToolAccess = body.fullToolAccess
     // B5：念出来。默认关，只认布尔。
     if (typeof body.voice === 'boolean') next.voice = body.voice
