@@ -19,11 +19,14 @@ import {
   upsertHorizonItem,
 } from './horizons.js'
 import {
+  AI_PROMPT_SCRIPTS,
   cleanPlanContract,
+  COMMON_PLAN_PRESETS,
   evaluateCheckpointSubmission,
   evaluateContractTick,
   inspectScenarioApps,
   OVERDUE_GRACE_MS,
+  resolveContractSessionAllow,
 } from './plan_modality.js'
 import { buildTodayCharts } from './telemetry_charts.js'
 import {
@@ -45,6 +48,7 @@ export function createV4Hub(deps) {
     getLastPhone,
     getLastRolledDice,
     appsOf,
+    emergencyPackages,
     usageReportView,
     readLedger,
     record,
@@ -236,9 +240,50 @@ export function createV4Hub(deps) {
     return { v: 1, ok: false, error: `未知 action: ${action}` }
   }
 
+  function contractSessionView(now = Date.now(), { escalatedOnly = false } = {}) {
+    const cur = loadContract()
+    if (!cur) return null
+    const ticked = evaluateContractTick(cur, now)
+    const c = ticked.contract || cur
+    if (ticked.changed && ticked.contract) saveContract(ticked.contract)
+    const openCps = (c.checkpoints || []).filter((cp) => cp.status !== 'passed')
+    if (!openCps.length) return null
+    const escalated = Boolean(ticked.triggerStrictNow || c.strictEscalated)
+    if (escalatedOnly && !escalated) return null
+
+    const emerg = typeof emergencyPackages === 'function' ? emergencyPackages(appsOf()) : []
+    const funSet = new Set((appsOf() || []).filter((a) => a?.role === 'fun').map((a) => String(a.app || '')))
+    const baseAllow = resolveContractSessionAllow(c, { escalated, isFunApp: (pkg) => funSet.has(pkg) })
+    const allow = [...new Set([...baseAllow, ...emerg])]
+    const nextDue = openCps.reduce((min, cp) => (cp.dueAt > 0 && cp.dueAt < min ? cp.dueAt : min), now + 45 * 60_000)
+
+    return {
+      allow,
+      until: escalated ? now + 30 * 60_000 : Math.max(now + 60_000, nextDue + OVERDUE_GRACE_MS),
+      topic: c.title,
+      why: escalated
+        ? `契约「${c.title}」逾期未过验收，已进入严格锁定（保留笔记工具提交验收）`
+        : `契约护航「${c.title}」（到点缓冲 1 分钟未验收将自动严锁）`,
+      strict: escalated,
+      graceMs: escalated ? 0 : 25_000,
+      mode: escalated ? 'ai-work' : 'task-lease',
+    }
+  }
+
+  function autonomyGapScale(autonomy) {
+    const lvl = autonomy?.level || 'L1'
+    if (lvl === 'L3') return 1.8
+    if (lvl === 'L2') return 1.4
+    if (lvl === 'L0') return 0.85
+    return 1.0
+  }
+
   function planContractRoute(body = {}) {
     const now = Date.now()
     const action = String(body?.action || 'status')
+    if (action === 'presets') {
+      return { v: 1, ok: true, presets: COMMON_PLAN_PRESETS, scripts: AI_PROMPT_SCRIPTS }
+    }
     if (action === 'check_apps') {
       return {
         v: 1,
@@ -261,12 +306,32 @@ export function createV4Hub(deps) {
         graceWarning: ticked.graceWarning,
         triggerStrictNow: ticked.triggerStrictNow,
         graceSecDefault: Math.round(OVERDUE_GRACE_MS / 1000),
+        presets: COMMON_PLAN_PRESETS,
+        scripts: AI_PROMPT_SCRIPTS,
       }
     }
     if (action === 'set') {
+      const preset = body?.presetId ? COMMON_PLAN_PRESETS.find((p) => p.id === body.presetId) : null
+      const base = body?.contract && typeof body.contract === 'object' ? body.contract : body
+      const mins = Math.max(5, Math.min(240, Number(base?.minutes || preset?.minutes || 45)))
+      const rawCps = Array.isArray(base?.checkpoints) && base.checkpoints.length
+        ? base.checkpoints
+        : [{
+            id: `cp-${now.toString(36).slice(-4)}`,
+            title: String(base?.checkpointTitle || preset?.checkpointTitle || base?.title || '提交本段交付并验收'),
+            mode: (base?.mode || preset?.mode) === 'video_extract' ? 'video_extract' : 'standard',
+            expectedDeliverable: String(base?.expectedDeliverable || preset?.expectedDeliverable || '提交结构化提炼'),
+            dueAt: now + mins * 60_000,
+            graceMs: OVERDUE_GRACE_MS,
+          }]
       const next = cleanPlanContract({
-        ...(body?.contract && typeof body.contract === 'object' ? body.contract : body),
-        id: body?.id || body?.contract?.id || `contract-${now.toString(36).slice(-5)}`,
+        ...preset,
+        ...base,
+        title: base?.title || preset?.title || 'AI 协同契约计划',
+        scenario: base?.scenario ?? preset?.scenario ?? '',
+        allowedApps: Array.isArray(base?.allowedApps) && base.allowedApps.length ? base.allowedApps : (preset?.allowedApps || ['md.obsidian', 'com.tencent.mm']),
+        checkpoints: rawCps,
+        id: base?.id || `contract-${now.toString(36).slice(-5)}`,
         createdAt: now,
         updatedAt: now,
       })
@@ -286,6 +351,13 @@ export function createV4Hub(deps) {
       if (res.contract) saveContract(res.contract)
       if (res.passed && res.checkpoint) {
         record({ state: 'checkpoint-passed', at: now, id: res.checkpoint.id, title: res.checkpoint.title })
+        if (!res.contract?.strictEscalated) {
+          try {
+            presetRt?.strictOff?.(now, 'contract-passed')
+          } catch {
+            // ignore
+          }
+        }
         if (res.contract?.horizonId) {
           horizonsRoute({ action: 'upsert', id: res.contract.horizonId, bumpStep: true })
         }
@@ -294,6 +366,11 @@ export function createV4Hub(deps) {
     }
     if (action === 'clear') {
       saveContract(null)
+      try {
+        presetRt?.strictOff?.(now, 'contract-cleared')
+      } catch {
+        // ignore
+      }
       return { v: 1, ok: true, contract: null }
     }
     return { v: 1, ok: false, error: `未知 action: ${action}` }
@@ -401,6 +478,8 @@ export function createV4Hub(deps) {
       autonomy: contractTick.autonomy,
       contract: contractTick.contract,
       graceWarning: contractTick.graceWarning,
+      presets: COMMON_PLAN_PRESETS,
+      promptScripts: AI_PROMPT_SCRIPTS,
       bankSummary: {
         bankName: String(rawBank?.名称 || '未导入'),
         bankTotal: Array.isArray(rawBank?.题目) ? rawBank.题目.length : 0,
@@ -437,10 +516,15 @@ export function createV4Hub(deps) {
     },
     {
       name: 'plan_set_contract',
-      description: '帮用户建立「AI 协同计划契约」：写清标题、允许 App、实际验收点（支持看视频压缩提炼高强度问答）、截至分钟数；到点缓冲 1 分钟未交付自动转严格锁。',
+      description: '帮用户建立「AI 协同计划契约」：支持直接传 presetId（如 video_extract_study / exam_drill_sprint / job_resume_apply / rest_recover_contract）或自定义标题、允许 App、验收点；到点缓冲 1 分钟未交付自动转严格锁。',
       parameters: {
         type: 'object',
         properties: {
+          presetId: {
+            type: 'string',
+            enum: ['video_extract_study', 'exam_drill_sprint', 'job_resume_apply', 'anti_scam_decision_gate', 'rest_recover_contract'],
+            description: '可选预设剧本ID，传了自动填充常用参数',
+          },
           title: { type: 'string', description: '计划契约总目标' },
           scenario: { type: 'string', description: '使用场景与产出物描述' },
           allowedApps: { type: 'array', items: { type: 'string' }, description: '契约期内允许使用的 App 包名' },
@@ -449,31 +533,26 @@ export function createV4Hub(deps) {
           mode: { type: 'string', enum: ['standard', 'video_extract'], description: 'video_extract=看视频提炼高强度问答验收' },
           expectedDeliverable: { type: 'string', description: '需提交的内容（如：压缩笔记+过2个机制追问）' },
         },
-        required: ['title', 'checkpointTitle'],
       },
       output: toolOutput,
       execute: (args = {}) => {
-        const now = Date.now()
-        const mins = Math.max(5, Math.min(240, Number(args.minutes) || 45))
         const out = planContractRoute({
           action: 'set',
+          presetId: args.presetId,
           title: args.title,
-          scenario: args.scenario || '',
-          allowedApps: Array.isArray(args.allowedApps) ? args.allowedApps : [],
+          scenario: args.scenario,
+          allowedApps: Array.isArray(args.allowedApps) ? args.allowedApps : undefined,
+          minutes: args.minutes,
+          checkpointTitle: args.checkpointTitle,
+          mode: args.mode,
+          expectedDeliverable: args.expectedDeliverable,
           strictOnOverdue: true,
-          checkpoints: [{
-            id: `cp-${now.toString(36).slice(-4)}`,
-            title: args.checkpointTitle,
-            mode: args.mode === 'video_extract' ? 'video_extract' : 'standard',
-            expectedDeliverable: args.expectedDeliverable || '提交结构化因果提炼并完成追问验收',
-            dueAt: now + mins * 60_000,
-            graceMs: OVERDUE_GRACE_MS,
-          }],
         })
         if (!out.ok) return { ok: false, text: out.error }
+        const firstCp = out.contract.checkpoints?.[0]
         return {
           ok: true,
-          text: `✓ 已签下契约「${out.contract.title}」，验收点「${args.checkpointTitle}」将于 ${mins} 分钟后到期（到期给予 1 分钟缓冲，仍未交自动转严格锁）。`,
+          text: `✓ 已签下契约「${out.contract.title}」，验收点「${firstCp?.title || '交付'}」将于设定时间到期（逾期给予 1 分钟缓冲，仍未交自动转严格锁）。`,
         }
       },
     },
@@ -546,7 +625,9 @@ export function createV4Hub(deps) {
     globalTools,
     todayViewV4,
     onPlanTick,
+    contractSessionView,
     computeAutonomy,
+    autonomyGapScale,
     horizonsRoute,
     bankRoute,
     planContractRoute,

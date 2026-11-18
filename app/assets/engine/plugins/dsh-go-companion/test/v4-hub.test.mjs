@@ -8,11 +8,15 @@ import { judgeQuizAnswer, parseBankSmart, pickNextQuizQuestion } from '../lib/ba
 import { evaluateAutonomyLevel } from '../lib/autonomy.js'
 import { cleanHorizons, mirrorHorizonsToMarkdown, syncLongGoalsFromMarkdown, upsertHorizonItem } from '../lib/horizons.js'
 import {
+  AI_PROMPT_SCRIPTS,
+  COMMON_PLAN_PRESETS,
   evaluateCheckpointSubmission,
   evaluateContractTick,
   inspectScenarioApps,
   OVERDUE_GRACE_MS,
+  resolveContractSessionAllow,
 } from '../lib/plan_modality.js'
+import { createV4Hub } from '../lib/v4_hub.js'
 import { compileCausalChainCard, runMainlineAlignmentAudit, runRedFlagScamAudit } from '../lib/dept_skills.js'
 import { buildTodayCharts } from '../lib/telemetry_charts.js'
 
@@ -168,4 +172,73 @@ test('horizons bidirectional Markdown sync + dept_skills red-flag audit + today 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('plan presets + AI prompt scripts + contractSessionView strict escalation loop', () => {
+  assert.ok(COMMON_PLAN_PRESETS.length >= 5)
+  assert.ok(AI_PROMPT_SCRIPTS.length >= 6)
+  for (const p of COMMON_PLAN_PRESETS) {
+    assert.ok(p.id && p.title && p.copyPrompt && p.minutes > 0)
+  }
+
+  const videoAllowFlex = resolveContractSessionAllow({ allowedApps: ['tv.danmaku.bili', 'md.obsidian'] }, { escalated: false })
+  assert.deepEqual(videoAllowFlex, ['tv.danmaku.bili', 'md.obsidian'])
+
+  const videoAllowEscalated = resolveContractSessionAllow({ allowedApps: ['tv.danmaku.bili', 'md.obsidian'] }, { escalated: true })
+  assert.deepEqual(videoAllowEscalated, ['md.obsidian'])
+
+  // 完整 V4Hub 契约联动闭环测试
+  const store = new Map()
+  let strictOffCalled = false
+  const hub = createV4Hub({
+    stateFile: (n) => n,
+    readState: (k, d) => store.get(k) ?? d,
+    writeJson: (k, v) => store.set(k, v),
+    home: () => '',
+    notesDir: () => '',
+    kbDir: () => '',
+    getConfig: () => ({ timeZone: 'Asia/Shanghai', defaultAllow: ['md.obsidian'] }),
+    getLastPhone: () => ({ today: [] }),
+    getLastRolledDice: () => 0,
+    appsOf: () => [{ app: 'tv.danmaku.bili', label: '哔哩哔哩', role: 'fun' }, { app: 'md.obsidian', label: 'Obsidian', role: 'work' }],
+    emergencyPackages: () => ['com.android.phone'],
+    usageReportView: () => ({ rows: [], funMinutes: 0, totalMinutes: 60 }),
+    readLedger: () => [],
+    record: () => {},
+    boutsGetRoute: () => ({ running: null, queue: [] }),
+    planDayRoute: () => ({ plan: { items: [] }, recent: [] }),
+    handoffRoute: () => ({ hasCognitiveOs: false, modelsCount: 0 }),
+    dayString: () => '2026-11-18',
+    zoneOr: (z) => z || 'Asia/Shanghai',
+    presetRt: { strictNow: () => {}, strictOff: () => { strictOffCalled = true } },
+    grantTempPass: () => {},
+    toolOutput: {},
+  })
+
+  const t0 = Date.now()
+  const created = hub.planContractRoute({ action: 'set', presetId: 'video_extract_study' })
+  assert.equal(created.ok, true)
+
+  // 契约期内：柔性护航，放行哔哩哔哩
+  const flexSess = hub.contractSessionView(t0 + 10_000, { escalatedOnly: false })
+  assert.equal(flexSess?.strict, false)
+  assert.equal(flexSess?.allow.includes('tv.danmaku.bili'), true)
+
+  // 逾期超过 1 分钟：升级为严格锁，且自动剥离视频软件、保留 Obsidian 提交验收
+  const due = created.contract.checkpoints[0].dueAt
+  const escSess = hub.contractSessionView(due + OVERDUE_GRACE_MS + 5_000, { escalatedOnly: true })
+  assert.equal(escSess?.strict, true)
+  assert.equal(escSess?.allow.includes('md.obsidian'), true)
+  assert.equal(escSess?.allow.includes('tv.danmaku.bili'), false)
+
+  // 提交高强度因果提炼通过后：自动解除严格态
+  const verified = hub.planContractRoute({
+    action: 'verify',
+    checkpointId: created.contract.checkpoints[0].id,
+    summary: '因为题干考察增量比较，所以核心结论是现期增长量对比基期更可靠，下次优先看柱状趋势。',
+    aiConfirmed: true,
+  })
+  assert.equal(verified.passed, true)
+  assert.equal(strictOffCalled, true)
+  assert.equal(hub.contractSessionView(due + OVERDUE_GRACE_MS + 6_000), null)
 })

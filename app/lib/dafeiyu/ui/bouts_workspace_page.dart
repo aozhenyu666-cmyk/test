@@ -75,9 +75,90 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
   };
   bool _allowDirty = false;
   bool _strictMode = true;
+  bool _chartsExpanded = false;
   _HorizonTab _horizonTab = _HorizonTab.today;
   final _goalCtrl = TextEditingController();
   final _horizonCtrl = TextEditingController();
+
+  static const _quickFocusPresets = <({
+    String chip,
+    String goal,
+    String protocolId,
+    int minutes,
+    bool strict,
+    List<String> allow,
+  })>[
+    (
+      chip: '考公刷题 60m',
+      goal: '考公行测/申论专项刷题与错题复盘',
+      protocolId: 'study',
+      minutes: 60,
+      strict: true,
+      allow: ['md.obsidian', 'com.tencent.mm'],
+    ),
+    (
+      chip: '网课提炼 45m',
+      goal: '看网课视频并提炼 1 张因果卡',
+      protocolId: 'study',
+      minutes: 45,
+      strict: true,
+      allow: ['md.obsidian', 'tv.danmaku.bili', 'com.tencent.mm'],
+    ),
+    (
+      chip: '简历投递 45m',
+      goal: '修改简历量化亮点并定向投递',
+      protocolId: 'execute',
+      minutes: 45,
+      strict: true,
+      allow: ['md.obsidian', 'com.tencent.mm'],
+    ),
+    (
+      chip: '合法放风 20m',
+      goal: '合法休息放风 · 到点自动回位',
+      protocolId: 'rest',
+      minutes: 25,
+      strict: false,
+      allow: ['md.obsidian', 'com.tencent.mm'],
+    ),
+  ];
+
+  static const _fallbackPromptScripts = <Map<String, String>>[
+    {
+      'category': '每日安排',
+      'title': '1. 一早定今日三件事（免手填排局）',
+      'prompt': '帮我定今天的主线计划，不用泛泛鼓励：我今天最重要的主航道是【考公/求职】，现有时间约【3】小时。请你直接调用规划工具帮我拆成 ≤3 件今天必打掉的局，配好允许的 App，并定好晚上验收交什么。',
+    },
+    {
+      'category': '计划模态',
+      'title': '2. 带目标去视频网站看课（1m 未交转严锁）',
+      'prompt': '我要开启「看网课契约」：接下来看【课程名/B站视频】共【45】分钟，用 Obsidian 做提炼。请调 plan_check_apps 检查 App 并用 plan_set_contract 立下视频提炼检查点（到点缓冲 1 分钟未验收自动严格锁）。期间别频繁打扰，看完把提炼内容发你验收。',
+    },
+    {
+      'category': '高强度验收',
+      'title': '3. 把压好的视频笔记交给你狠狠追问验收',
+      'prompt': '以下是我把刚看的课程/资料压缩后的三段因果提炼：【粘贴压缩内容】。请不要走过场夸我，按统筹规划部+督办审计部模式，针对底层因果和考场/面试反例高强度追问我 2 个核心问题；答到点子上再调 plan_verify_checkpoint(aiConfirmed=true) 通过。',
+    },
+    {
+      'category': '防骗止损',
+      'title': '4. 付款 / 买课 / 闲鱼交易前红旗安检',
+      'prompt': '我要决定要不要付一笔钱：【描述商品/金额/对方是否私聊先款或不退不换】。请用信息收集部 audit_decision_redflag(kind="redflag") 给我跑红旗一票否决检查，有坑直接喊停！',
+    },
+    {
+      'category': '防偏航',
+      'title': '5. 想折腾工具前做反沉没主线审计',
+      'prompt': '我突然想花时间折腾【想做的工具/新配置】。先用谋划思考部 audit_decision_redflag(kind="mainline") 对齐我的考公/就业主航道，算算沉没成本——如果是借磨刀逃避正事，直接喊停并指派最小可凑合动作！',
+    },
+    {
+      'category': '题库解锁',
+      'title': '6. 把杂乱真题一键洗进锁屏题库（10题开5分）',
+      'prompt': '帮我把下面这段题目清洗整理后调 bank_import_questions 导入我的锁屏解锁题库：【粘贴题目与答案】',
+    },
+    {
+      'category': '体系沉淀',
+      'title': '7. 睡前 5 分钟压一张因果卡 + 查时间账本',
+      'prompt': '请调 audit_decision_redflag(kind="causal")，结合我今天干的事和踩的坑，逼着我压成「触发场景 → 底层机制 → 下次唯一行动」1 张可复用卡片，并对照今日 App 用时分布定明早第一局。',
+    },
+  ];
 
   static const _whitelistPresets = <LoopApp>[
     LoopApp('md.obsidian', 'Obsidian'),
@@ -339,6 +420,73 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       _busy = false;
       _banner = res != null && res['ok'] == true ? '${res['text'] ?? '已加入主线：$title'}' : '添加失败：${res?['text'] ?? '引擎暂未就绪'}';
     });
+  }
+
+  Future<void> _openPromptScriptsSheet() async {
+    final remote = _today['promptScripts'];
+    final list = <Map<String, String>>[
+      if (remote is List && remote.isNotEmpty)
+        for (final x in remote)
+          if (x is Map)
+            {
+              'category': '${x['category'] ?? ''}',
+              'title': '${x['title'] ?? ''}',
+              'prompt': '${x['prompt'] ?? ''}',
+            }
+      else
+        ..._fallbackPromptScripts,
+    ];
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('常用 AI 话术剧本表（免自己打字）'),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '点任意一张剧本卡即可直接复制，粘贴发给鱼丸、鲸澜或 Gemini；只需按需替换【方括号】里的课程/金额即可。',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 10),
+                for (final item in list)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: GlassSurface(
+                      tier: GlassTier.pill,
+                      borderRadius: AppShape.radiusMd,
+                      child: ListTile(
+                        dense: true,
+                        title: Text(item['title'] ?? '', style: Theme.of(ctx).textTheme.titleSmall),
+                        subtitle: Text(
+                          item['prompt'] ?? '',
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(ctx).textTheme.bodySmall,
+                        ),
+                        trailing: FilledButton.tonal(
+                          onPressed: () async {
+                            await Clipboard.setData(ClipboardData(text: item['prompt'] ?? ''));
+                            if (ctx.mounted) Navigator.of(ctx).pop();
+                            if (mounted) setState(() => _banner = '✓ 已复制「${item['title']}」，直接粘贴发给 AI 即可');
+                          },
+                          child: const Text('复制'),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('关闭')),
+        ],
+      ),
+    );
   }
 
   Future<void> _copyHandoff() async {
@@ -813,6 +961,33 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                 ),
               ),
             ),
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final p in _quickFocusPresets) ...[
+                    CapsuleChoiceChip(
+                      icon: AppIcons.play,
+                      label: p.chip,
+                      selected: _goalCtrl.text.trim() == p.goal,
+                      onSelected: () => setState(() {
+                        _goalCtrl.text = p.goal;
+                        _selectedProtocol = p.protocolId;
+                        _selectedMinutes = p.minutes;
+                        _strictMode = p.strict;
+                        _allowDirty = true;
+                        _selectedAllow
+                          ..clear()
+                          ..addAll(p.allow);
+                        _banner = '已载入预设「${p.chip}」，直接点下方开启即可';
+                      }),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                ],
+              ),
+            ),
             const SizedBox(height: 10),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -1172,8 +1347,20 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     Text('● 纯娱乐 ${funMin}m（占比 ${((funMin * 100) / sumMin).round()}%）', style: theme.textTheme.bodySmall?.copyWith(color: colors.danger)),
                   ],
                 ),
-                if (trend.isNotEmpty) ...[
-                  const SizedBox(height: 12),
+                if (trend.isNotEmpty || completed.isNotEmpty || topApps.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                      onPressed: () => setState(() => _chartsExpanded = !_chartsExpanded),
+                      icon: Icon(_chartsExpanded ? AppIcons.collapse : AppIcons.expand, size: 16),
+                      label: Text(_chartsExpanded ? '收起详细图表与排行' : '展开明细（7日趋势 · 战果 ${completed.length} · App排行）'),
+                    ),
+                  ),
+                ],
+                if (_chartsExpanded && trend.isNotEmpty) ...[
+                  const SizedBox(height: 10),
                   Text('近 7 日有效主线专注趋势', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
                   const SizedBox(height: 6),
                   SizedBox(
@@ -1205,7 +1392,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     ),
                   ),
                 ],
-                if (completed.isNotEmpty) ...[
+                if (_chartsExpanded && completed.isNotEmpty) ...[
                   const Divider(height: 18),
                   Text('今日已完结战果 (${completed.length})', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
                   const SizedBox(height: 4),
@@ -1223,7 +1410,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                       ),
                     ),
                 ],
-                if (topApps.isNotEmpty) ...[
+                if (_chartsExpanded && topApps.isNotEmpty) ...[
                   const Divider(height: 18),
                   Text('今日 App 用时排行', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
                   const SizedBox(height: 4),
@@ -1243,6 +1430,80 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget? _buildActiveContractCard(DshColors colors) {
+    final contract = _today['contract'] is Map ? Map<String, dynamic>.from(_today['contract'] as Map) : null;
+    if (contract == null) return null;
+    final cps = contract['checkpoints'] is List
+        ? [for (final x in contract['checkpoints'] as List) if (x is Map) Map<String, dynamic>.from(x)]
+        : const <Map<String, dynamic>>[];
+    final pending = cps.where((c) => c['status'] != 'passed').toList();
+    if (pending.isEmpty) return null;
+    final first = pending.first;
+    final grace = _today['graceWarning'] is Map ? _today['graceWarning'] as Map : null;
+    final escalated = contract['strictEscalated'] == true;
+    final theme = Theme.of(context);
+    final statusTone = escalated
+        ? StatusTone.error
+        : (grace != null ? StatusTone.warn : StatusTone.ok);
+    final statusLabel = escalated
+        ? '逾期严格锁中'
+        : (grace != null ? '缓冲剩 ${grace['remainSec']}s' : '契约护航中');
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: GlassSurface(
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(
+                escalated ? AppIcons.lock : (grace != null ? AppIcons.warning : AppIcons.planMode),
+                size: 20,
+                color: escalated ? colors.danger : (grace != null ? colors.warning : theme.colorScheme.primary),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '契约：${contract['title']}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        StatusChip(tone: statusTone, label: statusLabel),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '下一验收点：${first['title']} · 到点 ${first['dueAt'] is num && (first['dueAt'] as num) > 0 ? _formatCountdown(first['dueAt'] as num) : ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.tonal(
+                onPressed: () => unawaited(PlanModalityPage.open(context, channel: _channel, loopChannel: _loop)),
+                child: const Text('去验收'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -1321,6 +1582,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     final topInset = MediaQuery.paddingOf(context).top;
     final headerActions = [
       GlassIconButton(
+        tooltip: '常用 AI 话术剧本（点即复制）',
+        icon: AppIcons.quote,
+        onPressed: _busy ? null : () => unawaited(_openPromptScriptsSheet()),
+      ),
+      GlassIconButton(
         tooltip: '跨 AI 交接上下文预览',
         icon: AppIcons.copy,
         onPressed: _busy ? null : () => unawaited(_copyHandoff()),
@@ -1386,6 +1652,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       else ...[
         _buildBriefCard(colors),
         _buildFocusHeroCard(colors),
+        ?_buildActiveContractCard(colors),
         const SizedBox(height: 16),
         _buildHorizonsAndChartsSection(colors),
         const SizedBox(height: 16),

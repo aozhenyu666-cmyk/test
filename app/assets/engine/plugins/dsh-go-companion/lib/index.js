@@ -2043,13 +2043,16 @@ export function apply(ctx) {
       mode: 'task-lease',
     }
   }
-  /** 手机的 session 槽：连麦舱 / AI 专时锁 / 鲸澜租约 / 外部 Agent 租约 / 预案严格模式。 */
+  let v4Hub = null
+  /** 手机的 session 槽：连麦舱 / AI 专时锁 / 逾期严锁计划契约 / 鲸澜租约 / 外部 Agent 租约 / 预案严格模式 / 护航期契约。 */
   const sessionNow = (now) =>
     geminiSessionView(now) ||
     aiWorkSessionView(now) ||
+    v4Hub?.contractSessionView(now, { escalatedOnly: true }) ||
     taskLeaseView(now) ||
     leaseSessionView(now) ||
-    presetRt.sessionView(now)
+    presetRt.sessionView(now) ||
+    v4Hub?.contractSessionView(now, { escalatedOnly: false })
   // 行为大脑：片段与日摘要、模式卡。只看见、只记住；不自动立规则（K4 以后再接）。
   const brainRt = createBrainRuntime({
     loadEpisodes: () => readState(stateFile('episodes.json'), null),
@@ -2535,7 +2538,7 @@ export function apply(ctx) {
     schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, text: { type: 'string' } } },
     render: (_a, v) => [{ type: 'text', text: String((v && v.text) || '') }],
   }
-  const v4Hub = createV4Hub({
+  v4Hub = createV4Hub({
     stateFile,
     readState,
     writeJson,
@@ -2546,6 +2549,7 @@ export function apply(ctx) {
     getLastPhone: () => lastPhone,
     getLastRolledDice: () => lastRolledDice,
     appsOf,
+    emergencyPackages,
     usageReportView,
     readLedger,
     record,
@@ -7621,14 +7625,18 @@ export function apply(ctx) {
       maxAttempts: MAX_ATTEMPTS,
     })
     persistGarden()
+    const autoPre = v4Hub.computeAutonomy(now)
+    const autoGapScale = (water.band === 'sink' || water.band === 'trap') ? 1.0 : v4Hub.autonomyGapScale(autoPre)
+    const rawMinGap = lastRhythm?.night === 'late'
+      ? Math.min(8 * 60_000, trustGap(tideGap(limits.minGapMs, water.band), trust.band))
+      : trustGap(tideGap(limits.minGapMs, water.band), trust.band)
     const out = decide({
       // 教练模式更勤，伙伴更松；再按水位收紧：陷得越深越勤，间隔带随机，不让他摸出规律。
-      // 在沉 / 陷住了就不掷骰子：该开口就开口。
+      // 在沉 / 陷住了就不掷骰子：该开口就开口。达标至 L2/L3 时按正向泄压系数放宽常规冷却。
       config: {
         ...config,
         ...limits,
-        minGapMs: lastRhythm?.night === 'late' ? Math.min(8 * 60_000, trustGap(tideGap(limits.minGapMs, water.band), trust.band))
-          : trustGap(tideGap(limits.minGapMs, water.band), trust.band),
+        minGapMs: Math.round(rawMinGap * autoGapScale),
         hourlyMax: tideHourly(limits.hourlyMax, water.band),
         diceThreshold: water.band === 'sink' || water.band === 'trap' ? 100
           : water.band === 'slide' ? Math.max(80, Number(config.diceThreshold) || 0) : config.diceThreshold,

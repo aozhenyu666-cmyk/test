@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../ui/common/capsule_chip.dart';
 import '../../ui/common/overview_card.dart';
@@ -54,8 +55,60 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
   Map<String, dynamic>? _contract;
   Map<String, dynamic>? _graceWarning;
   Map<String, dynamic>? _appProbe;
+  List<Map<String, dynamic>> _remotePresets = const [];
   String? _banner;
   Timer? _poll;
+
+  static const _fallbackPresets = <Map<String, dynamic>>[
+    {
+      'id': 'video_extract_study',
+      'shortLabel': '📺 网课提炼 45m',
+      'title': '看网课并提炼 1 张三段因果卡',
+      'scenario': '用 B站/网课 App 听课，在 Obsidian 里提炼三段因果链并过高强度追问',
+      'checkpointTitle': '提交视频压缩提炼与 2 句因果追问',
+      'mode': 'video_extract',
+      'minutes': 45,
+      'expectedDeliverable': '提交 [触发→机制→行动] 因果链，逾期 1 分钟自动严锁视频 App',
+      'allowedApps': ['md.obsidian', 'tv.danmaku.bili', 'com.tencent.mm'],
+      'copyPrompt': '我要开启「网课提炼契约（45分钟）」，用 B站 看课并在 Obsidian 提炼。请调 plan_check_apps 与 plan_set_contract 立下 45 分钟检查点（逾期缓冲 1 分钟转严锁），我看完发你高强度追问验收。',
+    },
+    {
+      'id': 'exam_drill_sprint',
+      'shortLabel': '📝 考公刷题 60m',
+      'title': '考公行测/申论专项刷题与错题归档',
+      'scenario': '集中刷 1 套真题并整理 3 道错题因果原因，支持导入锁屏题库',
+      'checkpointTitle': '完成本轮套题并提炼 3 道核心错题原因',
+      'mode': 'standard',
+      'minutes': 60,
+      'expectedDeliverable': '提交本轮题量、正确率与 3 条错因规则',
+      'allowedApps': ['md.obsidian', 'com.tencent.mm'],
+      'copyPrompt': '我要开始「考公真题冲刺（60分钟）」。请调 plan_set_contract 帮我立下 60 分钟契约，放行 Obsidian/微信，到点缓冲 1 分钟没交「题量+正确率+3条错因」就自动转严锁。',
+    },
+    {
+      'id': 'job_resume_apply',
+      'shortLabel': '💼 简历投递 45m',
+      'title': '简历项目打磨与定向岗位投递',
+      'scenario': '优化简历量化亮点并核对岗位 JD 完成真实投递',
+      'checkpointTitle': '提交简历改动要点与本轮投递家数',
+      'mode': 'standard',
+      'minutes': 45,
+      'expectedDeliverable': '至少优化 1 处量化成果表述并实际投递/沟通 ≥3 家',
+      'allowedApps': ['md.obsidian', 'cn.wps.moffice_eng', 'com.tencent.mm'],
+      'copyPrompt': '我要做「就业简历优化与投递（45分钟）」。请调 plan_set_contract 立契约：放行 Obsidian/WPS/微信，45 分钟后验收修改结果与投递记录。',
+    },
+    {
+      'id': 'rest_recover_contract',
+      'shortLabel': '☕ 合法放风 20m',
+      'title': '合法休息放风（到点自动收心回位）',
+      'scenario': '高强度专注后合法休息 20 分钟，到期确认收心并写下第一动作',
+      'checkpointTitle': '确认休息结束并报备下一轮第一动作',
+      'mode': 'standard',
+      'minutes': 20,
+      'expectedDeliverable': '一句话写明接下来 45 分钟唯一动作',
+      'allowedApps': ['md.obsidian', 'com.tencent.mm'],
+      'copyPrompt': '我刚完成一轮工作，申请「合法休息 20 分钟」。请调 plan_set_contract 定 20 分钟检查点，到点缓冲 1 分钟没回来说下一轮干嘛就自动严锁回工位。',
+    },
+  ];
 
   @override
   void initState() {
@@ -82,7 +135,47 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       if (!silent) _loading = false;
       _contract = res?['contract'] is Map ? Map<String, dynamic>.from(res!['contract'] as Map) : null;
       _graceWarning = res?['graceWarning'] is Map ? Map<String, dynamic>.from(res!['graceWarning'] as Map) : null;
+      if (res?['presets'] is List) {
+        _remotePresets = [
+          for (final x in res!['presets'] as List)
+            if (x is Map) Map<String, dynamic>.from(x),
+        ];
+      }
     });
+  }
+
+  void _applyPreset(Map<String, dynamic> preset) {
+    final minsRaw = preset['minutes'];
+    final mins = minsRaw is num ? minsRaw.toInt() : 45;
+    final allowRaw = preset['allowedApps'];
+    setState(() {
+      _titleCtrl.text = '${preset['title'] ?? ''}';
+      _scenarioCtrl.text = '${preset['scenario'] ?? ''}';
+      _cpTitleCtrl.text = '${preset['checkpointTitle'] ?? preset['title'] ?? ''}';
+      _deliverableCtrl.text = '${preset['expectedDeliverable'] ?? ''}';
+      _verifyMode = preset['mode'] == 'video_extract' ? 'video_extract' : 'standard';
+      _minutes = const [20, 45, 60, 90].contains(mins) ? mins : 45;
+      if (allowRaw is List && allowRaw.isNotEmpty) {
+        _allowed
+          ..clear()
+          ..addAll(allowRaw.map((e) => '$e').where((s) => s.isNotEmpty));
+      }
+      _banner = '✓ 已套用模板「${preset['shortLabel'] ?? preset['title']}」——直接点下方按钮开跑，无需手写';
+    });
+  }
+
+  Future<void> _copyAiPlanPrompt([String? customPrompt]) async {
+    final title = _titleCtrl.text.trim().isEmpty ? '当前学习与推进任务' : _titleCtrl.text.trim();
+    final scenario = _scenarioCtrl.text.trim();
+    final deliv = _deliverableCtrl.text.trim();
+    final prompt = customPrompt ??
+        '我要进入 AI 计划模态：$title${scenario.isNotEmpty ? '（场景：$scenario）' : ''}。'
+        '请先调 plan_check_apps 检查我手机里现有 App（当前打算放行 ${_allowed.join('、')}），'
+        '再调 plan_set_contract 立下 $_minutes 分钟检查点（验收模式：${_verifyMode == 'video_extract' ? 'video_extract 视频提炼高强度追问' : 'standard 标准交付'}，'
+        '验收标准：$deliv，到点缓冲 1 分钟未过自动严格锁）。';
+    await Clipboard.setData(ClipboardData(text: prompt));
+    if (!mounted) return;
+    setState(() => _banner = '✓ 已复制标准计划指令到剪贴板，直接粘贴发给 鱼丸/鲸澜/Gemini 即可！');
   }
 
   Future<void> _probeApps() async {
@@ -195,6 +288,18 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
           ),
         ),
         actions: [
+          TextButton(
+            onPressed: () async {
+              final sum = sumCtrl.text.trim();
+              final msg = '以下是我围绕验收点「${cp['title']}」压出的提炼结论：\n${sum.isEmpty ? '【请补上你的提炼要点】' : sum}\n'
+                  '请调统筹规划部+督办审计部，按底层因果和考场/面试反例高强度追问我 2 句，答对后调 plan_verify_checkpoint(aiConfirmed=true) 放行。';
+              await Clipboard.setData(ClipboardData(text: msg));
+              if (ctx.mounted) {
+                ScaffoldMessenger.maybeOf(ctx)?.showSnackBar(const SnackBar(content: Text('已复制高强度对线指令，可发给 AI 验收')));
+              }
+            },
+            child: const Text('复制发 AI 对线'),
+          ),
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
           FilledButton(
             onPressed: () async {
@@ -378,7 +483,23 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('新建 / 共创计划模态契约', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                Text('新建 / 共创计划模态契约（点预设模板免打字）', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final p in (_remotePresets.isNotEmpty ? _remotePresets : _fallbackPresets)) ...[
+                        CapsuleChoiceChip(
+                          label: '${p['shortLabel'] ?? p['title']}',
+                          selected: _titleCtrl.text.trim() == '${p['title']}',
+                          onSelected: () => _applyPreset(p),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _titleCtrl,
@@ -414,6 +535,12 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
                       selected: false,
                       onSelected: _busy ? () {} : () => unawaited(_pickApps()),
                     ),
+                    CapsuleChoiceChip(
+                      label: '复制发 AI 对齐',
+                      icon: AppIcons.copy,
+                      selected: false,
+                      onSelected: () => unawaited(_copyAiPlanPrompt()),
+                    ),
                   ],
                 ),
                 if (_appProbe != null)
@@ -440,11 +567,12 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
                 const SizedBox(height: 6),
                 SegmentedPill<int>(
                   segments: const [
-                    PillSegment(25, '25m'),
+                    PillSegment(20, '20m'),
                     PillSegment(45, '45m'),
+                    PillSegment(60, '60m'),
                     PillSegment(90, '90m'),
                   ],
-                  selected: _minutes,
+                  selected: const [20, 45, 60, 90].contains(_minutes) ? _minutes : 45,
                   onChanged: (v) => setState(() => _minutes = v),
                 ),
                 const SizedBox(height: 10),
@@ -480,6 +608,27 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
                 Text(
                   '付款买课遇到私聊定金、或者又想手搓新工具时，直接放进来扫一遍红旗与主线对齐度。',
                   style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    CapsuleChoiceChip(
+                      label: '例：私聊买课 80 元',
+                      selected: false,
+                      onSelected: () => setState(() {
+                        _auditInputCtrl.text = '对方让私聊微信先付定金80元买资料包，说马上涨价且不退不换，刚注册小号';
+                      }),
+                    ),
+                    CapsuleChoiceChip(
+                      label: '例：想改写软件配置',
+                      selected: false,
+                      onSelected: () => setState(() {
+                        _auditInputCtrl.text = '我想暂停刷题，花一下午重写一套新脚本和UI配置提示词';
+                      }),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 TextField(

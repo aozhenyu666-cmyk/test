@@ -233,4 +233,46 @@ void main() {
     await settlePhone(tester);
     expect(ch.restartCalls, 1);
   });
+
+  testWidgets('Today workbench preset chip prefills focus form and shows prompt scripts sheet', (tester) async {
+    final ch = _FakeV4Channel();
+    ch.bouts = {'running': null, 'queue': []};
+    ch.todayData = {
+      ...ch.todayData,
+      'contract': {
+        'id': 'c-test',
+        'title': '看网课提炼因果卡',
+        'strictEscalated': false,
+        'checkpoints': [
+          {
+            'id': 'cp-1',
+            'title': '交因果卡',
+            'status': 'pending',
+            'dueAt': DateTime.now().millisecondsSinceEpoch + 1200000,
+          },
+        ],
+      },
+    };
+    await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: _FakeLoopChannel()));
+    await settlePhone(tester);
+
+    expect(find.text('契约：看网课提炼因果卡'), findsOneWidget);
+    expect(find.text('去验收'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('常用 AI 话术剧本（点即复制）'));
+    await settlePhone(tester);
+    expect(find.text('常用 AI 话术剧本表（免自己打字）'), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await settlePhone(tester);
+
+    await tester.tap(find.text('考公刷题 60m'));
+    await settlePhone(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('today-start-btn')));
+    await settlePhone(tester);
+    await tester.tap(find.byKey(const ValueKey('today-start-btn')));
+    await settlePhone(tester);
+
+    expect(ch.todayStarts.single['goal'], '考公行测/申论专项刷题与错题复盘');
+    expect(ch.todayStarts.single['minutes'], 60);
+  });
 }
