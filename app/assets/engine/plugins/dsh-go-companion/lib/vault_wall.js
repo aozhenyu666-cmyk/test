@@ -24,6 +24,9 @@ const KEY_MEALS = '吃饭时段'
 const KEY_EVENING = '对账后到深夜锁前娱乐'
 const KEY_SEGMENT = '一次放松最长分钟'
 const KEY_QUOTA = '每周放松天数'
+const KEY_SW_WINDOW = '切换统计窗口分钟'
+const KEY_SW_DICE = '窗口内切换几次摇骰'
+const KEY_SW_LOCK = '窗口内切换几次锁'
 
 /** 四项规则在 config.wall 里的名字 ↔ 规则.md 里的中文名。 */
 export const RULE_LABEL = {
@@ -31,6 +34,14 @@ export const RULE_LABEL = {
   eveningOpen: KEY_EVENING,
   relaxSegmentMin: KEY_SEGMENT,
   weeklyQuota: KEY_QUOTA,
+  switchWindowMin: KEY_SW_WINDOW,
+  switchDiceAt: KEY_SW_DICE,
+  switchLockAt: KEY_SW_LOCK,
+}
+
+/** 老的 规则.md 没有切换三项：读到时补上（用文件里原有的值重写，不改他写的东西）。 */
+export function rulesNeedSwitchKeys(text) {
+  return !String(text || '').includes(KEY_SW_WINDOW)
 }
 
 function hm(min) {
@@ -67,6 +78,9 @@ export function renderRules(cur) {
     KEY_EVENING + ': ' + (cur.eveningOpen ? '开' : '锁'),
     KEY_SEGMENT + ': ' + cur.relaxSegmentMin,
     KEY_QUOTA + ': ' + cur.weeklyQuota,
+    KEY_SW_WINDOW + ': ' + (cur.switchWindowMin ?? 10),
+    KEY_SW_DICE + ': ' + (cur.switchDiceAt ?? 3),
+    KEY_SW_LOCK + ': ' + (cur.switchLockAt ?? 5),
     '---',
     '',
     '# 墙的规则',
@@ -76,6 +90,7 @@ export function renderRules(cur) {
     '- **改严立即生效**：吃饭时段缩短、对账后改成"锁"、放松时长或天数调小。',
     '- **改松要等冷却期**（默认 ' + RULES_COOLDOWN_DAYS + ' 天）：写进 `待生效.md`，到期才生效；期间改回去就撤销。',
     '- 吃饭时段写成 `"HH:MM-HH:MM 名字"`，几段都行；格式不对的那一段墙会忽略。',
+    '- 切换三项只在局内 / 忙时 / 契约期算：窗口分钟内切到这一局白名单以外的 App，达到「摇骰」次数就摇骰并拉 Gemini，达到「锁」次数就锁。次数调小、窗口调大是改严。',
     '',
   ].join('\n')
 }
@@ -119,6 +134,12 @@ export function parseRules(text) {
   if (Number.isFinite(seg)) out.relaxSegmentMin = Math.max(15, Math.min(240, seg))
   const quota = Math.round(Number(raw[KEY_QUOTA]))
   if (Number.isFinite(quota)) out.weeklyQuota = Math.max(0, Math.min(7, quota))
+  const swW = Math.round(Number(raw[KEY_SW_WINDOW]))
+  if (raw[KEY_SW_WINDOW] !== undefined && Number.isFinite(swW)) out.switchWindowMin = Math.max(5, Math.min(60, swW))
+  const swD = Math.round(Number(raw[KEY_SW_DICE]))
+  if (raw[KEY_SW_DICE] !== undefined && Number.isFinite(swD)) out.switchDiceAt = Math.max(2, Math.min(20, swD))
+  const swL = Math.round(Number(raw[KEY_SW_LOCK]))
+  if (raw[KEY_SW_LOCK] !== undefined && Number.isFinite(swL)) out.switchLockAt = Math.max(3, Math.min(30, swL))
   return { ok: true, wall: out }
 }
 
@@ -147,9 +168,13 @@ export function classifyRules(cur, next) {
   if (typeof next.eveningOpen === 'boolean' && next.eveningOpen !== cur.eveningOpen) {
     ;(next.eveningOpen ? loosen : tighten).eveningOpen = next.eveningOpen
   }
-  for (const k of ['relaxSegmentMin', 'weeklyQuota']) {
+  for (const k of ['relaxSegmentMin', 'weeklyQuota', 'switchDiceAt', 'switchLockAt']) {
     if (typeof next[k] !== 'number' || next[k] === cur[k]) continue
     ;(next[k] > cur[k] ? loosen : tighten)[k] = next[k]
+  }
+  // 窗口反过来：窗口越小越松。
+  if (typeof next.switchWindowMin === 'number' && next.switchWindowMin !== cur.switchWindowMin) {
+    ;(next.switchWindowMin < cur.switchWindowMin ? loosen : tighten).switchWindowMin = next.switchWindowMin
   }
   return { tighten, loosen }
 }

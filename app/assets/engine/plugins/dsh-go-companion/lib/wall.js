@@ -71,6 +71,10 @@ export function wallConfig(config) {
     eveningOpen: w.eveningOpen === true,
     relaxSegmentMin: clampInt(w.relaxSegmentMin, 15, 240, RELAX_SEGMENT_MIN),
     weeklyQuota: clampInt(w.weeklyQuota, 0, 7, RELAX_WEEKLY_QUOTA),
+    // 2026-11-18 切换次数限制（局内 / 忙时 / 契约期）：窗口分钟内切到白名单外的 App 达到几次摇骰拉 Gemini、几次锁。
+    switchWindowMin: clampInt(w.switchWindowMin, 5, 60, 10),
+    switchDiceAt: clampInt(w.switchDiceAt, 2, 20, 3),
+    switchLockAt: clampInt(w.switchLockAt, 3, 30, 5),
   }
 }
 

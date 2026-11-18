@@ -181,7 +181,7 @@ import {
 import { executeCapability } from './capabilities.js'
 import { matchLorebook } from '../../dsh-go-memory/lib/lorebook.js'
 import {
-  AUDIT_DIR, PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText,
+  AUDIT_DIR, PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText, rulesNeedSwitchKeys,
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
 } from './vault_wall.js'
 import { GEMINI_PACKAGES, driftPull, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
@@ -3215,6 +3215,10 @@ export function apply(ctx) {
     }
     const parsed = parseRules(text)
     if (!parsed.ok) return
+    if (rulesNeedSwitchKeys(text)) {
+      // 老文件补上切换三项：其余四项用他文件里写的值原样写回。
+      writeVaultText(join(base, RULES_FILE), renderRules({ ...cur, ...parsed.wall }))
+    }
     const { tighten, loosen } = classifyRules(cur, parsed.wall)
     const prev = loadRulesPending()
     const { pending, due } = updatePending(prev, loosen, now, cooldown)
@@ -7552,6 +7556,16 @@ export function apply(ctx) {
           activeLease: config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null,
           funTotalToday: funToday(phone),
           penalty: penaltyNow,
+          // 2026-11-18 切换次数限制：只在干正事时算，阈值来自 规则.md。
+          ...(() => {
+            const contract = v4Hub?.contractSessionView?.(now) || null
+            const inWork = effectiveGear(config, now) === 'busy' || Boolean(contract) || Boolean(runningBoutNow()) || Boolean(aiTask(config, now))
+            return {
+              inWork,
+              switchRule: wallConfig(config),
+              workAllow: [...(Array.isArray(contract?.allow) ? contract.allow : []), ...(Array.isArray(config.defaultAllow) ? config.defaultAllow : [])],
+            }
+          })(),
         })
       : { triggered: false }
     const radar = rawRadar.triggered && rawRadar.kind === 'unplanned-nudge' &&
@@ -8011,9 +8025,19 @@ export function apply(ctx) {
         !mealNowVal &&
         !onBreak(now) &&
         phone?.screenOn !== false
-      if (canPullNow && (drift || (phone?.fun && dwellMin >= 8 && inActiveWork && cooldownOk))) {
-        const pullTopic = drift?.topic || `你在${phone?.label || phone?.app || '娱乐应用'}已停留 ${dwellMin} 分钟，立刻对齐下一步主线`
-        const pullBrief = v4Hub.buildProactiveGeminiBrief({
+      const switchPull = radar.triggered && radar.pullGemini === true && cooldownOk
+      if (canPullNow && (drift || switchPull || (phone?.fun && dwellMin >= 8 && inActiveWork && cooldownOk))) {
+        const pullTopic = drift?.topic || (switchPull ? `你在干正事时 ${radar.reason}，用骰子把注意力拉回这一局` : `你在${phone?.label || phone?.app || '娱乐应用'}已停留 ${dwellMin} 分钟，立刻对齐下一步主线`)
+        // 切换次数到线：摇一骰，带着这一骰的思维方式去连麦（简报里有设定、当下事实、回执）。
+        let pullBrief = ''
+        if (switchPull) {
+          try {
+            pullBrief = String(diceRollRoute({ manual: false, topic: '' })?.geminiPrompt || '')
+          } catch {
+            pullBrief = ''
+          }
+        }
+        if (!pullBrief) pullBrief = v4Hub.buildProactiveGeminiBrief({
           topic: pullTopic,
           mode: 'interrogate',
           minutes: 15,
@@ -8025,7 +8049,7 @@ export function apply(ctx) {
           at: now,
           topic: pullTopic,
           mode: pullMode,
-          reason: drift ? 'drift' : 'fun-dwell-8m',
+          reason: drift ? 'drift' : (switchPull ? 'switch-limit' : 'fun-dwell-8m'),
           preferVoice: true,
           brief: pullBrief,
         }

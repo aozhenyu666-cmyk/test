@@ -7,6 +7,37 @@
 
 import { classifyApp, isDualUseApp, isPureGame } from './app_resolver.js'
 import { minuteOfDay as zoneMinuteOfDay } from './tz.js'
+import { isNeverLockPkg } from './never_lock.js'
+
+/**
+ * 2026-11-18 切换次数限制：只在「在干正事」时算（局内 / 忙时 / 契约期）。窗口内切到白名单以外的
+ * App（桌面、DSH、系统、输入法、代理、急事、工作类、Gemini 都不算）达到 diceAt 次 → 摇骰并拉 Gemini；
+ * 达到 lockAt 次 → 锁当前这个白名单外的 App。返回 null = 没到线。
+ */
+export function evalSwitchLimit({ phone, allow = new Set(), declaredApps = [], rule = null } = {}) {
+  if (!phone || !rule) return null
+  const windowMs = Math.max(5, Number(rule.switchWindowMin) || 10) * 60_000
+  const diceAt = Math.max(2, Number(rule.switchDiceAt) || 3)
+  const lockAt = Math.max(diceAt + 1, Number(rule.switchLockAt) || 5)
+  const list = Array.isArray(phone.switches?.recent60m) && phone.switches.recent60m.length
+    ? phone.switches.recent60m
+    : (Array.isArray(phone.switches?.recent) ? phone.switches.recent : [])
+  const off = (pkg) => {
+    if (!pkg || allow.has(pkg) || isNeverLockPkg(pkg)) return false
+    if (pkg.includes('bard') || pkg.includes('googlequicksearchbox')) return false
+    const cat = classifyApp(pkg, { declaredApps })
+    return cat !== 'work' && cat !== 'emergency'
+  }
+  const hits = list.filter((r) => r && Number(r.agoMs) <= windowMs && off(String(r.app || '')))
+  const count = hits.length
+  const winMin = Math.round(windowMs / 60_000)
+  if (count >= lockAt) {
+    const target = off(phone.app) ? phone.app : ''
+    return { level: 'lock', count, winMin, target }
+  }
+  if (count >= diceAt) return { level: 'dice', count, winMin, target: '' }
+  return null
+}
 
 export function evalBehaviorRadar({
   phone,
@@ -21,6 +52,9 @@ export function evalBehaviorRadar({
   activeLease = null,
   funTotalToday = 0,
   penalty = null,
+  inWork = false,
+  switchRule = null,
+  workAllow = [],
 } = {}) {
   const out = {
     triggered: false,
@@ -50,6 +84,7 @@ export function evalBehaviorRadar({
   const boutAllow = new Set([
     ...(Array.isArray(runningBout?.apps?.need) ? runningBout.apps.need : []),
     ...(Array.isArray(runningBout?.apps?.allow) ? runningBout.apps.allow : []),
+    ...(Array.isArray(workAllow) ? workAllow : []),
   ])
   const inBoutAllow = boutAllow.has(phone.app)
 
@@ -110,6 +145,38 @@ export function evalBehaviorRadar({
       forceWhy: (phone.label || phone.app) + ' 已经连玩 ' + mins + ' 分钟，先强制停下。',
       speaker: 'companion',
       ballReason: 'radar-game-binge',
+    }
+  }
+
+  // 2.9) 切换次数限制（局内 / 忙时 / 契约期，阈值在 规则.md 里他自己改）
+  if (inWork && switchRule) {
+    const sw = evalSwitchLimit({ phone, allow: boutAllow, declaredApps, rule: switchRule })
+    if (sw?.level === 'lock' && sw.target) {
+      return {
+        ...out,
+        triggered: true,
+        kind: 'switch-limit-lock',
+        reason: sw.winMin + ' 分钟内切到白名单外 ' + sw.count + ' 次',
+        tempBlockApps: [sw.target],
+        refuseMinutes: 15,
+        forceLevel: 4,
+        forceWhy: sw.winMin + ' 分钟里切出去 ' + sw.count + ' 次了，先锁住这个，回到这一局。',
+        speaker: 'companion',
+        ballReason: 'radar-switch-lock',
+      }
+    }
+    if (sw) {
+      return {
+        ...out,
+        triggered: true,
+        kind: 'switch-limit-dice',
+        reason: sw.winMin + ' 分钟内切到白名单外 ' + sw.count + ' 次',
+        forceLevel: 0,
+        forceWhy: '',
+        pullGemini: true,
+        speaker: 'companion',
+        ballReason: 'radar-switch-dice',
+      }
     }
   }
 
