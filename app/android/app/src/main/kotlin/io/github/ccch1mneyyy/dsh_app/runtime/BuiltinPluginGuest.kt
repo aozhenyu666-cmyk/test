@@ -261,6 +261,8 @@ object BuiltinPluginGuest {
                 "lib/driver.js",
                 // 2026-11-18 会话换班
                 "lib/rotate.js",
+                // 2026-11-18 思考层
+                "lib/reflect.js",
             ),
         ),
     )

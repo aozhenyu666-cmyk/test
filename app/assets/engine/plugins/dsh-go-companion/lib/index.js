@@ -154,6 +154,7 @@ import { buildLockDecision } from './lock_decision.js'
 import { driveMode, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
+import { noteExcerpts, reflectDue, reflectLines, reflectMarkdown, reflectSlot, reflectSystem, reflectUser, runReflect } from './reflect.js'
 import { resolveActiveSisterSkin } from './unified_arbiter.js'
 
 /**
@@ -783,6 +784,7 @@ export function apply(ctx) {
   let lastVibe = { face: '', turn: 0 }
   /** B2：一次只跑一个夜间整理。/plan 会被频繁问到，不挡一下就会并发发起好几次模型调用。 */
   let nightlyRunning = false
+  let reflectRunning = false
   /** requestId -> 发球时的现状（generated 时交给大脑开始计"有没有拉回来"）。 */
   const servedContext = new Map()
   /** B1：sessionId -> 这一轮已经被守卫打回过的判定（只留最近一次，重写只有一个机会）。 */
@@ -6512,6 +6514,8 @@ export function apply(ctx) {
       ...(living.innerOs ? [{ id: 'inner-os', layer: 'content', priority: 19, text: living.innerOs }] : []),
       // B2：夜间整理的底稿。进内容层（可裁）——它是背景素材，不是规矩，不该占状态层的位置。
       { id: 'nightly', layer: 'content', priority: 16, text: nightlyLines(loadNightly(), nowMs) },
+      // 2026-11-18 思考层：她们最近在想的（要紧、规律、想跟他提的、她自己的日常）。
+      { id: 'reflect', layer: 'content', priority: 70, text: (() => { try { return reflectLines(loadReflect(), role, nowMs) } catch { return '' } })() },
       // A4：块刚结束的这一句进内容层（可裁），不进约束层——它是随机的一句话，不是规矩。
       { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && nowMs - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
       { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
@@ -7899,6 +7903,79 @@ export function apply(ctx) {
     return handoffLive({ ...h, at: Number(h.boundAt || h.at) }, { now, turnsSince }) ? h.text : ''
   }
 
+  // ---------------------------------------------------------------- 2026-11-18 思考层
+  const loadReflect = () => readState(stateFile('reflect.json'), null)
+  function reflectInputs(now, tz) {
+    const reports = readState(stateFile('evening-reports.json'), null)?.reports || {}
+    const verdicts = Object.keys(reports).sort().slice(-7).map((d) => d + ' ' + String(reports[d]?.verdict?.line || reports[d]?.headline || '').slice(0, 160))
+    const day = dayString(now, tz)
+    const led = readLedger(home(), 1200).filter((e) => dayString(Number(e?.at) || 0, tz) === day)
+    const drives = [
+      '推进 ' + led.filter((e) => e.state === 'drive').length + ' 次，接管 ' + led.filter((e) => e.state === 'takeover-start').length + ' 次，紧急解除 ' + led.filter((e) => e.state === 'disarm').length + ' 次',
+      ...led.filter((e) => e.state === 'takeover-start').slice(-3).map((e) => '接管原因：' + String(e.why || '')),
+    ]
+    const g = loadGemini()
+    const receipts = (Array.isArray(g.recaps) ? g.recaps : []).slice(-5).map((r) => String(r.topic || '') + '：' + String(r.summary || '') + (r.conclusion ? '；结论 ' + r.conclusion : '') + (r.next ? '；下一步 ' + r.next : '') + (r.receipt === false ? '（无完整回执）' : ''))
+    let horizons = []
+    try {
+      const h = readState(stateFile('horizons.json'), null) || {}
+      horizons = [...(h.long || []), ...(h.medium || [])].slice(0, 8).map((i) => (i.horizon === 'long' ? '长期' : '中期') + '：' + i.title + ' ' + i.doneSteps + '/' + i.targetSteps + (i.due ? ' 截止 ' + i.due : ''))
+    } catch {}
+    let notes = []
+    try {
+      const dir = notesDir()
+      if (dir) notes = noteExcerpts(vaultRecentNotes(dir, { limit: 6, now, exclude: [] }).map((f) => ({ rel: f.rel, path: join(dir, f.rel) })), (p) => readVaultText(p) || '')
+    } catch {}
+    const prev = loadReflect()?.value
+    return {
+      verdicts,
+      appLedger: appLedgerLines(now),
+      quota: lastQuota?.line || '',
+      deadlines: (() => { try { return (v4Hub?.upcomingDeadlines?.(now) || []).map((d) => d.title + ' 还剩 ' + d.daysLeft + ' 天') } catch { return [] } })(),
+      horizons,
+      receipts,
+      drives,
+      said: recentHuman.slice(-8).map((h) => h.text),
+      notes,
+      previous: prev ? [...(prev.urgent || []).map((x) => '要紧：' + x.what), ...(prev.patterns || []).map((x) => '规律：' + x.what)] : [],
+    }
+  }
+  async function runReflectNow(now, tz, slot) {
+    const target = nightlyTargetOf(ctx, config)
+    record({ state: 'reflect', at: now, slot, stage: 'start' })
+    const out = await runReflect({ stream: streamOf(), provider: target.provider, model: target.model, system: reflectSystem(roleNames(config)), user: reflectUser(reflectInputs(now, tz)) })
+    if (!out.ok) {
+      record({ state: 'reflect', at: Date.now(), slot, stage: 'discard', why: String(out.problems?.[0] || '').slice(0, 120) })
+      return null
+    }
+    const v = out.value
+    writeJson(stateFile('reflect.json'), { at: Date.now(), slot, value: v })
+    // 她们给自己调参：伙伴档间隔（有上下限）。
+    if (v.self?.companionGapMin) {
+      commit({ minGapMs: v.self.companionGapMin * 60_000 })
+      record({ state: 'reflect-self', at: Date.now(), minGapMin: v.self.companionGapMin, note: v.self.note || '' })
+    }
+    // 改严的 App 分层直接执行；其余只是建议。
+    const tf = tierFnNow()
+    for (const p of v.proposals || []) {
+      if (p.kind !== 'tighten_app') continue
+      const before = tf(p.app)
+      if (before === 'base' || (TIER_RANK[p.tier] ?? 0) <= (TIER_RANK[before] ?? 1)) continue
+      commit({ appTiers: { ...(config.appTiers || {}), [p.app]: p.tier } })
+      record({ state: 'app-tier-set', at: Date.now(), pkg: p.app, from: before, to: p.tier, by: 'reflect', why: p.evidence })
+      writeTierFile()
+    }
+    try {
+      const kb = vaultKb()
+      if (kb) {
+        const label = dayString(now, tz) + ' ' + (slot === 0 ? '午间' : '晚间')
+        writeVaultText(join(kb, '两条鱼', '思考', dayString(now, tz) + '-' + (slot === 0 ? '午' : '晚') + '.md'), reflectMarkdown(v, { at: now, label }))
+      }
+    } catch {}
+    record({ state: 'reflect', at: Date.now(), slot, stage: 'done', urgent: v.urgent.length, patterns: v.patterns.length, proposals: v.proposals.length, dropped: out.dropped || 0 })
+    return v
+  }
+
   function planRoute(body) {
     const now = Date.now()
     const tz = requestZone(body?.timeZone, config)
@@ -8115,6 +8192,19 @@ export function apply(ctx) {
       }
     } catch (error) {
       console.error('[companion] 夜间整理判定失败：' + String((error && error.message) || error))
+    }
+    // 2026-11-18 思考层：午间 13:30、晚间 22:15 各一次，对话中不跑；异步，不卡 /plan。
+    try {
+      const rslot = reflectSlot(zoneMinuteOfDay(now, tz))
+      if (!reflectRunning && rslot >= 0 && !inConversation(sessionId, now) &&
+        reflectDue(ledger, { day: dayString(now, tz), slot: rslot, dayOf: (t) => dayString(t, tz) })) {
+        reflectRunning = true
+        runReflectNow(now, tz, rslot)
+          .catch((error) => console.error('[companion] 思考层失败：' + String((error && error.message) || error)))
+          .finally(() => { reflectRunning = false })
+      }
+    } catch (error) {
+      console.error('[companion] 思考层判定失败：' + String((error && error.message) || error))
     }
     // 第六轮 D：自建工作流到期处理。试启用 7 天没可数效果就停；转正的 30 天复核对不上同样停。
     // 和暗思考一样挂在 /plan 上——引擎里没有第二个"后台"面，不自建调度器。
