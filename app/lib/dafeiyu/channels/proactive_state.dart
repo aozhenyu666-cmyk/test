@@ -830,6 +830,103 @@ class ProactiveChannel {
       return null;
     }
   }
+
+  /// 三层自由主线（GET /horizons & POST /horizons）。
+  Future<Map<String, dynamic>?> horizonsOp([Map<String, Object?>? body]) async {
+    try {
+      final raw = body == null
+          ? await _methods.invokeMethod<Object?>('horizonsStatus')
+          : await _methods.invokeMethod<Object?>('horizonsOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// AI 协同计划模态契约接口（GET / POST /plan-contract）。
+  Future<Map<String, dynamic>?> planContractOp([Map<String, Object?>? body]) async {
+    try {
+      final raw = body == null
+          ? await _methods.invokeMethod<Object?>('planContractStatus')
+          : await _methods.invokeMethod<Object?>('planContractOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 题库导入与刷题解锁配置接口（GET / POST /bank）。
+  Future<Map<String, dynamic>?> bankOp([Map<String, Object?>? body]) async {
+    try {
+      final raw = body == null
+          ? await _methods.invokeMethod<Object?>('bankStatus')
+          : await _methods.invokeMethod<Object?>('bankOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 正向自律分级与泄压状态（GET /autonomy）。
+  Future<Map<String, dynamic>?> autonomyStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('autonomyStatus');
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 四部认知 Skill 审计接口（POST /skills/audit）。
+  Future<Map<String, dynamic>?> skillsAuditOp(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('skillsAuditOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 读取当前专注允许直达的白名单 App（带可读中文名）。
+  Future<List<Map<String, String>>> allowedFocusApps() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('allowedFocusApps');
+      if (raw is! List) return const [];
+      return [
+        for (final item in raw)
+          if (item is Map && item['packageName'] is String)
+            {
+              'packageName': '${item['packageName']}',
+              'label': '${item['label'] ?? item['packageName']}',
+            },
+      ];
+    } on Exception {
+      return const [];
+    }
+  }
+
+  /// 紧急挂起严格锁 N 分钟（防止人机双锁死，返回 DSH 主控安全调整）。
+  Future<bool> emergencySuspendStrict({int minutes = 10}) async {
+    try {
+      return await _methods.invokeMethod<bool>('emergencySuspendStrict', {'minutes': minutes}) ?? false;
+    } on Exception {
+      return false;
+    }
+  }
+
+  /// 从专注可用 App 专属舱直接打开允许的 App（无需回桌面）。
+  Future<bool> launchApp(String packageName) async {
+    try {
+      return await _methods.invokeMethod<bool>('launchApp', {'packageName': packageName}) ?? false;
+    } on Exception {
+      return false;
+    }
+  }
 }
 
 /// 大肥鱼与独立守护 App「大肥鱼哨兵」之间的互信绑定状态。

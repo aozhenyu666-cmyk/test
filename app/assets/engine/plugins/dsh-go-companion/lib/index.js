@@ -145,6 +145,7 @@ import {
   evaluateElasticBuffer, evaluateExternalRecapFallback, grantEmergencyPass, isEmergencyPassActive,
   issueAppLease, revokeAppLease,
 } from './external_agents.js'
+import { createV4Hub } from './v4_hub.js'
 
 /**
  * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
@@ -2534,6 +2535,42 @@ export function apply(ctx) {
     schema: { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean' }, text: { type: 'string' } } },
     render: (_a, v) => [{ type: 'text', text: String((v && v.text) || '') }],
   }
+  const v4Hub = createV4Hub({
+    stateFile,
+    readState,
+    writeJson,
+    home,
+    notesDir,
+    kbDir,
+    getConfig: () => config,
+    getLastPhone: () => lastPhone,
+    getLastRolledDice: () => lastRolledDice,
+    appsOf,
+    usageReportView,
+    readLedger,
+    record,
+    boutsGetRoute: () => boutsGetRoute(),
+    planDayRoute: (b) => planDayRoute(b),
+    handoffRoute: (b) => handoffRoute(b),
+    dayString,
+    zoneOr,
+    presetRt,
+    grantTempPass: (until, reason) => {
+      const cur = loadExternal()
+      saveExternal({
+        ...cur,
+        emergencyPass: {
+          active: true,
+          grantedAt: Date.now(),
+          until,
+          reason: String(reason || '刷题解锁').slice(0, 60),
+          day: dayString(Date.now(), zoneOr(config.timeZone)),
+          countToday: Number(cur?.emergencyPass?.countToday) || 0,
+        },
+      })
+    },
+    toolOutput,
+  })
   if (tools && typeof tools.register === 'function') {
     for (const def of [
       dispatchControlTool('global'),
@@ -2544,6 +2581,7 @@ export function apply(ctx) {
       rollSixDiceTool('global'),
       exportCognitiveHandoffTool('global'),
       addTodayTaskTool('global'),
+      ...v4Hub.globalTools,
     ]) {
       try {
         const offExtra = tools.register(def)
@@ -6208,6 +6246,7 @@ export function apply(ctx) {
       { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
       { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
+      { id: 'v4-skills', layer: 'content', priority: 66, text: v4Hub.skillsPromptFor(live?.department || 'dept:govern') },
       { id: 'telemetry', layer: 'content', priority: 9, text: telemetryText },
       ...(loreText ? [{ id: 'lorebook', layer: 'content', priority: 7, text: '【情境记忆】\n' + loreText }] : []),
       ...(contradiction?.contradicted
@@ -6834,7 +6873,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -6904,6 +6943,10 @@ export function apply(ctx) {
         if (path === '/handoff') return send(res, 200, handoffRoute(body.value || {}))
         if (path === '/today/start') return send(res, 200, todayStartRoute(body.value || {}))
         if (path === '/today/task') return send(res, 200, todayTaskRoute(body.value || {}))
+        if (path === '/horizons') return send(res, 200, v4Hub.horizonsRoute(body.value || {}))
+        if (path === '/bank') return send(res, 200, v4Hub.bankRoute(body.value || {}))
+        if (path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
+        if (path === '/skills/audit') return send(res, 200, v4Hub.skillsAuditRoute(body.value || {}))
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
@@ -7179,7 +7222,11 @@ export function apply(ctx) {
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bouts') return send(res, 200, boutsGetRoute())
-      if (req.method === 'GET' && path === '/today') return send(res, 200, todayView())
+      if (req.method === 'GET' && path === '/today') return send(res, 200, v4Hub.todayViewV4())
+      if (req.method === 'GET' && path === '/horizons') return send(res, 200, v4Hub.horizonsRoute({ action: 'list' }))
+      if (req.method === 'GET' && path === '/bank') return send(res, 200, v4Hub.bankRoute({ action: 'status' }))
+      if (req.method === 'GET' && path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute({ action: 'status' }))
+      if (req.method === 'GET' && path === '/autonomy') return send(res, 200, { v: 1, ok: true, autonomy: v4Hub.computeAutonomy() })
       if (req.method === 'GET' && path === '/usage/report') return send(res, 200, usageReportView())
       if (req.method === 'GET' && path === '/dice/roll') return send(res, 200, diceRollRoute({ manual: false }))
       if (req.method === 'GET' && path === '/memory/import') return send(res, 200, importVaultMemoriesRoute({}))
@@ -7749,13 +7796,21 @@ export function apply(ctx) {
       }
     }
     const epUntil = emergencyActive ? extState.emergencyPass.until : 0
-    const effectiveForceLevel = emergencyActive ? 0 : Math.max(force.level, radar.triggered ? radar.forceLevel : 0)
-    const effectiveForceWhy = radar.triggered ? (radar.forceWhy || force.why) : force.why
-    const effectiveForceRelease = emergencyActive || (!radar.triggered && (onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)))
+    const v4ContractTick = v4Hub.onPlanTick(now)
+    const effectiveForceLevel = emergencyActive
+      ? 0
+      : Math.max(force.level, radar.triggered ? radar.forceLevel : 0, v4ContractTick.forceStrictByContract ? 4 : 0)
+    const effectiveForceWhy = v4ContractTick.forceStrictByContract
+      ? '计划模态检查点已超 1 分钟缓冲未验收，自动转为严格锁定'
+      : (radar.triggered ? (radar.forceWhy || force.why) : force.why)
+    const effectiveForceRelease = emergencyActive || (!v4ContractTick.forceStrictByContract && !radar.triggered && (onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)))
     const mediaAction = !emergencyActive && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     return {
       v: 1, ...out, silence, sessionId, speaker: nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion',
       tide: { level: water.level, band: water.band, why: water.why },
+      autonomy: v4ContractTick.autonomy,
+      planContract: v4ContractTick.contract,
+      contractGraceWarning: v4ContractTick.graceWarning,
       // release：只有他讲通了（宽限期内）或 3 分钟应急放行期间才放行大肥鱼加的锁。
       force: { level: effectiveForceLevel, name: force.name, why: effectiveForceWhy, app: phone?.app || undefined,
         release: effectiveForceRelease },

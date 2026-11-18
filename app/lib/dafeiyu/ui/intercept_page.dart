@@ -27,6 +27,7 @@ import '../../ui/phone/action_log_page.dart' show formatLogTime;
 import '../../ui/phone/hold_to_confirm.dart';
 import '../dafeiyu_strings.dart';
 import 'app_picker_dialog.dart';
+import 'bank_manager_page.dart';
 
 class InterceptPage extends StatefulWidget {
   const InterceptPage({super.key, this.channel, this.loopChannel});
@@ -485,13 +486,21 @@ class _InterceptPageState extends State<InterceptPage> {
               icon: AppIcons.info,
               iconColor: strictActive ? colors.success : colors.info,
               title: switch (config.lockMode) {
-                InterceptLockMode.strict => '严格锁机：禁用数字放行与白名单放行，仅可回任务 / 破窗 / 急事 3 分钟',
+                InterceptLockMode.strict => '严格锁机：专属锁屏拦截娱乐并列可用 App，支持导入题库闯关 / 急事 3 分钟 / 长按回 DSH',
                 InterceptLockMode.linked => (status?.focusActive ?? false)
-                    ? '专注联动（当前严格生效中）：专注监督开启期间自动禁用数字放行'
-                    : '专注联动：日常使用冷静训练；开启专注监督后自动切换为严格锁机',
-                _ => '冷静训练：需先经历冷静倒计时，再按序完成数字训练方可临时放行',
+                    ? '专注联动（当前严格生效中）：专注监督开启期间自动升格为严格锁机'
+                    : '专注联动：日常使用题库门禁；开启专注监督后自动切换为严格锁机',
+                _ => '题库门禁模式：拦住娱乐后可直达正事 App，或刷完导入真题（10 题）临时放行 5 分钟',
               },
               titleMaxLines: 3,
+            ),
+            ListPageRow(
+              icon: AppIcons.skill,
+              iconColor: colors.info,
+              title: '备考题库中心（10 题解锁 5 分钟）',
+              subtitle: '导入 JSON / 纯文本考公与专业题库，替代无用按数字与走 150 步',
+              subtitleMaxLines: 2,
+              onTap: () => unawaited(BankManagerPage.open(context)),
             ),
           ],
         ),

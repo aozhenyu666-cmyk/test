@@ -166,7 +166,8 @@ object FocusRuntime {
         }
         val pkg = packageName?.trim().orEmpty()
         if (pkg.isEmpty()) return
-        val inTask = pkg in state.allowed || pkg == app.packageName
+        val inTask = pkg in state.allowed ||
+            io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSelfPackage(pkg, app.packageName)
         if (inTask) {
             lastNonDeviationPkg = pkg
             deviationPkg = ""
@@ -174,7 +175,8 @@ object FocusRuntime {
             return
         }
         if (pkg != deviationPkg) {
-            if (lastNonDeviationPkg != null && pkg !in FocusPolicy.ALWAYS_ALLOWED && pkg !in imePackages) {
+            val isNeutralOrSafe = io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSafeSystemOrHome(pkg, imePackages)
+            if (lastNonDeviationPkg != null && !isNeutralOrSafe) {
                 bounceStamps.addLast(now)
                 while (bounceStamps.isNotEmpty() && now - bounceStamps.first() > FocusPolicy.BOUNCE_WINDOW_MS) {
                     bounceStamps.removeFirst()
@@ -327,10 +329,7 @@ object FocusRuntime {
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
-        val strictSession = runCatching {
-            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.isStrictSession()
-        }.getOrDefault(false)
-        if (state.active && !strictSession) {
+        if (state.active) {
             builder.addAction(
                 Notification.Action.Builder(
                     null,
@@ -339,7 +338,7 @@ object FocusRuntime {
                 ).build(),
             )
             builder.addAction(
-                Notification.Action.Builder(null, "结束监督", action(FocusActionReceiver.ACTION_STOP)).build(),
+                Notification.Action.Builder(null, if (strictSession) "紧急暂停" else "结束监督", action(FocusActionReceiver.ACTION_STOP)).build(),
             )
         }
         val notification = builder.build()

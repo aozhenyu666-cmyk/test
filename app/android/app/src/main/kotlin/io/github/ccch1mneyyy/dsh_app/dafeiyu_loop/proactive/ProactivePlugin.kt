@@ -317,6 +317,50 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/today/task", body)
             }
+            "horizonsStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/horizons", null)
+            "horizonsOp" -> {
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/horizons", body)
+            }
+            "planContractStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/plan-contract", null)
+            "planContractOp" -> {
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/plan-contract", body)
+            }
+            "bankStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/bank", null)
+            "bankOp" -> {
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/bank", body)
+            }
+            "autonomyStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/autonomy", null)
+            "skillsAuditOp" -> {
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/skills/audit", body)
+            }
+            "allowedFocusApps" -> {
+                val apps = ProactiveRuntime.allowedAppsForFocus().map { (pkg, label) ->
+                    linkedMapOf<String, Any?>("packageName" to pkg, "label" to label)
+                }
+                result.success(apps)
+            }
+            "emergencySuspendStrict" -> {
+                val mins = (call.argument<Number>("minutes")?.toInt() ?: 10).coerceIn(3, 30)
+                ProactiveRuntime.suspendStrictForEmergency(mins)
+                result.success(true)
+            }
+            "launchApp" -> {
+                val pkg = call.argument<String>("packageName")?.trim().orEmpty()
+                if (pkg.isEmpty()) {
+                    result.success(false)
+                } else {
+                    io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.intercept.InterceptRuntime.openTarget(context, pkg)
+                    result.success(true)
+                }
+            }
             else -> result.notImplemented()
         }
     }

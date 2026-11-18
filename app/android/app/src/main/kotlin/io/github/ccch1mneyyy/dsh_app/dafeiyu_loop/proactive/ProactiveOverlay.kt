@@ -766,37 +766,58 @@ object ProactiveOverlay {
                 }
             }
 
+            // 左侧 60dp 立体大骰子 + 右侧标题/锚点/收起：高分屏一秒看清点数且不撑高悬浮窗
             val topRow = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            topRow.addView(TextView(context).apply {
-                text = "🎲 骰$dice · $name" + if (appLabel.isNotBlank()) "（$appLabel）" else ""
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            val dieView = DiceFaceView(context, palette, dice).also { v ->
+                val sz = context.dp(60f)
+                topRow.addView(v, LinearLayout.LayoutParams(sz, sz).apply {
+                    marginEnd = context.dp(12f)
+                })
+                v.playRoll(dice)
+            }
+            val metaCol = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            val headerLine = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            headerLine.addView(TextView(context).apply {
+                text = "骰$dice · $name" + if (appLabel.isNotBlank()) "（$appLabel）" else ""
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
                 setTextColor(palette.accent)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            topRow.addView(TextView(context).apply {
+            headerLine.addView(TextView(context).apply {
                 text = "收起"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setTextColor(palette.muted)
-                setPadding(context.dp(8f), context.dp(4f), context.dp(4f), context.dp(4f))
+                setPadding(context.dp(8f), context.dp(4f), context.dp(2f), context.dp(4f))
                 isClickable = true
                 setOnClickListener { close() }
             })
-            card.addView(topRow)
+            metaCol.addView(headerLine)
 
             if (anchor.isNotBlank()) {
-                card.addView(TextView(context).apply {
+                metaCol.addView(TextView(context).apply {
                     text = "锚点：$anchor"
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                     setTextColor(palette.muted)
                     maxLines = 2
                     ellipsize = TextUtils.TruncateAt.END
-                    setPadding(0, context.dp(4f), 0, 0)
+                    setPadding(0, context.dp(3f), 0, 0)
                 })
             }
+            topRow.addView(metaCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            dieView.setOnClickListener {
+                if (!busy) onReroll()
+            }
+            card.addView(topRow)
 
             card.addView(TextView(context).apply {
                 text = ask
@@ -956,6 +977,112 @@ object ProactiveOverlay {
             root?.let { runCatching { wm?.removeView(it) } }
             root = null
             if (liveDice === this) liveDice = null
+        }
+    }
+
+    /**
+     * 自绘 60dp 物理立体骰面 + 380ms 弹性翻滚定格动画：
+     * 1 点醒目朱红大圆芯、4 点双红、2/3/5/6 高对比墨青点阵，角落附微缩数字标。
+     */
+    private class DiceFaceView(
+        context: Context,
+        private val palette: OverlayPalette,
+        initialFace: Int,
+    ) : View(context) {
+        private var currentFace = initialFace.coerceIn(1, 6)
+        private var rollAnim: android.animation.ValueAnimator? = null
+        private val facePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        private val borderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+        }
+        private val pipPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        private val badgePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = android.graphics.Paint.Align.RIGHT
+        }
+        private val rect = android.graphics.RectF()
+
+        fun playRoll(targetFace: Int) {
+            val target = targetFace.coerceIn(1, 6)
+            rollAnim?.cancel()
+            val animEnabled = if (Build.VERSION.SDK_INT >= 26) android.animation.ValueAnimator.areAnimatorsEnabled() else true
+            if (!animEnabled) {
+                currentFace = target
+                rotation = 0f
+                scaleX = 1f
+                scaleY = 1f
+                invalidate()
+                return
+            }
+            var lastStep = -1
+            rollAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 380L
+                interpolator = android.view.animation.OvershootInterpolator(1.35f)
+                addUpdateListener { va ->
+                    val t = va.animatedFraction.coerceIn(0f, 1f)
+                    val step = (t * 5f).toInt()
+                    if (t >= 0.92f) {
+                        currentFace = target
+                        rotation = 0f
+                    } else if (step != lastStep) {
+                        lastStep = step
+                        currentFace = ((target + step * 2) % 6) + 1
+                    }
+                    rotation = ((1f - t) * 18f * kotlin.math.sin(t * kotlin.math.PI * 3.0)).toFloat()
+                    val s = if (t < 0.45f) 0.80f + (t / 0.45f) * 0.28f else 1.08f - ((t - 0.45f) / 0.55f) * 0.08f
+                    scaleX = s
+                    scaleY = s
+                    invalidate()
+                }
+                start()
+            }
+        }
+
+        override fun onDetachedFromWindow() {
+            rollAnim?.cancel()
+            super.onDetachedFromWindow()
+        }
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) return
+            val pad = w * 0.06f
+            rect.set(pad, pad, w - pad, h - pad)
+            val radius = w * 0.24f
+
+            // 底板 + 描边（微立体高光）
+            facePaint.color = palette.pressed
+            canvas.drawRoundRect(rect, radius, radius, facePaint)
+            borderPaint.color = palette.accent
+            borderPaint.strokeWidth = (w * 0.045f).coerceAtLeast(2f)
+            canvas.drawRoundRect(rect, radius, radius, borderPaint)
+
+            val cx = w / 2f
+            val cy = h / 2f
+            val off = w * 0.24f
+            val positions: List<Pair<Float, Float>> = when (currentFace) {
+                1 -> listOf(cx to cy)
+                2 -> listOf(cx - off to cy - off, cx + off to cy + off)
+                3 -> listOf(cx - off to cy - off, cx to cy, cx + off to cy + off)
+                4 -> listOf(cx - off to cy - off, cx + off to cy - off, cx - off to cy + off, cx + off to cy + off)
+                5 -> listOf(cx - off to cy - off, cx + off to cy - off, cx to cy, cx - off to cy + off, cx + off to cy + off)
+                else -> listOf(
+                    cx - off to cy - off, cx + off to cy - off,
+                    cx - off to cy, cx + off to cy,
+                    cx - off to cy + off, cx + off to cy + off,
+                )
+            }
+            val redPip = android.graphics.Color.parseColor("#E04F44")
+            val r = if (currentFace == 1) w * 0.145f else w * 0.088f
+            for (pt in positions) {
+                pipPaint.color = if (currentFace == 1 || currentFace == 4) redPip else palette.ink
+                canvas.drawCircle(pt.first, pt.second, r, pipPaint)
+            }
+
+            badgePaint.color = palette.muted
+            badgePaint.textSize = w * 0.19f
+            canvas.drawText(currentFace.toString(), w - pad * 2.1f, h - pad * 1.9f, badgePaint)
         }
     }
 }

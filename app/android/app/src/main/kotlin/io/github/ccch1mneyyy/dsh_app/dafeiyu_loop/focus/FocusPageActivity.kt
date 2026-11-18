@@ -179,12 +179,71 @@ class FocusPageActivity : Activity() {
             finish()
         })
 
-        glass.addView(holdButton("长按 3 秒 · 临时休息 5 分钟", holdMs = 3_000L, secondary = false) {
-            FocusRuntime.pause(5)
+        // 专注可用 App 直达舱：把当前白名单 App 直接摆在专注页，不用切回桌面翻找
+        val allowedApps = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.allowedAppsForFocus()
+        if (allowedApps.isNotEmpty()) {
+            val hubCard = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = rounded(p.input, dp(16), p.stroke)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(12) }
+            }
+            hubCard.addView(TextView(this).apply {
+                text = "当前可用白名单 App（点击直达，不用回桌面）"
+                textSize = 12f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(p.sub)
+                setPadding(0, 0, 0, dp(8))
+            })
+            for (chunk in allowedApps.chunked(2)) {
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { bottomMargin = dp(6) }
+                }
+                chunk.forEachIndexed { idx, (pkgName, appTitle) ->
+                    row.addView(Button(this).apply {
+                        text = appTitle
+                        textSize = 13.5f
+                        isAllCaps = false
+                        setTextColor(p.text)
+                        background = rounded(p.card, dp(12), p.stroke)
+                        stateListAnimator = null
+                        backgroundTintList = null
+                        setOnClickListener {
+                            packageManager.getLaunchIntentForPackage(pkgName)?.let {
+                                startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                            finish()
+                        }
+                    }, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+                        if (idx == 0 && chunk.size > 1) marginEnd = dp(6)
+                    })
+                }
+                hubCard.addView(row)
+            }
+            glass.addView(hubCard)
+        }
+
+        glass.addView(holdButton("长按 3 秒 · 紧急暂停并回 DSH 控制台", holdMs = 3_000L, secondary = false) {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.suspendStrictForEmergency(10)
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
             finish()
         })
         glass.addView(holdButton("长按 5 秒 · 提前结束监督", holdMs = 5_000L, secondary = true) {
             FocusRuntime.stop("user")
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
             finish()
         })
 

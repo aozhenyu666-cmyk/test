@@ -21,6 +21,7 @@ import '../../ui/common/sheet_title_bar.dart';
 import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
+import 'plan_modality_page.dart';
 
 /// 一局的草稿。字段名和插件 `planwire.js` 的 item 一致：多发一个键就是多一处要同步的地方。
 ///
@@ -435,6 +436,35 @@ class _PlanPageState extends State<PlanPage> {
             ],
           )
         else ...[
+          GlassSurface(
+            tier: GlassTier.card,
+            borderRadius: AppShape.radiusLg,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  const Icon(AppIcons.planMode, size: 20),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('AI 协同计划模态（推荐）', style: TextStyle(fontWeight: FontWeight.w700)),
+                        SizedBox(height: 2),
+                        Text('与 AI 共创验收点、查本机可用 App、支持视频提炼对线与逾期 1 分钟自动严格锁。', style: TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.tonal(
+                    onPressed: () => unawaited(PlanModalityPage.open(context, channel: widget.channel, loopChannel: widget.loop)),
+                    child: const Text('进入'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           if (_numbers.isNotEmpty) ...[_numbersCard(), const SizedBox(height: 12)],
           if (_sentence.isNotEmpty || _acceptLeftMs > 0) ...[_planCard(), const SizedBox(height: 12)],
           for (var i = 0; i < _rows.length; i += 1) _card(i),

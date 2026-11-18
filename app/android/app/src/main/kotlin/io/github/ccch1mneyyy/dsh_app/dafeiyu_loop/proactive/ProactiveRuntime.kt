@@ -539,6 +539,10 @@ object ProactiveRuntime {
 
     private fun listed(pkg: String): Boolean {
         if (pkg in NEVER_LOCK) return false
+        if (io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSafeSystemOrHome(pkg, SessionFactsOf.home(app)) ||
+            io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSelfPackage(pkg, app.packageName)) {
+            return false
+        }
         // Gemini 互动舱：按分级策略判——只有 LOCK 才算"要拦的"，宽限期里的 GRACE 不锁。
         if (sessionActive()) return sessionVerdict(pkg) == SessionVerdict.LOCK
         if (pkg in blockedNow()) return true
@@ -583,10 +587,12 @@ object ProactiveRuntime {
         if (!forceCheck && !FrontChange.switched(pkg)) return false
         val now = System.currentTimeMillis()
         if (pkg != frontPkg) {
-            val isAllowLike = pkg in sessionAllow || pkg == app.packageName
+            val isAllowLike = pkg in sessionAllow ||
+                io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSelfPackage(pkg, app.packageName)
+            val isNeutralOrSafe = io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSafeSystemOrHome(pkg, SessionFactsOf.home(app))
             if (isAllowLike) {
                 lastSessionInAllowPkg = pkg
-            } else if (lastSessionInAllowPkg != null && pkg !in SessionPolicy.NEVER_LOCK) {
+            } else if (lastSessionInAllowPkg != null && pkg !in SessionPolicy.NEVER_LOCK && !isNeutralOrSafe) {
                 synchronized(sessionBounceStamps) {
                     sessionBounceStamps.addLast(now)
                     while (sessionBounceStamps.isNotEmpty() && now - sessionBounceStamps.first() > 30_000L) {
@@ -783,6 +789,84 @@ object ProactiveRuntime {
         }
     }
 
+    /** 专注舱 / 锁屏页可用 App 直达清单（聚合 sessionAllow + Focus 允许列表 + taskPackage），去重后返回 (pkg, label)。 */
+    fun allowedAppsForFocus(): List<Pair<String, String>> {
+        if (!::app.isInitialized) return emptyList()
+        loadSession()
+        val fState = runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime.state() }.getOrNull()
+        val raw = LinkedHashSet<String>()
+        raw.addAll(sessionAllow)
+        sessionPkg?.takeIf { it.isNotBlank() }?.let(raw::add)
+        fState?.taskPackage?.takeIf { it.isNotBlank() }?.let(raw::add)
+        fState?.allowed?.let(raw::addAll)
+        val pm = app.packageManager
+        return raw.filter { pkg ->
+            pkg.isNotBlank() &&
+                !io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSelfPackage(pkg, app.packageName) &&
+                runCatching { pm.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
+        }.map { pkg ->
+            val label = runCatching {
+                pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: pkg
+            pkg to label
+        }
+    }
+
+    /**
+     * 真·紧急退出：挂起当前严格锁 / 专注 / 连麦锁 10 分钟并解除桌面死锁，让用户直接回到 DSH 主控制台调整模式，
+     * 同时诚实写入督办台账供晚间复盘（绝不假退出回桌面）。
+     */
+    fun suspendStrictForEmergency(minutes: Int = 10) {
+        if (!::app.isInitialized) return
+        val now = System.currentTimeMillis()
+        val until = now + minutes.coerceIn(3, 30) * 60_000L
+        force = null
+        forcedApp = null
+        setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
+        setRefuseUntil(0L)
+        applyEmergencyPassState(until, "紧急退出回 DSH（${minutes}m 保护）")
+        runCatching {
+            val fg = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime
+            if (fg.isActive()) fg.pause(minutes.coerceIn(3, 30))
+        }
+        runCatching { releaseCompanionLock() }
+        postEvent("emergency-exit", "minutes" to minutes, "reason" to "lockpage_longpress_dsh") {
+            consultPlanSoon(minGapMs = 0L)
+        }
+    }
+
+    /** 锁屏刷题解锁：拉取一道未过题或开启闯关会话。 */
+    fun fetchBankQuizSession(done: (Map<*, *>?) -> Unit) {
+        if (!::app.isInitialized) { done(null); return }
+        main.post {
+            fetchPluginRoute(routeCallback { m -> done(m) }, "POST", "/bank", linkedMapOf("action" to "quiz_session"))
+        }
+    }
+
+    /** 锁屏刷题判题：提交用户选择；若达到所需题数则立即发放 N 分钟临时放行胶囊并解除当前锁页。 */
+    fun submitBankQuizAnswer(questionId: String, answer: String, done: (Map<*, *>?) -> Unit) {
+        if (!::app.isInitialized) { done(null); return }
+        main.post {
+            fetchPluginRoute(routeCallback { m ->
+                val unlocked = m["unlocked"] == true
+                val until = (m["unlockUntil"] as? Number)?.toLong() ?: 0L
+                val now = System.currentTimeMillis()
+                if (unlocked && until > now) {
+                    force = null
+                    forcedApp = null
+                    applyEmergencyPassState(until, "刷题达标放行")
+                    releaseCompanionLock()
+                    consultPlanSoon(minGapMs = 0L)
+                }
+                done(m)
+            }, "POST", "/bank", linkedMapOf(
+                "action" to "quiz_answer",
+                "questionId" to questionId,
+                "answer" to answer,
+            ))
+        }
+    }
+
     /**
      * Gemini 互动舱（/plan 的 session）：舱内只许 allow 里的包名，外加图库/文件/相机这类系统窗口。
      * 存 prefs，App 进程重启后锁还在；到点自己失效。
@@ -955,16 +1039,16 @@ object ProactiveRuntime {
         loadSession()
         val now = System.currentTimeMillis()
         if (mode == "off") {
-            return if (sessionOwner == OWNER_WORK) {
+            return if (now < sessionUntil) {
                 setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
+                force = null
+                forcedApp = null
+                runCatching { releaseCompanionLock() }
                 // l10n:keep agent tool result
-                "工作模式已结束，App 现在随便用。"
-            } else if (now < sessionUntil) {
-                // l10n:keep agent tool result
-                "现在开着的是连麦舱，不是工作模式；要停掉它得在 DSH 的管理页里结束连麦。"
+                "当前工作/专注限制已解除，App 现在恢复可用。"
             } else {
                 // l10n:keep agent tool result
-                "现在没有工作模式。"
+                "现在没有进行中的工作模式或限制舱。"
             }
         }
         if (mode == "on") {
@@ -1326,10 +1410,7 @@ object ProactiveRuntime {
             // 拒绝模式 must not lose to that. The overlay window itself stays where it is.
             VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, null)
         }
-        if (f.level >= 4) {
-            runCatching { PhoneA11yService.instance?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME) }
-                .onFailure { Log.w(TAG, "home", it) }
-        }
+        // 直接覆盖展示专属锁屏界面，不再反复发 GLOBAL_ACTION_HOME 把人踢回 vivo 桌面导致与桌面死循环互弹。
         val shown = runCatching { InterceptRuntime.forceBlock(app, f.app, f.why, strict = f.refuse) }.getOrDefault(false)
         Log.i(TAG, "companion force=${f.level} ${f.app} shown=$shown")
     }

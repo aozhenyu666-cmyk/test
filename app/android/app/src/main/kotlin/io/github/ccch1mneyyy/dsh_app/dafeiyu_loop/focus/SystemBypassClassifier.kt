@@ -44,28 +44,8 @@ object SystemBypassClassifier {
         "com.google.android.googlequicksearchbox",
     )
 
-    /** 关键安全系统组件：无论任何严格模式都放行，避免锁死手机基础交互。 */
-    val ESSENTIAL_SYSTEM = setOf(
-        "com.android.permissioncontroller",
-        "com.google.android.permissioncontroller",
-        "com.lbe.security.miui",
-        "com.miui.securitycenter",
-        "com.coloros.safecenter",
-        "com.vivo.permissionmanager",
-        "com.huawei.systemmanager",
-        "com.android.camera",
-        "com.android.camera2",
-        "com.miui.gallery",
-        "com.google.android.apps.photos",
-        "com.android.documentsui",
-        "com.google.android.documentsui",
-        "com.android.deskclock",
-        "com.google.android.deskclock",
-        "com.android.packageinstaller",
-        "com.google.android.packageinstaller",
-        "com.android.captiveportallogin",
-        "com.google.android.captiveportallogin",
-    )
+    /** 关键安全系统组件：无论任何严格模式都放行，避免锁死手机基础交互（含各厂商文件管理与桌面）。 */
+    val ESSENTIAL_SYSTEM = io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.SAFE_BASE
 
     private val BYPASS_SUBSTRINGS = listOf(
         "browser", "market", "appstore", "gamecenter", "gamebox", "video", "movie", "novel", "comic", "news", "feed",
@@ -77,7 +57,7 @@ object SystemBypassClassifier {
     /** 纯函数判定（JVM 单测用）：不依赖 Context 即可判定是否属于可绕过的系统包。 */
     fun isBypassPackage(pkg: String, extraResolved: Set<String> = emptySet()): Boolean {
         val p = pkg.trim().lowercase()
-        if (p.isEmpty() || p in ESSENTIAL_SYSTEM) return false
+        if (p.isEmpty() || io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSafeSystemOrHome(p)) return false
         if (p in KNOWN_SYSTEM_BYPASS || p in extraResolved) return true
         return BYPASS_SUBSTRINGS.any { p.contains(it) }
     }

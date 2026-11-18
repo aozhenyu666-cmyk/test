@@ -235,6 +235,14 @@ object BuiltinPluginGuest {
                 // Phase 2 Cognitive Autonomy v2.0 modules.
                 "lib/app_governance.js",
                 "lib/external_agents.js",
+                // V4 全景重构模块化扩展（题库解锁 / 自律分级 / 三层主线 / 计划模态 / 统计图表 / 四部实战 Skill / 总装桥接）
+                "lib/autonomy.js",
+                "lib/bank_unlock.js",
+                "lib/dept_skills.js",
+                "lib/horizons.js",
+                "lib/plan_modality.js",
+                "lib/telemetry_charts.js",
+                "lib/v4_hub.js",
             ),
         ),
     )

@@ -1,5 +1,7 @@
 package io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus
 
+import io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist
+
 /**
  * 专注监督的状态与判定，纯 Kotlin、无 Android 依赖，方便在 JVM 上直接测。
  *
@@ -77,13 +79,8 @@ object FocusPolicy {
     const val STRICT_REBLOCK_MS = 3_000L
     const val BOUNCE_WINDOW_MS = 30_000L
 
-    /** 电话、系统 UI、输入法永远放行：不能在接电话时把页面盖上去。 */
-    val ALWAYS_ALLOWED = setOf(
-        "com.android.dialer",
-        "com.google.android.dialer",
-        "com.android.incallui",
-        "com.android.systemui",
-    )
+    /** 电话、系统 UI、桌面（含 BBK/vivo launcher）、下拉多窗、文件管理与输入法永远放行。 */
+    val ALWAYS_ALLOWED = SystemSafeAllowlist.EMERGENCY_PACKAGES + SystemSafeAllowlist.SYSTEM_UI_AND_LAUNCHERS
 
     fun isExpired(state: FocusState, now: Long): Boolean =
         state.active && state.endAt > 0 && now >= state.endAt
@@ -111,8 +108,8 @@ object FocusPolicy {
         if (isExpired(state, now) || isPaused(state, now)) return FocusDecision.None
         val pkg = packageName?.trim().orEmpty()
         if (pkg.isEmpty()) return FocusDecision.None
-        if (pkg == ownPackage) return FocusDecision.None
-        if (pkg in ALWAYS_ALLOWED) return FocusDecision.None
+        if (SystemSafeAllowlist.isSelfPackage(pkg, ownPackage)) return FocusDecision.None
+        if (SystemSafeAllowlist.isSafeSystemOrHome(pkg, imePackages)) return FocusDecision.None
         if (pkg in imePackages) return FocusDecision.None
         if (pkg in state.allowed) return FocusDecision.None
         val bypass = pkg in bypassPackages || SystemBypassClassifier.isBypassPackage(pkg)

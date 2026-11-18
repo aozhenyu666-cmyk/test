@@ -55,21 +55,13 @@ object SessionPolicy {
     const val DEFAULT_GRACE_MS = 45_000L
 
     /** 电话、短信、地图、支付：任何模式都不锁（真急事的底线）。 */
-    val NEVER_LOCK = setOf(
-        "com.android.dialer", "com.google.android.dialer", "com.android.phone", "com.android.server.telecom", "com.android.mms",
-        "com.google.android.apps.messaging", "com.android.contacts", "com.autonavi.minimap", "com.baidu.BaiduMap",
-        "com.google.android.apps.maps", "com.tencent.map", "com.eg.android.AlipayGphone", "com.unionpay",
-    )
+    val NEVER_LOCK = SystemSafeAllowlist.EMERGENCY_PACKAGES
 
     /**
      * 桌面兜底名单：`PackageManager.resolveActivity(ACTION_MAIN + CATEGORY_HOME)` 解析不到时用。
      * 荣耀、realme、第三方桌面的包名没法穷举——所以默认桌面靠运行时解析，这份只是兜底。
      */
-    val NEUTRAL = setOf(
-        "android", "com.android.systemui", "com.miui.home", "com.google.android.apps.nexuslauncher",
-        "com.android.launcher3", "com.oppo.launcher", "com.huawei.android.launcher",
-        "com.sec.android.app.launcher", "com.vivo.launcher", "com.bbk.launcher2",
-    )
+    val NEUTRAL = SystemSafeAllowlist.SYSTEM_UI_AND_LAUNCHERS
 
     fun judge(pkg: String, facts: SessionFacts): SessionVerdict {
         // 破窗放风：他申请下来的这 10 分钟就是"随便用"，锁了等于没放。
@@ -82,6 +74,8 @@ object SessionPolicy {
         if (pkg in facts.home) return SessionVerdict.ALLOW
         // 娱乐目标在系统应用之前判：装成系统的娱乐 App 也得立刻锁。
         if (pkg in facts.entertainment) return SessionVerdict.LOCK
+        // 安全系统基础件（含桌面、下拉多窗、各厂商文件管理、权限弹窗）在绕过判定之前放行，杜绝 BBK 桌面或文件管理死锁。
+        if (SystemSafeAllowlist.isSafeSystemOrHome(pkg, facts.home)) return SessionVerdict.ALLOW
         // 预装浏览器 / 应用商店 / 系统视频：披着系统外衣的绕过口，一律不再当安全系统组件放行。
         if (facts.systemBypass) {
             if (facts.strict || facts.bounceCount >= 2 || facts.graceMs <= 0L) return SessionVerdict.LOCK
