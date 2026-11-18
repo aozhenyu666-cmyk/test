@@ -556,6 +556,7 @@ export function generateEveningReport({
   kbDirPath = '',
   storyline = null,
   planned = 0,
+  appLedger = [],
   now = Date.now(),
   tz = DEFAULT_TZ,
 } = {}) {
@@ -757,6 +758,7 @@ export function generateEveningReport({
     '',
     ...tomorrowDraft.map((t, idx) => `${idx + 1}. [ ] **${t.title}**（预计 ${t.minutes}m）`),
     '',
+    ...(Array.isArray(appLedger) && appLedger.length ? ['## 五、App 账', '', ...appLedger.map((l) => `- ${l}`), ''] : []),
   ].join('\n')
 
   let wrotePath = ''
@@ -776,6 +778,7 @@ export function generateEveningReport({
     generatedAt: now,
     score,
     verdict,
+    appLedger: Array.isArray(appLedger) ? appLedger.slice(0, 12) : [],
     headline,
     markdown,
     mermaidPie,

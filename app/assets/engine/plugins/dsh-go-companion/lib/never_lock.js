@@ -26,6 +26,10 @@ export const SYSTEM_PACKAGES = Object.freeze([
   'com.miui.home', 'com.android.launcher3', 'com.google.android.apps.nexuslauncher', 'com.oppo.launcher',
   'com.huawei.android.launcher', 'com.hihonor.android.launcher', 'com.sec.android.app.launcher',
   'com.realme.launcher', 'com.oneplus.launcher',
+  // iQOO / vivo：相册、文件管理、Jovi 负一屏、截屏；系统选图片 / 选文件 / 分享页
+  'com.vivo.gallery', 'com.android.filemanager', 'com.vivo.assistant', 'com.vivo.smartshot',
+  'com.android.providers.media.module', 'com.google.android.providers.media.module',
+  'com.android.documentsui', 'com.google.android.documentsui', 'com.android.intentresolver',
 ])
 
 /** 连 Gemini 必须先开的代理（NekoBox 等）：锁掉它等于锁掉连麦。 */

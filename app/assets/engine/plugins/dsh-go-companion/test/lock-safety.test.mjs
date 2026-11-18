@@ -144,3 +144,19 @@ test('/plan：测试模式默认开着；live_locks 之后关，手动 /config �
     assert.equal(b.body.shadow, false)
   })
 })
+
+test('/plan：带出裁决器的唯一输出 lock（自由态 + 额度）', async () => {
+  await withHome(async (home) => {
+    seed(home, { mode: 'coach' })
+    const host = makeHost({ agent: makeAgent() })
+    const phone = cleanPhone({ app: 'com.vivo.browser', label: '浏览器', minutes: 3, screenOn: true, local: '15:10',
+      today: [{ app: 'com.ss.android.ugc.aweme', label: '抖音', minutes: 30, fun: true }],
+      installedApps: [{ pkg: 'com.ss.android.ugc.aweme', label: '抖音' }, { pkg: 'com.vivo.browser', label: '浏览器' }] })
+    const out = await call(host.handler, 'POST', '/dsh-go-companion/v1/plan', { v: 1, timeZone: 'Asia/Shanghai', phone })
+    assert.equal(out.status, 200)
+    assert.ok(out.body.lock, JSON.stringify(Object.keys(out.body)))
+    assert.ok(['free', 'allowlist', 'open'].includes(out.body.lock.mode))
+    assert.ok(out.body.lock.quota, '带额度')
+    assert.equal(typeof out.body.lock.why, 'string')
+  })
+})

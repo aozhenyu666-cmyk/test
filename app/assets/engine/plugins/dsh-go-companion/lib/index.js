@@ -148,6 +148,9 @@ import {
 import { createV4Hub } from './v4_hub.js'
 import { isNeverLockPkg } from './never_lock.js'
 import { contextLines, loadGeminiSetting, parseReceipt } from './trigger.js'
+import { AGREE_RE, TIER_FILE, TIER_LABEL, TIER_RANK, classifyTierChanges, parseTierFile, renderTierFile, tierOf } from './app_tiers.js'
+import { computeQuota } from './quota.js'
+import { buildLockDecision } from './lock_decision.js'
 import { resolveActiveSisterSkin } from './unified_arbiter.js'
 
 /**
@@ -1361,6 +1364,7 @@ export function apply(ctx) {
         const kind = event.data?.source?.kind
         if (kind && kind !== 'user') return
         lastHumanAt.set(String(session?.id || ''), Date.now())
+        rememberHuman(stripInjection(text))
         // 落进账本：引擎重启也知道他刚说过话（阶梯不会把聊过的球当成没接，发球也知道他多久前说的话）。
         record({ state: 'human', at: Date.now(), sessionId: String(session?.id || '') })
         try {
@@ -2663,12 +2667,15 @@ export function apply(ctx) {
     getGeminiExtras: (now, dice) => geminiExtras(now, dice),
     getPersonaAbout: (now) => personaLines(mergePersona(readCorePersona(home()), config.persona), effectiveMode(config, now)).slice(0, 5),
     getGearWhat: () => (effectiveGear(config, Date.now()) === 'busy' ? config.gearWhat : ''),
+    getAppLedger: (now) => appLedgerLines(now),
+    getQuotaLine: () => (lastQuota ? lastQuota.line : ''),
   })
   if (tools && typeof tools.register === 'function') {
     for (const def of [
       dispatchControlTool('global'),
       clockManageTool('global'),
       grantTaskLeaseTool('strategist'),
+      appTierTool(),
       declareIntentTool('global'),
       appUsageReportTool('global'),
       rollSixDiceTool('global'),
@@ -4410,16 +4417,67 @@ export function apply(ctx) {
   /**
    * 仅鲸澜（strategist）专享的双用途 App 短租约（≤20 分钟，纯游戏硬拒）。
    */
+  /** 2026-11-18 App 分层：改严直接做；改松（挪到 work）要引他刚说过的同意原话。 */
+  function appTierTool() {
+    return {
+      name: 'app_tier',
+      description: '调整一个 App 在大肥鱼里的分层（工作 work / 双用途 dual / 娱乐 fun / 游戏 game）。' +
+        '往更严挪（例如浏览器总被拿来刷 → dual 或 fun）直接生效；往 work 挪是放松，必须先问他，quote 填他刚才同意的原话（30 分钟内说的），否则不生效。' +
+        '系统页面（桌面、相册、文件、选图选文件、分享、相机、输入法、NekoBox、电话支付）永远不锁，不在这里管。',
+      parameters: {
+        type: 'object',
+        properties: {
+          app: { type: 'string', description: '中文名或包名' },
+          tier: { type: 'string', enum: ['work', 'dual', 'fun', 'game'] },
+          why: { type: 'string', description: '为什么（一句话，最好带数：昨天用了多久、通行证对不上几次）' },
+          quote: { type: 'string', description: '放松时必填：他同意的原话' },
+        },
+        required: ['app', 'tier', 'why'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const { resolved } = resolveAppNames([args.app], {
+          installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : lastInstalled,
+          declaredApps: appsOf(),
+        })
+        const pkg = resolved[0]
+        if (!pkg) return { ok: false, text: '没认出是哪个 App。' }
+        const tier = String(args.tier || '')
+        if (!TIER_RANK[tier] && tier !== 'work') return { ok: false, text: 'tier 只能是 work / dual / fun / game。' }
+        const before = tierFnNow()(pkg)
+        if (before === 'base') return { ok: false, text: '这是系统页面，永远不锁，不用分层。' }
+        if (before === tier) return { ok: true, text: pkg + ' 本来就在「' + TIER_LABEL[tier] + '」。' }
+        const loosen = (TIER_RANK[tier] ?? 1) < (TIER_RANK[before] ?? 1)
+        if (loosen) {
+          const quote = String(args.quote || '').trim()
+          const recent = recentHuman.filter((h) => now - h.at <= 30 * 60_000)
+          const said = quote && recent.some((h) => h.text.includes(quote) || quote.includes(h.text))
+          if (!said || !AGREE_RE.test(quote)) {
+            return { ok: false, text: '这是放松（' + TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '），要先问他；他说「行」之后把那句原话填进 quote。' }
+          }
+        }
+        commit({ appTiers: { ...(config.appTiers || {}), [pkg]: tier } })
+        writeTierFile()
+        record({ state: 'app-tier-set', at: now, pkg, from: before, to: tier, loosen, why: String(args.why || '').slice(0, 120) })
+        return { ok: true, text: pkg + '：' + TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '（' + (loosen ? '他同意的放松' : '改严，立即生效') + '）。他也可以在 大肥鱼/墙/App分层.md 里改。' }
+      },
+    }
+  }
+
   function grantTaskLeaseTool(role) {
     return {
       name: 'grant_task_lease',
-      description: '（仅鲸澜）为你批一段 ≤20 分钟的双用途 App（如 B 站 / 小红书 / 浏览器 / 微信）正事租约。' +
+      description: '（仅鲸澜）通行证：为他批一段 ≤30 分钟（默认 15）的双用途 App（浏览器 / 夸克 / 微信 / B 站等）正事租约，干活时双用途 App 只能这样用。' +
+        '一天超过 8 张要填 whyAgain（他亲口给的理由），申请次数进当晚判决。' +
         '纯游戏（王者/原神/游戏中心等）硬编码绝对拒绝；租约期手机持续巡检 screenText，偏航进娱乐流立即吊销重锁。',
       parameters: {
         type: 'object',
         properties: {
           app: { type: 'string', description: '双用途应用中文名或包名' },
-          minutes: { type: 'integer', minimum: 5, maximum: 20, description: '租约时长，上限 20 分钟' },
+          minutes: { type: 'integer', minimum: 5, maximum: 30, description: '通行证时长，默认 15，上限 30 分钟' },
+          whyAgain: { type: 'string', description: '今天第 9 张起必填：他给的理由（原话）' },
           taskGoal: { type: 'string', description: '具体要在里面办什么正事' },
           verifyHints: { type: 'array', items: { type: 'string' }, description: '读屏期望关键词' },
         },
@@ -4443,7 +4501,13 @@ export function apply(ctx) {
         if (isPureGame(pkg, args.app)) {
           return { ok: false, text: '硬规矩拦回：纯游戏绝不可通过聊天租约当场放行。' }
         }
-        const mins = Math.max(5, Math.min(20, Math.round(Number(args.minutes) || 15)))
+        const mins = Math.max(5, Math.min(30, Math.round(Number(args.minutes) || 15)))
+        const tzL = zoneOr(config.timeZone)
+        const issuedToday = readLedger(home(), 600)
+          .filter((e) => e?.state === 'grant-task-lease' && dayString(Number(e.at) || 0, tzL) === dayString(now, tzL)).length
+        if (issuedToday >= 8 && String(args.whyAgain || '').trim().length < 4) {
+          return { ok: false, text: '今天已经批了 ' + issuedToday + ' 张通行证：第 9 张起要他先说清理由（填 whyAgain），这件事会进今晚的判决。' }
+        }
         const until = now + mins * 60_000
         commit({
           taskLease: {
@@ -4455,7 +4519,7 @@ export function apply(ctx) {
             by: role,
           },
         })
-        record({ state: 'grant-task-lease', at: now, pkg, minutes: mins, goal: args.taskGoal })
+        record({ state: 'grant-task-lease', at: now, pkg, minutes: mins, goal: args.taskGoal, n: issuedToday + 1, whyAgain: args.whyAgain ? String(args.whyAgain).slice(0, 80) : undefined })
         return { ok: true, text: `已批复 ${pkg} 的 ${mins} 分钟任务租约（${args.taskGoal}）；租约期间若刷出无关娱乐流将自动吊销。` }
       },
     }
@@ -7071,6 +7135,7 @@ export function apply(ctx) {
         if (path === '/plan') return send(res, 200, planRoute(body.value))
         if (path === '/say') {
           const said = String(body.value?.text ?? '').trim()
+          rememberHuman(said)
           if (typeof body.value?.timeZone === 'string' && body.value.timeZone) sayZone = body.value.timeZone
           if (!said) return send(res, 400, { v: 1, error: { code: 'empty', message: 'text' } })
           const id = typeof body.value?.requestId === 'string' && body.value.requestId ? body.value.requestId : 'say-' + randomUUID()
@@ -7481,9 +7546,155 @@ export function apply(ctx) {
     }
   }
 
+  // ---------------------------------------------------------------- 2026-11-18 裁决器唯一输出：分层、额度、通行证
+  /** 他最近说过的话（核对「他刚说过行」用）。 */
+  const recentHuman = []
+  function rememberHuman(text) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200)
+    if (!t) return
+    recentHuman.push({ at: Date.now(), text: t })
+    while (recentHuman.length > 12) recentHuman.shift()
+  }
+  let lastInstalled = []
+  const tierFnNow = () => (pkg, label = '') => tierOf(pkg, { label, overrides: config.appTiers || {}, declaredApps: appsOf() })
+  const loadTierPending = () => readState(stateFile('app-tiers-pending.json'), {}) || {}
+  const saveTierPending = (p) => writeJson(stateFile('app-tiers-pending.json'), p)
+  const TIER_LOOSEN_MS = 24 * 3_600_000
+  let tierSeen = { key: '', at: 0 }
+  function tierLabels() {
+    const out = {}
+    for (const a of lastInstalled) if (a?.pkg) out[a.pkg] = a.label || ''
+    return out
+  }
+  function writeTierFile() {
+    const kb = vaultKb()
+    if (!kb) return
+    try {
+      writeVaultText(join(kb, WALL_DIR, TIER_FILE), renderTierFile(config.appTiers || {}, tierLabels()))
+      const st = statOf(join(kb, WALL_DIR, TIER_FILE))
+      tierSeen = { key: st ? st.mtimeMs + ':' + st.size : '', at: Date.now() }
+    } catch {
+      // 写不进去就算了：生效的是 config
+    }
+  }
+  /** 读 大肥鱼/墙/App分层.md：改严立即生效，改松 24 小时后生效。 */
+  function syncTierFile(now) {
+    const kb = vaultKb()
+    if (!kb) return
+    const file = join(kb, WALL_DIR, TIER_FILE)
+    const st = statOf(file)
+    const key = st ? st.mtimeMs + ':' + st.size : 'none'
+    if (key === tierSeen.key && now - tierSeen.at < 60_000) return
+    tierSeen = { key, at: now }
+    const text = readVaultText(file)
+    if (text === null) {
+      writeTierFile()
+      return
+    }
+    const cur = config.appTiers || {}
+    const tf = tierFnNow()
+    const { tighten, loosen } = classifyTierChanges(cur, parseTierFile(text), (p) => tf(p))
+    const pending = loadTierPending()
+    const next = { ...cur, ...tighten }
+    let changed = Object.keys(tighten).length > 0
+    for (const [p, t] of Object.entries(loosen)) {
+      const prev = pending[p]
+      if (!prev || prev.tier !== t) pending[p] = { tier: t, since: now }
+      else if (now - Number(prev.since) >= TIER_LOOSEN_MS) {
+        next[p] = t
+        delete pending[p]
+        changed = true
+      }
+    }
+    for (const p of Object.keys(pending)) if (!(p in loosen)) delete pending[p]
+    saveTierPending(pending)
+    if (changed) {
+      commit({ appTiers: next })
+      record({ state: 'app-tiers', at: now, tighten: Object.keys(tighten), loosen: Object.keys(next).filter((p) => !(p in cur) || cur[p] !== next[p]).filter((p) => !(p in tighten)) })
+    }
+  }
+  /** 今天通行证覆盖了几分钟（双用途在这段时间不算娱乐）。 */
+  function passMinutesToday(now, tz) {
+    const day = dayString(now, tz)
+    return readLedger(home(), 600)
+      .filter((e) => e?.state === 'grant-task-lease' && dayString(Number(e.at) || 0, tz) === day)
+      .reduce((sum, e) => sum + (Number(e.minutes) || 0), 0)
+  }
+  function quotaNow(now, tz, phone) {
+    const today = Array.isArray(phone?.today) && phone.today.length ? phone.today : (lastPhone?.today || [])
+    return computeQuota({
+      today,
+      tierOf: tierFnNow(),
+      earnedMin: Number(todayEarned(now, tz)?.earned) || 0,
+      passMinutes: passMinutesToday(now, tz),
+    })
+  }
+  let lastQuota = null
+  /** 每晚的 App 账：今天每个 App 用了多久、在哪一层、通行证几张、偏航几次。 */
+  function appLedgerLines(now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const day = dayString(now, tz)
+    const tf = tierFnNow()
+    const passes = {}
+    const drifts = {}
+    for (const e of readLedger(home(), 800)) {
+      if (!e || dayString(Number(e.at) || 0, tz) !== day) continue
+      if (e.state === 'grant-task-lease' && e.pkg) passes[e.pkg] = (passes[e.pkg] || 0) + 1
+      if (e.state === 'lease-drift' && e.app) drifts[e.app] = (drifts[e.app] || 0) + 1
+    }
+    return (Array.isArray(lastPhone?.today) ? lastPhone.today : [])
+      .filter((r) => r?.app && Number(r.minutes) > 0)
+      .sort((a, b) => Number(b.minutes) - Number(a.minutes))
+      .slice(0, 12)
+      .map((r) => {
+        const t = tf(r.app, r.label)
+        const extra = (passes[r.app] ? '，通行证 ' + passes[r.app] + ' 张' : '') + (drifts[r.app] ? '，偏航 ' + drifts[r.app] + ' 次' : '')
+        return (r.label || r.app) + '（' + (TIER_LABEL[t] || t) + '）' + Math.round(Number(r.minutes)) + ' 分钟' + extra
+      })
+  }
+  function lockDecisionNow(now, tz, phone, lockArbiter, extState) {
+    if (Array.isArray(phone?.installedApps) && phone.installedApps.length) lastInstalled = phone.installedApps
+    const quota = quotaNow(now, tz, phone)
+    lastQuota = quota
+    const contract = v4Hub?.contractSessionView?.(now) || null
+    const busy = effectiveGear(config, now) === 'busy'
+    const run = runningBoutNow()
+    const boutApps = [...(Array.isArray(live?.apps?.need) ? live.apps.need : []), ...(Array.isArray(live?.apps?.allow) ? live.apps.allow : [])]
+    const agentLease = activeAppLease(extState, now)
+    const workActive = busy || Boolean(run) || Boolean(aiTask(config, now)) || Boolean(contract)
+    const why = run ? '局进行中：' + (run.kind || '这一局') : contract ? contract.why : busy ? '忙时：' + (config.gearWhat || '正事') : '专时进行中'
+    const taskLease = config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null
+    return buildLockDecision({
+      arbiter: lockArbiter,
+      work: {
+        active: workActive,
+        why,
+        allow: [
+          ...(Array.isArray(contract?.allow) ? contract.allow : []),
+          ...(Array.isArray(config.defaultAllow) ? config.defaultAllow : []),
+          ...boutApps,
+          ...(Array.isArray(agentLease?.packages) ? agentLease.packages : []),
+        ],
+      },
+      installed: lastInstalled,
+      tierOf: tierFnNow(),
+      quota,
+      lease: taskLease,
+      radarDeny: (Array.isArray(config.blockExtra) ? config.blockExtra : [])
+        .filter((b) => b && Number(b.until) > now && !isNeverLockPkg(b.app))
+        .map((b) => ({ app: b.app, until: Number(b.until), why: b.why || '临时锁' })),
+      now,
+    })
+  }
+
   function planRoute(body) {
     const now = Date.now()
     const tz = requestZone(body?.timeZone, config)
+    try {
+      syncTierFile(now)
+    } catch (error) {
+      console.error('[companion] App分层.md 同步失败：' + String((error && error.message) || error))
+    }
     try {
       syncVaultRules(now)
     } catch (error) {
@@ -7581,7 +7792,10 @@ export function apply(ctx) {
           recordBreachPenalty(radar.kind === 'game-binge' || radar.kind === 'lease-drift' ? 'severe' : 'moderate', now, tz)
         }
       }
-      if (radar.revokeLease) commit({ taskLease: null })
+      if (radar.revokeLease) {
+        record({ state: 'lease-drift', at: now, app: config.taskLease?.app || phone?.app || '', goal: config.taskLease?.goal || '' })
+        commit({ taskLease: null })
+      }
       if (Array.isArray(radar.tempBlockApps) && radar.tempBlockApps.length) {
         const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && Number(b.until) > now && !radar.tempBlockApps.includes(b.app))
         const until = now + Math.max(15, radar.refuseMinutes || 30) * 60_000
@@ -8006,6 +8220,13 @@ export function apply(ctx) {
       wall: { locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
     })
     const activeSisterSkin = resolveActiveSisterSkin({ speaker: speakerOut, lockArbiter })
+    // 2026-11-18：裁决器的唯一输出（手机先影子对比，确认没问题再切成唯一执法依据）。
+    let lockDecision = null
+    try {
+      lockDecision = lockDecisionNow(now, tz, phone, emergencyActive ? { priority: 'P0', why: '紧急放行中' } : lockArbiter, extState)
+    } catch (error) {
+      console.error('[companion] lock 裁决失败：' + String((error && error.message) || error))
+    }
     const geminiMinutesToday = v4Hub.getGeminiStats(dayString(now, tz), now).minutesToday
     let geminiAutoPull = v4Hub.consumePendingAutoPull()
     if (!geminiAutoPull) {
@@ -8065,6 +8286,7 @@ export function apply(ctx) {
       contractGraceWarning: v4ContractTick.graceWarning,
       geminiMinutesToday,
       lockArbiter,
+      ...(lockDecision ? { lock: lockDecision } : {}),
       activeSisterSkin,
       ...(geminiAutoPull ? { geminiAutoPull } : {}),
       // release：只有他讲通了（宽限期内）或 3 分钟应急放行期间才放行大肥鱼加的锁。

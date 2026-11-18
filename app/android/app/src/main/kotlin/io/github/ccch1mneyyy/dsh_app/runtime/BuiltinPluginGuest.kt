@@ -253,6 +253,10 @@ object BuiltinPluginGuest {
                 "lib/trigger.js",
                 // 2026-11-18 验收器：日判、截止日、周六周报
                 "lib/verdict.js",
+                // 2026-11-18 裁决器唯一输出：App 分层、自由态额度、锁裁决
+                "lib/app_tiers.js",
+                "lib/quota.js",
+                "lib/lock_decision.js",
             ),
         ),
     )

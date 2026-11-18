@@ -135,6 +135,8 @@ object InterceptRuntime {
         if (packageName.isNullOrBlank()) return
         val now = System.currentTimeMillis()
         expireStale(now)
+        // 裁决器影子对比：只记新旧分歧，不执法。
+        runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ArbiterShadow.observe(app, packageName) }
         // 2026-11-18 锁机安全：紧急解除期间什么都不锁；桌面 / DSH 自己 / 系统界面永远不锁。
         if (LockSafety.disarmed(app, now)) return
         if (LockSafety.neverLock(app, packageName)) return

@@ -99,6 +99,8 @@ export function createV4Hub(deps) {
     getCommitments = () => [],
     getPersonaAbout = () => [],
     getGeminiExtras = () => ({}),
+    getAppLedger = () => [],
+    getQuotaLine = () => '',
     getGearWhat = () => '',
   } = deps
 
@@ -577,6 +579,13 @@ export function createV4Hub(deps) {
       lockArbiter,
       kbDirPath: kbPathNow(),
       storyline: loadStorylineStore(now),
+      appLedger: (() => {
+        try {
+          return targetDay === dayString(now, tzName) ? getAppLedger(now) : []
+        } catch {
+          return []
+        }
+      })(),
       planned: (() => {
         try {
           const unified = getUnifiedTasks(now)
@@ -619,6 +628,12 @@ export function createV4Hub(deps) {
     const lines = deadlineLines(loadHorizonsSynced(), today)
     const y = loadReportsStore()?.reports?.[shiftYmdLocal(today, -1)]
     if (y?.verdict?.line) lines.push('昨天的判决（代码按账本算的，不许替他找补）：' + y.verdict.line.replace(/^今天：/, ''))
+    const q = getQuotaLine()
+    if (q) lines.push(q + '。用到 90 / 110 分钟时提一句，不要每轮都说。')
+    if (Array.isArray(y?.appLedger) && y.appLedger.length) {
+      lines.push('昨天的 App 账：' + y.appLedger.slice(0, 6).join('；'))
+      lines.push('早上那一轮（鲸澜）：双用途 App 偏航 ≥2 次、或某个 App 用时明显不对的，用 app_tier 改严并一句话告诉他；想放松要先问他。')
+    }
     return lines
   }
 

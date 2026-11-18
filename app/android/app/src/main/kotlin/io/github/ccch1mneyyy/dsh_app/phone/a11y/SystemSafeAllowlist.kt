@@ -92,6 +92,14 @@ object SystemSafeAllowlist {
         "com.coloros.safecenter",
         "com.vivo.permissionmanager",
         "com.huawei.systemmanager",
+        // iQOO / vivo：相册、文件管理、Jovi 负一屏、截屏；系统选图片 / 选文件 / 分享页
+        "com.vivo.gallery",
+        "com.android.filemanager",
+        "com.vivo.assistant",
+        "com.vivo.smartshot",
+        "com.android.providers.media.module",
+        "com.google.android.providers.media.module",
+        "com.android.intentresolver",
     )
 
     val SAFE_BASE = EMERGENCY_PACKAGES + SYSTEM_UI_AND_LAUNCHERS + FILE_AND_ESSENTIAL_TOOLS + PROXY_PACKAGES

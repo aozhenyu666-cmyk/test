@@ -1453,6 +1453,8 @@ object ProactiveRuntime {
         if (lastPlanError != null) { companionPlan = null; arm(); return }
         // 测试模式开关跟插件走（插件默认开；他在中枢或对姐妹说「结束测试模式」才关）。
         (map["shadow"] as? Boolean)?.let { LockSafety.setShadow(app, it) }
+        // 裁决器的唯一输出：先影子对比（不执法），攒够数据再切换。
+        runCatching { ArbiterShadow.update(map["lock"]) }
         val nowNotif = System.currentTimeMillis()
         if (nowNotif - lastSafetyNotifAt > 5 * 60_000L) {
             lastSafetyNotifAt = nowNotif
