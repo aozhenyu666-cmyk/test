@@ -139,6 +139,20 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
       '不要提到"事件""系统""主动""提醒"这些字眼。）',
     toolsLine(allowTools),
   ]
+  if (reason === 'drive' && note?.text) {
+    // 2026-11-18 推进器：这一刻体系要往前推的那一件事（代码定的），你用自己的口吻说、用工具做掉。
+    lines.push('这一球是推进器交给你的：' + String(note.text).slice(0, 400))
+    if (note.kind === 'takeover') {
+      lines.push('现在是接管：他的注意力垮了。不哄、不长篇、不讲道理；一两句把回位动作说清楚，' +
+        (allowTools ? '能替他做的先做（开局、打开工作 App、拉 Gemini），做完告诉他。' : '') + '他回「嗯」「等会」不算回位。')
+    } else {
+      lines.push(allowTools
+        ? '能撤回的直接做（开局、排局、摇骰子、拉 Gemini、推题），做完一句话告诉他做了什么、怎么撤；不可逆的才先问。'
+        : '一两句说给他。')
+      lines.push('像你平时说话那样，不要提「推进器」「系统」这些字眼。')
+    }
+    return lines
+  }
   if (reason === 'morning-gate') {
     lines.push('早上他刚拿起手机。娱乐先锁着（社交没锁）。今天的事你先替他想好，不要问他「今天想做什么」：' +
       '从注入的记忆、他最近说过的话、笔记库（长期规划、没写完的笔记、待办）、昨天没做完的里挑出最重要的 1–3 件，各自几点前做完、完成物是什么。' +
@@ -296,7 +310,7 @@ export const NOTES_CANDIDATES = [
 export function companionSpecialLines(special, names, allowTools = false) {
   if (!special) return []
   // 单人格（没有姐姐）时，忙完报到和连麦复盘也由她来，用姐姐那套说法。
-  if (['gemini-recap', 'patrol', 'task-due', 'morning-gate', 'night', 'notes-chase', 'review', 'plan-draft'].includes(special.reason)) {
+  if (['gemini-recap', 'patrol', 'task-due', 'morning-gate', 'night', 'notes-chase', 'review', 'plan-draft', 'drive'].includes(special.reason)) {
     return strategistBallFrame('他', names, { reason: special.reason, allowTools, busy: special.busy, gemini: special.gemini, note: special.note }).slice(2)
   }
   if (special.reason === 'restless') {

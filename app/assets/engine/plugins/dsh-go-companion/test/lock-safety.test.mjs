@@ -160,3 +160,24 @@ test('/plan：带出裁决器的唯一输出 lock（自由态 + 额度）', asyn
     assert.equal(typeof out.body.lock.why, 'string')
   })
 })
+
+test('/plan：陷住了 → 接管（锁成只剩工作 App 的白名单）；回到工作 App 满 3 分钟 → 解除', async () => {
+  await withHome(async (home) => {
+    seed(home, { mode: 'coach', strategistSessionId: 'session-abc' })
+    const host = makeHost({ agent: makeAgent() })
+    const deep = cleanPhone({ app: 'com.ss.android.ugc.aweme', label: '抖音', minutes: 140, fun: true, screenOn: true, local: '15:10',
+      today: [{ app: 'com.ss.android.ugc.aweme', label: '抖音', minutes: 200, fun: true }] })
+    const a = await call(host.handler, 'POST', '/dsh-go-companion/v1/plan', { v: 1, timeZone: 'Asia/Shanghai', phone: deep })
+    assert.equal(a.status, 200)
+    assert.equal(a.body.drive?.mode, 'takeover', JSON.stringify(a.body.drive) + ' tide=' + JSON.stringify(a.body.tide))
+    assert.ok(a.body.drive.takeover, '接管在进行')
+    assert.ok(Array.isArray(a.body.session?.allow) && a.body.session.allow.includes('com.baidu.netdisk'), '白名单里有工作 App：' + JSON.stringify(a.body.session))
+    const led = readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8')
+    assert.match(led, /takeover-start/)
+    const back = cleanPhone({ app: 'com.baidu.netdisk', label: '百度网盘', minutes: 4, screenOn: true, local: '15:20',
+      today: [{ app: 'com.ss.android.ugc.aweme', label: '抖音', minutes: 200, fun: true }] })
+    const b = await call(host.handler, 'POST', '/dsh-go-companion/v1/plan', { v: 1, timeZone: 'Asia/Shanghai', phone: back })
+    assert.equal(b.body.drive?.takeover, null, '回位后解除')
+    assert.match(readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8'), /takeover-end/)
+  })
+})

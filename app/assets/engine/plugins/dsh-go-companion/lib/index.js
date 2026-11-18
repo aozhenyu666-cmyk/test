@@ -151,6 +151,8 @@ import { contextLines, loadGeminiSetting, parseReceipt } from './trigger.js'
 import { AGREE_RE, TIER_FILE, TIER_LABEL, TIER_RANK, classifyTierChanges, parseTierFile, renderTierFile, tierOf } from './app_tiers.js'
 import { computeQuota } from './quota.js'
 import { buildLockDecision } from './lock_decision.js'
+import { driveMode, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
+import { WORK_DEFAULT } from './app_tiers.js'
 import { resolveActiveSisterSkin } from './unified_arbiter.js'
 
 /**
@@ -1105,7 +1107,9 @@ export function apply(ctx) {
       // 渠道那一道：档位要念（hot/blaze/eager），或者漠视阶梯走到了"换渠道"那一级——
       // 后者从第四轮就在账本里记 stage='channel'，一直没人接。
       const voice = voiceOf(emotion, {
-        now, enabled: config.voice === true, quiet: quietNow, channel: burst.channel, stage: silence.stage,
+        // 2026-11-18：推手 / 接管档默认念出来（driveVoice 可关）；接管时直接走「换渠道」那一级。
+        now, enabled: config.voice === true || (lastDriveMode !== 'partner' && config.driveVoice !== false), quiet: quietNow,
+        channel: burst.channel, stage: silence.stage, ...(lastTakeover ? { stage: 'channel' } : {}),
       }) || undefined
       const livingServe = stochasticLivingLines({
         role: 'companion',
@@ -2201,6 +2205,11 @@ export function apply(ctx) {
     }
     if (why.reason === 'patrol') saveGearState({ ...loadGearState(), patrolAt: now, ...(why.note?.slot ? { patrolSlot: why.note.slot } : {}) })
     if (why.reason === 'plan-draft') saveGearState({ ...loadGearState(), planDraftAt: now })
+    if (why.reason === 'drive' && why.note?.key) {
+      const d = loadDrive()
+      saveDrive({ ...d, memo: { ...(d.memo || {}), [why.note.key]: now } })
+      record({ state: 'drive', at: now, kind: why.note.kind, mode: why.note.mode, role: why.role })
+    }
     if (why.mark) saveGemini({ ...loadGemini(), ...why.mark })
   }
   /**
@@ -7687,6 +7696,111 @@ export function apply(ctx) {
     })
   }
 
+  // ---------------------------------------------------------------- 2026-11-18 推进器 + 三档
+  const loadDrive = () => readState(stateFile('drive.json'), {}) || {}
+  const saveDrive = (d) => writeJson(stateFile('drive.json'), d)
+  let lastDriveMode = 'partner'
+  let lastTakeover = null
+  /** 接管时的白名单：工作层 + Gemini + 代理 + 他的默认白名单。 */
+  function takeoverAllow() {
+    const tf = tierFnNow()
+    return [...new Set([
+      ...WORK_DEFAULT,
+      ...lastInstalled.filter((a) => a?.pkg && tf(a.pkg, a.label) === 'work').map((a) => a.pkg),
+      ...geminiPackages(),
+      'moe.nb4a',
+      ...(Array.isArray(config.defaultAllow) ? config.defaultAllow : []),
+    ])]
+  }
+  /**
+   * 推进器一次：算档位、走接管状态机、挑这一刻要推的一件事。
+   * 只产出「推什么」，开不开口仍由下面的发球逻辑（在聊天中、正在生成时不插嘴）。
+   */
+  function driveNow(now, tz, phone, water, radar, blocked) {
+    const st = loadDrive()
+    const tf = tierFnNow()
+    const frontTier = phone?.app ? tf(phone.app, phone.label) : 'base'
+    const frontMinutes = Number(phone?.minutes) || 0
+    const day = dayString(now, tz)
+    const ledger = readLedger(home(), 400)
+    const drifts30 = ledger.filter((e) => e?.state === 'lease-drift' && now - Number(e.at) <= 30 * 60_000).length
+    const receiptJustNow = ledger.some((e) => e?.state === 'gemini-recap' && e.receipt === true && now - Number(e.at) <= 3 * 60_000)
+    const run = runningBoutNow()
+    // 局刚结束：上一刻有局、这一刻没了。
+    let lastBoutEndAt = Number(st.lastBoutEndAt) || 0
+    if (st.runId && !run) lastBoutEndAt = now
+    const runId = run ? String(run.id || run.protocolId || 'live') : ''
+    let contractOverdue = false
+    let checkpoints = []
+    try {
+      contractOverdue = Boolean(v4Hub?.contractSessionView?.(now, { escalatedOnly: true }))
+      const c = readState(stateFile('plan-contract.json'), null)
+      checkpoints = Array.isArray(c?.checkpoints) ? c.checkpoints.map((cp) => ({ id: cp.id, title: cp.title, dueAt: Number(cp.dueAt) || 0, status: cp.status })) : []
+    } catch {
+      // 没有契约
+    }
+    let planItems = []
+    try {
+      planItems = (planDayRoute({ action: 'list' }).plan?.items || []).map((i) => ({ id: i.id, title: i.title, minute: i.minute, openedAt: i.openedAt, missed: i.missed, first: i.packet?.first }))
+    } catch {
+      planItems = []
+    }
+    let quota = null
+    try {
+      quota = quotaNow(now, tz, phone)
+    } catch {
+      quota = null
+    }
+    const min = zoneMinuteOfDay(now, tz)
+    const boutGap = !run && lastBoutEndAt > 0 && now - lastBoutEndAt >= 5 * 60_000 && min >= 9 * 60 && min < 21 * 60 + 30
+    const m = driveMode({
+      tideBand: water?.band, tideLevel: water?.level, frontTier, frontMinutes,
+      quotaOut: Boolean(quota && ((quota.funOut && frontTier === 'fun') || (quota.gameOut && frontTier === 'game'))),
+      leaseDrifts30m: drifts30, contractOverdue, boutGap, noPlan: Boolean(planGateNow(now, tz)) && min >= 9 * 60 + 30,
+      switchDice: radar?.kind === 'switch-limit-dice',
+    })
+    const tk = stepTakeover(st.takeover, { now, day, mode: m.mode, why: m.why, frontTier, frontMinutes, boutRunning: Boolean(run), receiptJustNow, blocked })
+    if (tk.event === 'start') {
+      record({ state: 'takeover-start', at: now, why: tk.why, n: tk.state.count })
+      commit({ aiWorkSession: { allow: takeoverAllow(), until: now + 45 * 60_000, strict: true, why: '接管：' + tk.why, by: 'takeover' } })
+    } else if (tk.event === 'end') {
+      record({ state: 'takeover-end', at: now, why: tk.why, minutes: Math.round((now - Number(st.takeover?.since || now)) / 60_000) })
+      if (config.aiWorkSession?.by === 'takeover') commit({ aiWorkSession: null })
+    }
+    const memo = { ...(st.memo || {}) }
+    let drive = null
+    if (tk.state.active) {
+      const nextItem = planItems.filter((i) => !i.openedAt && !i.missed).sort((a, b) => Number(a.minute) - Number(b.minute))[0] || null
+      const lastSpoke = Number(memo.takeoverSpoke) || 0
+      if (now - lastSpoke >= TAKEOVER_SPEAK_GAP_MS) {
+        drive = {
+          kind: 'takeover', key: 'takeoverSpoke', role: Number(tk.state.spokeN || 0) % 2 === 0 ? 'strategist' : 'companion',
+          text: '【接管】' + tk.why + '。锁已经落了（只剩工作 App、Gemini、系统页面）。回位动作：' + returnAction({ nextItem, workApp: '' }) +
+            '。做到了接管自动解除，最长 45 分钟。他求情「再玩一会」可以不答应；他要真有急事让他用通知栏的紧急解除。语气看你自己，但别长篇。',
+        }
+        tk.state.spokeN = Number(tk.state.spokeN || 0) + 1
+      }
+    } else {
+      let deadlines = []
+      try {
+        deadlines = v4Hub?.upcomingDeadlines ? v4Hub.upcomingDeadlines(now) : []
+      } catch {
+        deadlines = []
+      }
+      drive = nextDrive({ now, minuteOfDay: min, mode: m.mode, boutRunning: Boolean(run), lastBoutEndAt, planItems, checkpoints, deadlines, memo })
+      if (drive?.kind === 'auto-open') {
+        memo[drive.key] = now
+        Promise.resolve(boutsRoute({ action: 'start', id: drive.itemId, by: 'driver' }))
+          .then((r) => record({ state: 'drive-auto-open', at: Date.now(), itemId: drive.itemId, ok: r?.ok === true, toast: String(r?.toast || '').slice(0, 80) }))
+          .catch(() => {})
+      }
+    }
+    saveDrive({ ...st, takeover: tk.state, memo, lastBoutEndAt, runId, mode: m.mode, why: m.why, at: now })
+    lastDriveMode = tk.state.active ? 'takeover' : m.mode
+    lastTakeover = tk.state.active ? tk.state : null
+    return { mode: lastDriveMode, why: m.why, drive, takeover: tk.state }
+  }
+
   function planRoute(body) {
     const now = Date.now()
     const tz = requestZone(body?.timeZone, config)
@@ -8065,12 +8179,27 @@ export function apply(ctx) {
     const thinker = config.dual !== false && config.strategistSessionId ? 'strategist' : 'companion'
     let hold = null
     noteFront(phone, now)
+    // 2026-11-18 推进器：此刻体系该推哪一步（代码定），谁来说、怎么做交给两条鱼。
+    let driveRes = null
+    try {
+      const blockedDrive = emergencyActive || Boolean(lastRhythm?.night) || inQuiet(now, config.quietStart, config.quietEnd, tz) || gem.inside ||
+        readLedger(home(), 60).some((e) => e?.state === 'disarm' && Number(e.until) > now)
+      driveRes = driveNow(now, tz, phone, water, radar, blockedDrive)
+    } catch (error) {
+      console.error('[companion] 推进器失败：' + String((error && error.message) || error))
+    }
+    const driveBall = driveRes?.drive && driveRes.drive.kind !== 'auto-open'
+      ? { role: driveRes.drive.role === 'strategist' && thinker === 'strategist' ? 'strategist' : 'companion', reason: 'drive', at: now,
+        note: { kind: driveRes.drive.kind, key: driveRes.drive.key, text: driveRes.drive.text, mode: driveRes.mode } }
+      : null
     // 违抗（第二轮）：保留闭环——当场升拒绝模式，但收尾的话由**墙**按模板说（锁屏页的 why），
     // 不再由鲸澜出面；姐妹照常陪聊，只是不当监工。
     if (canTalk && !gem.inside && lastRhythm?.morningGate && !lastRhythm.state.morningBall) {
       nextSpeaker = { role: thinker, reason: 'morning-gate', at: now }
     } else if (canTalk && !gem.inside && lastRhythm?.night === 'lock' && phone?.screenOn && now - (Number(lastRhythm.state.nightBallAt) || 0) >= 30 * 60_000) {
       nextSpeaker = { role: thinker, reason: 'night', at: now }
+    } else if (canTalk && !gem.inside && driveBall && (gearNow !== 'busy' || driveBall.note.kind === 'takeover' || driveBall.note.kind === 'checkpoint')) {
+      nextSpeaker = driveBall
     } else if (canTalk && !gem.inside) {
       const gs = loadGearState()
       const patrol = gearNow === 'free' && config.proactiveTools !== false && !lastRhythm?.reviewGate && (!silence || silence.stage === 'none') ? patrolSignal(phone, now, tz) : null
@@ -8153,6 +8282,10 @@ export function apply(ctx) {
     if (!out.speak && (out.reason === 'dice' || out.reason === 'cooldown') && recent.counts.generated === 0 && phone?.screenOn && !inConversation(sessionId, now) && gearNow !== 'busy') {
       Object.assign(out, { speak: true, reason: 'morning', nextCheckAt: now })
     }
+    // 2026-11-18 接管：不闭嘴——「5 球没接就歇」和骰子 / 冷却都不拦推进器的那一球。
+    if (!out.speak && lastTakeover && nextSpeaker?.reason === 'drive' && canTalk && !gem.inside && !inConversation(sessionId, now) && !desk.inFlight()) {
+      Object.assign(out, { speak: true, reason: 'drive', nextCheckAt: now + 60_000 })
+    }
     // 行为触发兜底：即使之前 3 条通知未回进入 no-take，只要此刻确实在娱乐分心且距上次发球满 25 分钟，仍恢复主动提醒。
     if (!out.speak && out.reason === 'no-take' && canTalk && !gem.inside && phone?.screenOn && worthObserving(phone) && !inConversation(sessionId, now) && gearNow !== 'busy' && now - (recent.lastAt || 0) >= 25 * 60_000) {
       Object.assign(out, { speak: true, reason: 'observe-override', nextCheckAt: now + 60_000 })
@@ -8180,7 +8313,7 @@ export function apply(ctx) {
       const dualOn = config.dual !== false && Boolean(config.strategistSessionId)
       const speakerRole = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
       const urgentEnforcement = out.force?.level >= 2 || String(out.reason || '').startsWith('ladder-')
-      if (dualOn && out.speak && !urgentEnforcement && speakerRole === 'companion' && isInWithdrawal(wNow, now)) {
+      if (dualOn && out.speak && !urgentEnforcement && !lastTakeover && speakerRole === 'companion' && isInWithdrawal(wNow, now)) {
         nextSpeaker = null
         Object.assign(out, {
           speak: false,
@@ -8279,6 +8412,7 @@ export function apply(ctx) {
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
       tide: { level: water.level, band: water.band, why: water.why },
+      drive: driveRes ? { mode: driveRes.mode, why: driveRes.why, takeover: driveRes.takeover?.active ? { since: driveRes.takeover.since, reason: driveRes.takeover.reason } : null } : null,
       // 测试模式：手机照常算锁，但只弹「这里本来会锁」的提示，不真锁。默认开，他自己关。
       shadow: config.lockShadow !== false,
       autonomy: v4ContractTick.autonomy,
@@ -9532,6 +9666,7 @@ function mergeConfig(current, body) {
     if (typeof body.fullToolAccess === 'boolean') next.fullToolAccess = body.fullToolAccess
     // B5：念出来。默认关，只认布尔。
     if (typeof body.voice === 'boolean') next.voice = body.voice
+    if (typeof body.driveVoice === 'boolean') next.driveVoice = body.driveVoice
     if (body.strategistSessionId === null) next.strategistSessionId = undefined
     else if (typeof body.strategistSessionId === 'string' && body.strategistSessionId.length <= 256) next.strategistSessionId = body.strategistSessionId || undefined
     for (const k of ['companionName', 'strategistName']) if (typeof body[k] === 'string' && body[k].trim()) next[k] = body[k].trim().slice(0, 20)
