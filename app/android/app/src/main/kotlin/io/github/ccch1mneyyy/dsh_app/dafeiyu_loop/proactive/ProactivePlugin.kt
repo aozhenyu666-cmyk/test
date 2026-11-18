@@ -341,6 +341,30 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/skills/audit", body)
             }
+            "analyticsOp" -> {
+                val body = linkedMapOf<String, Any?>("timeZone" to BeijingClock.ZONE.id)
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/analytics", body)
+            }
+            "storylineOp" -> {
+                val body = linkedMapOf<String, Any?>("timeZone" to BeijingClock.ZONE.id)
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "timeZone") body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/storyline", body)
+            }
+            "launchGeminiProactive" -> {
+                val topic = call.argument<String>("topic").orEmpty()
+                val brief = call.argument<String>("brief").orEmpty()
+                val mode = call.argument<String>("mode")?.takeIf { it.isNotBlank() } ?: "countdown_3s"
+                val preferVoice = call.argument<Boolean>("preferVoice") == true
+                GeminiAutoLauncher.launch(
+                    app = context,
+                    topic = topic,
+                    brief = brief,
+                    mode = mode,
+                    preferVoice = preferVoice,
+                )
+                result.success(true)
+            }
             "allowedFocusApps" -> {
                 val apps = ProactiveRuntime.allowedAppsForFocus().map { (pkg, label) ->
                     linkedMapOf<String, Any?>("packageName" to pkg, "label" to label)

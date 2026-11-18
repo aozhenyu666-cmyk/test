@@ -35,6 +35,30 @@ import {
   runMainlineAlignmentAudit,
   runRedFlagScamAudit,
 } from './dept_skills.js'
+import {
+  buildAnalyticsOverview,
+  generateEveningReport,
+  normalizeHistoryStore,
+  normalizeReportsStore,
+  shouldAutoTriggerEveningReport,
+  trackDailyGemini,
+  upsertEveningReport,
+  upsertHistoryDay,
+} from './analytics_center.js'
+import {
+  appendStorylineEvent,
+  formatIntradayPromptBlock,
+  markAutoPulled,
+  normalizeStoryline,
+  setPullMode,
+} from './intraday_storyline.js'
+import {
+  computeUnifiedLockArbiter,
+  computeUnifiedTodayTasks,
+  resolveActiveSisterSkin,
+} from './unified_arbiter.js'
+import { geminiBrief, geminiMode } from './gemini.js'
+import { isEmergencyPassActive } from './external_agents.js'
 
 export function createV4Hub(deps) {
   const {
@@ -60,15 +84,67 @@ export function createV4Hub(deps) {
     presetRt,
     grantTempPass,
     toolOutput,
+    loadEpisodes = () => null,
+    loadGemini = () => ({}),
+    saveGemini = () => {},
+    loadExternal = () => ({}),
+    loadDailyToday = () => ({ tasks: [] }),
+    getGeminiSession = () => null,
+    getAiWorkSession = () => null,
+    getTaskLease = () => null,
+    getWallDecision = () => ({ locked: false, kind: null }),
+    getSpeaker = () => 'companion',
+    getCommitments = () => [],
+    getPersonaAbout = () => [],
+    getGearWhat = () => '',
   } = deps
 
   const tz = () => zoneOr(getConfig()?.timeZone)
-  const mdLongPath = () => archivePathInKb(kbDir(notesDir(), home()))
+  const kbPathNow = () => kbDir(notesDir(), home())
+  const mdLongPath = () => archivePathInKb(kbPathNow())
 
   const loadRawBank = () => readState(stateFile('bank.json'), null)
   const saveRawBank = (b) => writeJson(stateFile('bank.json'), b)
   const loadBankUnlock = () => cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
   const saveBankUnlock = (s) => writeJson(stateFile('bank-unlock.json'), s)
+
+  const loadHistoryStore = () => normalizeHistoryStore(readState(stateFile('history-365.json'), null))
+  const saveHistoryStore = (s) => writeJson(stateFile('history-365.json'), normalizeHistoryStore(s))
+  const loadReportsStore = () => normalizeReportsStore(readState(stateFile('evening-reports.json'), null))
+  const saveReportsStore = (s) => writeJson(stateFile('evening-reports.json'), normalizeReportsStore(s))
+  const loadStorylineStore = (now = Date.now()) =>
+    normalizeStoryline(readState(stateFile('intraday-storyline.json'), null), { now, tz: tz() })
+  const saveStorylineStore = (s) => writeJson(stateFile('intraday-storyline.json'), s)
+
+  let pendingAutoPull = null
+  let lastHistorySyncAt = 0
+  let lastHistorySyncDay = ''
+
+  function recordStoryline(event, now = Date.now()) {
+    const next = appendStorylineEvent(loadStorylineStore(now), event, { now, tz: tz() })
+    saveStorylineStore(next)
+    return next
+  }
+
+  function getStorylinePromptBlock(now = Date.now()) {
+    return formatIntradayPromptBlock(loadStorylineStore(now), now, tz())
+  }
+
+  function buildProactiveGeminiBrief({ topic = '', mode = 'think', minutes = 20, now = Date.now() } = {}) {
+    const storyBlock = getStorylinePromptBlock(now)
+    const base = geminiBrief({
+      owner: String(getConfig()?.owner || '他'),
+      topic,
+      minutes,
+      mode: geminiMode(mode),
+      about: typeof getPersonaAbout === 'function' ? getPersonaAbout(now) : [],
+      commitments: typeof getCommitments === 'function' ? getCommitments(now) : [],
+      recap: (loadGemini()?.recaps || []).slice(-1)[0] || null,
+      gear: typeof getGearWhat === 'function' ? getGearWhat() : null,
+    })
+    if (!storyBlock) return base
+    return `${base}\n${storyBlock}`.slice(0, 1800)
+  }
 
   const loadHorizonsSynced = () => {
     const raw = readState(stateFile('horizons.json'), null)
@@ -233,6 +309,12 @@ export function createV4Hub(deps) {
           unlockMinutes: judged.unlockMinutes,
           until: judged.unlockUntil,
         })
+        recordStoryline({
+          kind: 'quiz_unlock',
+          actor: 'user',
+          summary: `锁屏答对 ${judged.solved} 题解锁 ${judged.unlockMinutes}m 通行`,
+          at: now,
+        }, now)
       }
       return { v: 1, ...judged }
     }
@@ -338,6 +420,12 @@ export function createV4Hub(deps) {
       if (!next) return { v: 1, ok: false, error: '契约格式无效，至少提供 title 和 checkpoints' }
       saveContract(next)
       record({ state: 'plan-contract-set', at: now, id: next.id, title: next.title, checkpoints: next.checkpoints.length })
+      recordStoryline({
+        kind: 'contract_set',
+        actor: 'user',
+        summary: `签下契约「${next.title}」（${next.checkpoints.length}个验收点）`,
+        at: now,
+      }, now)
       return { v: 1, ok: true, contract: next }
     }
     if (action === 'verify') {
@@ -351,6 +439,12 @@ export function createV4Hub(deps) {
       if (res.contract) saveContract(res.contract)
       if (res.passed && res.checkpoint) {
         record({ state: 'checkpoint-passed', at: now, id: res.checkpoint.id, title: res.checkpoint.title })
+        recordStoryline({
+          kind: 'contract_verify',
+          actor: 'strategist',
+          summary: `验收通过「${res.checkpoint.title}」`,
+          at: now,
+        }, now)
         if (!res.contract?.strictEscalated) {
           try {
             presetRt?.strictOff?.(now, 'contract-passed')
@@ -397,23 +491,214 @@ export function createV4Hub(deps) {
     return { v: 1, ok: false, error: 'unknown audit kind' }
   }
 
-  // ---- `/plan` 周期钩子：1 分钟逾期自动转严格锁 + 返回 autonomyLevel ----
+  function getGeminiStats(day, now = Date.now()) {
+    const tzName = tz()
+    return trackDailyGemini({
+      phone: getLastPhone?.(),
+      episodesState: loadEpisodes?.(),
+      geminiState: loadGemini?.(),
+      historyStore: loadHistoryStore(),
+      day: day || dayString(now, tzName),
+      now,
+      tz: tzName,
+    })
+  }
+
+  function computeLockArbiter(now = Date.now(), overrides = {}) {
+    const ext = loadExternal?.() || {}
+    const emergencyPass = isEmergencyPassActive(ext, now) ? ext.emergencyPass : null
+    const geminiSession = overrides.geminiSession !== undefined ? overrides.geminiSession : getGeminiSession?.(now)
+    const aiWorkSession = overrides.aiWorkSession !== undefined ? overrides.aiWorkSession : getAiWorkSession?.(now)
+    const contractSession = overrides.contractSession !== undefined ? overrides.contractSession : contractSessionView(now)
+    const taskLease = overrides.taskLease !== undefined ? overrides.taskLease : getTaskLease?.(now)
+    const presetStrict = overrides.presetStrict !== undefined ? overrides.presetStrict : presetRt?.sessionView?.(now)
+    const wall = overrides.wall !== undefined ? overrides.wall : getWallDecision?.(now)
+    const autonomy = overrides.autonomy || computeAutonomy(now)
+    return computeUnifiedLockArbiter({
+      emergencyPass,
+      geminiSession,
+      aiWorkSession,
+      contractSession,
+      taskLease,
+      presetStrict,
+      wall,
+      autonomy,
+      now,
+    })
+  }
+
+  function getUnifiedTasks(now = Date.now()) {
+    const bouts = boutsGetRoute()
+    const plan = planDayRoute({ action: 'list' })
+    const daily = loadDailyToday?.(now) || { tasks: [] }
+    return computeUnifiedTodayTasks({
+      planItems: Array.isArray(plan?.plan?.items) ? plan.plan.items : [],
+      dailyTasks: Array.isArray(daily?.tasks) ? daily.tasks : [],
+      boutQueue: Array.isArray(bouts?.queue) ? bouts.queue : [],
+      contract: loadContract(),
+      horizons: loadHorizonsSynced(),
+    })
+  }
+
+  function buildReportInputs(targetDay, now = Date.now()) {
+    const tzName = tz()
+    const episodesState = loadEpisodes?.() || null
+    const historyStore = loadHistoryStore()
+    const reportsStore = loadReportsStore()
+    const usageReport = usageReportView(now, tzName)
+    const ledger = readLedger(home(), 500)
+    const contract = loadContract()
+    const horizons = loadHorizonsSynced()
+    const bankSt = loadBankUnlock()
+    const rawBank = loadRawBank()
+    const bankStats = {
+      ...bankSt.stats,
+      bankTotal: Array.isArray(rawBank?.题目) ? rawBank.题目.length : 0,
+      requiredCount: bankSt.config.requiredCount,
+      unlockMinutes: bankSt.config.unlockMinutes,
+    }
+    const geminiStats = getGeminiStats(targetDay, now)
+    const lockArbiter = computeLockArbiter(now)
+    return {
+      day: targetDay,
+      episodesState,
+      historyStore,
+      reportsStore,
+      usageReport,
+      ledger,
+      contract,
+      horizons,
+      bankStats,
+      geminiStats,
+      lockArbiter,
+      kbDirPath: kbPathNow(),
+      storyline: loadStorylineStore(now),
+      now,
+      tz: tzName,
+    }
+  }
+
+  function syncTodayHistory(now = Date.now()) {
+    const tzName = tz()
+    const today = dayString(now, tzName)
+    if (lastHistorySyncDay === today && now - lastHistorySyncAt < 60_000) return
+    lastHistorySyncDay = today
+    lastHistorySyncAt = now
+    const inputs = buildReportInputs(today, now)
+    const overview = buildAnalyticsOverview({ ...inputs, rangeDays: 7 })
+    const nextHist = upsertHistoryDay(inputs.historyStore, {
+      day: today,
+      buckets: overview.buckets,
+      topApps: overview.topApps,
+      geminiStats: overview.geminiStats,
+      updatedAt: now,
+    })
+    saveHistoryStore(nextHist)
+  }
+
+  function generateAndSaveEveningReport(day, now = Date.now()) {
+    const tzName = tz()
+    const targetDay = day && /^\d{4}-\d{2}-\d{2}$/.test(String(day)) ? String(day) : dayString(now, tzName)
+    const inputs = buildReportInputs(targetDay, now)
+    const report = generateEveningReport(inputs)
+    const nextReports = upsertEveningReport(inputs.reportsStore, report)
+    saveReportsStore(nextReports)
+    record({ state: 'evening-report-generated', at: now, day: targetDay, score: report.score, path: report.path || undefined })
+    recordStoryline({
+      kind: 'evening_report',
+      actor: 'strategist',
+      summary: `生成 ${targetDay} 晚间总报告（战力 ${report.score}/100）`,
+      at: now,
+    }, now)
+    return report
+  }
+
+  function analyticsRoute(body = {}) {
+    const now = Date.now()
+    const tzName = tz()
+    const action = String(body?.action || 'overview')
+    const targetDay = body?.day && /^\d{4}-\d{2}-\d{2}$/.test(String(body.day)) ? String(body.day) : dayString(now, tzName)
+    const rangeDays = Number(body?.rangeDays) || 7
+
+    if (action === 'generate_report') {
+      const report = generateAndSaveEveningReport(targetDay, now)
+      const inputs = buildReportInputs(targetDay, now)
+      const overview = buildAnalyticsOverview({ ...inputs, rangeDays })
+      return { v: 1, ok: true, report, overview }
+    }
+
+    if (targetDay === dayString(now, tzName)) syncTodayHistory(now)
+    const inputs = buildReportInputs(targetDay, now)
+    return buildAnalyticsOverview({ ...inputs, rangeDays })
+  }
+
+  function storylineRoute(body = {}) {
+    const now = Date.now()
+    const tzName = tz()
+    const action = String(body?.action || 'get')
+    let store = loadStorylineStore(now)
+    if (action === 'set_gemini_pull_mode') {
+      store = setPullMode(store, body?.pullMode, { now, tz: tzName })
+      saveStorylineStore(store)
+      record({ state: 'gemini-pull-mode', at: now, pullMode: store.pullMode })
+    } else if (action === 'append') {
+      store = appendStorylineEvent(store, {
+        kind: body?.kind || 'note',
+        actor: body?.actor || 'user',
+        summary: body?.summary || '',
+        at: body?.at || now,
+      }, { now, tz: tzName })
+      saveStorylineStore(store)
+    }
+    return {
+      v: 1,
+      ok: true,
+      pullMode: store.pullMode,
+      storyline: store,
+      promptBlock: formatIntradayPromptBlock(store, now, tzName),
+    }
+  }
+
+  // ---- `/plan` 周期钩子：1 分钟逾期自动转严格锁 + 365 天归档 + 21:30 晚间总报 ----
   function onPlanTick(now = Date.now()) {
     const cur = loadContract()
-    if (!cur) return { contract: null, autonomy: computeAutonomy(now), forceStrictByContract: false }
-    const ticked = evaluateContractTick(cur, now)
-    if (ticked.changed && ticked.contract) {
-      saveContract(ticked.contract)
-      if (ticked.newlyEscalated) {
-        record({ state: 'checkpoint-overdue-locked', at: now, contractId: ticked.contract.id, title: ticked.contract.title })
-        presetRt.strictNow?.(now, `契约验收点超时未交，缓冲 1 分钟已到自动转严格锁`, 'contract')
+    let ticked = { contract: null, graceWarning: null, triggerStrictNow: false, changed: false, newlyEscalated: false }
+    if (cur) {
+      ticked = evaluateContractTick(cur, now)
+      if (ticked.changed && ticked.contract) {
+        saveContract(ticked.contract)
+        if (ticked.newlyEscalated) {
+          record({ state: 'checkpoint-overdue-locked', at: now, contractId: ticked.contract.id, title: ticked.contract.title })
+          presetRt.strictNow?.(now, `契约验收点超时未交，缓冲 1 分钟已到自动转严格锁`, 'contract')
+          recordStoryline({
+            kind: 'contract_overdue',
+            actor: 'strategist',
+            summary: `契约「${ticked.contract.title}」逾期转严格锁`,
+            at: now,
+          }, now)
+        }
       }
+    }
+    try {
+      syncTodayHistory(now)
+    } catch {
+      // ignore sync error
+    }
+    let eveningReportGenerated = null
+    try {
+      const tzName = tz()
+      if (shouldAutoTriggerEveningReport(loadReportsStore(), { now, tz: tzName })) {
+        eveningReportGenerated = generateAndSaveEveningReport(dayString(now, tzName), now)
+      }
+    } catch {
+      // ignore report generation error
     }
     return {
       contract: ticked.contract,
       graceWarning: ticked.graceWarning,
       forceStrictByContract: ticked.triggerStrictNow,
       autonomy: computeAutonomy(now),
+      eveningReportGenerated,
     }
   }
 
@@ -452,10 +737,16 @@ export function createV4Hub(deps) {
       ? `正在专注「${bouts.running.title}」${bouts.running.strict ? '（严格锁）' : ''}`
       : (tasks.length ? `今日主线 ${tasks.length}/${queue.length} 项待推进` : '当前空闲 · 可一键开启契约专注')
 
+    const todayStr = dayString(now, tzName)
+    const geminiStats = getGeminiStats(todayStr, now)
+    const lockArbiter = computeLockArbiter(now, { autonomy: contractTick.autonomy })
+    const activeSisterSkin = resolveActiveSisterSkin({ speaker: getSpeaker?.() || 'companion', lockArbiter })
+    const unifiedTasks = getUnifiedTasks(now)
+
     return {
       v: 1,
       ok: true,
-      day: dayString(now, tzName),
+      day: todayStr,
       brief: {
         line: `今日专注约 ${focusMin}m · 娱乐 ${funMin}m · ${headState}`,
         focusMin,
@@ -467,6 +758,7 @@ export function createV4Hub(deps) {
       running: bouts.running,
       strict: Boolean(bouts.strict || contractTick.forceStrictByContract),
       tasks,
+      unifiedTasks,
       allQueueCount: queue.length,
       defaultAllow: Array.isArray(getConfig()?.defaultAllow) && getConfig().defaultAllow.length ? getConfig().defaultAllow : ['md.obsidian', 'com.tencent.mm'],
       recentApps: Array.isArray(plan.recent) ? plan.recent : [],
@@ -480,6 +772,10 @@ export function createV4Hub(deps) {
       graceWarning: contractTick.graceWarning,
       presets: COMMON_PLAN_PRESETS,
       promptScripts: AI_PROMPT_SCRIPTS,
+      geminiMinutesToday: geminiStats.minutesToday,
+      geminiStats,
+      lockArbiter,
+      activeSisterSkin,
       bankSummary: {
         bankName: String(rawBank?.名称 || '未导入'),
         bankTotal: Array.isArray(rawBank?.题目) ? rawBank.题目.length : 0,
@@ -619,6 +915,79 @@ export function createV4Hub(deps) {
         return { ok: true, text: `✓ 成功导入 ${out.importedCount} 道题到「${out.bankName}」（当前库共 ${out.bankTotal} 题）。锁屏答对 10 题可解锁 5 分钟。` }
       },
     },
+    {
+      name: 'generate_evening_report',
+      description: '生成或刷新指定日期（默认今天）的「晚间 AI 可视化总报告」，包含 5 桶耗时分布、Mermaid 饼图、战果复盘与明日三件套草案，并自动写入 Obsidian 每日报告目录。',
+      parameters: {
+        type: 'object',
+        properties: {
+          day: { type: 'string', description: '可选 YYYY-MM-DD，默认今天' },
+        },
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const res = analyticsRoute({ action: 'generate_report', day: args?.day })
+        const r = res.report
+        return {
+          ok: true,
+          text: `✓ 已生成 ${r.day} 晚间可视化总报告（战力 ${r.score}/100）：${r.headline}${r.path ? `\n已同步写入：${r.path}` : ''}`,
+          report: r,
+        }
+      },
+    },
+    {
+      name: 'proactive_pull_gemini',
+      description: '主动越权唤起 Gemini Live（自动带入今日连续叙事脉络与背景简报），下发立即触发指令 geminiAutoPull 并打开 Gemini 共脑舱。',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: '本次连麦议题或审讯靶点' },
+          mode: { type: 'string', enum: ['study', 'think', 'interrogate'] },
+          minutes: { type: 'integer', minimum: 5, maximum: 180 },
+          preferVoice: { type: 'boolean' },
+        },
+        required: ['topic'],
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const tzName = tz()
+        const topic = String(args?.topic || '').trim().slice(0, 120) || '推进今日主线卡点'
+        const mode = geminiMode(args?.mode)
+        const minutes = Math.max(5, Math.min(180, Math.round(Number(args?.minutes) || 20)))
+        const preferVoice = args?.preferVoice !== false
+        const brief = buildProactiveGeminiBrief({ topic, mode, minutes, now })
+        const g = loadGemini?.() || {}
+        saveGemini?.({
+          ...g,
+          session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: 'proactive_pull_gemini' },
+        })
+        const nextStory = markAutoPulled(loadStorylineStore(now), {
+          now,
+          tz: tzName,
+          summary: `主动拉起 Gemini「${topic.slice(0, 40)}」`,
+        })
+        saveStorylineStore(nextStory)
+        record({ state: 'gemini-auto-pull', at: now, topic, mode, minutes, by: 'tool' })
+        pendingAutoPull = {
+          triggered: true,
+          at: now,
+          topic,
+          mode,
+          minutes,
+          pullMode: nextStory.pullMode,
+          preferVoice,
+          brief,
+          reason: 'ai-tool',
+        }
+        return {
+          ok: true,
+          text: `⚡ 已准备越权唤起 Gemini Live（${topic}，${minutes}m）。背景简报已生成并写入触发队列：\n${brief}`,
+          brief,
+          geminiAutoPull: pendingAutoPull,
+        }
+      },
+    },
   ]
 
   return {
@@ -632,6 +1001,26 @@ export function createV4Hub(deps) {
     bankRoute,
     planContractRoute,
     skillsAuditRoute,
+    analyticsRoute,
+    storylineRoute,
+    computeLockArbiter,
+    getGeminiStats,
+    getUnifiedTasks,
+    recordStoryline,
+    getStorylinePromptBlock,
+    getPullMode: (now = Date.now()) => loadStorylineStore(now).pullMode,
+    getLastPullAt: (now = Date.now()) => loadStorylineStore(now).lastPullAt,
+    markStoryAutoPulled: (now = Date.now(), summary = '') => {
+      const next = markAutoPulled(loadStorylineStore(now), { now, tz: tz(), summary })
+      saveStorylineStore(next)
+      return next
+    },
+    buildProactiveGeminiBrief,
+    consumePendingAutoPull: () => {
+      const p = pendingAutoPull
+      pendingAutoPull = null
+      return p
+    },
     skillsPromptFor: (dept) => buildSkillsPromptBlock(dept),
   }
 }

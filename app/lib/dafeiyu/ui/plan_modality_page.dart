@@ -13,6 +13,9 @@ import '../../ui/theme/theme.dart';
 import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
 import 'app_picker_dialog.dart';
+import 'plan_page.dart';
+
+enum _PlanTab { contract, schedule, audit }
 
 /// DSH Go V4 · AI 协同计划模态专属页
 /// 特性：
@@ -49,6 +52,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
 
   bool _loading = true;
   bool _busy = false;
+  _PlanTab _tab = _PlanTab.contract;
   int _minutes = 45;
   String _verifyMode = 'video_extract';
   final Set<String> _allowed = {'md.obsidian'};
@@ -355,8 +359,8 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         : const <Map<String, dynamic>>[];
 
     return AppPage.list(
-      title: 'AI 协同计划模态',
-      subtitle: const Text('和 AI 核对可用 App、立下硬验收点：平时柔性自由，逾期 1 分钟自动严格锁'),
+      title: '计划与契约台',
+      subtitle: const Text('契约共创验收 · 全天排局时间表 · 红旗防骗与主线体检'),
       actions: [
         GlassIconButton(
           icon: AppIcons.refresh,
@@ -365,6 +369,16 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         ),
       ],
       children: [
+        SegmentedPill<_PlanTab>(
+          segments: const [
+            PillSegment(_PlanTab.contract, '契约共创'),
+            PillSegment(_PlanTab.schedule, '全天排局表'),
+            PillSegment(_PlanTab.audit, '防骗与主线体检'),
+          ],
+          selected: _tab,
+          onChanged: (next) => setState(() => _tab = next),
+        ),
+        const SizedBox(height: 12),
         if (_banner != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
@@ -377,30 +391,33 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
               ),
             ),
           ),
-        if (_graceWarning != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: GlassSurface(
-              tier: GlassTier.card,
-              borderRadius: AppShape.radiusMd,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    Icon(AppIcons.warning, color: colors.warning),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        '⚠️ 验收点「${_graceWarning!['title']}」已到点！距自动转严格锁还剩 ${_graceWarning!['remainSec']} 秒',
-                        style: theme.textTheme.bodyMedium?.copyWith(color: colors.warning, fontWeight: FontWeight.w700),
+        if (_tab == _PlanTab.schedule)
+          PlanPage(channel: _channel, loop: _loop, asTab: true)
+        else if (_tab == _PlanTab.contract) ...[
+          if (_graceWarning != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: GlassSurface(
+                tier: GlassTier.card,
+                borderRadius: AppShape.radiusMd,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Icon(AppIcons.warning, color: colors.warning),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '⚠️ 验收点「${_graceWarning!['title']}」已到点！距自动转严格锁还剩 ${_graceWarning!['remainSec']} 秒',
+                          style: theme.textTheme.bodyMedium?.copyWith(color: colors.warning, fontWeight: FontWeight.w700),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        if (contract != null) ...[
+          if (contract != null) ...[
           OverviewCard(
             margin: const EdgeInsets.only(bottom: 14),
             leading: OverviewGlyph(AppIcons.planMode, tint: contract['strictEscalated'] == true ? 1 : 0),
@@ -594,7 +611,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
             ),
           ),
         ),
-        const SizedBox(height: 14),
+        ] else
         GlassSurface(
           tier: GlassTier.card,
           borderRadius: AppShape.radiusLg,

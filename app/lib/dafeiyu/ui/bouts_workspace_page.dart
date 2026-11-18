@@ -23,6 +23,8 @@ import 'bout_voice_page.dart';
 import 'companion_hub_page.dart';
 import 'intercept_page.dart';
 import 'plan_modality_page.dart';
+import 'strategy_horizons_page.dart';
+import 'usage_analytics_page.dart';
 
 enum _DetailTab { queue, protocols, clock }
 enum _HorizonTab { today, medium, long }
@@ -1172,10 +1174,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     final buckets = charts['buckets'] is Map ? charts['buckets'] as Map : const {};
     final mainlineMin = (buckets['mainlineMin'] as num?)?.toInt() ?? 0;
     final videoMin = (buckets['videoStudyMin'] as num?)?.toInt() ?? 0;
+    final geminiMin = (buckets['geminiMin'] as num?)?.toInt() ?? (_today['geminiMinutesToday'] as num?)?.toInt() ?? 0;
     final tinkerMin = (buckets['toolTinkerMin'] as num?)?.toInt() ?? 0;
     final funMin = (buckets['funMin'] as num?)?.toInt() ?? 0;
     final tinkerWarn = buckets['tinkerWarning'] == true;
-    final sumMin = (mainlineMin + videoMin + tinkerMin + funMin).clamp(1, 100000);
+    final sumMin = (mainlineMin + videoMin + geminiMin + tinkerMin + funMin).clamp(1, 100000);
 
     final topApps = charts['topApps'] is List
         ? [for (final x in charts['topApps'] as List) if (x is Map) Map<String, dynamic>.from(x)]
@@ -1201,7 +1204,44 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('三层主线脉络（自由周期 · 一键拆入今日）', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '三层主线脉络（自由周期 · 一键拆入今日）',
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                GlassSurface(
+                  tier: GlassTier.pill,
+                  borderRadius: AppShape.radiusMd,
+                  onTap: () => unawaited(StrategyHorizonsPage.open(context, channel: _channel)),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    child: Row(
+                      children: [
+                        Icon(AppIcons.planMode, size: 16, color: theme.colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '🧭 三层战略主线（长期北极星 · 中期战役）▸',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${longList.length}长 · ${medList.length}中',
+                          style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 SegmentedPill<_HorizonTab>(
                   segments: const [
@@ -1319,6 +1359,34 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     if (tinkerWarn) const StatusChip(tone: StatusTone.warn, label: '折腾工具偏高'),
                   ],
                 ),
+                const SizedBox(height: 8),
+                GlassSurface(
+                  tier: GlassTier.pill,
+                  borderRadius: AppShape.radiusMd,
+                  onTap: () => unawaited(UsageAnalyticsPage.open(context, channel: _channel)),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        Icon(AppIcons.chart, size: 16, color: theme.colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '📊 全屏统计与晚间报告 ▸',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '90天 · 24h轴 · Gemini',
+                          style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 10),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(999),
@@ -1327,10 +1395,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     child: Row(
                       children: [
                         if (mainlineMin > 0) Expanded(flex: mainlineMin, child: Container(color: colors.success)),
+                        if (geminiMin > 0) Expanded(flex: geminiMin, child: Container(color: colors.info)),
                         if (videoMin > 0) Expanded(flex: videoMin, child: Container(color: theme.colorScheme.primary)),
                         if (tinkerMin > 0) Expanded(flex: tinkerMin, child: Container(color: colors.warning)),
                         if (funMin > 0) Expanded(flex: funMin, child: Container(color: colors.danger)),
-                        if (mainlineMin + videoMin + tinkerMin + funMin == 0)
+                        if (mainlineMin + geminiMin + videoMin + tinkerMin + funMin == 0)
                           Expanded(flex: 1, child: Container(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4))),
                       ],
                     ),
@@ -1342,6 +1411,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                   runSpacing: 4,
                   children: [
                     Text('● 主线攻坚 ${mainlineMin}m', style: theme.textTheme.bodySmall?.copyWith(color: colors.success)),
+                    Text('● Gemini 沟通 ${geminiMin}m', style: theme.textTheme.bodySmall?.copyWith(color: colors.info)),
                     Text('● 视频学习 ${videoMin}m', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary)),
                     Text('● 折腾工具 ${tinkerMin}m', style: theme.textTheme.bodySmall?.copyWith(color: colors.warning)),
                     Text('● 纯娱乐 ${funMin}m（占比 ${((funMin * 100) / sumMin).round()}%）', style: theme.textTheme.bodySmall?.copyWith(color: colors.danger)),

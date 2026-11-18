@@ -25,8 +25,13 @@ export const AFTER_LOCK_MS = 5 * 60_000
 export const WAKE_EARLIEST_MIN = 5 * 60
 /** 片段与摘要保留多久。 */
 export const KEEP_SEG_DAYS = 21
-export const KEEP_DIGEST_DAYS = 60
+export const KEEP_DIGEST_DAYS = 365
 export const MAX_SEGS = 4000
+
+const GEMINI_APPS = new Set([
+  'com.google.android.apps.bard',
+  'com.google.android.googlequicksearchbox',
+])
 
 /** 桌面与系统界面：不算一段行为。和 presets.js 的 NEUTRAL_PACKAGES 是同一张表。 */
 const NEUTRAL = new Set([
@@ -267,31 +272,54 @@ export function deviationOf(segs, appsOf) {
   return { min: Math.round(min), top }
 }
 
+function addSegMinutesByHour(byHour, startMs, endMs, hourOf) {
+  let t = num(startMs)
+  const end = num(endMs)
+  while (t < end) {
+    const h = hourOf(t)
+    const next = Math.min(end, t + (60 - new Date(t).getUTCMinutes()) * 60_000 - new Date(t).getUTCSeconds() * 1000)
+    const step = Math.max(1_000, next - t)
+    if (h >= 0 && h < 24) byHour[h] += step / 60_000
+    t += step
+  }
+}
+
 export function digestOf(state, day, opts) {
   const s = normalizeState(state)
   const segs = segsOf(s, day, opts.now)
   const funByHour = Array(24).fill(0)
+  const workByHour = Array(24).fill(0)
   const apps = {}
+  const allApps = {}
   let segFun = 0
+  let segWork = 0
+  let segGemini = 0
   for (const seg of segs) {
-    if (!seg.fun) continue
     const minutes = Math.max(0, (num(seg.end) - num(seg.start)) / 60_000)
-    segFun += minutes
-    apps[seg.app] = (apps[seg.app] || 0) + minutes
-    // 跨小时的片段按分钟拆到各个小时。
-    let t = num(seg.start)
-    while (t < num(seg.end)) {
-      const h = opts.hourOf(t)
-      const next = Math.min(num(seg.end), t + (60 - new Date(t).getUTCMinutes()) * 60_000 - new Date(t).getUTCSeconds() * 1000)
-      const step = Math.max(1_000, next - t)
-      if (h >= 0 && h < 24) funByHour[h] += step / 60_000
-      t += step
+    if (seg.app) {
+      const prev = allApps[seg.app] || { min: 0, fun: false }
+      allApps[seg.app] = { min: prev.min + minutes, fun: prev.fun || seg.fun === true }
+    }
+    if (GEMINI_APPS.has(seg.app)) {
+      segGemini += minutes
+    }
+    if (seg.fun) {
+      segFun += minutes
+      apps[seg.app] = (apps[seg.app] || 0) + minutes
+      addSegMinutesByHour(funByHour, seg.start, seg.end, opts.hourOf)
+    } else {
+      segWork += minutes
+      addSegMinutesByHour(workByHour, seg.start, seg.end, opts.hourOf)
     }
   }
   const bouts = isPlain(s.bouts[day]) ? s.bouts[day] : {}
   const tally = { opened: 0, self: 0, done: 0, bad: 0, passed: 0 }
   for (const row of Object.values(bouts)) for (const k of Object.keys(tally)) tally[k] += num(row[k])
   const top = Object.entries(apps).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([app, m]) => ({ app, min: Math.round(m) }))
+  const byAppAll = Object.entries(allApps)
+    .sort((a, b) => b[1].min - a[1].min)
+    .slice(0, 10)
+    .map(([app, info]) => ({ app, min: Math.round(info.min), fun: Boolean(info.fun) }))
   // 局内偏离分钟：调用方给 appsOf（按局号取这一局的必需/允许），没给就不算。
   const dev = opts.appsOf ? deviationOf(segs, opts.appsOf) : { min: 0, top: [] }
   return {
@@ -299,6 +327,10 @@ export function digestOf(state, day, opts) {
     funMin: Math.round(Math.max(segFun, num(s.marks.todayFun?.[day]))),
     funByHour: funByHour.map((m) => Math.round(m)),
     topFun: top,
+    focusMin: Math.round(segWork),
+    workByHour: workByHour.map((m) => Math.round(m)),
+    geminiMin: Math.round(segGemini),
+    byAppAll,
     segs: segs.length,
     funSegs: segs.filter((x) => x.fun).length,
     locks: num(s.marks.locks?.[day]),

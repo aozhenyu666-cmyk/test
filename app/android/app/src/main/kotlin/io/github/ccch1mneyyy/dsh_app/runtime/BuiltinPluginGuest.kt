@@ -243,6 +243,10 @@ object BuiltinPluginGuest {
                 "lib/plan_modality.js",
                 "lib/telemetry_charts.js",
                 "lib/v4_hub.js",
+                // V5 终局架构大归一模块化扩展（365天分析中心 / 同日连续脉络 / 统一仲裁桥）
+                "lib/analytics_center.js",
+                "lib/intraday_storyline.js",
+                "lib/unified_arbiter.js",
             ),
         ),
     )

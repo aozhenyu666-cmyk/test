@@ -420,22 +420,17 @@ class _PlanPageState extends State<PlanPage> {
 
   @override
   Widget build(BuildContext context) {
-    return AppPage.list(
-      title: '今天的计划',
-      subtitle: const Text('一局一行。必需应用和允许应用都要写——严格模式就按这两栏放行。'),
-      actions: [
-        GlassIconButton(icon: AppIcons.refresh, tooltip: '重新读一遍', onPressed: () => unawaited(_load())),
-      ],
-      children: [
-        if (_loading)
-          const ListPageCard(children: [ListPageRow(icon: AppIcons.loading, title: '正在读今天的计划…')])
-        else if (_failed)
-          ListPageCard(
-            children: [
-              ListPageRow(icon: AppIcons.warning, title: '读不到今天的计划（$_why）', titleMaxLines: 2),
-            ],
-          )
-        else ...[
+    final body = <Widget>[
+      if (_loading)
+        const ListPageCard(children: [ListPageRow(icon: AppIcons.loading, title: '正在读今天的计划…')])
+      else if (_failed)
+        ListPageCard(
+          children: [
+            ListPageRow(icon: AppIcons.warning, title: '读不到今天的计划（$_why）', titleMaxLines: 2),
+          ],
+        )
+      else ...[
+        if (!widget.asTab) ...[
           GlassSurface(
             tier: GlassTier.card,
             borderRadius: AppShape.radiusLg,
@@ -465,38 +460,54 @@ class _PlanPageState extends State<PlanPage> {
             ),
           ),
           const SizedBox(height: 12),
-          if (_numbers.isNotEmpty) ...[_numbersCard(), const SizedBox(height: 12)],
-          if (_sentence.isNotEmpty || _acceptLeftMs > 0) ...[_planCard(), const SizedBox(height: 12)],
-          for (var i = 0; i < _rows.length; i += 1) _card(i),
-          const SizedBox(height: 12),
-          ListPageCard(
-            children: [
-              ListPageRow(
-                icon: AppIcons.add,
-                title: '再加一局',
-                onTap: () => setState(() => _rows.add(_blank())),
-              ),
-              ListPageRow(
-                icon: AppIcons.selected,
-                title: _saving ? '正在交…' : '就按这一份来',
-                subtitle: '交上去立刻生效，到点自己开局',
-                onTap: _saving ? null : () => unawaited(_submit()),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ListPageCard(
-            children: [
-              ListPageRow(
-                icon: AppIcons.time,
-                title: '现在是 ${_clock(_min)}',
-                subtitle: '比当前时间早太多（20 分钟以上）的局会记成空局，不会补开',
-                subtitleMaxLines: 2,
-              ),
-            ],
-          ),
         ],
+        if (_numbers.isNotEmpty) ...[_numbersCard(), const SizedBox(height: 12)],
+        if (_sentence.isNotEmpty || _acceptLeftMs > 0) ...[_planCard(), const SizedBox(height: 12)],
+        for (var i = 0; i < _rows.length; i += 1) _card(i),
+        const SizedBox(height: 12),
+        ListPageCard(
+          children: [
+            ListPageRow(
+              icon: AppIcons.add,
+              title: '再加一局',
+              onTap: () => setState(() => _rows.add(_blank())),
+            ),
+            ListPageRow(
+              icon: AppIcons.selected,
+              title: _saving ? '正在交…' : '就按这一份来',
+              subtitle: '交上去立刻生效，到点自己开局',
+              onTap: _saving ? null : () => unawaited(_submit()),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ListPageCard(
+          children: [
+            ListPageRow(
+              icon: AppIcons.time,
+              title: '现在是 ${_clock(_min)}',
+              subtitle: '比当前时间早太多（20 分钟以上）的局会记成空局，不会补开',
+              subtitleMaxLines: 2,
+            ),
+          ],
+        ),
       ],
+    ];
+
+    if (widget.asTab) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: body,
+      );
+    }
+
+    return AppPage.list(
+      title: '今天的计划',
+      subtitle: const Text('一局一行。必需应用和允许应用都要写——严格模式就按这两栏放行。'),
+      actions: [
+        GlassIconButton(icon: AppIcons.refresh, tooltip: '重新读一遍', onPressed: () => unawaited(_load())),
+      ],
+      children: body,
     );
   }
 

@@ -146,6 +146,7 @@ import {
   issueAppLease, revokeAppLease,
 } from './external_agents.js'
 import { createV4Hub } from './v4_hub.js'
+import { resolveActiveSisterSkin } from './unified_arbiter.js'
 
 /**
  * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
@@ -645,7 +646,13 @@ export function apply(ctx) {
   /** 他声明的应用名单（config.apps）。空数组＝全按内置的娱乐类包名表判。 */
   const appsOf = () => cleanApps(config.apps)
   /** 手机现状洗一遍，再按他声明的名单重标娱乐类。三处调用都走这个口，别直接 cleanPhone。 */
-  const phoneOf = (raw) => remark(cleanPhone(raw), appsOf())
+  const phoneOf = (raw) => {
+    const p = remark(cleanPhone(raw), appsOf())
+    if (p && raw && Number.isFinite(Number(raw.geminiMinutesToday))) {
+      p.geminiMinutesToday = Math.max(0, Math.round(Number(raw.geminiMinutesToday)))
+    }
+    return p
+  }
 
   function record(entry) {
     appendLedger(home(), { v: 1, ...entry })
@@ -971,6 +978,7 @@ export function apply(ctx) {
           contact: contactLines(readLedger(home(), 400), now),
           gemini: why.gemini,
           phone: phoneOf(req?.phone),
+          intraday: v4Hub?.getStorylinePromptBlock?.(now) || '',
           commitments: readCommitments(home(), now, 3),
           facts: backgroundFacts(candidates, BACKGROUND_LIMIT),
           vault,
@@ -1139,6 +1147,7 @@ export function apply(ctx) {
         force: forceLines(force, phone, { drill: Boolean(drill), gemini: config.proactiveTools !== false }),
         special,
         contact: contactLines(entries, now),
+        intraday: v4Hub?.getStorylinePromptBlock?.(now) || '',
         grace: Number(brain.graceUntil) > now,
         morning: firstToday,
         owner: config.owner,
@@ -1283,6 +1292,15 @@ export function apply(ctx) {
           return
         }
         lastBall = { role: speakerOf(r.sessionId), at: Date.now() }
+        try {
+          const sp = speakerOf(r.sessionId)
+          v4Hub?.recordStoryline?.({
+            kind: 'proactive_ball',
+            actor: sp,
+            summary: String(cleanText || '').slice(0, 80),
+            at: now,
+          }, now)
+        } catch {}
         // 大脑从这一刻开始计：10 分钟内他有没有离开那个娱乐 App。
         if (served) {
           const b = loadBrain()
@@ -1343,6 +1361,17 @@ export function apply(ctx) {
         lastHumanAt.set(String(session?.id || ''), Date.now())
         // 落进账本：引擎重启也知道他刚说过话（阶梯不会把聊过的球当成没接，发球也知道他多久前说的话）。
         record({ state: 'human', at: Date.now(), sessionId: String(session?.id || '') })
+        try {
+          const snippet = stripInjection(text).replace(/\s+/g, ' ').trim().slice(0, 80)
+          if (snippet) {
+            v4Hub?.recordStoryline?.({
+              kind: 'user_reply',
+              actor: 'user',
+              summary: snippet,
+              at: Date.now(),
+            }, Date.now())
+          }
+        } catch {}
         // 第三轮：早上/晚上的门不再靠"他认真回了一句"关——过关要交墙按证据判（submit_to_wall），
         // 敷衍的话不会让窗口消失。这里只记"他在聊"。
         // 他说"安静一小时""今天别找我"就照做：这是一句话就说清的事，不必占一次模型调用。
@@ -1821,6 +1850,9 @@ export function apply(ctx) {
     saveGeminiSchedule({ ...s, fired: true, firedAt: now })
     saveGemini({ ...loadGemini(), session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: s.by || 'schedule' } })
     record({ state: 'gemini-schedule-fired', at: now, topic, minutes, mode })
+    try {
+      v4Hub?.recordStoryline?.({ kind: 'gemini_start', actor: 'gemini', summary: `预约连麦开始：${topic || '共脑'}（${minutes}m）`, at: now }, now)
+    } catch {}
     return { topic, minutes, mode, brief }
   }
   /**
@@ -2574,6 +2606,19 @@ export function apply(ctx) {
       })
     },
     toolOutput,
+    loadEpisodes: () => readState(stateFile('episodes.json'), null),
+    loadGemini,
+    saveGemini,
+    loadExternal,
+    loadDailyToday: (now) => dailyToday(now),
+    getGeminiSession: (now) => geminiSessionView(now),
+    getAiWorkSession: (now) => aiWorkSessionView(now),
+    getTaskLease: (now) => taskLeaseView(now),
+    getWallDecision: (now) => wallDecision(wallCfgNow(), now, zoneOr(config.timeZone)),
+    getSpeaker: () => (nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'),
+    getCommitments: (now) => readCommitments(home(), now, 3).map((c) => c.statement),
+    getPersonaAbout: (now) => personaLines(mergePersona(readCorePersona(home()), config.persona), effectiveMode(config, now)).slice(0, 5),
+    getGearWhat: () => (effectiveGear(config, Date.now()) === 'busy' ? config.gearWhat : ''),
   })
   if (tools && typeof tools.register === 'function') {
     for (const def of [
@@ -5838,6 +5883,9 @@ export function apply(ctx) {
         if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
         saveGemini({ ...g, session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: role } })
         record({ state: 'gemini-start', at: now, topic, mode, minutes, by: role })
+        try {
+          v4Hub?.recordStoryline?.({ kind: 'gemini_start', actor: 'gemini', summary: `开启 Gemini 连麦「${topic || '共脑'}」（${minutes}m）`, at: now }, now)
+        } catch {}
         return { ok: true, text: '背景：\n' + brief + '\n\n下一步：\n' + geminiSteps(), brief }
       },
     }
@@ -5928,6 +5976,14 @@ export function apply(ctx) {
         const recaps = [...(Array.isArray(g.recaps) ? g.recaps : []), { ...r, file: wrote || undefined }].slice(-5)
         saveGemini({ ...g, recaps, session: null, recappedFor: Number(g.inSince) || g.recappedFor })
         record({ state: 'gemini-recap', at: now, by: role, file: wrote || undefined, minutes })
+        try {
+          v4Hub?.recordStoryline?.({
+            kind: 'gemini_recap',
+            actor: 'gemini',
+            summary: `Gemini 复盘：${summary.slice(0, 50)}${r.next ? `；下一步：${r.next.slice(0, 24)}` : ''}`,
+            at: now,
+          }, now)
+        } catch {}
         return { ok: true, text: wrote ? '存好了：' + wrote : '记下了（笔记文件没写进去，复盘还在，两姐妹都看得到）。' }
       },
     }
@@ -5986,6 +6042,8 @@ export function apply(ctx) {
         '站得住就认，站不住就具体说哪里站不住；别只重复立场，也别一被反驳就全盘让步。',
     )
     lines.push('答应他的事要真的做到：要定时提醒就用提醒工具真的设好，并说清楚到点是怎么提醒的；做不到的（比如替他数着打了几把）就别答应。不要假装记得没发生过的事；不知道就说不知道。')
+    const intradayBlock = v4Hub?.getStorylinePromptBlock?.(Date.now())
+    if (intradayBlock) lines.push(intradayBlock)
     return lines.join('\n')
   }
   // ---------------------------------------------------------------- B 层 T3：内容层随机
@@ -6237,6 +6295,7 @@ export function apply(ctx) {
       : ''
     const kbSplits = knowledgeBlocks(kbDir(notesDir(), home()), role, { notesDir: notesDir() })
       .map((b) => ({ id: b.id, layer: 'content', priority: b.priority, text: b.text }))
+    const intradayBlock = v4Hub?.getStorylinePromptBlock?.(nowMs) || ''
 
     const blocks = [
       {
@@ -6264,6 +6323,7 @@ export function apply(ctx) {
         : []),
       // C1：挂载卡是状态层最高优先级——卡一断这轮就白聊，别的都能让一让。
       { id: 'mount', layer: 'state', priority: 65, text: mountText() },
+      ...(intradayBlock ? [{ id: 'intraday-storyline', layer: 'state', priority: 57, text: intradayBlock }] : []),
       { id: 'trust', layer: 'state', priority: 60, text: trustLines(trustNow()).join('\n') },
       // B4 + feiyu-mood：账本怒气耐心 + 复合心情维度潜台词。
       { id: 'emotion', layer: 'state', priority: 58, text: emotionBlockText },
@@ -6877,7 +6937,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -6951,6 +7011,8 @@ export function apply(ctx) {
         if (path === '/bank') return send(res, 200, v4Hub.bankRoute(body.value || {}))
         if (path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
         if (path === '/skills/audit') return send(res, 200, v4Hub.skillsAuditRoute(body.value || {}))
+        if (path === '/analytics') return send(res, 200, v4Hub.analyticsRoute(body.value || {}))
+        if (path === '/storyline') return send(res, 200, v4Hub.storylineRoute(body.value || {}))
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
@@ -7231,6 +7293,14 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/bank') return send(res, 200, v4Hub.bankRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/autonomy') return send(res, 200, { v: 1, ok: true, autonomy: v4Hub.computeAutonomy() })
+      if (req.method === 'GET' && path === '/analytics') {
+        return send(res, 200, v4Hub.analyticsRoute({
+          action: 'overview',
+          day: url.searchParams.get('day') || undefined,
+          rangeDays: Number(url.searchParams.get('rangeDays')) || 7,
+        }))
+      }
+      if (req.method === 'GET' && path === '/storyline') return send(res, 200, v4Hub.storylineRoute({ action: 'get' }))
       if (req.method === 'GET' && path === '/usage/report') return send(res, 200, usageReportView())
       if (req.method === 'GET' && path === '/dice/roll') return send(res, 200, diceRollRoute({ manual: false }))
       if (req.method === 'GET' && path === '/memory/import') return send(res, 200, importVaultMemoriesRoute({}))
@@ -7532,13 +7602,21 @@ export function apply(ctx) {
     }
     const mind = sense(phone, ledger, sessionId, now)
     if (phone) lastPhone = phone
+    else if (body?.phone && Number.isFinite(Number(body.phone.geminiMinutesToday))) {
+      lastPhone = { ...(lastPhone || { today: [] }), geminiMinutesToday: Math.max(0, Math.round(Number(body.phone.geminiMinutesToday))) }
+    }
     // 第九轮：预案。手机一切 App 就会来问一次 /plan，所以严格模式能在这一问的回答里就落下去。
     let presetWatchUntil = 0
     try {
       const pr = presetRt.tick(phone, now)
       presetWatchUntil = Number(pr?.watchUntil) || 0
       // 真的落了锁（不是影子、不只是说一句）：行为大脑记一笔，接下来 5 分钟的片段前因是「刚被锁」。
-      if (pr.fires.some((f) => !f.shadow && f.ops.some((o) => o !== 'say' && o !== 'log'))) brainRt.noteLock(now)
+      if (pr.fires.some((f) => !f.shadow && f.ops.some((o) => o !== 'say' && o !== 'log'))) {
+        brainRt.noteLock(now)
+        try {
+          v4Hub?.recordStoryline?.({ kind: 'lock', actor: 'system', summary: `触发护栏锁定（${phone?.label || phone?.app || '娱乐'}）`, at: now }, now)
+        } catch {}
+      }
     } catch (error) {
       console.error('[companion] 预案失败：' + String((error && error.message) || error))
     }
@@ -7813,12 +7891,62 @@ export function apply(ctx) {
       : (radar.triggered ? (radar.forceWhy || force.why) : force.why)
     const effectiveForceRelease = emergencyActive || (!v4ContractTick.forceStrictByContract && !radar.triggered && (onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)))
     const mediaAction = !emergencyActive && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
+    const wd = wallDecision(wallCfgNow(), now, tz)
+    const speakerOut = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
+    const lockArbiter = v4Hub.computeLockArbiter(now, {
+      autonomy: v4ContractTick.autonomy,
+      wall: { locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
+    })
+    const activeSisterSkin = resolveActiveSisterSkin({ speaker: speakerOut, lockArbiter })
+    const geminiMinutesToday = v4Hub.getGeminiStats(dayString(now, tz), now).minutesToday
+    let geminiAutoPull = v4Hub.consumePendingAutoPull()
+    if (!geminiAutoPull) {
+      const pullMode = v4Hub.getPullMode(now)
+      const lastPullAt = v4Hub.getLastPullAt(now)
+      const mealNowVal = mealNow(wallConfig(config).meals, localMinute(phone, zoneMinuteOfDay(now, tz)))
+      const inActiveWork = effectiveGear(config, now) === 'busy' || Boolean(v4ContractTick.contract) || Boolean(runningBoutNow())
+      const dwellMin = Math.max(0, Number(phone?.minutes) || 0)
+      const cooldownOk = lastPullAt === 0 || now - lastPullAt >= 20 * 60_000
+      const canPullNow =
+        pullMode !== 'gentle' &&
+        config.control !== false &&
+        canTalk &&
+        !gem.inside &&
+        !emergencyActive &&
+        !lastRhythm?.night &&
+        !mealNowVal &&
+        !onBreak(now) &&
+        phone?.screenOn !== false
+      if (canPullNow && (drift || (phone?.fun && dwellMin >= 8 && inActiveWork && cooldownOk))) {
+        const pullTopic = drift?.topic || `你在${phone?.label || phone?.app || '娱乐应用'}已停留 ${dwellMin} 分钟，立刻对齐下一步主线`
+        const pullBrief = v4Hub.buildProactiveGeminiBrief({
+          topic: pullTopic,
+          mode: 'interrogate',
+          minutes: 15,
+          now,
+        })
+        v4Hub.markStoryAutoPulled(now, `触发主动拉起 Gemini（${phone?.label || phone?.app || '分心'} ${dwellMin}m）`)
+        geminiAutoPull = {
+          triggered: true,
+          at: now,
+          topic: pullTopic,
+          mode: pullMode,
+          reason: drift ? 'drift' : 'fun-dwell-8m',
+          preferVoice: true,
+          brief: pullBrief,
+        }
+      }
+    }
     return {
-      v: 1, ...out, silence, sessionId, speaker: nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion',
+      v: 1, ...out, silence, sessionId, speaker: speakerOut,
       tide: { level: water.level, band: water.band, why: water.why },
       autonomy: v4ContractTick.autonomy,
       planContract: v4ContractTick.contract,
       contractGraceWarning: v4ContractTick.graceWarning,
+      geminiMinutesToday,
+      lockArbiter,
+      activeSisterSkin,
+      ...(geminiAutoPull ? { geminiAutoPull } : {}),
       // release：只有他讲通了（宽限期内）或 3 分钟应急放行期间才放行大肥鱼加的锁。
       force: { level: effectiveForceLevel, name: force.name, why: effectiveForceWhy, app: phone?.app || undefined,
         release: effectiveForceRelease },
@@ -7862,18 +7990,15 @@ export function apply(ctx) {
       followup: followupView(config.followup, now),
       obligations: obligationsView(config.obligations, now),
       // 第二轮·墙：此刻娱乐锁/开、申请窗口开没开、本周还剩几天放松额度（面板和手机据此显示）。
-      wall: (() => {
-        const wd = wallDecision(wallCfgNow(), now, tz)
-        return {
-          locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null), openUntil: wd.openUntil || 0,
-          applyWindowOpen: applyWindowOpen(config.applyWindow, now),
-          applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
-          relaxRemaining: relaxRemainingNow(now, tz),
-          depositMissing: statusOf(depositToday(now)).missing.join('、'),
-          relaxToday: Boolean(activeRelax(config, now, tz)),
-          tightenToday: tightenActive(config, now, tz),
-        }
-      })(),
+      wall: {
+        locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null), openUntil: wd.openUntil || 0,
+        applyWindowOpen: applyWindowOpen(config.applyWindow, now),
+        applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
+        relaxRemaining: relaxRemainingNow(now, tz),
+        depositMissing: statusOf(depositToday(now)).missing.join('、'),
+        relaxToday: Boolean(activeRelax(config, now, tz)),
+        tightenToday: tightenActive(config, now, tz),
+      },
     }
   }
 
@@ -8415,6 +8540,9 @@ export function apply(ctx) {
     const budgetMin = Number(opts.minutes) > 0 ? Math.max(5, Math.min(240, Math.round(Number(opts.minutes)))) : 0
     live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, goal, budgetMin, openedAt: now }
     record({ state: 'bout-open', at: now, protocolId: protocol.id, department: dept, via: 'panel' })
+    try {
+      v4Hub?.recordStoryline?.({ kind: 'bout_start', actor: 'user', summary: `开局「${goal || protocol.name || protocol.id}」`, at: now }, now)
+    } catch {}
     {
       const wr = checkWithdrawalRelease(loadWithdrawal(), { actionHappened: true, now })
       if (wr.released) {
@@ -8453,6 +8581,14 @@ export function apply(ctx) {
     if (r.state === 'closed' || r.state === 'escalated') {
       const passed = r.state === 'closed' && r.accepted !== false
       brainRt.noteBout({ protocolId: live.protocol?.id, outcome: r.state === 'closed' ? 'done' : 'bad', accepted: passed }, now)
+      try {
+        v4Hub?.recordStoryline?.({
+          kind: 'bout_verify',
+          actor: 'strategist',
+          summary: `${passed ? '收局验收通过' : '局升级/结束'}「${live.goal || live.protocol?.name || ''}」`,
+          at: now,
+        }, now)
+      } catch {}
       // 第九轮第四项：通过验收就记一段放风额度——娱乐用交付挣，不再靠「今天表现好」这种虚的。
       // 升级收场不算交付，一分不给。
       let earnt = ''
@@ -8787,6 +8923,11 @@ export function apply(ctx) {
     }
     const items = body?.top === true ? [item, ...curItems] : [...curItems, item]
     const saved = planDayRoute({ action: 'set', items, by: String(body?.by || 'today') })
+    if (saved.ok) {
+      try {
+        v4Hub?.recordStoryline?.({ kind: 'morning_anchor', actor: 'user', summary: `立项：${title}（${minutes}m）`, at: now }, now)
+      } catch {}
+    }
     return {
       v: 1,
       ...saved,

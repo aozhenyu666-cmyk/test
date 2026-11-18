@@ -927,6 +927,60 @@ class ProactiveChannel {
       return false;
     }
   }
+
+  /// V5 统计大屏 / 90 天热力图 / 晚间 AI 可视化总报告（GET / POST /analytics）。
+  Future<Map<String, dynamic>?> analyticsOp([Map<String, Object?>? body]) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>(
+        'analyticsOp',
+        body ?? const {'action': 'overview'},
+      );
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// V5 同日连续叙事总线 & Gemini 主动唤起策略（GET / POST /storyline）。
+  Future<Map<String, dynamic>?> storylineOp([Map<String, Object?>? body]) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>(
+        'storylineOp',
+        body ?? const {'action': 'get'},
+      );
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// V5 越权主动唤起 Gemini Live（含 3 秒悬浮桥接或铁血零秒强拉，写剪贴板简报）。
+  Future<bool> launchGeminiProactive({
+    String topic = '',
+    String brief = '',
+    String mode = 'countdown_3s',
+    bool preferVoice = true,
+  }) async {
+    try {
+      return await _methods.invokeMethod<bool>('launchGeminiProactive', {
+            'topic': topic,
+            'brief': brief,
+            'mode': mode,
+            'preferVoice': preferVoice,
+          }) ??
+          false;
+    } on Exception {
+      return false;
+    }
+  }
 }
 
 /// 大肥鱼与独立守护 App「大肥鱼哨兵」之间的互信绑定状态。

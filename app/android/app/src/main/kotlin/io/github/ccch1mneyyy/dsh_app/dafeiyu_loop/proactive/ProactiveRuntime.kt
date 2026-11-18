@@ -1142,9 +1142,11 @@ object ProactiveRuntime {
 
     /** 下一场预约连麦的时刻（插件给的绝对毫秒）；0 = 没有预约。 */
     @Volatile private var geminiDueAt: Long = 0L
+    @Volatile private var lastAutoPullAt: Long = 0L
+    private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
 
     /**
-     * 到点：取 launch → 简报进剪贴板 → 提示一句 → 拉起 Gemini → 马上问一次 /plan，拿连麦舱
+     * 到点：取 launch → 简报进剪贴板 → 雾蓝悬浮桥接 / 无障碍破权拉起 Gemini → 马上问一次 /plan，拿连麦舱
      * （插件取 launch 时已经把舱开好了，手机按 /plan 的 session 上"只许 Gemini"）。
      */
     private fun fireGeminiDue() {
@@ -1154,30 +1156,20 @@ object ProactiveRuntime {
                 val launch = m["launch"] as? Map<*, *> ?: return@routeCallback
                 val brief = (launch["brief"] as? String).orEmpty()
                 val topic = (launch["topic"] as? String).orEmpty()
-                if (brief.isNotBlank()) runCatching {
-                    val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("大肥鱼 · 连麦背景", brief))
+                val mode = (launch["mode"] as? String)?.takeIf { it.isNotBlank() } ?: "countdown_3s"
+                val preferVoice = launch["preferVoice"] == true
+                GeminiAutoLauncher.launch(
+                    app = app,
+                    topic = topic.ifBlank { "约好的 Gemini 共脑时间到了" },
+                    brief = brief,
+                    mode = mode,
+                    preferVoice = preferVoice,
+                ) { opened ->
+                    Log.i("DshProactive", "gemini due: topic=$topic opened=$opened")
                 }
-                runCatching {
-                    val hint = if (topic.isBlank()) "约好的连麦到点了：背景已复制，进 Gemini 粘贴" else "连麦到点：$topic（背景已复制，进 Gemini 粘贴）"
-                    android.widget.Toast.makeText(app, hint, android.widget.Toast.LENGTH_LONG).show()
-                }
-                val opened = openGemini()
-                Log.i("DshProactive", "gemini due: topic=$topic opened=$opened")
                 consultPlanSoon(minGapMs = 0L)
             }, "POST", "/gemini/due", linkedMapOf<String, Any?>())
         }
-    }
-
-    /** 先开 Gemini App，没有就开 Google App（不少手机上 Gemini Live 跑在里面）。 */
-    private fun openGemini(): Boolean {
-        val pm = app.packageManager
-        for (pkg in listOf("com.google.android.apps.bard", "com.google.android.googlequicksearchbox")) {
-            val intent = pm.getLaunchIntentForPackage(pkg) ?: continue
-            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (runCatching { app.startActivity(intent) }.isSuccess) return true
-        }
-        return false
     }
 
     // ---------------------------------------------------------------- 追问锁（接口约定 §2、§5）
@@ -1498,6 +1490,31 @@ object ProactiveRuntime {
         if (geminiDueAt in 1..stamp) {
             geminiDueAt = 0L
             fireGeminiDue()
+        }
+        val autoPull = map["geminiAutoPull"] as? Map<*, *>
+        if (autoPull != null && autoPull["trigger"] != false && autoPull["active"] != false) {
+            val pullTopic = (autoPull["topic"] as? String).orEmpty()
+            val pullBrief = (autoPull["brief"] as? String).orEmpty()
+            val pullMode = (autoPull["mode"] as? String)?.takeIf { it.isNotBlank() }
+                ?: (autoPull["pullMode"] as? String)?.takeIf { it.isNotBlank() }
+                ?: "countdown_3s"
+            val preferVoice = autoPull["preferVoice"] == true
+            val pullStamp = (autoPull["at"] as? Number)?.toLong() ?: stamp
+            if ((pullTopic.isNotBlank() || pullBrief.isNotBlank()) &&
+                stamp - lastAutoPullAt >= AUTO_PULL_COOLDOWN_MS &&
+                pullStamp > stamp - AUTO_PULL_COOLDOWN_MS
+            ) {
+                lastAutoPullAt = stamp
+                GeminiAutoLauncher.launch(
+                    app = app,
+                    topic = pullTopic,
+                    brief = pullBrief,
+                    mode = pullMode,
+                    preferVoice = preferVoice,
+                ) { opened ->
+                    Log.i(TAG, "geminiAutoPull: topic=$pullTopic mode=$pullMode opened=$opened")
+                }
+            }
         }
         // 3 分钟应急急事通行（/plan 的 emergencyPass）：跨重启/轮询同步胶囊倒计时，到期立刻撤除并复查。
         val ep = map["emergencyPass"] as? Map<*, *>
@@ -2051,6 +2068,11 @@ object ProactiveRuntime {
             io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.MaskedSummaryHelper.maskedSummary(1500)
         }.getOrNull()
         val geminiVoiceActive = isVoiceModalityActive(front, screenText)
+        val geminiMinutesToday = GEMINI_PACKAGES.sumOf { pkg ->
+            val uRow = usageMap[pkg]
+            val nowMins = (nowTodayMap[pkg] as? Number)?.toLong() ?: 0L
+            maxOf(nowMins, uRow?.minutes ?: 0L)
+        }
         val totalMinutes = today.sumOf { (it["minutes"] as? Number)?.toLong() ?: 0L }
         val timeSlots = usage?.timeSlots.orEmpty().map { slot ->
             linkedMapOf<String, Any?>(
@@ -2076,6 +2098,7 @@ object ProactiveRuntime {
             "charging" to s.charging,
             "mediaPlaying" to mediaPlaying,
             "geminiVoiceActive" to geminiVoiceActive,
+            "geminiMinutesToday" to geminiMinutesToday,
             "screenText" to screenText,
             "foregroundDebugOn" to io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(app),
             "local" to String.format(java.util.Locale.US, "%02d:%02d", minuteOfDay(wall) / 60, minuteOfDay(wall) % 60),
