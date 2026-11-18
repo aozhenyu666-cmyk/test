@@ -10,7 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../plugins/native/native_model.dart' show NativePanel;
 import '../../plugins/native/native_state.dart' show nativeContributionsProvider, rereadNativeContributions;
 import '../channels/proactive_state.dart';
-import '../../state/sessions_state.dart' show currentSessionProvider;
+import '../../state/sessions_state.dart' show currentSessionProvider, sessionsProvider;
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
 import '../../ui/common/segmented_pill.dart';
@@ -68,6 +68,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   Map<String, dynamic>? _storyline;
   int _clockCount = 0;
   bool? _lockShadow;
+  Map<String, dynamic>? _rotate;
 
   @override
   void initState() {
@@ -108,6 +109,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       _channel.analyticsOp({'action': 'overview'}).catchError((_) => null),
       _channel.storylineOp({'action': 'get'}).catchError((_) => null),
       _channel.lockShadow().catchError((_) => null),
+      _channel.rotateOp({'action': 'status'}).catchError((_) => null),
     ]);
     if (!mounted) return;
     setState(() {
@@ -117,7 +119,45 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       _analytics = extras[3] is Map<String, dynamic> ? extras[3] as Map<String, dynamic> : null;
       _storyline = extras[4] is Map<String, dynamic> ? extras[4] as Map<String, dynamic> : null;
       _lockShadow = extras[5] is bool ? extras[5] as bool : null;
+      _rotate = extras[6] is Map<String, dynamic> ? extras[6] as Map<String, dynamic> : null;
     });
+  }
+
+  /// 会话换班：插件先写交接 → App 新建对话 → 绑上去。旧对话不删。
+  Future<void> _rotateSession(String role) async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    String message;
+    try {
+      final prep = await _channel.rotateOp({'action': 'prepare', 'role': role});
+      if (prep?['ok'] != true) throw StateError('交接没写成');
+      final id = await ref.read(sessionsProvider.notifier).create();
+      final bound = await _channel.rotateOp({'action': 'bound', 'role': role, 'sessionId': id});
+      message = bound?['ok'] == true ? '换好了：新对话已绑定，交接会在头几天自动带上' : '新对话建好了，但没绑上：${bound?['error'] ?? '插件没回应'}';
+    } on Object catch (e) {
+      message = '没换成：$e';
+    }
+    if (!mounted) return;
+    setState(() => _actionBusy = false);
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(message)));
+    unawaited(_refreshExtras());
+  }
+
+  Widget _rotateRow(String role, String name) {
+    final st = _rotate?[role];
+    final m = st is Map ? st : const {};
+    final turns = m['turns'] is num ? (m['turns'] as num).toInt() : 0;
+    final days = m['days'] is num ? (m['days'] as num).toInt() : 0;
+    final due = m['due'] == true;
+    final bound = '${m['sessionId'] ?? ''}'.isNotEmpty;
+    return ListTile(
+      title: Text('$name 的对话'),
+      subtitle: Text(bound ? '已聊 $turns 轮 · $days 天${due ? ' · 该换班了（${m['why'] ?? ''}）' : ''}' : '还没绑定对话'),
+      trailing: TextButton(
+        onPressed: _actionBusy ? null : () => unawaited(_rotateSession(role)),
+        child: Text(due ? '现在换' : '换新对话'),
+      ),
+    );
   }
 
   Future<void> _setLockShadow(bool on) async {
@@ -490,6 +530,18 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
                 ),
                 value: _lockShadow!,
                 onChanged: _actionBusy ? null : (v) => unawaited(_setLockShadow(v)),
+              ),
+            ),
+          ),
+        if (_rotate != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Card(
+              child: Column(
+                children: [
+                  _rotateRow('companion', '鱼丸'),
+                  _rotateRow('strategist', '鲸澜'),
+                ],
               ),
             ),
           ),

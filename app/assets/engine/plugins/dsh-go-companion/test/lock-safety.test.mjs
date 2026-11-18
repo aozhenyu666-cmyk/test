@@ -181,3 +181,23 @@ test('/plan：陷住了 → 接管（锁成只剩工作 App 的白名单）；�
     assert.match(readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8'), /takeover-end/)
   })
 })
+
+test('/rotate：写交接 → 绑新对话（不能和姐姐同一个）→ 轮数从绑定起算', async () => {
+  await withHome(async (home) => {
+    seed(home, { strategistSessionId: 'session-big' })
+    const host = makeHost({ agent: makeAgent() })
+    const st = await call(host.handler, 'POST', '/dsh-go-companion/v1/rotate', { action: 'status' })
+    assert.equal(st.body.companion.sessionId, 'session-abc')
+    const prep = await call(host.handler, 'POST', '/dsh-go-companion/v1/rotate', { action: 'prepare', role: 'companion' })
+    assert.equal(prep.body.ok, true)
+    assert.match(prep.body.preview, /交接/)
+    const clash = await call(host.handler, 'POST', '/dsh-go-companion/v1/rotate', { action: 'bound', role: 'companion', sessionId: 'session-big' })
+    assert.equal(clash.body.ok, false)
+    const ok = await call(host.handler, 'POST', '/dsh-go-companion/v1/rotate', { action: 'bound', role: 'companion', sessionId: 'session-new' })
+    assert.equal(ok.body.ok, true)
+    const after = await call(host.handler, 'POST', '/dsh-go-companion/v1/rotate', { action: 'status' })
+    assert.equal(after.body.companion.sessionId, 'session-new')
+    assert.equal(after.body.companion.turns, 0)
+    assert.match(readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8'), /session-rotate/)
+  })
+})

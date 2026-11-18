@@ -259,6 +259,8 @@ object BuiltinPluginGuest {
                 "lib/lock_decision.js",
                 // 2026-11-18 推进器 + 三档（伙伴 / 推手 / 接管）
                 "lib/driver.js",
+                // 2026-11-18 会话换班
+                "lib/rotate.js",
             ),
         ),
     )

@@ -153,6 +153,7 @@ import { computeQuota } from './quota.js'
 import { buildLockDecision } from './lock_decision.js'
 import { driveMode, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
 import { WORK_DEFAULT } from './app_tiers.js'
+import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { resolveActiveSisterSkin } from './unified_arbiter.js'
 
 /**
@@ -6469,6 +6470,8 @@ export function apply(ctx) {
       { id: 'capability', layer: 'constraint', priority: 90, text: capabilityLines(role, { notesDir: notesDir() }) },
       { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
       { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
+      // 2026-11-18 会话换班：新对话头 3 天 / 30 轮带上上一个对话的交接。
+      { id: 'handoff', layer: 'content', priority: 80, text: (() => { try { return handoffBlockText(role, nowMs) } catch { return '' } })() },
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
       { id: 'v4-skills', layer: 'content', priority: 66, text: v4Hub.skillsPromptFor(live?.department || 'dept:govern') },
       // 2026-11-18 验收器：截止日 + 昨天的判决，两姐妹每一轮都看得到（读不到就不放）。
@@ -7107,7 +7110,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7178,6 +7181,7 @@ export function apply(ctx) {
         if (path === '/handoff') return send(res, 200, handoffRoute(body.value || {}))
         if (path === '/today/start') return send(res, 200, todayStartRoute(body.value || {}))
         if (path === '/today/task') return send(res, 200, todayTaskRoute(body.value || {}))
+        if (path === '/rotate') return send(res, 200, rotateRoute(body.value || {}))
         if (path === '/horizons') return send(res, 200, v4Hub.horizonsRoute(body.value || {}))
         if (path === '/bank') return send(res, 200, v4Hub.bankRoute(body.value || {}))
         if (path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
@@ -7799,6 +7803,100 @@ export function apply(ctx) {
     lastDriveMode = tk.state.active ? 'takeover' : m.mode
     lastTakeover = tk.state.active ? tk.state : null
     return { mode: lastDriveMode, why: m.why, drive, takeover: tk.state }
+  }
+
+  // ---------------------------------------------------------------- 2026-11-18 会话换班
+  const handoffFile = (role) => stateFile('handoff-' + (role === 'strategist' ? 'strategist' : 'companion') + '.json')
+  function roleSession(role) {
+    return role === 'strategist' ? String(config.strategistSessionId || '') : String(config.sessionId || '')
+  }
+  function rotateStatusNow(now = Date.now()) {
+    const entries = readLedger(home(), 5000)
+    const bound = config.sessionBoundAt || {}
+    return {
+      companion: rotationStatus(entries, { sessionId: roleSession('companion'), boundAt: Number(bound.companion) || 0, now }),
+      strategist: rotationStatus(entries, { sessionId: roleSession('strategist'), boundAt: Number(bound.strategist) || 0, now }),
+    }
+  }
+  function handoffFacts(now) {
+    let db = null
+    try {
+      db = openMemoryDb(memoryPath())
+      return db ? backgroundFacts(loadCandidates(db, { sessionId: config.sessionId, now }), 6) : []
+    } catch {
+      return []
+    } finally {
+      try { db?.close?.() } catch {}
+    }
+  }
+  function prepareHandoff(role, now = Date.now()) {
+    const names = roleNames(config)
+    const sid = roleSession(role)
+    const entries = readLedger(home(), 1500)
+    let verdictLine = ''
+    try {
+      verdictLine = (v4Hub?.verifierPromptLines?.(now) || []).find((l) => l.startsWith('昨天的判决')) || ''
+    } catch {}
+    const text = buildHandoff({
+      roleName: role === 'strategist' ? names.strategist : names.companion,
+      owner: String(config.owner || '他'),
+      dialog: recentDialog(entries, { sessionId: sid, limit: 14 }),
+      humanRecent: recentHuman.slice(-4),
+      commitments: readCommitments(home(), now, 5).map((c) => c.statement),
+      topics: (garden?.topics || []).filter((t) => t && t.status !== 'done').slice(0, 6).map((t) => t.title + (t.detail ? '（' + String(t.detail).slice(0, 60) + '）' : '')),
+      stance: (() => { try { return stanceText() } catch { return '' } })(),
+      gemini: geminiLines(loadGemini(), now),
+      verdictLine,
+      facts: handoffFacts(now),
+      now,
+    })
+    const h = { text, at: now, from: sid, to: '', role }
+    writeJson(handoffFile(role), h)
+    try {
+      const kb = vaultKb()
+      if (kb) {
+        const day = dayString(now, zoneOr(config.timeZone))
+        writeVaultText(join(kb, '会话交接', day + '-' + (role === 'strategist' ? names.strategist : names.companion) + '.md'), text + '\n')
+      }
+    } catch {
+      // 笔记库写不进去：交接还在 companion/ 里
+    }
+    record({ state: 'session-handoff', at: now, role, from: sid, chars: text.length })
+    return h
+  }
+  /** POST /rotate：status / prepare（写交接）/ bound（App 新建好对话后绑上）。 */
+  function rotateRoute(body = {}) {
+    const now = Date.now()
+    const action = String(body?.action || 'status')
+    const role = body?.role === 'strategist' ? 'strategist' : 'companion'
+    if (action === 'prepare') {
+      const h = prepareHandoff(role, now)
+      return { v: 1, ok: true, role, chars: h.text.length, preview: h.text.slice(0, 400) }
+    }
+    if (action === 'bound') {
+      const sid = String(body?.sessionId || '').trim()
+      if (!sid || sid.length > 256) return { v: 1, ok: false, error: 'sessionId' }
+      const other = role === 'strategist' ? String(config.sessionId || '') : String(config.strategistSessionId || '')
+      if (sid === other) return { v: 1, ok: false, error: 'same-as-sister' }
+      const old = roleSession(role)
+      commit({
+        ...(role === 'strategist' ? { strategistSessionId: sid } : { sessionId: sid }),
+        sessionBoundAt: { ...(config.sessionBoundAt || {}), [role]: now },
+      })
+      const h = readState(handoffFile(role), null)
+      if (h) writeJson(handoffFile(role), { ...h, to: sid, boundAt: now })
+      record({ state: 'session-rotate', at: now, role, from: old, to: sid })
+      try { mountPersona() } catch {}
+      return { v: 1, ok: true, role, sessionId: sid }
+    }
+    return { v: 1, ok: true, ...rotateStatusNow(now) }
+  }
+  /** 新对话头几天每轮带上的交接。 */
+  function handoffBlockText(role, now = Date.now()) {
+    const h = readState(handoffFile(role), null)
+    if (!h?.to || h.to !== roleSession(role)) return ''
+    const turnsSince = readLedger(home(), 600).filter((e) => (e?.state === 'generated' || e?.state === 'human') && String(e.sessionId || '') === h.to && Number(e.at) >= Number(h.boundAt || h.at)).length
+    return handoffLive({ ...h, at: Number(h.boundAt || h.at) }, { now, turnsSince }) ? h.text : ''
   }
 
   function planRoute(body) {
@@ -9635,6 +9733,10 @@ function mergeConfig(current, body) {
   if (body && typeof body === 'object') {
     if (body.sessionId === null) next.sessionId = undefined
     else if (typeof body.sessionId === 'string' && body.sessionId.length <= 256) next.sessionId = body.sessionId
+    // 换了对话就从这一刻起算轮数（会话换班用）。
+    for (const [key, role] of [['sessionId', 'companion'], ['strategistSessionId', 'strategist']]) {
+      if (typeof body[key] === 'string' && body[key] && body[key] !== current[key]) next.sessionBoundAt = { ...(next.sessionBoundAt || current.sessionBoundAt || {}), [role]: Date.now() }
+    }
     if (typeof body.enabled === 'boolean') next.enabled = body.enabled
     for (const key of ['quietStart', 'quietEnd']) {
       if (Number.isFinite(Number(body[key]))) next[key] = Math.max(0, Math.min(23, Math.round(Number(body[key]))))
