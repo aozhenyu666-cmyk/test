@@ -137,6 +137,9 @@ object FocusRuntime {
     fun onReturned() {
         deviationPkg = ""
         deviationSince = 0L
+        val strictSession = runCatching {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.isStrictSession()
+        }.getOrDefault(false)
         if (state.active) {
             state = state.copy(lastBlockAt = System.currentTimeMillis(), lastBlockPkg = "")
             save()
@@ -329,6 +332,9 @@ object FocusRuntime {
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
+        val strictSession = runCatching {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.isStrictSession()
+        }.getOrDefault(false)
         if (state.active) {
             builder.addAction(
                 Notification.Action.Builder(
