@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -80,9 +82,16 @@ class _BankManagerPageState extends State<BankManagerPage> {
         allowedExtensions: const ['json', 'txt', 'md'],
       );
       if (picked == null) return;
-      final content = await picked.readAsString();
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in picked.readAsByteStream()) {
+        bytes.add(chunk);
+        if (bytes.length > 4 * 1024 * 1024) {
+          throw const FormatException('题库文件过大（超过 4MB）');
+        }
+      }
+      final content = utf8.decode(bytes.takeBytes(), allowMalformed: true);
       if (!mounted) return;
-      final baseName = picked.uri.pathSegments.last.replaceAll(RegExp(r'\.[^.]+$'), '');
+      final baseName = picked.name.replaceAll(RegExp(r'\.[^.]+$'), '');
       setState(() {
         _rawCtrl.text = content;
         if (baseName.isNotEmpty) _nameCtrl.text = baseName;
