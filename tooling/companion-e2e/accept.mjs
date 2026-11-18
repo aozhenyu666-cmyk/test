@@ -191,7 +191,7 @@ pl = await route('POST', '/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone:
 check('第一球后 15 分钟还没接 → 换渠道再问一句（不再每十分钟催）', pl.body.reason === 'ladder-channel' && pl.body.silence?.stage === 'channel', pl.body)
 inject([{ requestId: sid + '-c', at: Date.now() - 60_000, silence: 'channel' }])
 pl = await route('POST', '/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone: wechat() })
-check('三球都没接 → 停下，3 小时后再看', pl.body.reason === 'no-take' && pl.body.nextCheckAt > Date.now() + 2.9 * 3_600_000, pl.body)
+check('三球都没接 → 停下，1 小时后再看', pl.body.reason === 'no-take' && pl.body.nextCheckAt > Date.now() + 0.9 * 3_600_000, pl.body)
 
 // ---------------------------------------------------------------- F. 水位、节奏、力度
 console.log('【F. 水位与力度】')
@@ -474,6 +474,7 @@ reset()
   check('J6.2 /clock GET 持久可读 paused 状态', clkAfterPause.status === 200 && clkAfterPause.body?.tasks?.find((t) => t.id === 'e2e_cyc')?.paused === true, clkAfterPause.body)
   await route('POST', '/clock', { op: 'delete', id: 'e2e_cyc' })
 
+  await route('POST', '/config', { lockTimeZone: false, timeZone: tzDay })
   const feedRadar = await route('POST', '/plan', {
     roll: 100,
     timeZone: tzDay,
