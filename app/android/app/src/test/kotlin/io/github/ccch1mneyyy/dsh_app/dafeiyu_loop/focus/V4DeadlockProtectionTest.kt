@@ -40,7 +40,7 @@ class V4DeadlockProtectionTest {
                 bounceCount = 5,
                 strict = true,
             )
-            assertEquals(FocusDecision.None, dec, "safe package $pkg must not trigger FocusBlock")
+            assertEquals("safe package $pkg must not trigger FocusBlock", FocusDecision.None, dec)
         }
     }
 
@@ -66,7 +66,7 @@ class V4DeadlockProtectionTest {
                     systemBypass = SystemBypassClassifier.isBypassPackage(pkg),
                 ),
             )
-            assertEquals(SessionVerdict.ALLOW, v, "safe package $pkg must stay ALLOW in strict SessionPolicy")
+            assertEquals("safe package $pkg must stay ALLOW in strict SessionPolicy", SessionVerdict.ALLOW, v)
         }
     }
 
