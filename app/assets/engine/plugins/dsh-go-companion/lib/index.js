@@ -1860,7 +1860,7 @@ export function apply(ctx) {
       .filter((t) => t?.fun).reduce((sum, t) => sum + (Number(t.minutes) || 0), 0)
     let deadlines = []
     try {
-      deadlines = typeof upcomingDeadlines === 'function' ? upcomingDeadlines(now) : []
+      deadlines = v4Hub?.upcomingDeadlines ? v4Hub.upcomingDeadlines(now) : []
     } catch {
       deadlines = []
     }
@@ -6394,6 +6394,15 @@ export function apply(ctx) {
       { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
       { id: 'v4-skills', layer: 'content', priority: 66, text: v4Hub.skillsPromptFor(live?.department || 'dept:govern') },
+      // 2026-11-18 验收器：截止日 + 昨天的判决，两姐妹每一轮都看得到（读不到就不放）。
+      { id: 'verifier', layer: 'content', priority: 72, text: (() => {
+        try {
+          const lines = v4Hub.verifierPromptLines(Date.now())
+          return lines.length ? '【验收器】\n' + lines.join('\n') : ''
+        } catch {
+          return ''
+        }
+      })() },
       { id: 'telemetry', layer: 'content', priority: 9, text: telemetryText },
       ...(loreText ? [{ id: 'lorebook', layer: 'content', priority: 7, text: '【情境记忆】\n' + loreText }] : []),
       ...(contradiction?.contradicted

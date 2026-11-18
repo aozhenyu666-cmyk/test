@@ -251,6 +251,8 @@ object BuiltinPluginGuest {
                 "lib/never_lock.js",
                 // 2026-11-18 触发器：Gemini 设定、当下事实、回执
                 "lib/trigger.js",
+                // 2026-11-18 验收器：日判、截止日、周六周报
+                "lib/verdict.js",
             ),
         ),
     )

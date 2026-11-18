@@ -12,6 +12,7 @@ import { digestOf, segsOf } from './episodes.js'
 import { GEMINI_PACKAGES } from './gemini.js'
 import { classifyUsageBucket } from './telemetry_charts.js'
 import { DEFAULT_TZ, hm as zoneHm, minuteOfDay, startOfDay } from './tz.js'
+import { dayVerdict, ledgerFacts, missedOn } from './verdict.js'
 
 export const HISTORY_VERSION = 1
 export const MAX_HISTORY_DAYS = 365
@@ -554,6 +555,7 @@ export function generateEveningReport({
   lockArbiter = null,
   kbDirPath = '',
   storyline = null,
+  planned = 0,
   now = Date.now(),
   tz = DEFAULT_TZ,
 } = {}) {
@@ -630,7 +632,21 @@ export function generateEveningReport({
     score >= 40 ? '有推进但存在分心损耗' :
     '主线投入偏低，明日需尽早开局'
 
-  const headline = `${targetDay} · ${verdictTag}（战力 ${score}/100 · 主线与共脑 ${focusTotal}m / 娱乐 ${b.funMin}m）`
+  // 2026-11-18 验收器：硬判决（空转 / 部分 / 达成）由代码按账本算，放在最前面，不让软话盖过去。
+  const facts = ledgerFacts(ledger, (e) => dayString(num(e.at), tz) === targetDay)
+  const verdict = dayVerdict({
+    delivered: completedTasks.length,
+    planned,
+    receiptsOk: facts.receiptsOk,
+    receiptsMissing: facts.receiptsMissing,
+    funMin: b.funMin,
+    focusMin: b.mainlineMin + b.videoStudyMin,
+    disarms: facts.disarms,
+    violations: violationsToday,
+    missedDeadlines: missedOn(horizons, shiftYmd(targetDay, 1)),
+  })
+
+  const headline = `${targetDay} · 【${verdict.tag}】${verdictTag}（战力 ${score}/100 · 主线与共脑 ${focusTotal}m / 娱乐 ${b.funMin}m）`
 
   const pieSlices = [
     ['主线攻坚', b.mainlineMin],
@@ -703,6 +719,7 @@ export function generateEveningReport({
     `title: "${targetDay} 晚间 AI 可视化总报告"`,
     `day: "${targetDay}"`,
     `score: ${score}`,
+    `verdict: "${verdict.tag}"`,
     'tags:',
     '  - 每日报告',
     '  - DSH-Go',
@@ -710,7 +727,9 @@ export function generateEveningReport({
     '',
     `# ${targetDay} · 大肥鱼晚间 AI 可视化总报告`,
     '',
-    `> **战力总评：${score}/100** · ${headline}`,
+    `> **${verdict.line}**`,
+    '',
+    `> 战力总评：${score}/100 · ${headline}`,
     '',
     '## 一、时间投入分布图',
     '',
@@ -756,6 +775,7 @@ export function generateEveningReport({
     day: targetDay,
     generatedAt: now,
     score,
+    verdict,
     headline,
     markdown,
     mermaidPie,

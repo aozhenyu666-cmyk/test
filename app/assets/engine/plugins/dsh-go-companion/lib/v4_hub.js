@@ -58,6 +58,8 @@ import {
   resolveActiveSisterSkin,
 } from './unified_arbiter.js'
 import { geminiBrief, geminiMode } from './gemini.js'
+import { deadlineLines, isSaturday, upcoming as upcomingDeadlinesOf, weekEndingSaturday, weeklyMarkdown } from './verdict.js'
+import { mkdirSync as mkdirSyncV, writeFileSync as writeFileSyncV } from 'node:fs'
 import { isEmergencyPassActive } from './external_agents.js'
 
 export function createV4Hub(deps) {
@@ -575,9 +577,54 @@ export function createV4Hub(deps) {
       lockArbiter,
       kbDirPath: kbPathNow(),
       storyline: loadStorylineStore(now),
+      planned: (() => {
+        try {
+          const unified = getUnifiedTasks(now)
+          const list = Array.isArray(unified?.tasks) ? unified.tasks : (Array.isArray(unified) ? unified : [])
+          return list.length
+        } catch {
+          return 0
+        }
+      })(),
       now,
       tz: tzName,
     }
+  }
+
+  /** 2026-11-18 验收器：周六晚报出来后，把这一周汇总写进 大肥鱼/周报/<周六>.md。 */
+  function writeWeeklyIfSaturday(targetDay) {
+    if (!isSaturday(targetDay)) return ''
+    const kb = kbPathNow()
+    if (!kb) return ''
+    try {
+      const dir = join(kb, '周报')
+      mkdirSyncV(dir, { recursive: true })
+      const file = join(dir, `${weekEndingSaturday(targetDay)}.md`)
+      writeFileSyncV(file, weeklyMarkdown(loadReportsStore()?.reports || {}, targetDay), 'utf8')
+      return file
+    } catch {
+      return ''
+    }
+  }
+
+  /** 最近的截止日（今天起 14 天内）。 */
+  function upcomingDeadlines(now = Date.now()) {
+    return upcomingDeadlinesOf(loadHorizonsSynced(), dayString(now, tz()), 14)
+  }
+
+  /** 进两姐妹每一轮上下文：截止日 + 昨天的判决（早上那几轮最该提）。 */
+  function verifierPromptLines(now = Date.now()) {
+    const tzName = tz()
+    const today = dayString(now, tzName)
+    const lines = deadlineLines(loadHorizonsSynced(), today)
+    const y = loadReportsStore()?.reports?.[shiftYmdLocal(today, -1)]
+    if (y?.verdict?.line) lines.push('昨天的判决（代码按账本算的，不许替他找补）：' + y.verdict.line.replace(/^今天：/, ''))
+    return lines
+  }
+
+  function shiftYmdLocal(ymd, delta) {
+    const t = Date.parse(ymd + 'T00:00:00Z') + delta * 86_400_000
+    return new Date(t).toISOString().slice(0, 10)
   }
 
   function syncTodayHistory(now = Date.now()) {
@@ -605,11 +652,12 @@ export function createV4Hub(deps) {
     const report = generateEveningReport(inputs)
     const nextReports = upsertEveningReport(inputs.reportsStore, report)
     saveReportsStore(nextReports)
-    record({ state: 'evening-report-generated', at: now, day: targetDay, score: report.score, path: report.path || undefined })
+    const weeklyPath = writeWeeklyIfSaturday(targetDay)
+    record({ state: 'evening-report-generated', at: now, day: targetDay, score: report.score, verdict: report.verdict?.tag, path: report.path || undefined, weekly: weeklyPath || undefined })
     recordStoryline({
       kind: 'evening_report',
       actor: 'strategist',
-      summary: `生成 ${targetDay} 晚间总报告（战力 ${report.score}/100）`,
+      summary: `生成 ${targetDay} 晚间总报告（${report.verdict?.tag || ''} · 战力 ${report.score}/100）`,
       at: now,
     }, now)
     return report
@@ -1018,6 +1066,9 @@ export function createV4Hub(deps) {
       return next
     },
     buildProactiveGeminiBrief,
+    upcomingDeadlines,
+    verifierPromptLines,
+    writeWeeklyIfSaturday,
     consumePendingAutoPull: () => {
       const p = pendingAutoPull
       pendingAutoPull = null

@@ -127,6 +127,41 @@ class _StrategyHorizonsPageState extends State<StrategyHorizonsPage> {
     });
   }
 
+  /// 2026-11-18 日历：给长期 / 中期目标设截止日（YYYY-MM-DD），验收器按它提醒和判「错过」。
+  Future<void> _setDue(String horizon, Map<String, dynamic> item) async {
+    if (_busy) return;
+    final now = DateTime.now();
+    final current = DateTime.tryParse('${item['due'] ?? ''}');
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: current ?? now.add(const Duration(days: 7)),
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 5),
+      helpText: '「${item['title'] ?? ''}」的截止日',
+    );
+    if (picked == null || !mounted) return;
+    final due = '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+    setState(() => _busy = true);
+    await _channel.horizonsOp({'action': 'upsert', 'horizon': horizon, 'id': item['id'], 'due': due});
+    await _refresh();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _banner = '✓ 「${item['title']}」截止日定在 $due';
+    });
+  }
+
+  static String _dueText(Object? raw) {
+    final due = DateTime.tryParse('${raw ?? ''}');
+    if (due == null) return '';
+    final today = DateTime.now();
+    final left = DateTime(due.year, due.month, due.day).difference(DateTime(today.year, today.month, today.day)).inDays;
+    final ymd = '${raw ?? ''}';
+    if (left < 0) return '截止 $ymd · 已过 ${-left} 天';
+    if (left == 0) return '截止 $ymd · 就是今天';
+    return '截止 $ymd · 还剩 $left 天';
+  }
+
   Future<void> _bumpStep(String horizon, Map<String, dynamic> item) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -511,6 +546,13 @@ class _StrategyHorizonsPageState extends State<StrategyHorizonsPage> {
                   ),
                 ],
               ),
+              if (_dueText(item['due']).isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _dueText(item['due']),
+                  style: theme.textTheme.bodySmall?.copyWith(color: colors.warning, fontWeight: FontWeight.w700),
+                ),
+              ],
               if ('${item['note'] ?? ''}'.isNotEmpty || '${item['spanHint'] ?? ''}'.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
@@ -531,6 +573,12 @@ class _StrategyHorizonsPageState extends State<StrategyHorizonsPage> {
               const SizedBox(height: 10),
               Row(
                 children: [
+                  IconButton(
+                    tooltip: '设截止日',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _busy ? null : () => unawaited(_setDue(horizon, item)),
+                    icon: const Icon(Icons.event, size: 18),
+                  ),
                   OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
                       shape: AppShape.card,

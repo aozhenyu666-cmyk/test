@@ -7,6 +7,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/
+/** 截止日（日历）：只认 YYYY-MM-DD，其他一律当没有。 */
+export function cleanDue(v) {
+  const s = String(v || '').trim()
+  return YMD_RE.test(s) ? s : ''
+}
+
 export function cleanHorizons(raw) {
   const s = raw && typeof raw === 'object' ? raw : {}
   const normItem = (it, defaultHorizon) => {
@@ -24,6 +31,7 @@ export function cleanHorizons(raw) {
       targetSteps: Math.max(1, Math.min(100, Number(it.targetSteps) || 5)),
       doneSteps: Math.max(0, Number(it.doneSteps) || 0),
       status: it.status === 'done' || it.status === 'archived' ? it.status : 'active',
+      due: cleanDue(it.due),
       createdAt: Number(it.createdAt) || Date.now(),
       updatedAt: Number(it.updatedAt) || Date.now(),
     }
@@ -48,7 +56,9 @@ export function syncLongGoalsFromMarkdown(horizonsRaw, mdPath) {
       if (!title || title.startsWith('#') || existingTitles.has(title)) continue
       existingTitles.add(title)
       const isDone = /^\s*(?:[-*]|\d+\.)\s+\[[xX]\]/.test(line)
+      const dueM = m[1].match(/截止\s*(\d{4}-\d{2}-\d{2})/)
       state.long.push({
+        due: dueM ? dueM[1] : '',
         id: `long-${state.long.length + 1}-${Date.now().toString(36).slice(-4)}`,
         horizon: 'long',
         title,
@@ -78,13 +88,13 @@ export function mirrorHorizonsToMarkdown(stateRaw, mdPath) {
     if (!s.long.length) lines.push('- （暂无，请在主控台「三层主线 · 长期」添加你的就业/考公核心目标）')
     for (const item of s.long) {
       const mark = item.status === 'done' ? 'x' : ' '
-      lines.push(`- [${mark}] ${item.title}（${item.spanHint} · 进度 ${item.doneSteps}/${item.targetSteps}）${item.note ? ` — ${item.note}` : ''}`)
+      lines.push(`- [${mark}] ${item.title}（${item.spanHint} · 进度 ${item.doneSteps}/${item.targetSteps}${item.due ? ` · 截止 ${item.due}` : ''}）${item.note ? ` — ${item.note}` : ''}`)
     }
     lines.push('', '## 二、中期战役（不定期阶段攻坚）')
     if (!s.medium.length) lines.push('- （暂无阶段战役）')
     for (const item of s.medium) {
       const mark = item.status === 'done' ? 'x' : ' '
-      lines.push(`- [${mark}] ${item.title}（${item.spanHint} · 进度 ${item.doneSteps}/${item.targetSteps}）${item.note ? ` — ${item.note}` : ''}`)
+      lines.push(`- [${mark}] ${item.title}（${item.spanHint} · 进度 ${item.doneSteps}/${item.targetSteps}${item.due ? ` · 截止 ${item.due}` : ''}）${item.note ? ` — ${item.note}` : ''}`)
     }
     writeFileSync(mdPath, lines.join('\n') + '\n', 'utf8')
   } catch {
@@ -114,6 +124,7 @@ export function upsertHorizonItem(stateRaw, payload = {}, now = Date.now()) {
       ...(payload.spanHint !== undefined ? { spanHint: String(payload.spanHint).trim().slice(0, 32) } : {}),
       ...(payload.parentId !== undefined ? { parentId: String(payload.parentId).trim() } : {}),
       ...(payload.targetSteps !== undefined ? { targetSteps: Math.max(1, Math.min(100, Number(payload.targetSteps) || 5)) } : {}),
+      ...(payload.due !== undefined ? { due: cleanDue(payload.due) } : {}),
       doneSteps: nextDone,
       status: nextStatus,
       updatedAt: now,
@@ -132,6 +143,7 @@ export function upsertHorizonItem(stateRaw, payload = {}, now = Date.now()) {
     targetSteps: Math.max(1, Math.min(100, Number(payload.targetSteps) || (bucket === 'long' ? 10 : 5))),
     doneSteps: 0,
     status: 'active',
+    due: cleanDue(payload.due),
     createdAt: now,
     updatedAt: now,
   }
