@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -76,17 +75,16 @@ class _BankManagerPageState extends State<BankManagerPage> {
 
   Future<void> _pickFileImport() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final picked = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: const ['json', 'txt', 'md'],
       );
-      final path = result?.files.single.path;
-      if (path == null || path.isEmpty) return;
-      final content = await File(path).readAsString();
+      if (picked == null) return;
+      final content = await picked.readAsString();
       if (!mounted) return;
+      final baseName = picked.uri.pathSegments.last.replaceAll(RegExp(r'\.[^.]+$'), '');
       setState(() {
         _rawCtrl.text = content;
-        final baseName = path.split(Platform.pathSeparator).last.replaceAll(RegExp(r'\.[^.]+$'), '');
         if (baseName.isNotEmpty) _nameCtrl.text = baseName;
         _banner = '已载入文件（${content.length} 字符），点击下方「立即清洗入库」即可完成导入';
       });
