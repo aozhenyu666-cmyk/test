@@ -216,7 +216,21 @@ object GeminiAutoLauncher {
         return null
     }
 
+    /**
+     * 2026-11-18：Gemini 在国内要先连代理（NekoBox）。代理没连上就先打开 NekoBox，让他点「连接」，
+     * 连上（系统里出现 VPN）后自动接着打开 Gemini；90 秒还没连上就算了，只留一条提示。
+     */
     fun startGeminiActivity(app: Context, topic: String = "", preferVoice: Boolean = false): Boolean {
+        return when (val step = ProxyGate.before(app)) {
+            ProxyGate.Step.Direct -> startGeminiDirect(app, topic, preferVoice)
+            is ProxyGate.Step.OpenProxyFirst -> {
+                ProxyGate.openProxyThen(app, step.pkg) { startGeminiDirect(app, topic, preferVoice) }
+                true
+            }
+        }
+    }
+
+    private fun startGeminiDirect(app: Context, topic: String = "", preferVoice: Boolean = false): Boolean {
         val candidates = buildCandidateIntents(app, preferVoice)
         if (candidates.isEmpty()) {
             Log.w(TAG, "no Gemini or Google Search app installed")

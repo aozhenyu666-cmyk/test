@@ -249,6 +249,8 @@ object BuiltinPluginGuest {
                 "lib/unified_arbiter.js",
                 // 2026-11-18 锁机安全：插件侧唯一的永不锁名单
                 "lib/never_lock.js",
+                // 2026-11-18 触发器：Gemini 设定、当下事实、回执
+                "lib/trigger.js",
             ),
         ),
     )

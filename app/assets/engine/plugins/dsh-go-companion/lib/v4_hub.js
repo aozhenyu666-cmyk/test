@@ -96,6 +96,7 @@ export function createV4Hub(deps) {
     getSpeaker = () => 'companion',
     getCommitments = () => [],
     getPersonaAbout = () => [],
+    getGeminiExtras = () => ({}),
     getGearWhat = () => '',
   } = deps
 
@@ -141,9 +142,10 @@ export function createV4Hub(deps) {
       commitments: typeof getCommitments === 'function' ? getCommitments(now) : [],
       recap: (loadGemini()?.recaps || []).slice(-1)[0] || null,
       gear: typeof getGearWhat === 'function' ? getGearWhat() : null,
+      ...(typeof getGeminiExtras === 'function' ? getGeminiExtras(now) : {}),
     })
     if (!storyBlock) return base
-    return `${base}\n${storyBlock}`.slice(0, 1800)
+    return `${base}\n${storyBlock}`.slice(0, 3200)
   }
 
   const loadHorizonsSynced = () => {

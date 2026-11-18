@@ -890,13 +890,15 @@ object ProactiveOverlay {
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginEnd = context.dp(6f)
             })
-            btnRow.addView(chip("复制给 Gemini") {
+            btnRow.addView(chip("连 Gemini") {
+                // 2026-11-18 触发器：骰子 → 整份简报（设定 + 当下事实 + 这一骰 + 回执）→ 先确认代理 → 打开 Gemini。
                 val clipText = geminiPrompt.ifBlank { "【骰$dice · $name】$ask" }
                 runCatching {
                     val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     cm.setPrimaryClip(ClipData.newPlainText("大肥鱼六骰提问", clipText))
-                    setStatus("已复制，切到 Gemini Live 粘贴即可")
+                    setStatus("简报已复制：进 Gemini 粘贴发出，再开 Live 共享屏幕")
                 }
+                runCatching { GeminiAutoLauncher.launch(app, "骰$dice · $name", clipText, mode = "instant", preferVoice = true) }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginEnd = context.dp(6f)
             })

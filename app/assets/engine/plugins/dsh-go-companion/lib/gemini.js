@@ -11,6 +11,7 @@
 export const GEMINI_PACKAGES = ['com.google.android.apps.bard', 'com.google.android.googlequicksearchbox']
 
 import { hm, md, ymd } from './tz.js'
+import { RECEIPT_FORMAT, settingLines } from './trigger.js'
 
 export const GEMINI_MODES = {
   study: '学习陪练：围绕主题提问、让他讲给你听、抽查他是不是真懂，讲错了直接指出。',
@@ -23,7 +24,7 @@ export function geminiMode(raw) {
 }
 
 /** 给 Gemini 的背景（写给 Gemini 看，他会粘贴进 Gemini 再开 Live）。 */
-export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 'think', about = [], commitments = [], recap = null, gear = null } = {}) {
+export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 'think', about = [], commitments = [], recap = null, gear = null, setting = '', context = [] } = {}) {
   const m = geminiMode(mode)
   const lines = [
     '【给 Gemini 的背景，读完只回一句"收到，开始吧"】',
@@ -31,6 +32,17 @@ export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 't
     '这次要做：' + (String(topic).trim() || '他手上最要紧的那件事') + '。',
     '方式：' + GEMINI_MODES[m],
   ]
+  // 2026-11-18 触发器：他自己的设定（笔记库 Gemini设定.md）+ 代码读得到的当下事实，放在最前面。
+  const set = settingLines(setting)
+  if (set.length) {
+    lines.push('你的设定（他写的，照做）：')
+    for (const l of set) lines.push('- ' + l)
+  }
+  const ctx = (Array.isArray(context) ? context : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8)
+  if (ctx.length) {
+    lines.push('现在的情况（DSH 读到的事实）：')
+    for (const l of ctx) lines.push('- ' + l.slice(0, 160))
+  }
   const facts = about.map((x) => String(x).trim()).filter(Boolean).slice(0, 8)
   if (facts.length) {
     lines.push('关于他（别复述，用上就行）：')
@@ -48,9 +60,9 @@ export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 't
     '- 你来推进：他沉默、跑题、含糊（"差不多""应该吧"）就追问到具体，把他拉回主题。',
     '- 他说想去玩、想休息、要走：先问为什么，理由站不住就不同意，告诉他还剩多少时间。',
     '- 每过 10 分钟用一句"到现在为止：……"小结一次。',
-    '- 时间到或他说结束时，按这个格式说一段（别省）：【复盘】做了什么：…… 卡在哪：…… 下一步：……',
+    '- 时间到、他说结束或说「出回执」时，按这个格式说一段（一项都别省，几点前要写具体钟点）：' + RECEIPT_FORMAT,
   )
-  return lines.join('\n').slice(0, 1800)
+  return lines.join('\n').slice(0, 2600)
 }
 
 /** 走神：同一个娱乐 App 坐够这么久，才值得把他从里面拉出来。 */
@@ -139,8 +151,11 @@ export function recapMarkdown(r, at) {
   const when = Number(at) || Date.now()
   const t = ymd(when) + ' ' + hm(when)
   const lines = ['', '## ' + t + (r.topic ? ' · ' + r.topic : ''), '', '- 做了什么：' + r.summary]
+  if (r.conclusion) lines.push('- 结论：' + r.conclusion)
   if (r.stuck) lines.push('- 卡在哪：' + r.stuck)
-  if (r.next) lines.push('- 下一步：' + r.next)
+  if (r.next) lines.push('- 下一步：' + r.next + (r.due ? '（' + r.due + ' 前）' : ''))
+  if (r.evidence) lines.push('- 证据：' + r.evidence)
+  if (r.receipt === false) lines.push('- ⚠ 没有完整回执：这场记为无产出')
   for (const q of r.quotes || []) lines.push('> ' + String(q).slice(0, 200))
   return lines.join('\n') + '\n'
 }

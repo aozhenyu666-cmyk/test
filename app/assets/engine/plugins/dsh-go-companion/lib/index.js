@@ -147,6 +147,7 @@ import {
 } from './external_agents.js'
 import { createV4Hub } from './v4_hub.js'
 import { isNeverLockPkg } from './never_lock.js'
+import { contextLines, loadGeminiSetting, parseReceipt } from './trigger.js'
 import { resolveActiveSisterSkin } from './unified_arbiter.js'
 
 /**
@@ -1835,6 +1836,46 @@ export function apply(ctx) {
     const target = day + (hour * 60 + minute) * 60_000
     return target > now ? target : target + 86_400_000
   }
+  /**
+   * 2026-11-18 触发器：给 Gemini 的设定（笔记库 Gemini设定.md）+ 当下事实（前台、这一局、娱乐用时、截止日、骰子）。
+   * 任何一处拼 Gemini 简报都带上它；读不到的就不写，全读不到时让 Gemini 先问一个具体问题。
+   */
+  function geminiExtras(now = Date.now(), dice = null) {
+    let setting = ''
+    try {
+      const dir = notesDir()
+      setting = loadGeminiSetting(dir ? kbDir(dir, home()) : '')
+    } catch {
+      // 用默认设定
+    }
+    const phone = lastPhone || {}
+    let bout = null
+    try {
+      const run = runningBoutNow()
+      if (run) bout = { title: run.kind || run.protocolId, firstStep: String(live?.official?.view?.()?.ask || '') }
+    } catch {
+      // 没有进行中的局
+    }
+    const funMinutesToday = (Array.isArray(phone.today) ? phone.today : [])
+      .filter((t) => t?.fun).reduce((sum, t) => sum + (Number(t.minutes) || 0), 0)
+    let deadlines = []
+    try {
+      deadlines = typeof upcomingDeadlines === 'function' ? upcomingDeadlines(now) : []
+    } catch {
+      deadlines = []
+    }
+    return {
+      setting,
+      context: contextLines({
+        front: phone.label || phone.app || '',
+        frontMinutes: Number(phone.minutes) || 0,
+        bout,
+        funMinutesToday,
+        deadlines,
+        dice,
+      }),
+    }
+  }
   /** 到点了就把预约换成一次 launch（背景简报 + 进共舱），只发一次。 */
   function dueGeminiLaunch(now = Date.now()) {
     const s = loadGeminiSchedule()
@@ -1847,6 +1888,7 @@ export function apply(ctx) {
       owner: String(config.owner || '他'), topic, minutes, mode,
       about: personaLines(mergePersona(readCorePersona(home()), config.persona), effectiveMode(config, now)).slice(0, 5),
       commitments: readCommitments(home(), now, 3).map((c) => c.statement),
+      ...geminiExtras(now),
     })
     saveGeminiSchedule({ ...s, fired: true, firedAt: now })
     saveGemini({ ...loadGemini(), session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: s.by || 'schedule' } })
@@ -2618,6 +2660,7 @@ export function apply(ctx) {
     getWallDecision: (now) => wallDecision(wallCfgNow(), now, zoneOr(config.timeZone)),
     getSpeaker: () => (nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'),
     getCommitments: (now) => readCommitments(home(), now, 3).map((c) => c.statement),
+    getGeminiExtras: (now, dice) => geminiExtras(now, dice),
     getPersonaAbout: (now) => personaLines(mergePersona(readCorePersona(home()), config.persona), effectiveMode(config, now)).slice(0, 5),
     getGearWhat: () => (effectiveGear(config, Date.now()) === 'busy' ? config.gearWhat : ''),
   })
@@ -4818,6 +4861,22 @@ export function apply(ctx) {
       seed: input?.seed ?? null,
     })
     lastRolledDice = card.dice
+    // 2026-11-18 触发器：骰子 → 一整份 Gemini 简报（设定 + 当下事实 + 这一骰的思维方式 + 回执），
+    // 手机「连 Gemini」直接带着它去开 Live；骰子卡原来那几行放在最前面。
+    try {
+      const extras = geminiExtras(now, { dice: card.dice, name: card.name, ask: card.ask })
+      const cardLines = String(card.geminiPrompt || '').split('\n').map((l) => l.trim()).filter(Boolean)
+      card.geminiPrompt = geminiBrief({
+        owner: String(config.owner || '他'),
+        topic: card.topic || ('用「' + card.name + '」把手上这件事想清楚'),
+        minutes: 15,
+        mode: 'think',
+        setting: extras.setting,
+        context: [...cardLines, ...extras.context.filter((l) => !l.startsWith('这次摇到的思维方式'))],
+      })
+    } catch {
+      // 简报拼不出来就用骰子卡原来那段
+    }
     record({
       state: 'dice-roll',
       at: now,
@@ -5894,6 +5953,7 @@ export function apply(ctx) {
           commitments: readCommitments(home(), now, 3).map((c) => c.statement),
           recap: recaps[recaps.length - 1] || null,
           gear: effectiveGear(config, now) === 'busy' ? config.gearWhat : null,
+          ...geminiExtras(now),
         })
         const ld = loadLadderDoc()
         if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
@@ -5950,7 +6010,8 @@ export function apply(ctx) {
   function geminiLogTool(role) {
     return {
       name: 'gemini_log',
-      description: '存下一场 Gemini 连麦的复盘（读回对话之后调用）：做了什么、卡在哪、下一步、他的一两句关键原话。写进笔记库 Gemini/日期.md，两姐妹之后每一轮都看得到。只写真读到的，读不到别编。',
+      description: '存下一场 Gemini 连麦的回执（读回对话之后调用）：Gemini 最后那段【复盘】原文放进 raw，代码自己抠出结论 / 下一步 / 几点前 / 证据；' +
+        '读不到【复盘】就只填 summary，这场记为「无回执」，进今晚的日判。写进笔记库 Gemini/日期.md，两姐妹之后每一轮都看得到。只写真读到的，读不到别编。',
       parameters: {
         type: 'object',
         properties: {
@@ -5959,6 +6020,7 @@ export function apply(ctx) {
           next: { type: 'string', description: '下一步' },
           quotes: { type: 'array', items: { type: 'string' }, description: '他说过的关键原话，最多 3 句' },
           topic: { type: 'string' },
+          raw: { type: 'string', description: 'Gemini 最后那段【复盘】的原文（读得到就照抄）' },
         },
         required: ['summary'],
         additionalProperties: false,
@@ -5966,14 +6028,19 @@ export function apply(ctx) {
       output: toolOutput,
       execute: (args = {}) => {
         const now = Date.now()
-        const summary = String(args.summary || '').trim().slice(0, 400)
+        const receipt = parseReceipt(args.raw)
+        const summary = String(args.summary || receipt?.summary || '').trim().slice(0, 400)
         if (!summary) return { ok: false, text: '复盘是空的。' }
         const g = loadGemini()
         const minutes = g.session?.startedAt ? Math.max(0, Math.round((now - Number(g.session.startedAt)) / 60_000)) : undefined
         const r = {
           at: now, by: role, summary, minutes,
-          stuck: String(args.stuck || '').trim().slice(0, 200) || undefined,
-          next: String(args.next || '').trim().slice(0, 200) || undefined,
+          stuck: String(args.stuck || receipt?.stuck || '').trim().slice(0, 200) || undefined,
+          next: String(args.next || receipt?.next || '').trim().slice(0, 200) || undefined,
+          conclusion: receipt?.conclusion || undefined,
+          due: receipt?.by || undefined,
+          evidence: receipt?.evidence || undefined,
+          receipt: receipt?.complete === true,
           quotes: (Array.isArray(args.quotes) ? args.quotes : []).map((q) => String(q).slice(0, 200)).slice(0, 3),
           topic: String(args.topic || g.session?.topic || '').slice(0, 120) || undefined,
         }
@@ -5991,7 +6058,8 @@ export function apply(ctx) {
         }
         const recaps = [...(Array.isArray(g.recaps) ? g.recaps : []), { ...r, file: wrote || undefined }].slice(-5)
         saveGemini({ ...g, recaps, session: null, recappedFor: Number(g.inSince) || g.recappedFor })
-        record({ state: 'gemini-recap', at: now, by: role, file: wrote || undefined, minutes })
+        // 回执是否完整进账本：日判按它算「这场连麦有没有产出」。
+        record({ state: 'gemini-recap', at: now, by: role, file: wrote || undefined, minutes, receipt: r.receipt })
         try {
           v4Hub?.recordStoryline?.({
             kind: 'gemini_recap',
