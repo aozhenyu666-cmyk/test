@@ -265,6 +265,12 @@ object BuiltinPluginGuest {
                 "lib/reflect.js",
                 // 2026-11-18 当下任务卡
                 "lib/card.js",
+                // 2026-11-19 Wave 1 统一方案 v2（强度表 / 放行账 / 发球仲裁 / Gemini 闸门 / 时间账）
+                "lib/intensity.js",
+                "lib/pass_ledger.js",
+                "lib/speak_arbiter.js",
+                "lib/gemini_gate.js",
+                "lib/time_ledger.js",
             ),
         ),
     )

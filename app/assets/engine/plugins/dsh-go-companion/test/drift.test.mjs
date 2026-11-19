@@ -170,14 +170,23 @@ test('一天两次：第二次还拉，第三次不拉；连麦结束后还能�
     assert.equal((await t.plan(tiktok())).body.reason, 'gemini-drift')
     await settle()
     await t.due()
-    // 这一场 15 分钟，结束后他接着刷：第二次拉。
+    // 这一场 15 分钟且过完 20 分钟自动拉起冷却 + 10 分钟场后冷却后，他接着刷：第二次拉。
     const g = JSON.parse(readFileSync(join(home, 'companion', 'gemini.json'), 'utf8'))
-    writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({ ...g, session: { ...g.session, until: Date.now() - 60_000 } }))
+    writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({ ...g, session: { ...g.session, until: Date.now() - 15 * 60_000 } }))
+    const gatePath = join(home, 'companion', 'gemini-gate.json')
+    if (existsSync(gatePath)) {
+      const gate = JSON.parse(readFileSync(gatePath, 'utf8'))
+      writeFileSync(gatePath, JSON.stringify({ ...gate, lastAutoAt: Date.now() - 25 * 60_000, lastSessionEndedAt: 0 }))
+    }
     assert.equal((await t.plan(tiktok(20))).body.reason, 'gemini-drift', '第二次')
     await settle()
     await t.due()
     const g2 = JSON.parse(readFileSync(join(home, 'companion', 'gemini.json'), 'utf8'))
-    writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({ ...g2, session: { ...g2.session, until: Date.now() - 60_000 } }))
+    writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({ ...g2, session: { ...g2.session, until: Date.now() - 15 * 60_000 } }))
+    if (existsSync(gatePath)) {
+      const gate2 = JSON.parse(readFileSync(gatePath, 'utf8'))
+      writeFileSync(gatePath, JSON.stringify({ ...gate2, lastAutoAt: Date.now() - 25 * 60_000, lastSessionEndedAt: 0 }))
+    }
     const third = await t.plan(tiktok(30))
     assert.notEqual(third.body.reason, 'gemini-drift', '今天拉到两次为止，第三次不拉')
     assert.equal(third.body.geminiSchedule, null)

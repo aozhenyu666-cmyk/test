@@ -157,6 +157,18 @@ import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotat
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
 import { noteExcerpts, reflectDue, reflectLines, reflectMarkdown, reflectSlot, reflectSystem, reflectUser, runReflect } from './reflect.js'
 import { resolveActiveSisterSkin } from './unified_arbiter.js'
+import {
+  DEFAULT_INTENSITY, applyIntensityChange, hardInterventionStatus, isLockExemptFromDailyCap,
+  isValidIntensity, normalizeHardInterventions, normalizeIntensity, recordHardIntervention,
+  resolveIntensityState, thresholdsForIntensity,
+} from './intensity.js'
+import {
+  isEmergencyActive as isPassEmergencyActive, normalizePassLedger, passLedgerSummary,
+  requestPass, revokeEmergencyPass,
+} from './pass_ledger.js'
+import { arbitrateSpeak } from './speak_arbiter.js'
+import { buildStandardGeminiBrief, markGeminiSessionEnded, normalizeGeminiGate, requestGemini } from './gemini_gate.js'
+import { appendTimeEntry, computeTimeLedger, normalizeTimeLedger } from './time_ledger.js'
 
 /**
  * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
@@ -192,7 +204,7 @@ import {
   AUDIT_DIR, PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText, rulesNeedSwitchKeys,
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
 } from './vault_wall.js'
-import { GEMINI_PACKAGES, driftPull, geminiBrief, geminiLines, geminiMode, geminiSteps, recapMarkdown, trackGemini } from './gemini.js'
+import { GEMINI_PACKAGES, driftPull, geminiBrief, geminiLines, geminiMode, geminiSteps, inGemini, recapMarkdown, trackGemini } from './gemini.js'
 import { auditOf, cardsOf, groupPrompts } from './sisters.js'
 import { ClockKernel, parseCron } from './clock_kernel.js'
 import { classifyApp, isDualUseApp, isPureGame, resolveAppNames } from './app_resolver.js'
@@ -264,8 +276,11 @@ const DEFAULTS = Object.freeze({
   // 判球可以单独配一个更快的模型；没配就沿用会话自己的 provider/model。
   judgeProvider: undefined,
   judgeModel: undefined,
-  // D5：破窗一次扣多少信用分（默认 15）；每天最多破窗 1 次是硬规则，不做配置。
-  breakglassPenalty: 15,
+  // 2026-11-19 H1：强度表（gentle / standard / strict）与待生效改松。
+  intensity: DEFAULT_INTENSITY,
+  pendingIntensity: null,
+  // 2026-11-19 H2：破窗不再扣信用分（保留记账与日判）。
+  breakglassPenalty: 0,
   // 那一天（当地零点，ms）已经破过窗：账本被压缩/清理也不会把同一天放开第二次。
   breakglassDay: 0,
   // 第二轮·墙：默认严格的娱乐锁时间表（吃饭开放、夜里深夜锁），由这张内部表驱动，改表不必动代码。
@@ -1814,6 +1829,149 @@ export function apply(ctx) {
   const todayEarned = (now = Date.now(), tz = zoneOr(config.timeZone)) =>
     earnedRt.ofDay(readState(stateFile('earned.json'), null), startOfDay(now, tz))
   const saveEarned = (e) => writeJson(stateFile('earned.json'), e)
+
+  // ---- 2026-11-19 H1–H4 统一出口状态读写 ----
+  const loadHardInterventions = (now = Date.now(), tz = zoneOr(config.timeZone)) =>
+    normalizeHardInterventions(readState(stateFile('hard-interventions.json'), null), dayString(now, tz))
+  const saveHardInterventions = (s) => writeJson(stateFile('hard-interventions.json'), s)
+
+  function intensityStateNow(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const res = resolveIntensityState(config, { now, tz })
+    if (res.promoted) {
+      config = { ...config, intensity: res.intensity, pendingIntensity: null }
+      try { writeConfig(config) } catch {}
+      record({ state: 'intensity-promoted', at: now, intensity: res.intensity })
+    }
+    const day = dayString(now, tz)
+    const hardInterventions = hardInterventionStatus(loadHardInterventions(now, tz), {
+      day,
+      tier: res.intensity,
+      cap: res.thresholds.hardInterventionDailyCap,
+    })
+    return {
+      intensity: res.intensity,
+      pendingIntensity: res.pendingIntensity,
+      thresholds: res.thresholds,
+      emergencyDisarmDailyCap: res.thresholds.emergencyDisarmDailyCap,
+      hardInterventions,
+    }
+  }
+
+  function recordHardNow({ kind = 'lock', source = '', app = '', why = '', now = Date.now(), tz = zoneOr(config.timeZone), dedupeKey = '' } = {}) {
+    const day = dayString(now, tz)
+    const info = intensityStateNow(now, tz)
+    const cur = loadHardInterventions(now, tz)
+    const r = recordHardIntervention(cur, {
+      kind,
+      source,
+      app,
+      why,
+      day,
+      now,
+      tier: info.intensity,
+      cap: info.thresholds.hardInterventionDailyCap,
+      dedupeKey,
+    })
+    if (r.recorded) saveHardInterventions(r.state)
+    return r
+  }
+
+  const loadPassLedger = (now = Date.now(), tz = zoneOr(config.timeZone)) =>
+    normalizePassLedger(readState(stateFile('pass-ledger.json'), null), dayString(now, tz))
+  const savePassLedger = (s) => writeJson(stateFile('pass-ledger.json'), s)
+
+  function activeEmergencyInfo(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const pl = loadPassLedger(now, tz)
+    if (isPassEmergencyActive(pl, now)) {
+      return {
+        active: true,
+        until: Number(pl.emergency.until) || 0,
+        reason: String(pl.emergency.reason || '紧急放行中'),
+        source: String(pl.emergency.source || 'disarm'),
+      }
+    }
+    const ext = loadExternal()
+    if (isEmergencyPassActive(ext, now)) {
+      return {
+        active: true,
+        until: Number(ext.emergencyPass.until) || 0,
+        reason: String(ext.emergencyPass.reason || '紧急放行中'),
+        source: 'emergency-pass',
+      }
+    }
+    return null
+  }
+  const isEmergencyPassOrDisarmActive = (now = Date.now(), tz = zoneOr(config.timeZone)) => Boolean(activeEmergencyInfo(now, tz))
+
+  const loadGeminiGate = (now = Date.now(), tz = zoneOr(config.timeZone)) =>
+    normalizeGeminiGate(readState(stateFile('gemini-gate.json'), null), dayString(now, tz))
+  const saveGeminiGate = (s) => writeJson(stateFile('gemini-gate.json'), s)
+
+  const loadTimeLedger = (now = Date.now(), tz = zoneOr(config.timeZone)) =>
+    normalizeTimeLedger(readState(stateFile('time-ledger.json'), null), dayString(now, tz))
+  const saveTimeLedger = (s) => writeJson(stateFile('time-ledger.json'), s)
+
+  function recordTimeEntryNow({ kind, minutes = 0, reason = '', at = Date.now(), tz = zoneOr(config.timeZone) } = {}) {
+    const day = dayString(at, tz)
+    const next = appendTimeEntry(loadTimeLedger(at, tz), { kind, minutes, reason, at, day })
+    saveTimeLedger(next)
+    return next
+  }
+
+  function timeLedgerNow(now = Date.now(), tz = zoneOr(config.timeZone), phone = lastPhone) {
+    const day = dayString(now, tz)
+    const info = intensityStateNow(now, tz)
+    const tlState = loadTimeLedger(now, tz)
+    const sumBoutInLedger = tlState.entries
+      .filter((e) => e.kind === 'earned_bout')
+      .reduce((s, e) => s + (Number(e.minutes) || 0), 0)
+    const earnedObj = todayEarned(now, tz)
+    const legacyEarnedExtra = Math.max(0, (Number(earnedObj?.earned) || 0) - sumBoutInLedger)
+    const todayRows = Array.isArray(phone?.today) && phone.today.length ? phone.today : (lastPhone?.today || [])
+    const tl = computeTimeLedger({
+      state: tlState,
+      day,
+      today: todayRows,
+      tierOf: tierFnNow(),
+      passMinutes: passMinutesToday(now, tz),
+      funQuota: info.thresholds.funQuotaMin,
+      gameQuota: info.thresholds.gameQuotaMin,
+      earnedBout: legacyEarnedExtra,
+    })
+    lastQuota = tl
+    return tl
+  }
+
+  function requestGeminiViaGate(opts = {}) {
+    const now = Number(opts.now) || Date.now()
+    const tz = opts.tz || zoneOr(config.timeZone)
+    const day = dayString(now, tz)
+    const info = intensityStateNow(now, tz)
+    const gate = loadGeminiGate(now, tz)
+    const g = loadGemini()
+    const sessionActive = Boolean(opts.sessionActive ?? (inGemini(lastPhone, geminiPackages()) || (g.session && Number(g.session.until) > now)))
+    const res = requestGemini(gate, {
+      ...opts,
+      now,
+      day,
+      dailyCap: info.thresholds.geminiAutoMaxPerDay,
+      sessionActive,
+      emergencyActive: opts.emergencyActive ?? isEmergencyPassOrDisarmActive(now, tz),
+      isNight: opts.isNight ?? Boolean(lastRhythm?.night),
+      isQuiet: opts.isQuiet ?? inQuiet(now, config.quietStart, config.quietEnd, tz),
+      hardCapped: opts.hardCapped ?? info.hardInterventions.capped,
+      pullMode: opts.pullMode ?? v4Hub?.getPullMode?.(now),
+      kbDirPath: opts.kbDirPath ?? (() => { try { const d = notesDir(); return d ? kbDir(d, home()) : '' } catch { return '' } })(),
+      owner: opts.owner ?? String(config.owner || '他'),
+    })
+    if (res.allowed) {
+      saveGeminiGate(res.state)
+      if (res.mode === 'auto') {
+        recordHardNow({ kind: 'auto_gemini', source: 'gemini:' + res.source, why: opts.topic || res.source, now, tz, dedupeKey: 'gem:' + res.source + ':' + Math.floor(now / 60_000) })
+      }
+    }
+    return res
+  }
   /** 最近一次 /plan 算出的作息（早上门 / 晚上门 / 深夜阶段 / 深夜锁到几点）。 */
   let lastRhythm = null
   let lastApplyWindow = null
@@ -1896,12 +2054,37 @@ export function apply(ctx) {
     const topic = String(s.topic || '')
     const minutes = Math.max(5, Math.min(180, Math.round(Number(s.minutes) || 30)))
     const mode = geminiMode(s.mode)
-    const brief = geminiBrief({
-      owner: String(config.owner || '他'), topic, minutes, mode,
-      about: personaLines(mergePersona(readCorePersona(home()), config.persona), effectiveMode(config, now)).slice(0, 5),
-      commitments: readCommitments(home(), now, 3).map((c) => c.statement),
-      ...geminiExtras(now),
-    })
+    const extras = geminiExtras(now)
+    const about = personaLines(mergePersona(readCorePersona(home()), config.persona), effectiveMode(config, now)).slice(0, 5)
+    const commitments = readCommitments(home(), now, 3).map((c) => c.statement)
+    const preAuthorized = Boolean(s.alreadyGated || s.by === 'drift' || s.by === 'preset' || s.by === 'ladder')
+    let brief = ''
+    if (preAuthorized) {
+      brief = buildStandardGeminiBrief({
+        owner: String(config.owner || '他'),
+        topic,
+        minutes,
+        mode,
+        about,
+        commitments,
+        ...extras,
+      })
+    } else {
+      const gateRes = requestGeminiViaGate({
+        source: s.by || 'schedule',
+        mode: 'manual',
+        topic,
+        minutes,
+        geminiMode: mode,
+        about,
+        commitments,
+        ...extras,
+        now,
+        sessionActive: false,
+      })
+      if (!gateRes.allowed) return null
+      brief = gateRes.brief
+    }
     saveGeminiSchedule({ ...s, fired: true, firedAt: now })
     saveGemini({ ...loadGemini(), session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: s.by || 'schedule' } })
     record({ state: 'gemini-schedule-fired', at: now, topic, minutes, mode })
@@ -1919,19 +2102,33 @@ export function apply(ctx) {
   function driftPullNow(now, phone, tz) {
     const sch = loadGeminiSchedule()
     if (!sch.fired && Number(sch.at) > now) return null
+    const info = intensityStateNow(now, tz)
     const r = driftPull({
       phone, now, day: startOfDay(now, tz), gear: effectiveGear(config, now), busyWhat: config.gearWhat,
       night: lastRhythm?.night, meal: mealNow(wallConfig(config).meals, localMinute(phone, zoneMinuteOfDay(now, tz))),
-      onBreak: onBreak(now), session: geminiSessionView(now),
+      onBreak: onBreak(now) || isEmergencyPassOrDisarmActive(now, tz), session: geminiSessionView(now),
       pulls: loadGemini().pulls, dwellMin: config.driftMin,
     })
     if (!r) return null
+    const gateRes = requestGeminiViaGate({
+      source: 'drift',
+      mode: 'auto',
+      topic: r.topic,
+      minutes: r.minutes,
+      geminiMode: r.mode,
+      now,
+      tz,
+      hardCapped: info.hardInterventions.capped,
+      isNight: Boolean(lastRhythm?.night),
+      isQuiet: inQuiet(now, config.quietStart, config.quietEnd, tz),
+    })
+    if (!gateRes.allowed) return null
     const at = now + 500
-    saveGeminiSchedule({ at, topic: r.topic, minutes: r.minutes, mode: r.mode, by: 'drift' })
+    saveGeminiSchedule({ at, topic: r.topic, minutes: r.minutes, mode: r.mode, by: 'drift', alreadyGated: true })
     const g = loadGemini()
     saveGemini({ ...g, pulls: [...(Array.isArray(g.pulls) ? g.pulls : []), { at: now, app: r.app, minutes: r.dwell }].slice(-30) })
     record({ state: 'gemini-drift', at: now, app: r.app, minutes: r.dwell })
-    return r
+    return { ...r, brief: gateRes.brief }
   }
   const loadGearState = () => readState(stateFile('gear.json'), {}) || {}
   const saveGearState = (g) => writeJson(stateFile('gear.json'), g)
@@ -2077,11 +2274,16 @@ export function apply(ctx) {
       },
       allLock: (until, why) => {
         const now = Date.now()
-        saveGemini({ ...loadGemini(), session: { topic: String(why || '').slice(0, 100), mode: 'interrogate', minutes: Math.max(1, Math.round((until - now) / 60_000)), startedAt: now, until, by: 'preset', cell: ALL_LOCK } })
+        const minutes = Math.max(1, Math.round((until - now) / 60_000))
+        const gateRes = requestGeminiViaGate({ source: 'preset', mode: 'auto', topic: String(why || '').slice(0, 100), minutes, geminiMode: 'interrogate', now })
+        if (!gateRes.allowed) return
+        saveGemini({ ...loadGemini(), session: { topic: String(why || '').slice(0, 100), mode: 'interrogate', minutes, startedAt: now, until, by: 'preset', cell: ALL_LOCK } })
       },
       tool: (tool, until, topic) => {
         const now = Date.now()
         const minutes = Math.max(1, Math.round((until - now) / 60_000))
+        const gateRes = requestGeminiViaGate({ source: 'preset', mode: 'auto', topic, minutes, geminiMode: 'think', now })
+        if (!gateRes.allowed) return
         saveGemini({ ...loadGemini(), session: { topic, mode: 'think', minutes, startedAt: now, until, by: 'preset' } })
         saveGeminiSchedule({ at: now + 500, topic, minutes, mode: 'think', by: 'preset' })
       },
@@ -2229,9 +2431,9 @@ export function apply(ctx) {
     if (open.some((i) => i.packet)) return false
     return now - (Number(loadGearState().planDraftAt) || 0) >= 60 * 60_000
   }
-  /** 两姐妹共用的信用分（从账本算，见 trust.js）。 */
+  /** 两姐妹共用的信用分（从账本算，见 trust.js）。2026-11-19 H2：破窗不再扣信用分。 */
   const trustWeights = () => ({
-    breakglass: -(Number(config.breakglassPenalty) || 15),
+    breakglass: 0,
     'followup-timeout': -(Number(config.followupPenalty) || 5),
   })
   const trustNow = (now = Date.now()) => trustScore(readLedger(home(), 800), now, { weights: trustWeights() })
@@ -2580,10 +2782,11 @@ export function apply(ctx) {
     }
     savePenalty(next)
     try {
+      recordTimeEntryNow({ kind: 'penalty', minutes: addDebt, reason: severity, at: now, tz })
       const curEarned = todayEarned(now, tz)
-      if (Number(curEarned.earnedMin) > Number(curEarned.spentMin)) {
-        const spentNext = Math.min(Number(curEarned.earnedMin), (Number(curEarned.spentMin) || 0) + addDebt)
-        saveEarned({ ...curEarned, spentMin: spentNext })
+      if (Number(curEarned.earned) > Number(curEarned.spent)) {
+        const spentRes = earnedRt.spend(curEarned, addDebt)
+        saveEarned(spentRes.state)
       }
     } catch {
       // ignore earned deduction error
@@ -2682,13 +2885,75 @@ export function apply(ctx) {
     getGearWhat: () => (effectiveGear(config, Date.now()) === 'busy' ? config.gearWhat : ''),
     getAppLedger: (now) => appLedgerLines(now),
     getQuotaLine: () => (lastQuota ? lastQuota.line : ''),
+    getIntensityInfo: (now) => intensityStateNow(now),
+    getPassLedgerSummary: (now = Date.now()) => {
+      const tz = zoneOr(config.timeZone)
+      const info = intensityStateNow(now, tz)
+      return passLedgerSummary(loadPassLedger(now, tz), {
+        day: dayString(now, tz),
+        cap: info.emergencyDisarmDailyCap,
+        now,
+      })
+    },
+    getTimeLedger: (now = Date.now()) => timeLedgerNow(now, zoneOr(config.timeZone), lastPhone),
+    getEmergencyPassActive: (now = Date.now()) => activeEmergencyInfo(now, zoneOr(config.timeZone)),
+    onBankUnlock: ({ minutes, solved, until, now = Date.now() } = {}) => {
+      const tz = zoneOr(config.timeZone)
+      const day = dayString(now, tz)
+      const mins = Math.max(1, Math.round(Number(minutes) || 5))
+      const plRes = requestPass(loadPassLedger(now, tz), 'earned', {
+        source: 'bank',
+        minutes: mins,
+        reason: `锁屏答对 ${solved || 10} 题解锁 ${mins}m`,
+        until,
+        now,
+        day,
+      })
+      if (plRes.ok) savePassLedger(plRes.state)
+      recordTimeEntryNow({ kind: 'earned_bank', minutes: mins, reason: `题库解锁 ${solved || 10} 题`, at: now, tz })
+    },
+    requestGeminiGate: (opts) => requestGeminiViaGate(opts),
   })
+  function intensityTightenTool() {
+    return {
+      name: 'intensity_tighten',
+      description: '把强度档往严里调（只能改严：gentle -> standard -> strict，不能改松；改松请让用户在伴侣中枢切，次日生效）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          tier: { type: 'string', enum: ['gentle', 'standard', 'strict'], description: '目标强度档' },
+          reason: { type: 'string', description: '为什么要收紧' },
+        },
+        required: ['tier'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const r = applyIntensityChange(config, args.tier, { now, tz, allowRelax: false })
+        if (!r.ok) {
+          return { ok: false, text: '只能收紧强度档，不能在聊天里改松；改松请到伴侣中枢操作（次日生效）。' }
+        }
+        config = { ...config, intensity: r.intensity, pendingIntensity: r.pendingIntensity, intensityExplicit: true }
+        try { writeConfig(config) } catch {}
+        record({ state: 'intensity-tighten', at: now, tier: r.intensity, applied: r.applied, reason: String(args.reason || '').slice(0, 120) })
+        return {
+          ok: true,
+          text: r.applied === 'immediate'
+            ? `强度档已立即收紧为「${r.intensity}」。`
+            : `当前已经是「${r.intensity}」档，无需变更。`,
+        }
+      },
+    }
+  }
   if (tools && typeof tools.register === 'function') {
     for (const def of [
       dispatchControlTool('global'),
       clockManageTool('global'),
       grantTaskLeaseTool('strategist'),
       appTierTool(),
+      intensityTightenTool(),
       showCardTool('global'),
       declareIntentTool('global'),
       appUsageReportTool('global'),
@@ -3751,9 +4016,21 @@ export function apply(ctx) {
       output: toolOutput,
       execute: (args = {}) => {
         const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const day = dayString(now, tz)
         const minutes = Math.max(5, Math.min(30, Math.round(Number(args.minutes) || 10)))
-        const until = now + minutes * 60_000
         const reason = String(args.reason || '').slice(0, 200)
+        const until = now + minutes * 60_000
+        const plRes = requestPass(loadPassLedger(now, tz), 'earned', {
+          source: 'break',
+          minutes,
+          reason,
+          until,
+          now,
+          day,
+        })
+        if (plRes.ok) savePassLedger(plRes.state)
+        recordTimeEntryNow({ kind: 'break', minutes, reason, at: now, tz })
         config = { ...config, breakUntil: until, breakSince: now, breakChecked: false }
         try {
           writeConfig(config)
@@ -4517,23 +4794,40 @@ export function apply(ctx) {
         }
         const mins = Math.max(5, Math.min(30, Math.round(Number(args.minutes) || 15)))
         const tzL = zoneOr(config.timeZone)
-        const issuedToday = readLedger(home(), 600)
-          .filter((e) => e?.state === 'grant-task-lease' && dayString(Number(e.at) || 0, tzL) === dayString(now, tzL)).length
-        if (issuedToday >= 8 && String(args.whyAgain || '').trim().length < 4) {
-          return { ok: false, text: '今天已经批了 ' + issuedToday + ' 张通行证：第 9 张起要他先说清理由（填 whyAgain），这件事会进今晚的判决。' }
+        const day = dayString(now, tzL)
+        const plCur = loadPassLedger(now, tzL)
+        // 兼容历史测试直接往 ledger.jsonl 写的 grant-task-lease 条目
+        const issuedInLedger = readLedger(home(), 600)
+          .filter((e) => e?.state === 'grant-task-lease' && dayString(Number(e.at) || 0, tzL) === day).length
+        const seedPl = plCur.lease.count < issuedInLedger
+          ? { ...plCur, lease: { ...plCur.lease, count: issuedInLedger } }
+          : plCur
+        const plRes = requestPass(seedPl, 'lease', {
+          app: pkg,
+          label: args.app,
+          minutes: mins,
+          goal: args.taskGoal,
+          whyAgain: args.whyAgain,
+          verifyHints: args.verifyHints,
+          by: role,
+          now,
+          day,
+        })
+        if (!plRes.ok) {
+          return { ok: false, text: plRes.why }
         }
-        const until = now + mins * 60_000
+        savePassLedger(plRes.state)
         commit({
           taskLease: {
             app: pkg,
             allow: [pkg],
-            until,
-            goal: String(args.taskGoal || '').slice(0, 80),
-            verifyHints: Array.isArray(args.verifyHints) ? args.verifyHints.map((x) => String(x)).slice(0, 6) : [],
+            until: plRes.until,
+            goal: plRes.lease.goal,
+            verifyHints: plRes.lease.verifyHints,
             by: role,
           },
         })
-        record({ state: 'grant-task-lease', at: now, pkg, minutes: mins, goal: args.taskGoal, n: issuedToday + 1, whyAgain: args.whyAgain ? String(args.whyAgain).slice(0, 80) : undefined })
+        record({ state: 'grant-task-lease', at: now, pkg, minutes: mins, goal: args.taskGoal, n: plRes.countToday, whyAgain: args.whyAgain ? String(args.whyAgain).slice(0, 80) : undefined })
         return { ok: true, text: `已批复 ${pkg} 的 ${mins} 分钟任务租约（${args.taskGoal}）；租约期间若刷出无关娱乐流将自动吊销。` }
       },
     }
@@ -4948,7 +5242,7 @@ export function apply(ctx) {
     try {
       const extras = geminiExtras(now, { dice: card.dice, name: card.name, ask: card.ask })
       const cardLines = String(card.geminiPrompt || '').split('\n').map((l) => l.trim()).filter(Boolean)
-      card.geminiPrompt = geminiBrief({
+      const brief = geminiBrief({
         owner: String(config.owner || '他'),
         topic: card.topic || ('用「' + card.name + '」把手上这件事想清楚'),
         minutes: 15,
@@ -4956,6 +5250,18 @@ export function apply(ctx) {
         setting: extras.setting,
         context: [...cardLines, ...extras.context.filter((l) => !l.startsWith('这次摇到的思维方式'))],
       })
+      card.geminiPrompt = brief
+      if (input?.manual !== false) {
+        requestGeminiViaGate({
+          source: 'dice',
+          mode: 'manual',
+          topic: card.topic || card.name,
+          minutes: 15,
+          geminiMode: 'think',
+          brief,
+          now,
+        })
+      }
     } catch {
       // 简报拼不出来就用骰子卡原来那段
     }
@@ -5706,15 +6012,75 @@ export function apply(ctx) {
       return { v: 1, ok: true }
     }
     if (type === 'disarm') {
-      // 2026-11-18：手机本地紧急解除（通知栏要理由、每天 3 次；adb 不计次）。只记账，进今晚的日判。
+      // 2026-11-19 H2：统一走放行账（支持 disarmId 幂等同步；notification / gemini-defer 共用每日上限，adb 不计次）。
+      const tz = zoneOr(config.timeZone)
+      const day = dayString(now, tz)
+      const info = intensityStateNow(now, tz)
+      const disarmId = typeof body?.disarmId === 'string' && body.disarmId.trim()
+        ? body.disarmId.trim().slice(0, 80)
+        : (typeof body?.eventId === 'string' && body.eventId.trim() ? body.eventId.trim().slice(0, 80) : '')
+      const counted = body?.counted !== false
+      const source = String(body?.source || 'disarm').slice(0, 32)
+      const reqReason = String(body?.reason || '').trim().slice(0, 120) || (counted ? '紧急解除' : 'adb 解除')
+      const plRes = requestPass(loadPassLedger(now, tz), 'emergency', {
+        source,
+        disarmId,
+        reason: reqReason,
+        until: Number(body?.until) || 0,
+        counted,
+        cap: info.emergencyDisarmDailyCap,
+        now,
+        day,
+      })
+      if (plRes.idempotent) {
+        return sendSuccessDisarm(plRes)
+      }
+      if (!plRes.ok) {
+        return {
+          v: 1,
+          ok: false,
+          error: { code: plRes.error, message: plRes.why },
+          countToday: plRes.countToday,
+          left: plRes.left,
+          cap: plRes.cap,
+        }
+      }
+      savePassLedger(plRes.state)
+      const ext = loadExternal()
+      saveExternal({
+        ...ext,
+        emergencyPass: {
+          active: true,
+          grantedAt: now,
+          until: plRes.until,
+          reason: plRes.why,
+          day,
+          countToday: plRes.countToday,
+        },
+      })
+      try { presetRt.strictOff(now, 'disarm') } catch {}
       record({
         state: 'disarm',
         at: now,
-        reason: String(body?.reason || '').slice(0, 80),
-        until: Number(body?.until) || 0,
-        counted: body?.counted !== false,
+        ...(disarmId ? { disarmId } : {}),
+        source,
+        reason: plRes.why,
+        until: plRes.until,
+        counted,
       })
-      return { v: 1, ok: true }
+      return sendSuccessDisarm(plRes)
+    }
+    function sendSuccessDisarm(plRes) {
+      return {
+        v: 1,
+        ok: true,
+        idempotent: Boolean(plRes.idempotent),
+        countToday: plRes.countToday,
+        left: plRes.left,
+        cap: plRes.cap,
+        until: plRes.until,
+        why: plRes.why,
+      }
     }
     if (type === 'voice-out') {
       // B5：手机报"这一条到底念出来没有"。念了就 ok，没念就带降级原因——这是唯一能知道
@@ -5771,25 +6137,50 @@ export function apply(ctx) {
       return { v: 1, ok: true, refuse: { until }, force: { level: 4, app: String(body?.app || ''), why: '想去设置里拆掉管控' } }
     }
     if (type === 'breakglass') {
-      // D5：每天最多 1 次。按手机时区算“今天”，跨零点就是新的一天。
+      // H2：破窗走统一放行账，每天最多破窗 1 次 + 与其他应急口共享每日上限；不再扣信用分（保留记账与日判）。
+      const tz = zoneOr(config.timeZone)
+      const day = dayString(now, tz)
       const today = startOfDay(now, config.timeZone)
       const usedToday = Number(config.breakglassDay) === today ||
         readLedger(home(), 800).some((e) => e?.state === 'breakglass' && Number(e.at) >= today)
       if (usedToday) return { v: 1, ok: false, error: { code: 'breakglass-used', message: '今天已经破窗过一次' } }
+      const info = intensityStateNow(now, tz)
       const minutes = Math.max(5, Math.min(15, Math.round(Number(body?.minutes) || 10)))
-      const penalty = Math.max(0, Math.min(100, Math.round(Number(config.breakglassPenalty) || 15)))
-      const until = now + minutes * 60_000
+      const note = typeof body?.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 300) : '破窗紧急解除'
+      const plRes = requestPass(loadPassLedger(now, tz), 'emergency', {
+        source: 'breakglass',
+        reason: note,
+        durationMs: minutes * 60_000,
+        cap: info.emergencyDisarmDailyCap,
+        now,
+        day,
+      })
+      if (!plRes.ok) {
+        return {
+          v: 1,
+          ok: false,
+          error: { code: plRes.error, message: plRes.why },
+          countToday: plRes.countToday,
+          left: plRes.left,
+          cap: plRes.cap,
+        }
+      }
+      savePassLedger(plRes.state)
+      const until = plRes.until
+      const ext = loadExternal()
+      saveExternal({
+        ...ext,
+        emergencyPass: { active: true, grantedAt: now, until, reason: note, day, countToday: plRes.countToday },
+      })
       config = { ...config, breakUntil: until, breakSince: now, breakChecked: false, breakglassDay: today }
       try {
         writeConfig(config)
       } catch {
         // 这一轮照样生效
       }
-      // penalty 一起记账：晚上对账和信用分都看得到这次扣了多少。
-      // 破窗是每条预案的出口：严格模式一起收掉。
       presetRt.strictOff(now, 'breakglass')
-      record({ state: 'breakglass', at: now, minutes, penalty, steps: Number(body?.steps) || undefined, note: typeof body?.note === 'string' ? body.note.slice(0, 300) : undefined })
-      return { v: 1, ok: true, breakUntil: until, penalty }
+      record({ state: 'breakglass', at: now, minutes, penalty: 0, steps: Number(body?.steps) || undefined, note: typeof body?.note === 'string' ? body.note.slice(0, 300) : undefined })
+      return { v: 1, ok: true, breakUntil: until, until, penalty: 0, countToday: plRes.countToday, left: plRes.left, cap: plRes.cap }
     }
     if (type === 'notif') {
       const n = loadNotifs()
@@ -5831,7 +6222,9 @@ export function apply(ctx) {
       // 连麦结束（带时长）：满 3 分钟才算完成，接着出追问（连麦回流）；不足回待命。
       const minutes = Math.max(0, Math.round(Number(body?.minutes) || 0))
       const min = Math.max(1, Math.round(Number(config.brainMinMin) || 3))
+      const tz = zoneOr(config.timeZone)
       saveGemini({ ...loadGemini(), session: null })
+      saveGeminiGate(markGeminiSessionEnded(loadGeminiGate(now, tz), { now, day: dayString(now, tz) }))
       record({ state: 'gemini-end', at: now, minutes, by: String(body?.by || 'phone').slice(0, 20) })
       if (minutes >= min) {
         const lock = openFollowup('gemini', '刚才连麦说到哪、结论是什么？', now)
@@ -6039,6 +6432,7 @@ export function apply(ctx) {
         })
         const ld = loadLadderDoc()
         if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
+        requestGeminiViaGate({ source: 'tool', mode: 'manual', topic, minutes, geminiMode: mode, brief, now })
         saveGemini({ ...g, session: { topic, mode, minutes, startedAt: now, until: now + minutes * 60_000, by: role } })
         record({ state: 'gemini-start', at: now, topic, mode, minutes, by: role })
         try {
@@ -6421,7 +6815,7 @@ export function apply(ctx) {
       emergencyPassUntil: extNow.emergencyPass?.until || 0,
       contextExempt: Number(govNow.contextExempt?.until) > nowMs ? govNow.contextExempt?.reason || 'tier1' : '',
       credit: trustNow()?.score,
-      earnedMin: earnedRt.leftOf(todayEarned(nowMs, zoneOr(config.timeZone))),
+      earnedMin: timeLedgerNow(nowMs, zoneOr(config.timeZone)).earnedNet,
       extraLine: freshPcLine(nowMs),
       timeZone: zoneOr(config.timeZone),
     }, nowMs)
@@ -6854,17 +7248,27 @@ export function apply(ctx) {
     const next = { ...doc }
     if (l.cell) {
       const minutes = Math.max(1, Math.round((l.until - now) / 60_000))
-      saveGemini({
-        ...loadGemini(),
-        session: {
-          topic: String(verdict?.why || '').slice(0, 100), mode: 'interrogate', minutes,
-          startedAt: now, until: l.until, by: 'ladder', cell: l.cell,
-        },
-      })
-      // 拉起 Gemini 沿用 R4-4 的预约：手机到点自己调 /gemini/due 取简报并打开。
-      // 只有 cell 要拉——all-lock 是他不肯进舱，再拉一次没有意义。
+      const topic = String(verdict?.why || '').slice(0, 100)
       if (l.cell === 'cell') {
-        saveGeminiSchedule({ at: now + 500, topic: String(verdict?.why || '').slice(0, 100), minutes, mode: 'interrogate', by: 'ladder' })
+        const gateRes = requestGeminiViaGate({ source: 'ladder', mode: 'auto', topic, minutes, geminiMode: 'interrogate', now, tz })
+        if (gateRes.allowed) {
+          saveGemini({
+            ...loadGemini(),
+            session: {
+              topic, mode: 'interrogate', minutes,
+              startedAt: now, until: l.until, by: 'ladder', cell: l.cell,
+            },
+          })
+          saveGeminiSchedule({ at: now + 500, topic, minutes, mode: 'interrogate', by: 'ladder' })
+        }
+      } else {
+        saveGemini({
+          ...loadGemini(),
+          session: {
+            topic, mode: 'interrogate', minutes,
+            startedAt: now, until: l.until, by: 'ladder', cell: l.cell,
+          },
+        })
       }
       next.cell = l.cell
       next.cellUntil = l.until
@@ -7116,7 +7520,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7209,22 +7613,59 @@ export function apply(ctx) {
         if (path === '/drill-op') return send(res, 200, drillOpRoute(body.value))
         if (path === '/emergency-pass') {
           const now = Date.now()
+          const tz = zoneOr(config.timeZone)
+          const day = dayString(now, tz)
           if (body.value?.action === 'revoke') {
             const cur = loadExternal()
             saveExternal({ ...cur, emergencyPass: null })
+            savePassLedger(revokeEmergencyPass(loadPassLedger(now, tz), day))
             record({ state: 'emergency-pass-revoke', at: now })
             return send(res, 200, { v: 1, ok: true, revoked: true })
           }
-          const resEp = grantEmergencyPass(loadExternal(), {
+          const info = intensityStateNow(now, tz)
+          const resEp = requestPass(loadPassLedger(now, tz), 'emergency', {
+            source: 'emergency-pass',
             reason: body.value?.reason,
-            day: dayString(now, zoneOr(config.timeZone)),
+            cap: info.emergencyDisarmDailyCap,
+            durationMs: body.value?.durationMs,
             now,
+            day,
           })
           if (resEp.ok) {
-            saveExternal(resEp.state)
-            record({ state: 'emergency-pass-grant', at: now, until: resEp.until, reason: body.value?.reason || '', countToday: resEp.countToday })
+            savePassLedger(resEp.state)
+            const cur = loadExternal()
+            saveExternal({
+              ...cur,
+              emergencyPass: {
+                active: true,
+                grantedAt: now,
+                until: resEp.until,
+                reason: resEp.why,
+                day,
+                countToday: resEp.countToday,
+              },
+            })
+            try { presetRt.strictOff(now, 'emergency-pass') } catch {}
+            record({ state: 'emergency-pass-grant', at: now, until: resEp.until, reason: resEp.why, countToday: resEp.countToday })
           }
-          return send(res, resEp.ok ? 200 : 400, { v: 1, ...resEp })
+          return send(res, resEp.ok ? 200 : 400, { v: 1, ...resEp, remainingToday: resEp.left })
+        }
+        if (path === '/intensity') {
+          const now = Date.now()
+          const tz = zoneOr(config.timeZone)
+          const targetTier = body.value?.intensity ?? body.value?.tier
+          const act = String(body.value?.action || (targetTier !== undefined ? 'set' : 'get'))
+          if (act === 'set' || targetTier !== undefined) {
+            const r = applyIntensityChange(config, targetTier, { now, tz, allowRelax: true })
+            if (!r.ok) {
+              return send(res, 400, { v: 1, ok: false, error: r.error, ...intensityStateNow(now, tz) })
+            }
+            config = { ...config, intensity: r.intensity, pendingIntensity: r.pendingIntensity, intensityExplicit: true }
+            writeConfig(config)
+            record({ state: 'intensity-change', at: now, target: targetTier, applied: r.applied, intensity: r.intensity })
+            return send(res, 200, { v: 1, ok: true, applied: r.applied, ...intensityStateNow(now, tz) })
+          }
+          return send(res, 200, { v: 1, ok: true, ...intensityStateNow(now, tz) })
         }
         if (path === '/lease') {
           const now = Date.now()
@@ -7436,8 +7877,14 @@ export function apply(ctx) {
           }
           return send(res, 200, { v: 1, ok: true, currentDepartment: live?.department || '' })
         }
+        const prevIntensity = config.intensity
+        const prevPending = JSON.stringify(config.pendingIntensity || null)
         config = mergeConfig(config, body.value)
         writeConfig(config)
+        if (body.value && isValidIntensity(body.value.intensity) &&
+          (config.intensity !== prevIntensity || JSON.stringify(config.pendingIntensity || null) !== prevPending)) {
+          record({ state: 'intensity-change', at: Date.now(), target: body.value.intensity, intensity: config.intensity, pending: config.pendingIntensity || null })
+        }
         // 换了会话 / 名字 / 人设：马上重挂，不等下一次定时检查。
         try {
           mountPersona()
@@ -7494,6 +7941,9 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/status') {
         return send(res, 200, statusBody())
       }
+      if (req.method === 'GET' && path === '/intensity') {
+        return send(res, 200, { v: 1, ok: true, ...intensityStateNow(Date.now()) })
+      }
       // A3：审查记录是只读的，所以它是 GET；body 里没东西也照样能查。
       if (req.method === 'GET' && path === '/wall/thread') {
         return send(res, 200, wallThreadRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
@@ -7513,8 +7963,13 @@ export function apply(ctx) {
   }
 
   function publicConfig() {
+    const intInfo = intensityStateNow(Date.now())
     return {
       enabled: config.enabled,
+      intensity: intInfo.intensity,
+      pendingIntensity: intInfo.pendingIntensity,
+      emergencyDisarmDailyCap: intInfo.emergencyDisarmDailyCap,
+      intensityThresholds: intInfo.thresholds,
       refuseUntil: Number(config.refuseUntil) > Date.now() ? Number(config.refuseUntil) : 0,
       lockShadow: config.lockShadow !== false,
       sessionId: config.sessionId ?? null,
@@ -7544,8 +7999,8 @@ export function apply(ctx) {
       // 判球模型（没配就是 null，表示沿用会话）。
       judgeProvider: config.judgeProvider || null,
       judgeModel: config.judgeModel || null,
-      // D5：破窗扣多少分（默认 15）。
-      breakglassPenalty: Number(config.breakglassPenalty) || 15,
+      // 2026-11-19 H2：破窗不再扣信用分（默认 0）。
+      breakglassPenalty: Number(config.breakglassPenalty) || 0,
       // 最近 10 次的实测耗时：发球 / 判球 / 聊天。设置页显示中位数，一眼看出是不是模型慢。
       timings: readTimings(),
       control: config.control !== false,
@@ -7641,13 +8096,7 @@ export function apply(ctx) {
       .reduce((sum, e) => sum + (Number(e.minutes) || 0), 0)
   }
   function quotaNow(now, tz, phone) {
-    const today = Array.isArray(phone?.today) && phone.today.length ? phone.today : (lastPhone?.today || [])
-    return computeQuota({
-      today,
-      tierOf: tierFnNow(),
-      earnedMin: Number(todayEarned(now, tz)?.earned) || 0,
-      passMinutes: passMinutesToday(now, tz),
-    })
+    return timeLedgerNow(now, tz, phone)
   }
   let lastQuota = null
   /** 每晚的 App 账：今天每个 App 用了多久、在哪一层、通行证几张、偏航几次。 */
@@ -7762,18 +8211,25 @@ export function apply(ctx) {
     } catch {
       quota = null
     }
+    const intInfo = intensityStateNow(now, tz)
+    const th = intInfo.thresholds
     const min = zoneMinuteOfDay(now, tz)
-    const boutGap = !run && lastBoutEndAt > 0 && now - lastBoutEndAt >= 5 * 60_000 && min >= 9 * 60 && min < 21 * 60 + 30
+    const boutGap = !run && lastBoutEndAt > 0 && now - lastBoutEndAt >= th.boutGapPushMin * 60_000 && min >= 9 * 60 && min < 21 * 60 + 30
     const m = driveMode({
       tideBand: water?.band, tideLevel: water?.level, frontTier, frontMinutes,
       quotaOut: Boolean(quota && ((quota.funOut && frontTier === 'fun') || (quota.gameOut && frontTier === 'game'))),
       leaseDrifts30m: drifts30, contractOverdue, boutGap, noPlan: Boolean(planGateNow(now, tz)) && min >= 9 * 60 + 30,
       switchDice: radar?.kind === 'switch-limit-dice',
     })
-    const tk = stepTakeover(st.takeover, { now, day, mode: m.mode, why: m.why, frontTier, frontMinutes, boutRunning: Boolean(run), receiptJustNow, blocked })
+    const tk = stepTakeover(st.takeover, {
+      now, day, mode: m.mode, why: m.why, frontTier, frontMinutes, boutRunning: Boolean(run), receiptJustNow, blocked,
+      takeoverMaxMs: th.takeoverMaxMin * 60_000,
+      takeoverMaxPerDay: th.takeoverMaxPerDay,
+    })
     if (tk.event === 'start') {
       record({ state: 'takeover-start', at: now, why: tk.why, n: tk.state.count })
-      commit({ aiWorkSession: { allow: takeoverAllow(), until: now + 45 * 60_000, strict: true, why: '接管：' + tk.why, by: 'takeover' } })
+      recordHardNow({ kind: 'takeover', source: 'driver', why: tk.why, now, tz, dedupeKey: 'takeover:' + tk.state.since })
+      commit({ aiWorkSession: { allow: takeoverAllow(), until: now + th.takeoverMaxMin * 60_000, strict: true, why: '接管：' + tk.why, by: 'takeover' } })
       try {
         const nextItem = planItems.filter((i) => !i.openedAt && !i.missed).sort((a, b) => Number(a.minute) - Number(b.minute))[0] || null
         saveCard(takeoverCard({ why: tk.why, action: returnAction({ nextItem }), now }))
@@ -7792,7 +8248,7 @@ export function apply(ctx) {
         drive = {
           kind: 'takeover', key: 'takeoverSpoke', role: Number(tk.state.spokeN || 0) % 2 === 0 ? 'strategist' : 'companion',
           text: '【接管】' + tk.why + '。锁已经落了（只剩工作 App、Gemini、系统页面）。回位动作：' + returnAction({ nextItem, workApp: '' }) +
-            '。做到了接管自动解除，最长 45 分钟。他求情「再玩一会」可以不答应；他要真有急事让他用通知栏的紧急解除。语气看你自己，但别长篇。',
+            '。做到了接管自动解除，最长 ' + th.takeoverMaxMin + ' 分钟。他求情「再玩一会」可以不答应；他要真有急事让他用通知栏的紧急解除。语气看你自己，但别长篇。',
         }
         tk.state.spokeN = Number(tk.state.spokeN || 0) + 1
       }
@@ -7803,7 +8259,11 @@ export function apply(ctx) {
       } catch {
         deadlines = []
       }
-      drive = nextDrive({ now, minuteOfDay: min, mode: m.mode, boutRunning: Boolean(run), lastBoutEndAt, planItems, checkpoints, deadlines, memo })
+      drive = nextDrive({
+        now, minuteOfDay: min, mode: m.mode, boutRunning: Boolean(run), lastBoutEndAt, planItems, checkpoints, deadlines, memo,
+        boutGapPushMs: th.boutGapPushMin * 60_000,
+        boutGapAutoMs: th.boutGapAutoOpenMin * 60_000,
+      })
       if (drive?.kind === 'auto-open') {
         memo[drive.key] = now
         Promise.resolve(boutsRoute({ action: 'start', id: drive.itemId, by: 'driver' }))
@@ -8118,6 +8578,10 @@ export function apply(ctx) {
     } catch {
       // ignore clock tick errors
     }
+    const intensityNow = intensityStateNow(now, tz)
+    const hardCapped = intensityNow.hardInterventions.capped
+    const emergencyNow = activeEmergencyInfo(now, tz)
+    const emergencyActiveInitial = Boolean(emergencyNow)
     // 行为雷达 0ms 先行判定：晨间开机直奔娱乐 / 纯游戏连玩 / 未收录短视频与信息流 / 租约偏航（静音/免打扰时段不越权抢跑）
     const radarAllowed = config.control !== false && body?.skipRadar !== true && !(Number(config.muteUntil) > now) && !inQuiet(now, config.quietStart, config.quietEnd, tz)
     const inJudgeGrace = Number(loadBrain()?.graceUntil) > now && trustNow(now).band !== 'low' && !(refuseUntilAt(now) > now)
@@ -8130,19 +8594,26 @@ export function apply(ctx) {
           tz,
           morningPlanned: !planGateNow(now, tz),
           onBreak: onBreak(now),
-          emergencyActive: isEmergencyPassActive(loadExternal(), now),
+          emergencyActive: emergencyActiveInitial,
           graceActive: inJudgeGrace,
           runningBout: runningBoutNow(),
           activeLease: config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null,
           funTotalToday: funToday(phone),
           penalty: penaltyNow,
-          // 2026-11-18 切换次数限制：只在干正事时算，阈值来自 规则.md。
+          // 2026-11-18 切换次数限制：只在干正事时算，默认阈值来自强度表，规则.md 可覆盖。
           ...(() => {
             const contract = v4Hub?.contractSessionView?.(now) || null
             const inWork = effectiveGear(config, now) === 'busy' || Boolean(contract) || Boolean(runningBoutNow()) || Boolean(aiTask(config, now))
+            const wc = wallConfig(config)
+            const switchRule = {
+              ...wc,
+              ...(config.wall?.switchWindowMin == null ? { switchWindowMin: intensityNow.thresholds.switchWindowMin } : {}),
+              ...(config.wall?.switchDiceAt == null ? { switchDiceAt: intensityNow.thresholds.switchDice } : {}),
+              ...(config.wall?.switchLockAt == null ? { switchLockAt: intensityNow.thresholds.switchLock } : {}),
+            }
             return {
               inWork,
-              switchRule: wallConfig(config),
+              switchRule,
               workAllow: [...(Array.isArray(contract?.allow) ? contract.allow : []), ...(Array.isArray(config.defaultAllow) ? config.defaultAllow : [])],
             }
           })(),
@@ -8165,20 +8636,23 @@ export function apply(ctx) {
         record({ state: 'lease-drift', at: now, app: config.taskLease?.app || phone?.app || '', goal: config.taskLease?.goal || '' })
         commit({ taskLease: null })
       }
-      if (Array.isArray(radar.tempBlockApps) && radar.tempBlockApps.length) {
+      if (!hardCapped && Array.isArray(radar.tempBlockApps) && radar.tempBlockApps.length) {
         const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && Number(b.until) > now && !radar.tempBlockApps.includes(b.app))
         const until = now + Math.max(15, radar.refuseMinutes || 30) * 60_000
         commit({
           blockExtra: [...keep, ...radar.tempBlockApps.map((app) => ({ app, until, by: 'radar', why: radar.forceWhy }))].slice(-30),
         })
       }
-      if (radar.revokeLease && radar.refuseMinutes > 0) {
+      if (!hardCapped && radar.revokeLease && radar.refuseMinutes > 0) {
         commit({
           refuseUntil: Math.max(now + radar.refuseMinutes * 60_000, Number(config.refuseUntil) || 0),
           refuseBy: 'ai',
         })
       }
-      record({ state: 'behavior-radar', at: now, kind: radar.kind, app: phone?.app || '', reason: radar.reason })
+      if (!hardCapped && Number(radar.forceLevel) >= 3) {
+        recordHardNow({ kind: 'lock', source: 'radar:' + radar.kind, app: phone?.app || '', why: radar.reason, now, tz, dedupeKey: 'radar:' + radar.kind + ':' + (phone?.app || '') })
+      }
+      record({ state: 'behavior-radar', at: now, kind: radar.kind, app: phone?.app || '', reason: radar.reason, downgradedByHardCap: hardCapped || undefined })
     }
     // 临时封禁名单里的 App 也算娱乐。
     if (phone?.app && blockedNow(now).includes(phone.app)) phone.fun = true
@@ -8232,7 +8706,8 @@ export function apply(ctx) {
       record({ state: 'emergency-pass-pullback', at: now, expiredAt: pullBackRes.expiredAt, reason: pullBackRes.passReason, app: phone?.app || '' })
     }
     const leaseNow = activeAppLease(extState, now)
-    const emergencyActive = isEmergencyPassActive(extState, now)
+    const activeEmergency = activeEmergencyInfo(now, tz)
+    const emergencyActive = Boolean(activeEmergency)
     const elasticRes = body?.elasticPlan ? evaluateElasticBuffer({ ...body.elasticPlan, now }) : null
     let schedulingFloor = null
     if (elasticRes?.exceeded) {
@@ -8317,6 +8792,9 @@ export function apply(ctx) {
       // 真的落了锁（不是影子、不只是说一句）：行为大脑记一笔，接下来 5 分钟的片段前因是「刚被锁」。
       if (pr.fires.some((f) => !f.shadow && f.ops.some((o) => o !== 'say' && o !== 'log'))) {
         brainRt.noteLock(now)
+        if (!hardCapped) {
+          recordHardNow({ kind: 'lock', source: 'preset', app: phone?.app || '', why: '预案锁定', now, tz, dedupeKey: 'preset:' + (phone?.app || '') })
+        }
         try {
           v4Hub?.recordStoryline?.({ kind: 'lock', actor: 'system', summary: `触发护栏锁定（${phone?.label || phone?.app || '娱乐'}）`, at: now }, now)
         } catch {}
@@ -8439,10 +8917,17 @@ export function apply(ctx) {
     // 姐姐什么时候主动开口：妹妹递了急话，或者晚上 20–22 点（当地）一天一次对账。
     // 安静时段 / 他说了别烦我 时都不说；其余时候不受妹妹的阶梯和骰子影响（她们是两个人）。
     nextSpeaker = null
-    // 档位和 Gemini 连麦：报到、忙完迎接、连麦中途跑了叫回去、连完读回来——这些比平时的发球优先。
+    // 档位和 Gemini 连麦：报到、忙完迎接、连麦中途跑了叫回去、连完读回来——收集所有候选并由 speak_arbiter 统一裁决。
     const gearNow = effectiveGear(config, now)
+    const prevGemSession = loadGemini().session
     const gem = trackGemini(loadGemini(), phone, now, geminiPackages())
     saveGemini(gem.state)
+    if (prevGemSession && !prevGemSession.ended && gem.state?.session?.ended) {
+      const endedAt = (Number(prevGemSession.until) > 0 && Number(prevGemSession.until) < now)
+        ? Number(prevGemSession.until)
+        : now
+      saveGeminiGate(markGeminiSessionEnded(loadGeminiGate(now, tz), { now: endedAt, day: dayString(now, tz) }))
+    }
     const canTalk = out.reason !== 'muted' && out.reason !== 'quiet' && out.reason !== 'disabled'
     const thinker = config.dual !== false && config.strategistSessionId ? 'strategist' : 'companion'
     let hold = null
@@ -8450,123 +8935,233 @@ export function apply(ctx) {
     // 2026-11-18 推进器：此刻体系该推哪一步（代码定），谁来说、怎么做交给两条鱼。
     let driveRes = null
     try {
-      const blockedDrive = emergencyActive || Boolean(lastRhythm?.night) || inQuiet(now, config.quietStart, config.quietEnd, tz) || gem.inside ||
-        readLedger(home(), 60).some((e) => e?.state === 'disarm' && Number(e.until) > now)
+      const blockedDrive = emergencyActive || hardCapped || Boolean(lastRhythm?.night) || inQuiet(now, config.quietStart, config.quietEnd, tz) || gem.inside
       driveRes = driveNow(now, tz, phone, water, radar, blockedDrive)
     } catch (error) {
       console.error('[companion] 推进器失败：' + String((error && error.message) || error))
     }
     const driveBall = driveRes?.drive && driveRes.drive.kind !== 'auto-open'
-      ? { role: driveRes.drive.role === 'strategist' && thinker === 'strategist' ? 'strategist' : 'companion', reason: 'drive', at: now,
-        note: { kind: driveRes.drive.kind, key: driveRes.drive.key, text: driveRes.drive.text, mode: driveRes.mode } }
+      ? {
+          role: driveRes.drive.role === 'strategist' && thinker === 'strategist' ? 'strategist' : 'companion',
+          reason: 'drive',
+          driveKind: driveRes.drive.kind,
+          timepointKey: driveRes.drive.key,
+          at: now,
+          note: { kind: driveRes.drive.kind, key: driveRes.drive.key, text: driveRes.drive.text, mode: driveRes.mode },
+        }
       : null
-    // 违抗（第二轮）：保留闭环——当场升拒绝模式，但收尾的话由**墙**按模板说（锁屏页的 why），
-    // 不再由鲸澜出面；姐妹照常陪聊，只是不当监工。
-    if (canTalk && !gem.inside && lastRhythm?.morningGate && !lastRhythm.state.morningBall) {
-      nextSpeaker = { role: thinker, reason: 'morning-gate', at: now }
-    } else if (canTalk && !gem.inside && lastRhythm?.night === 'lock' && phone?.screenOn && now - (Number(lastRhythm.state.nightBallAt) || 0) >= 30 * 60_000) {
-      nextSpeaker = { role: thinker, reason: 'night', at: now }
-    } else if (canTalk && !gem.inside && driveBall && (gearNow !== 'busy' || driveBall.note.kind === 'takeover' || driveBall.note.kind === 'checkpoint')) {
-      nextSpeaker = driveBall
-    } else if (canTalk && !gem.inside) {
-      const gs = loadGearState()
-      const patrol = gearNow === 'free' && config.proactiveTools !== false && !lastRhythm?.reviewGate && (!silence || silence.stage === 'none') ? patrolSignal(phone, now, tz) : null
-      if (gem.recap && config.proactiveTools !== false) {
-        nextSpeaker = { role: thinker, reason: 'gemini-recap', at: now, mark: { recappedFor: Number(gem.state.inSince) },
-          gemini: { minutes: Math.round((Number(gem.state.lastInAt) - Number(gem.state.inSince)) / 60_000), topic: gem.state.session?.topic } }
-      } else if (gem.left) {
-        nextSpeaker = { role: 'companion', reason: 'gemini-left', at: now, mark: { nagAt: now },
-          topic: gem.session.topic, left: Math.max(1, Math.round((gem.session.until - now) / 60_000)), app: phone?.label || phone?.app }
-      } else if (gearNow === 'free' && restlessSignal(phone, now)) {
-        nextSpeaker = { role: 'companion', reason: 'restless', at: now, ...restlessSignal(phone, now) }
-      } else if (gearNow === 'busy') {
-        // B1：忙时不催进度——原来这里每 25 分钟发一球问「做到哪了、卡没卡」，撤掉。
-        // 这一档里一句都不发，等到点那一次报到（进度只在 A2 的时间块边界由代码问一次）。
-        hold = Math.max(now + 60_000, Number(config.gearUntil) || 0)
-      } else if (config.gear === 'busy' && Number(config.gearUntil) <= now && now - Number(config.gearUntil) < 2 * 3_600_000 &&
+
+    // ---- H3 发球仲裁：收集所有候选 → 按 5 级优先级表 + 总节流选出一球 ----
+    const speakCandidates = []
+    if (lastRhythm?.night === 'lock' && phone?.screenOn && now - (Number(lastRhythm.state.nightBallAt) || 0) >= 30 * 60_000) {
+      speakCandidates.push({ role: thinker, reason: 'night', priority: 1, at: now })
+    }
+    if (lastRhythm?.morningGate && !lastRhythm.state.morningBall) {
+      speakCandidates.push({ role: thinker, reason: 'morning-gate', priority: 2, at: now, timepointKey: 'morning-gate:' + dayString(now, tz) })
+    }
+    if (driveBall && driveBall.note?.kind !== 'fill' && (gearNow !== 'busy' || driveBall.note.kind === 'takeover' || driveBall.note.kind === 'checkpoint')) {
+      const dp = driveBall.note.kind === 'takeover' ? 1 : (driveBall.note.kind === 'checkpoint' || driveBall.note.kind === 'deadline' ? 2 : 3)
+      speakCandidates.push({ ...driveBall, priority: dp })
+    }
+    const gs = loadGearState()
+    if (gem.recap && config.proactiveTools !== false) {
+      speakCandidates.push({
+        role: thinker, reason: 'gemini-recap', priority: 4, at: now, mark: { recappedFor: Number(gem.state.inSince) },
+        gemini: { minutes: Math.round((Number(gem.state.lastInAt) - Number(gem.state.inSince)) / 60_000), topic: gem.state.session?.topic },
+      })
+    }
+    if (gem.left) {
+      speakCandidates.push({
+        role: 'companion', reason: 'gemini-left', priority: 4, at: now, mark: { nagAt: now },
+        topic: gem.session.topic, left: Math.max(1, Math.round((gem.session.until - now) / 60_000)), app: phone?.label || phone?.app,
+      })
+    }
+    if (gearNow === 'free' && restlessSignal(phone, now)) {
+      speakCandidates.push({ role: 'companion', reason: 'restless', priority: 5, at: now, ...restlessSignal(phone, now) })
+    }
+    if (gearNow === 'busy') {
+      hold = Math.max(now + 60_000, Number(config.gearUntil) || 0)
+    } else {
+      if (config.gear === 'busy' && Number(config.gearUntil) <= now && now - Number(config.gearUntil) < 2 * 3_600_000 &&
         Number(gs.doneFor) !== Number(config.gearUntil) && !lastRhythm?.reviewGate) {
-        // 对账门开着时不单独来验收任务：对账会一并清算（C5）。
-        // 她们立的任务到点：姐姐来验收（不自动算完成）；他自己定的忙时到点：妹妹来迎接。
-        nextSpeaker = config.taskBy
-          ? { role: thinker, reason: 'task-due', at: now, busy: { goal: config.taskGoal, what: config.gearWhat }, digest: true }
-          : { role: 'companion', reason: 'busy-done', at: now, what: config.gearWhat, digest: true,
-            minutes: Math.round((Number(config.gearUntil) - Number(config.gearSince || config.gearUntil)) / 60_000) }
-      } else if (gearNow === 'free' && config.proactiveTools !== false && phone?.screenOn && !lastRhythm?.night &&
+        if (config.taskBy) {
+          speakCandidates.push({ role: thinker, reason: 'task-due', priority: 2, at: now, timepointKey: 'task-due:' + Number(config.gearUntil), busy: { goal: config.taskGoal, what: config.gearWhat }, digest: true })
+        } else {
+          speakCandidates.push({ role: 'companion', reason: 'busy-done', priority: 2, at: now, timepointKey: 'busy-done:' + Number(config.gearUntil), what: config.gearWhat, digest: true, minutes: Math.round((Number(config.gearUntil) - Number(config.gearSince || config.gearUntil)) / 60_000) })
+        }
+      }
+      if (gearNow === 'free' && config.proactiveTools !== false && phone?.screenOn && !lastRhythm?.night &&
         (!silence || silence.stage === 'none') && planDraftDue(now, tz)) {
-        // 计划草案只有时段没有内容：鲸澜自己去填，不等他来问。排在深夜锁、连麦、忙时之后；
-        // 有一球还没接（阶梯在走）时让阶梯先走完，不插队。
-        nextSpeaker = { role: thinker, reason: 'plan-draft', at: now }
-      } else if (patrol) {
-        nextSpeaker = { role: thinker, reason: 'patrol', at: now, note: patrol }
-      } else if (gearNow === 'free' && config.proactiveTools !== false && chaseSignal(phone, now, tz)) {
-        nextSpeaker = { role: thinker, reason: 'notes-chase', at: now, note: chaseSignal(phone, now, tz) }
+        speakCandidates.push({ role: thinker, reason: 'plan-draft', priority: 3, at: now })
+      }
+      const patrol = gearNow === 'free' && config.proactiveTools !== false && !lastRhythm?.reviewGate && (!silence || silence.stage === 'none') ? patrolSignal(phone, now, tz) : null
+      if (patrol) {
+        speakCandidates.push({ role: thinker, reason: 'patrol', priority: 3, at: now, note: patrol })
+      }
+      if (gearNow === 'free' && config.proactiveTools !== false && chaseSignal(phone, now, tz)) {
+        speakCandidates.push({ role: thinker, reason: 'notes-chase', priority: 5, at: now, note: chaseSignal(phone, now, tz) })
       }
     }
-    if (nextSpeaker) Object.assign(out, { speak: true, reason: nextSpeaker.reason, nextCheckAt: now + 60_000 })
-    else if (hold) Object.assign(out, { speak: false, reason: 'busy', nextCheckAt: Math.min(hold, Number(config.gearUntil) || hold) })
-    if (!nextSpeaker && !hold && config.dual !== false && config.strategistSessionId && canTalk) {
+    if (!hold && config.dual !== false && config.strategistSessionId) {
       const handoff = pendingHandoff(now)
-      const hour = phone?.local ? Number(phone.local.slice(0, 2)) : Math.floor(zoneMinuteOfDay(now, tz) / 60)
       const todayStart = startOfDay(now, tz)
       const reviewedToday = ledger.some((e) => e?.state === 'generated' && e.sessionId === config.strategistSessionId && Number(e.at) >= todayStart)
-      if (handoff) nextSpeaker = { role: 'strategist', reason: 'handoff', note: handoff, at: now }
-      // 晚上对账：21:30 开门（rhythm.js），门开着、还没来过就来。
-      else if (lastRhythm?.reviewGate && !lastRhythm.state.reviewBall && !reviewedToday) nextSpeaker = { role: 'strategist', reason: 'review', at: now }
-      // 申请窗口刚开：鲸澜来一句，告诉他现在能提明天的放松/收紧（主持修改申请窗口是鲸澜的事）。
-      else if (lastApplyWindow?.justOpened) {
-        nextSpeaker = { role: 'strategist', reason: 'apply-window', at: now, note: { applyWindow: { remaining: relaxRemainingNow(now, tz), closeAt: Number(lastApplyWindow.state?.closeAt) || 0 } } }
+      if (handoff) {
+        speakCandidates.push({ role: 'strategist', reason: 'handoff', outReason: 'strategist-handoff', priority: 2, note: handoff, at: now, timepointKey: 'handoff:' + dayString(now, tz) })
       }
-      if (nextSpeaker) Object.assign(out, { speak: true, reason: 'strategist-' + nextSpeaker.reason, nextCheckAt: now })
+      if (lastRhythm?.reviewGate && !lastRhythm.state.reviewBall && !reviewedToday) {
+        speakCandidates.push({ role: 'strategist', reason: 'review', outReason: 'strategist-review', priority: 2, at: now, timepointKey: 'review:' + dayString(now, tz) })
+      }
+      if (lastApplyWindow?.justOpened) {
+        speakCandidates.push({
+          role: 'strategist', reason: 'apply-window', outReason: 'strategist-apply-window', priority: 2, at: now,
+          timepointKey: 'apply-window:' + Number(lastApplyWindow.state?.openAt || now),
+          note: { applyWindow: { remaining: relaxRemainingNow(now, tz), closeAt: Number(lastApplyWindow.state?.closeAt) || 0 } },
+        })
+      }
     }
-    // 他在 Gemini 里连麦：默认不插嘴；若客户端明确上报处于文字而非语音模态满 3 分钟，或活跃会话每 10 分钟到抽检点，主动监督提醒。
     if (gem.inside) {
-      const gsGem = loadGearState()
       const hasVoiceReport = body?.phone && Object.prototype.hasOwnProperty.call(body.phone, 'geminiVoiceActive')
       const inSince = Number(gem.state.inSince) || now
-      if (hasVoiceReport && body.phone.geminiVoiceActive === false && canTalk && !desk.inFlight() &&
-        now - inSince >= 3 * 60_000 && now - (Number(gsGem.gemVoiceWarnAt) || 0) >= 8 * 60_000) {
-        saveGearState({ ...gsGem, gemVoiceWarnAt: now })
-        nextSpeaker = { role: thinker, reason: 'gemini-voice-check', at: now }
-        Object.assign(out, { speak: true, reason: 'gemini-voice-check', nextCheckAt: now + 60_000 })
-      } else if (hasVoiceReport && body.phone.geminiVoiceActive === true && gem.session && canTalk && !desk.inFlight() &&
-        now - inSince >= 10 * 60_000 && now - (Number(gsGem.gemCheckpointAt) || inSince) >= 10 * 60_000) {
-        saveGearState({ ...gsGem, gemCheckpointAt: now })
-        nextSpeaker = { role: thinker, reason: 'gemini-checkpoint', at: now, note: { topic: gem.session.topic || '' } }
-        Object.assign(out, { speak: true, reason: 'gemini-checkpoint', nextCheckAt: now + 60_000 })
-      } else {
-        nextSpeaker = null
-        Object.assign(out, { speak: false, reason: 'in-gemini', nextCheckAt: now + 2 * 60_000 })
+      if (hasVoiceReport && body.phone.geminiVoiceActive === false &&
+        now - inSince >= 3 * 60_000 && now - (Number(gs.gemVoiceWarnAt) || 0) >= 8 * 60_000) {
+        speakCandidates.push({ role: thinker, reason: 'gemini-voice-check', priority: 4, at: now })
+      } else if (hasVoiceReport && body.phone.geminiVoiceActive === true && gem.session &&
+        now - inSince >= 10 * 60_000 && now - (Number(gs.gemCheckpointAt) || inSince) >= 10 * 60_000) {
+        speakCandidates.push({ role: thinker, reason: 'gemini-checkpoint', priority: 4, at: now, note: { topic: gem.session.topic || '' } })
       }
     }
-    // 有一球正在路上（接下了、还没生成完）：再说开口就会连发两球（手机每次切 App 都会问一次）。
+    // 走神强拉（R4-6）：如果触发，不发这一球，等他在 Gemini 里交代
+    const drift = config.control !== false && canTalk && !gem.inside && !emergencyActive && !hardCapped ? driftPullNow(now, phone, tz) : null
+    if (radar.triggered && !(radar.forceLevel === 0 && silence?.stage && silence.stage !== 'none') && !drift) {
+      const targetRole = radar.speaker === 'strategist' && config.dual !== false && config.strategistSessionId ? 'strategist' : 'companion'
+      const withLock = Number(radar.forceLevel) >= 3 && !hardCapped
+      speakCandidates.push({ role: targetRole, reason: radar.ballReason || 'radar-drift', priority: withLock ? 3 : 5, withLock, at: now, note: radar.forceWhy })
+    }
+    const restartTakeover = readState(stateFile('restart-takeover.json'), null)
+    if (restartTakeover && !restartTakeover.handled && now - Number(restartTakeover.at) < 30 * 60_000) {
+      speakCandidates.push({ role: 'companion', reason: 'restart-takeover', priority: 5, at: now, note: restartTakeover.note })
+    }
+    // 基础陪伴球（decide() 命中 / 晨间第一球 / no-take 兜底）与推进器 P5 fill
+    if (!hold && !gem.inside) {
+      if (out.speak) {
+        speakCandidates.push({
+          role: 'companion',
+          reason: out.reason,
+          outReason: out.reason,
+          priority: 5,
+          isBaseDecide: true,
+          bypassThrottle: out.reason === 'ladder-lighter' || out.reason === 'ladder-channel',
+          at: now,
+        })
+      }
+      if (driveBall && driveBall.note?.kind === 'fill' && gearNow !== 'busy') {
+        speakCandidates.push({ ...driveBall, priority: 5 })
+      }
+      if (!out.speak && (out.reason === 'dice' || out.reason === 'cooldown') && recent.counts.generated === 0 && phone?.screenOn && gearNow !== 'busy') {
+        speakCandidates.push({ role: 'companion', reason: 'morning', outReason: 'morning', priority: 5, isBaseDecide: true, bypassThrottle: true, at: now })
+      } else if (!out.speak && out.reason === 'no-take' && phone?.screenOn && worthObserving(phone) && gearNow !== 'busy' && now - (recent.lastAt || 0) >= 25 * 60_000) {
+        speakCandidates.push({ role: 'companion', reason: 'observe-override', outReason: 'observe-override', priority: 5, isBaseDecide: true, at: now })
+      }
+    }
+
     desk.sweep()
-    if (out.speak && desk.inFlight()) {
-      Object.assign(out, { speak: false, reason: 'in-flight', nextCheckAt: now + 60_000 })
+    const wNow = loadWithdrawal()
+    const inWithdrawalNow = isInWithdrawal(wNow, now)
+    const dualOn = config.dual !== false && Boolean(config.strategistSessionId)
+    const maxBallsPerHour = (mode === 'coach' && !config.intensityExplicit)
+      ? Math.max(intensityNow.thresholds.maxBallsPerHour, limits.hourlyMax)
+      : intensityNow.thresholds.maxBallsPerHour
+    const arbiterMinGapMs = Number(config.minGapMs) === 0
+      ? 0
+      : Math.max(0, intensityNow.thresholds.partnerMinGapMin * 60_000)
+
+    const arbRes = arbitrateSpeak({
+      candidates: speakCandidates,
+      now,
+      canTalk: canTalk && !drift,
+      inGemini: gem.inside,
+      emergencyActive,
+      inFlight: desk.inFlight(),
+      inConversation: inConversation(sessionId, now),
+      silence,
+      inWithdrawal: inWithdrawalNow,
+      dualOn,
+      sentLastHour: sentLastHour(ledger, now),
+      maxBallsPerHour,
+      lastBallAt: recent.lastAt,
+      minGapMs: arbiterMinGapMs,
+      bypassedTimepoints: Array.isArray(gs.bypassedTimepoints) ? gs.bypassedTimepoints : [],
+    })
+
+    if (arbRes.candidates.length > 0) {
+      record({
+        state: 'speak-pick',
+        at: now,
+        picked: arbRes.picked?.reason || null,
+        priority: arbRes.picked?.priority || null,
+        role: arbRes.picked?.role || null,
+        candidates: arbRes.candidates,
+        throttled: arbRes.throttled,
+        ...(arbRes.skipReason ? { skipReason: arbRes.skipReason } : {}),
+      })
     }
-    if (out.speak && inConversation(sessionId, now)) {
-      Object.assign(out, { speak: false, reason: 'in-conversation', nextCheckAt: now + IN_CONVERSATION_MS })
+
+    if (arbRes.picked) {
+      const p = arbRes.picked
+      if (p.priority === 2 && (silence.stage === 'stop' || silence.stage === 'wait' || inWithdrawalNow) && p.timepointKey) {
+        const nextTp = [...(Array.isArray(gs.bypassedTimepoints) ? gs.bypassedTimepoints : []), p.timepointKey].slice(-30)
+        saveGearState({ ...loadGearState(), bypassedTimepoints: nextTp })
+      }
+      if (p.reason === 'gemini-voice-check') saveGearState({ ...loadGearState(), gemVoiceWarnAt: now })
+      if (p.reason === 'gemini-checkpoint') saveGearState({ ...loadGearState(), gemCheckpointAt: now })
+      if (p.reason === 'restart-takeover' && restartTakeover) writeJson(stateFile('restart-takeover.json'), { ...restartTakeover, handled: true })
+      if (p.isBaseDecide) {
+        nextSpeaker = null
+        Object.assign(out, {
+          speak: true,
+          reason: p.outReason || p.reason,
+          nextCheckAt: p.outReason === 'morning' ? now : (out.nextCheckAt || now + 60_000),
+        })
+      } else {
+        nextSpeaker = p
+        Object.assign(out, {
+          speak: true,
+          reason: p.outReason || p.reason,
+          nextCheckAt: p.outReason ? now : (p.reason.startsWith('radar') ? now : now + 60_000),
+        })
+      }
+    } else {
+      nextSpeaker = null
+      if (drift) {
+        Object.assign(out, { speak: false, reason: 'gemini-drift' })
+      } else if (gem.inside) {
+        Object.assign(out, { speak: false, reason: 'in-gemini', nextCheckAt: now + 2 * 60_000 })
+      } else if (hold) {
+        Object.assign(out, { speak: false, reason: 'busy', nextCheckAt: Math.min(hold, Number(config.gearUntil) || hold) })
+      } else if (arbRes.throttled) {
+        Object.assign(out, {
+          speak: false,
+          reason: arbRes.skipReason === 'hourly-cap' ? 'hourly_max' : 'cooldown',
+          nextCheckAt: now + 5 * 60_000,
+        })
+      } else if (out.speak || (arbRes.candidates.length > 0 && ['withdrawal', 'in-conversation', 'in-flight'].includes(arbRes.skipReason))) {
+        const fallbackReason = arbRes.skipReason === 'withdrawal' ? 'withdrawal' : (arbRes.skipReason || 'filtered')
+        Object.assign(out, {
+          speak: false,
+          reason: fallbackReason,
+          nextCheckAt: fallbackReason === 'withdrawal'
+            ? Math.min(Number(wNow.personaCooldownUntil) || (now + 5 * 60_000), now + 5 * 60_000)
+            : (fallbackReason === 'in-conversation' ? now + IN_CONVERSATION_MS : now + 60_000),
+        })
+      }
     }
-    // 一早第一球：今天还没开过口、屏幕亮着——不等骰子和间隔，先开球定今天的锚。
-    if (!out.speak && (out.reason === 'dice' || out.reason === 'cooldown') && recent.counts.generated === 0 && phone?.screenOn && !inConversation(sessionId, now) && gearNow !== 'busy') {
-      Object.assign(out, { speak: true, reason: 'morning', nextCheckAt: now })
-    }
-    // 2026-11-18 接管：不闭嘴——「5 球没接就歇」和骰子 / 冷却都不拦推进器的那一球。
-    if (!out.speak && lastTakeover && nextSpeaker?.reason === 'drive' && canTalk && !gem.inside && !inConversation(sessionId, now) && !desk.inFlight()) {
-      Object.assign(out, { speak: true, reason: 'drive', nextCheckAt: now + 60_000 })
-    }
-    // 行为触发兜底：即使之前 3 条通知未回进入 no-take，只要此刻确实在娱乐分心且距上次发球满 25 分钟，仍恢复主动提醒。
-    if (!out.speak && out.reason === 'no-take' && canTalk && !gem.inside && phone?.screenOn && worthObserving(phone) && !inConversation(sessionId, now) && gearNow !== 'busy' && now - (recent.lastAt || 0) >= 25 * 60_000) {
-      Object.assign(out, { speak: true, reason: 'observe-override', nextCheckAt: now + 60_000 })
-    }
+
     // 待命计时器在走：到 10 分钟要回来开锁，别等下一次定期检查。他喊了安静、或者已经三球没接要退避 3 小时，都不抢。
     const backoff = out.reason === 'muted' || out.reason === 'quiet' || out.reason === 'disabled' || out.reason === 'no-take'
     if (Number(config.standbySince) && !backoff) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || Infinity, Number(config.standbySince) + STANDBY_LOCK_MS)
     // 力度到了"锁 / 赶"：不管这一球说不说，手机都要执行（说到做到）。
-    if (force.level >= 3) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now, now + 60_000)
-    // R4-6 走神强拉：忙时他在娱乐 App 里坐着，直接约一场审讯式连麦（走 R4-4 那条路，手机到点自己拉起）。
-    // 这一条比场面上的球要紧：拉起了就不说话，等他在 Gemini 里交代。
-    const drift = config.control !== false && canTalk && !gem.inside ? driftPullNow(now, phone, tz) : null
-    if (drift) Object.assign(out, { speak: false, reason: 'gemini-drift' })
+    if (force.level >= 3 && !hardCapped) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now, now + 60_000)
     // A5 热生效：插件推不动手机（手机是拉的一方）。改过预案的两分钟内让它 5 秒回来问一次，
     // 下一次问就拿到新的严格模式 / 锁 / 放行名单，不用等他退出重进，也不用等下一次定时醒。
     if (presetWatchUntil > now) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now + 5000, now + 5000)
@@ -8576,55 +9171,53 @@ export function apply(ctx) {
     if (!backoff && presetRt.list(now).presets.some((p) => p.status === '生效')) {
       out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now, now + IDLE_POLL_MS)
     }
-    {
-      const wNow = loadWithdrawal()
-      const dualOn = config.dual !== false && Boolean(config.strategistSessionId)
-      const speakerRole = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
-      const urgentEnforcement = out.force?.level >= 2 || String(out.reason || '').startsWith('ladder-')
-      if (dualOn && out.speak && !urgentEnforcement && !lastTakeover && speakerRole === 'companion' && isInWithdrawal(wNow, now)) {
-        nextSpeaker = null
-        Object.assign(out, {
-          speak: false,
-          reason: 'withdrawal',
-          nextCheckAt: Math.min(Number(wNow.personaCooldownUntil) || (now + 5 * 60_000), now + 5 * 60_000),
-        })
-      }
-    }
-    if (!out.speak) nextSpeaker = null
-    // 若行为雷达在 0ms 先行锁机，优先于骰子/冷却唤起对应姐妹解释锁机原因（无锁的轻量唤起不打断进行中的 silence 阶梯）
-    if (radar.triggered && !(radar.forceLevel === 0 && silence?.stage && silence.stage !== 'none') && out.reason !== 'gemini-drift' && !out.geminiSchedule && out.reason !== 'muted' && out.reason !== 'quiet' && out.reason !== 'disabled' && !desk.inFlight() && !inConversation(sessionId, now)) {
-      const targetRole = radar.speaker === 'strategist' && config.dual !== false && config.strategistSessionId ? 'strategist' : 'companion'
-      nextSpeaker = { role: targetRole, reason: radar.ballReason || 'radar-drift', at: now, note: radar.forceWhy }
-      Object.assign(out, { speak: true, reason: radar.ballReason || 'radar-drift', nextCheckAt: now })
-    } else if (!nextSpeaker && canTalk && !desk.inFlight() && !inConversation(sessionId, now)) {
-      const takeover = readState(stateFile('restart-takeover.json'), null)
-      if (takeover && !takeover.handled && now - Number(takeover.at) < 30 * 60_000) {
-        writeJson(stateFile('restart-takeover.json'), { ...takeover, handled: true })
-        nextSpeaker = { role: 'companion', reason: 'restart-takeover', at: now, note: takeover.note }
-        Object.assign(out, { speak: true, reason: 'restart-takeover', nextCheckAt: now })
-      }
-    }
-    const epUntil = emergencyActive ? extState.emergencyPass.until : 0
+
+    const epUntil = emergencyActive ? activeEmergency.until : 0
     const v4ContractTick = v4Hub.onPlanTick(now)
-    const effectiveForceLevel = emergencyActive
-      ? 0
-      : Math.max(force.level, radar.triggered ? radar.forceLevel : 0, v4ContractTick.forceStrictByContract ? 4 : 0)
-    const effectiveForceWhy = v4ContractTick.forceStrictByContract
-      ? '计划模态检查点已超 1 分钟缓冲未验收，自动转为严格锁定'
-      : (radar.triggered ? (radar.forceWhy || force.why) : force.why)
-    const effectiveForceRelease = emergencyActive || (!v4ContractTick.forceStrictByContract && !radar.triggered && (onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)))
-    const mediaAction = !emergencyActive && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     const wd = wallDecision(wallCfgNow(), now, tz)
+    const nightLocked = Boolean(wd.locked && wd.kind === 'night')
+    const contractOverdue = Boolean(v4ContractTick.forceStrictByContract)
+    const hardCapDowngrade = hardCapped && !nightLocked && !contractOverdue
+
+    const effectiveForceLevel = (emergencyActive || hardCapDowngrade)
+      ? 0
+      : Math.max(force.level, radar.triggered ? radar.forceLevel : 0, contractOverdue ? 4 : 0)
+    const effectiveForceWhy = contractOverdue
+      ? '计划模态检查点已超 1 分钟缓冲未验收，自动转为严格锁定'
+      : (hardCapDowngrade
+          ? '今天硬干预已经用满，改为温和提醒'
+          : (radar.triggered ? (radar.forceWhy || force.why) : force.why))
+    const effectiveForceRelease = emergencyActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)))
+    const mediaAction = !emergencyActive && !hardCapDowngrade && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     const speakerOut = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
-    const lockArbiter = v4Hub.computeLockArbiter(now, {
+    let lockArbiter = v4Hub.computeLockArbiter(now, {
       autonomy: v4ContractTick.autonomy,
-      wall: { locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
+      wall: { locked: (emergencyActive || hardCapDowngrade) ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
+      ...(hardCapDowngrade ? { aiWorkSession: null, presetStrict: null } : {}),
     })
+    if (hardCapDowngrade && !['P0', 'P2', 'P4'].includes(lockArbiter.priority)) {
+      lockArbiter = {
+        active: false,
+        priority: 'P6',
+        source: 'HARD_CAP_DOWNGRADE',
+        label: '今天硬干预已经用满（仅提醒）',
+        why: '今天硬干预已经用满，余下时段只保留深夜锁和契约逾期锁',
+        allow: ['*'],
+        unlockHow: '明日零点自动重置',
+      }
+    }
     const activeSisterSkin = resolveActiveSisterSkin({ speaker: speakerOut, lockArbiter })
+    const timeLedger = timeLedgerNow(now, tz, phone)
     // 2026-11-18：裁决器的唯一输出（手机先影子对比，确认没问题再切成唯一执法依据）。
     let lockDecision = null
     try {
-      lockDecision = lockDecisionNow(now, tz, phone, emergencyActive ? { priority: 'P0', why: '紧急放行中' } : lockArbiter, extState)
+      const effectiveLockInput = emergencyActive
+        ? { priority: 'P0', source: 'EMERGENCY_SUSPEND', label: '紧急放行中', why: activeEmergency.reason || '紧急放行中', unlockHow: '倒计时结束后恢复' }
+        : lockArbiter
+      lockDecision = lockDecisionNow(now, tz, phone, effectiveLockInput, extState)
+      if (hardCapDowngrade && lockDecision) {
+        lockDecision = { ...lockDecision, mode: 'free', deny: [], needPass: [], why: '今天硬干预已经用满（仅提醒）', unlockHow: '明日零点自动重置' }
+      }
     } catch (error) {
       console.error('[companion] lock 裁决失败：' + String((error && error.message) || error))
     }
@@ -8632,53 +9225,84 @@ export function apply(ctx) {
     let geminiAutoPull = v4Hub.consumePendingAutoPull()
     if (!geminiAutoPull) {
       const pullMode = v4Hub.getPullMode(now)
-      const lastPullAt = v4Hub.getLastPullAt(now)
       const mealNowVal = mealNow(wallConfig(config).meals, localMinute(phone, zoneMinuteOfDay(now, tz)))
       const inActiveWork = effectiveGear(config, now) === 'busy' || Boolean(v4ContractTick.contract) || Boolean(runningBoutNow())
       const dwellMin = Math.max(0, Number(phone?.minutes) || 0)
-      const cooldownOk = lastPullAt === 0 || now - lastPullAt >= 20 * 60_000
-      const canPullNow =
-        pullMode !== 'gentle' &&
+      const switchPull = radar.triggered && radar.pullGemini === true
+      const dwellPull = phone?.fun && dwellMin >= 8 && inActiveWork
+      const canAttemptAutoPull =
         config.control !== false &&
         canTalk &&
         !gem.inside &&
-        !emergencyActive &&
-        !lastRhythm?.night &&
         !mealNowVal &&
         !onBreak(now) &&
         phone?.screenOn !== false
-      const switchPull = radar.triggered && radar.pullGemini === true && cooldownOk
-      if (canPullNow && (drift || switchPull || (phone?.fun && dwellMin >= 8 && inActiveWork && cooldownOk))) {
+      if (canAttemptAutoPull && (drift || switchPull || dwellPull)) {
+        const pullSource = drift ? 'drift' : (switchPull ? 'switch-limit' : 'fun-dwell-8m')
         const pullTopic = drift?.topic || (switchPull ? `你在干正事时 ${radar.reason}，用骰子把注意力拉回这一局` : `你在${phone?.label || phone?.app || '娱乐应用'}已停留 ${dwellMin} 分钟，立刻对齐下一步主线`)
-        // 切换次数到线：摇一骰，带着这一骰的思维方式去连麦（简报里有设定、当下事实、回执）。
-        let pullBrief = ''
-        if (switchPull) {
+        let pullBrief = drift?.brief || ''
+        if (switchPull && !pullBrief) {
           try {
             pullBrief = String(diceRollRoute({ manual: false, topic: '' })?.geminiPrompt || '')
           } catch {
             pullBrief = ''
           }
         }
-        if (!pullBrief) pullBrief = v4Hub.buildProactiveGeminiBrief({
-          topic: pullTopic,
-          mode: 'interrogate',
-          minutes: 15,
-          now,
-        })
-        v4Hub.markStoryAutoPulled(now, `触发主动拉起 Gemini（${phone?.label || phone?.app || '分心'} ${dwellMin}m）`)
-        geminiAutoPull = {
-          triggered: true,
-          at: now,
-          topic: pullTopic,
-          mode: pullMode,
-          reason: drift ? 'drift' : (switchPull ? 'switch-limit' : 'fun-dwell-8m'),
-          preferVoice: true,
-          brief: pullBrief,
+        if (!pullBrief) {
+          pullBrief = v4Hub.buildProactiveGeminiBrief({
+            topic: pullTopic,
+            mode: 'interrogate',
+            minutes: 15,
+            now,
+          })
+        }
+        const gateRes = drift
+          ? { allowed: true, brief: pullBrief }
+          : requestGeminiViaGate({
+              source: pullSource,
+              mode: 'auto',
+              topic: pullTopic,
+              minutes: 15,
+              geminiMode: 'interrogate',
+              brief: pullBrief,
+              now,
+              tz,
+              pullMode,
+              emergencyActive,
+              isNight: Boolean(lastRhythm?.night),
+              isQuiet: inQuiet(now, config.quietStart, config.quietEnd, tz),
+              hardCapped,
+              sessionActive: gem.inside || Boolean(gem.session),
+            })
+        if (gateRes.allowed) {
+          v4Hub.markStoryAutoPulled(now, `触发主动拉起 Gemini（${phone?.label || phone?.app || '分心'} ${dwellMin}m）`)
+          geminiAutoPull = {
+            triggered: true,
+            at: now,
+            topic: pullTopic,
+            mode: pullMode,
+            reason: pullSource,
+            preferVoice: true,
+            brief: gateRes.brief || pullBrief,
+          }
         }
       }
     }
+    const intensityFinal = intensityStateNow(now, tz)
+    const passLedger = passLedgerSummary(loadPassLedger(now, tz), {
+      day: dayString(now, tz),
+      cap: intensityFinal.emergencyDisarmDailyCap,
+      now,
+    })
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
+      intensity: intensityFinal.intensity,
+      pendingIntensity: intensityFinal.pendingIntensity,
+      emergencyDisarmDailyCap: intensityFinal.emergencyDisarmDailyCap,
+      hardInterventions: intensityFinal.hardInterventions,
+      passLedger,
+      timeLedger,
+      ...(arbRes.candidates.length ? { speakPick: { picked: arbRes.picked?.reason || null, priority: arbRes.picked?.priority || null, candidates: arbRes.candidates, throttled: arbRes.throttled } } : {}),
       tide: { level: water.level, band: water.band, why: water.why },
       drive: driveRes ? { mode: driveRes.mode, why: driveRes.why, takeover: driveRes.takeover?.active ? { since: driveRes.takeover.since, reason: driveRes.takeover.reason } : null } : null,
       // 测试模式：手机照常算锁，但只弹「这里本来会锁」的提示，不真锁。默认开，他自己关。
@@ -8693,7 +9317,7 @@ export function apply(ctx) {
       ...(geminiAutoPull ? { geminiAutoPull } : {}),
       // release：只有他讲通了（宽限期内）或 3 分钟应急放行期间才放行大肥鱼加的锁。
       // 锁机事故修复：前台是桌面 / DSH 自己 / 系统界面 / 代理时不给锁目标（手机没有目标就不落锁）。
-      force: { level: effectiveForceLevel, name: force.name, why: effectiveForceWhy, app: (phone?.app && !isNeverLockPkg(phone.app)) ? phone.app : undefined,
+      force: { level: effectiveForceLevel, name: force.name, why: effectiveForceWhy, app: (!hardCapDowngrade && phone?.app && !isNeverLockPkg(phone.app)) ? phone.app : undefined,
         release: effectiveForceRelease },
       ...(radar.triggered ? { behaviorRadar: { kind: radar.kind, reason: radar.reason } } : {}),
       clockTasks: clockKernel.list(),
@@ -8702,13 +9326,13 @@ export function apply(ctx) {
       contextExempt: exemptRes.exempt ? { active: true, until: exemptRes.until, reason: exemptRes.reason } : null,
       degradedEscape: escapeRes.degraded ? { active: true, reason: escapeRes.reason, distinctApps: escapeRes.distinctApps, dwellSeconds: escapeRes.dwellSeconds } : null,
       lease: leaseNow,
-      emergencyPass: emergencyActive ? { active: true, until: epUntil, reason: extState.emergencyPass.reason } : null,
+      emergencyPass: emergencyActive ? { active: true, until: epUntil, reason: activeEmergency.reason } : null,
       ...(pullBackRes.pullBack ? { emergencyPullBack: { triggered: true, reason: pullBackRes.reason, expiredAt: pullBackRes.expiredAt } } : {}),
       ...(elasticRes ? { elasticBuffer: { ...elasticRes, ...(schedulingFloor ? { schedulingFloor } : {}) } } : {}),
       trust: { score: trust.score, band: trust.band },
       penalty: penaltyNow,
       // 临时封禁名单：手机把这些也当娱乐 App 管。
-      block: blockedNow(now),
+      block: (emergencyActive || hardCapDowngrade) ? [] : blockedNow(now),
       // A6：每个锁都要能解释。这是「哪个 App 被哪条预案锁的」那一句，锁页直接显示。
       blockWhy: (Array.isArray(config.blockExtra) ? config.blockExtra : [])
         .filter((b) => b && Number(b.until) > now && !NEVER_BLOCK.includes(b.app) && b.why)
@@ -8716,12 +9340,12 @@ export function apply(ctx) {
       // 第九轮 B1：今天还没有计划 → 手机的浮层/首页挂一张「去定计划」，三个角色谁在场都同一张。
       planGate: planGateNow(now, tz),
       // 通知防波堤：忙时 / 任务模式期间，非白名单通知收进缓存（手机端 NotificationShield）。
-      shield: !emergencyActive && (effectiveGear(config, now) === 'busy' || aiTask(config, now)) ? { until: Math.max(Number(config.gearUntil) || 0, now + ROLL_MS) } : null,
+      shield: !emergencyActive && !hardCapDowngrade && (effectiveGear(config, now) === 'busy' || aiTask(config, now)) ? { until: Math.max(Number(config.gearUntil) || 0, now + ROLL_MS) } : null,
       // 拒绝模式：手机记住到期时间，自己在每次切到娱乐 App 的那一刻就锁，不等这一问。
-      refuse: !emergencyActive && refuseUntilAt(now) > now ? { until: refuseUntilAt(now) } : null,
+      refuse: !emergencyActive && !hardCapDowngrade && refuseUntilAt(now) > now ? { until: refuseUntilAt(now) } : null,
       gear: effectiveGear(config, now),
       // Gemini / 外部 Agent 租约互动舱：这段时间只许白名单包，其余 App 由手机直接锁；应急通行时让路。
-      session: emergencyActive ? null : sessionNow(now),
+      session: (emergencyActive || hardCapDowngrade) ? null : sessionNow(now),
       ...(forceUnlockUntil > now || onBreak(now) ? { clearWorkSession: true } : {}),
       // D4：预约的下一场连麦（手机据此 arm 闹钟；到点调 /gemini/due 取 launch）。
       geminiSchedule: (() => {
@@ -8736,7 +9360,7 @@ export function apply(ctx) {
       obligations: obligationsView(config.obligations, now),
       // 第二轮·墙：此刻娱乐锁/开、申请窗口开没开、本周还剩几天放松额度（面板和手机据此显示）。
       wall: {
-        locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null), openUntil: wd.openUntil || 0,
+        locked: (emergencyActive || hardCapDowngrade) ? false : wd.locked, kind: (emergencyActive || hardCapDowngrade) ? null : (wd.kind || null), openUntil: wd.openUntil || 0,
         applyWindowOpen: applyWindowOpen(config.applyWindow, now),
         applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
         relaxRemaining: relaxRemainingNow(now, tz),
@@ -8769,15 +9393,25 @@ export function apply(ctx) {
     const now = Date.now()
     const entries = readLedger(home(), 400)
     const today = summarize(entries, startOfDay(now, config.timeZone))
+    const tz = zoneOr(config.timeZone)
+    const intInfo = intensityStateNow(now, tz)
+    const timeLedger = timeLedgerNow(now, tz, lastPhone)
+    const passLedger = passLedgerSummary(loadPassLedger(now, tz), { day: dayString(now, tz), cap: intInfo.emergencyDisarmDailyCap, now })
     return {
       v: 1,
       version: '0.2.0',
       config: publicConfig(),
+      intensity: intInfo.intensity,
+      pendingIntensity: intInfo.pendingIntensity,
+      emergencyDisarmDailyCap: intInfo.emergencyDisarmDailyCap,
+      hardInterventions: intInfo.hardInterventions,
+      timeLedger,
+      passLedger,
       // 首页直接读这两项（不必再拆 config）：判球模型和最近 10 次的实测耗时。
       judgeProvider: config.judgeProvider || null,
       judgeModel: config.judgeModel || null,
-      // D5：破窗扣多少分（默认 15）。
-      breakglassPenalty: Number(config.breakglassPenalty) || 15,
+      // 2026-11-19 H2：破窗不再扣信用分（默认 0）。
+      breakglassPenalty: Number(config.breakglassPenalty) || 0,
       timings: readTimings(),
       sessionId: config.sessionId ?? null,
       agents: live,
@@ -9346,6 +9980,15 @@ export function apply(ctx) {
         if (next.lastAdd) {
           earnt = '放风 +' + next.lastAdd + ' 分钟（今天还剩 ' + earnedRt.leftOf(next) + ' 分钟）'
           record({ state: 'earned', at: now, add: next.lastAdd, left: earnedRt.leftOf(next) })
+          const plRes = requestPass(loadPassLedger(now, tz), 'earned', {
+            source: 'bout',
+            minutes: next.lastAdd,
+            reason: '通过一局验收',
+            now,
+            day: dayString(now, tz),
+          })
+          if (plRes.ok) savePassLedger(plRes.state)
+          recordTimeEntryNow({ kind: 'earned_bout', minutes: next.lastAdd, reason: '通过一局验收', at: now, tz })
         }
       } else if (r.state === 'escalated') {
         recordBreachPenalty('moderate', now, zoneOr(config.timeZone))
@@ -9951,6 +10594,14 @@ function mergeConfig(current, body) {
     if (typeof body.judgeProvider === 'string') next.judgeProvider = body.judgeProvider.trim().slice(0, 80) || undefined
     if (typeof body.judgeModel === 'string') next.judgeModel = body.judgeModel.trim().slice(0, 120) || undefined
     if (Number.isFinite(Number(body.breakglassPenalty))) next.breakglassPenalty = Math.max(0, Math.min(100, Math.round(Number(body.breakglassPenalty))))
+    if (isValidIntensity(body.intensity)) {
+      const r = applyIntensityChange(next, body.intensity, { now: Date.now(), tz: zoneOr(next.timeZone), allowRelax: true })
+      if (r.ok) {
+        next.intensity = r.intensity
+        next.pendingIntensity = r.pendingIntensity
+        next.intensityExplicit = true
+      }
+    }
     if (Array.isArray(body.defaultAllow)) {
       next.defaultAllow = body.defaultAllow.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim().slice(0, 120)).slice(0, 30)
     }

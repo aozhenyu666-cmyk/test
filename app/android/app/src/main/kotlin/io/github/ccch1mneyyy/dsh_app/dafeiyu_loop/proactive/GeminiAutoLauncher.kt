@@ -66,6 +66,24 @@ object GeminiLaunchPolicy {
             }
         }
     }
+
+    /** Routes Gemini "正事延后 10m" through the shared [DisarmCapPolicy] emergency disarm cap. */
+    fun planDefer10m(
+        day: String,
+        storedDay: String,
+        storedUsed: Int,
+        storedSeq: Int,
+        cap: Int = DisarmCapPolicy.DEFAULT_DAILY_CAP,
+    ): DisarmCapPolicy.DisarmPlan = DisarmCapPolicy.planDisarm(
+        day = day,
+        storedDay = storedDay,
+        storedUsed = storedUsed,
+        storedSeq = storedSeq,
+        cap = cap,
+        reason = "Gemini倒计时延后10分钟",
+        counted = true,
+        source = "gemini-defer",
+    )
 }
 
 /**
@@ -117,7 +135,9 @@ object GeminiAutoLauncher {
         onResult: ((Boolean) -> Unit)?,
     ) {
         val frontPkg = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
-        val emergencyActive = runCatching { ProactiveRuntime.inEmergencyPass() }.getOrDefault(false)
+        val emergencyActive = runCatching {
+            ProactiveRuntime.inEmergencyPass() || LockSafety.disarmed(app)
+        }.getOrDefault(false)
         val decision = GeminiLaunchPolicy.decide(
             frontPkg = frontPkg,
             emergencyActive = emergencyActive,
@@ -168,7 +188,26 @@ object GeminiAutoLauncher {
                     },
                     onDelay10m = {
                         dismissOverlay()
-                        runCatching { ProactiveRuntime.suspendStrictForEmergency(10) }
+                        val res = LockSafety.disarm(
+                            ctx = app,
+                            reason = "Gemini倒计时延后10分钟",
+                            minutes = LockSafety.DISARM_MINUTES,
+                            counted = true,
+                            source = "gemini-defer",
+                        )
+                        if (res is LockSafety.DisarmResult.Refused) {
+                            main.post {
+                                runCatching {
+                                    android.widget.Toast.makeText(
+                                        app,
+                                        "今天紧急解除/延后次数已用完：${res.why}",
+                                        android.widget.Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            }
+                        } else {
+                            LockSafety.ensureNotification(app)
+                        }
                         onResult?.invoke(false)
                     },
                 )

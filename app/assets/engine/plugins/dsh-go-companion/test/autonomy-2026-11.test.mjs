@@ -65,7 +65,7 @@ async function withHome(fn) {
   try { return await fn(home) } finally {
     if (old === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = old
-    rmSync(home, { recursive: true, force: true })
+    try { rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) } catch {}
   }
 }
 

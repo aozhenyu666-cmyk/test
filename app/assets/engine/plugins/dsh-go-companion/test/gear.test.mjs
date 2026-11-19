@@ -236,7 +236,7 @@ test('Gemini 去：背景写清他是谁、这次干嘛、怎么盯、怎么复�
 test('Gemini 连麦中途跑了：妹妹叫他回去（能动手就直接打开 Gemini）', async () => {
   await withHome(async (home) => {
     const now = Date.now()
-    const t = setup(home)
+    const t = setup(home, { patrolHours: [] })
     writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({
       session: { topic: '想清楚要不要考研', until: now + 20 * 60_000, startedAt: now - 10 * 60_000 }, inSince: now - 9 * 60_000, lastInAt: now - 3 * 60_000,
     }))
@@ -254,7 +254,7 @@ test('Gemini 回：出来几分钟后姐姐去后台屏读回那段对话、存�
     const now = Date.now()
     const vault = join(home, 'vault')
     mkdirSync(vault)
-    const t = setup(home, { notesPath: vault, state: 'brain' })
+    const t = setup(home, { notesPath: vault, state: 'brain', patrolHours: [] })
     // 在 Gemini 里待了 15 分钟，4 分钟前出来
     writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({ inSince: now - 19 * 60_000, lastInAt: now - 4 * 60_000 }))
     const p = await t.plan(wechat)
@@ -355,21 +355,21 @@ test('破窗每天最多 1 次：第二次被拒，第二天恢复', async () =>
   })
 })
 
-test('破窗扣分：默认 15、可按配置改，账本记下这次扣了多少', async () => {
+test('破窗不扣信用分（H2 统一放行账）：默认 0、账本照记，weights 覆盖仍可用', async () => {
   const now = Date.now()
   const rows = [{ state: 'breakglass', at: now - 1_000 }]
-  assert.equal(trustScore(rows, now).score, 45, '默认扣 15')
-  assert.equal(trustScore(rows, now, { weights: { breakglass: -25 } }).score, 35, '可覆盖')
+  assert.equal(trustScore(rows, now).score, 60, 'H2 起破窗不扣信用分')
+  assert.equal(trustScore(rows, now, { weights: { breakglass: -25 } }).score, 35, '显式 weights 仍可覆盖')
   await withHome(async (home) => {
     const t = setup(home)
     const res = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'breakglass', minutes: 10, steps: 160, note: '配置' })
-    assert.equal(res.body.penalty, 15)
+    assert.equal(res.body.penalty, 0)
     const row = JSON.parse(readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').trim().split('\n').pop())
     assert.equal(row.state, 'breakglass')
-    assert.equal(row.penalty, 15)
+    assert.equal(row.penalty, 0)
     const cfg = await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/config', { breakglassPenalty: 25 })
     assert.equal(cfg.body.config.breakglassPenalty, 25)
-    // 配置落盘；信用分按落盘的数值覆盖（statusBody 不带 trust，直接验 trustScore 的入参）。
+    // 配置落盘；信用分按显式 weights 覆盖时仍可测。
     const saved = JSON.parse(readFileSync(join(home, 'companion', 'config.json'), 'utf8'))
     assert.equal(saved.breakglassPenalty, 25)
     assert.equal(trustScore(rows, Date.now(), { weights: { breakglass: -saved.breakglassPenalty } }).score, 35)

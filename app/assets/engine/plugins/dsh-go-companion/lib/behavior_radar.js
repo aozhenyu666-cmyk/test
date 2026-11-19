@@ -17,8 +17,8 @@ import { isNeverLockPkg } from './never_lock.js'
 export function evalSwitchLimit({ phone, allow = new Set(), declaredApps = [], rule = null } = {}) {
   if (!phone || !rule) return null
   const windowMs = Math.max(5, Number(rule.switchWindowMin) || 10) * 60_000
-  const diceAt = Math.max(2, Number(rule.switchDiceAt) || 3)
-  const lockAt = Math.max(diceAt + 1, Number(rule.switchLockAt) || 5)
+  const diceAt = Math.max(2, Number(rule.switchDiceAt ?? rule.switchDice) || 3)
+  const lockAt = Math.max(diceAt + 1, Number(rule.switchLockAt ?? rule.switchLock) || 5)
   const list = Array.isArray(phone.switches?.recent60m) && phone.switches.recent60m.length
     ? phone.switches.recent60m
     : (Array.isArray(phone.switches?.recent) ? phone.switches.recent : [])

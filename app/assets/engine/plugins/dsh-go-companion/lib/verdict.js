@@ -44,18 +44,25 @@ export function dayVerdict({
   return { tag, line, reasons, delivered: d, receiptsOk: ok, funMin: fun }
 }
 
-/** 从账本里数当天的回执、紧急解除。 */
+/** 从账本里数当天的回执、紧急解除（含 disarm / 紧急通行 / 破窗，按 disarmId 去重）。 */
 export function ledgerFacts(entries, inDay) {
   let receiptsOk = 0
   let receiptsMissing = 0
   let disarms = 0
+  const seenDisarmIds = new Set()
   for (const e of Array.isArray(entries) ? entries : []) {
     if (!e || !inDay(e)) continue
     if (e.state === 'gemini-recap') {
       if (e.receipt === true) receiptsOk++
       else receiptsMissing++
     }
-    if (e.state === 'disarm' && e.counted !== false) disarms++
+    if ((e.state === 'disarm' || e.state === 'emergency-pass-grant' || e.state === 'breakglass') && e.counted !== false) {
+      if (e.disarmId) {
+        if (seenDisarmIds.has(String(e.disarmId))) continue
+        seenDisarmIds.add(String(e.disarmId))
+      }
+      disarms++
+    }
   }
   return { receiptsOk, receiptsMissing, disarms }
 }

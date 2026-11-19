@@ -364,6 +364,26 @@ class ProactiveChannel {
     }
   }
 
+  /// 读取强度档（`gentle` / `standard` / `strict`）与待生效的放宽变更（`pendingIntensity`）。
+  Future<IntensityView?> intensityStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('companionConfig', const <String, Object?>{});
+      return IntensityView.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 切换强度档（`gentle` / `standard` / `strict`）：改严立即生效，改松排入明日生效。
+  Future<IntensityView?> setIntensity(String tier) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('companionConfig', <String, Object?>{'intensity': tier});
+      return IntensityView.fromWire(raw);
+    } on Exception {
+      return null;
+    }
+  }
+
   /// B5 试听：让手机用系统 TTS 念一句（`voiceTry`）。
   ///
   /// 返回 null = 真的念完了；否则是降级原因（`no-tts` / `dnd` / `muted` / `session`）。
@@ -1952,6 +1972,148 @@ class DrillOpJudge {
       code: raw['code'] is String ? raw['code'] as String : '',
       text: raw['text'] is String ? raw['text'] as String : '',
       demo: raw['demo'] is String ? raw['demo'] as String : '',
+    );
+  }
+}
+
+/// H1：统一强度表状态（温和 / 标准 / 严格）与每日硬干预/紧急解除上限。
+class IntensityView {
+  const IntensityView({
+    this.tier = 'standard',
+    this.pendingTier,
+    this.pendingEffectiveDay,
+    this.emergencyDisarmDailyCap = 3,
+    this.hardCount = 0,
+    this.hardCap = 12,
+    this.hardCapped = false,
+    this.hardLeft = 12,
+  });
+
+  /// `gentle` | `standard` | `strict`
+  final String tier;
+  final String? pendingTier;
+  final String? pendingEffectiveDay;
+  final int emergencyDisarmDailyCap;
+  final int hardCount;
+  final int hardCap;
+  final bool hardCapped;
+  final int hardLeft;
+
+  static String normalizeTier(String? raw) => switch (raw?.trim().toLowerCase()) {
+        'gentle' => 'gentle',
+        'strict' => 'strict',
+        _ => 'standard',
+      };
+
+  static IntensityView? fromWire(Object? raw) {
+    if (raw is! Map || raw['error'] is Map) return null;
+    final cfg = raw['config'] is Map ? raw['config'] as Map : const {};
+    final tierRaw = raw['intensity'] ?? cfg['intensity'];
+    final pendingRaw = raw['pendingIntensity'] ?? cfg['pendingIntensity'];
+    final capRaw = raw['emergencyDisarmDailyCap'] ?? cfg['emergencyDisarmDailyCap'];
+    final hardRaw = raw['hardInterventions'] ?? cfg['hardInterventions'];
+    if (tierRaw is! String && pendingRaw == null && capRaw is! num && hardRaw is! Map) {
+      return null;
+    }
+    String? pendingTier;
+    String? pendingDay;
+    if (pendingRaw is Map) {
+      final t = pendingRaw['tier'] ?? pendingRaw['intensity'];
+      if (t is String && t.isNotEmpty) pendingTier = normalizeTier(t);
+      final d = pendingRaw['effectiveDay'] ?? pendingRaw['day'];
+      if (d is String && d.isNotEmpty) pendingDay = d;
+    } else if (pendingRaw is String && pendingRaw.isNotEmpty) {
+      pendingTier = normalizeTier(pendingRaw);
+    }
+    final hard = hardRaw is Map ? hardRaw : const {};
+    final hardCap = hard['cap'] is num ? (hard['cap'] as num).toInt() : 12;
+    final hardCount = hard['count'] is num ? (hard['count'] as num).toInt() : 0;
+    final hardLeft = hard['left'] is num ? (hard['left'] as num).toInt() : (hardCap - hardCount).clamp(0, hardCap);
+    return IntensityView(
+      tier: normalizeTier(tierRaw is String ? tierRaw : null),
+      pendingTier: pendingTier,
+      pendingEffectiveDay: pendingDay,
+      emergencyDisarmDailyCap: capRaw is num ? capRaw.toInt() : 3,
+      hardCount: hardCount,
+      hardCap: hardCap,
+      hardCapped: hard['capped'] == true,
+      hardLeft: hardLeft,
+    );
+  }
+}
+
+/// H4：统一时间账（基础娱乐/游戏额度 + 挣来池 - 扣罚 + 通行证免扣）。
+class TimeLedgerView {
+  const TimeLedgerView({
+    this.day = '',
+    this.funQuota = 120,
+    this.gameQuota = 60,
+    this.earnedBout = 0,
+    this.earnedBank = 0,
+    this.earnedBreak = 0,
+    this.earned = 0,
+    this.penalty = 0,
+    this.earnedNet = 0,
+    this.passMinutes = 0,
+    this.funUsed = 0,
+    this.gameUsed = 0,
+    this.dualCounted = 0,
+    this.converted = 0,
+    this.funLeft = 0,
+    this.gameLeft = 0,
+    this.funOut = false,
+    this.gameOut = false,
+    this.line = '',
+  });
+
+  final String day;
+  final int funQuota;
+  final int gameQuota;
+  final int earnedBout;
+  final int earnedBank;
+  final int earnedBreak;
+  final int earned;
+  final int penalty;
+  final int earnedNet;
+  final int passMinutes;
+  final int funUsed;
+  final int gameUsed;
+  final int dualCounted;
+  final int converted;
+  final int funLeft;
+  final int gameLeft;
+  final bool funOut;
+  final bool gameOut;
+  final String line;
+
+  static TimeLedgerView? fromWire(Object? raw) {
+    if (raw is! Map || raw.isEmpty) return null;
+    int i(Object? v, [int d = 0]) => v is num ? v.round() : d;
+    final earned = i(raw['earned'] ?? raw['earnedPool']);
+    final penalty = i(raw['penalty']);
+    final earnedNet = raw['earnedNet'] is num
+        ? i(raw['earnedNet'])
+        : (earned - penalty < 0 ? 0 : earned - penalty);
+    return TimeLedgerView(
+      day: raw['day'] is String ? raw['day'] as String : '',
+      funQuota: i(raw['funQuota'], 120),
+      gameQuota: i(raw['gameQuota'], 60),
+      earnedBout: i(raw['earnedBout']),
+      earnedBank: i(raw['earnedBank']),
+      earnedBreak: i(raw['earnedBreak']),
+      earned: earned,
+      penalty: penalty,
+      earnedNet: earnedNet,
+      passMinutes: i(raw['passMinutes']),
+      funUsed: i(raw['funUsed']),
+      gameUsed: i(raw['gameUsed']),
+      dualCounted: i(raw['dualCounted']),
+      converted: i(raw['converted']),
+      funLeft: i(raw['funLeft']),
+      gameLeft: i(raw['gameLeft']),
+      funOut: raw['funOut'] == true,
+      gameOut: raw['gameOut'] == true,
+      line: raw['line'] is String ? raw['line'] as String : '',
     );
   }
 }

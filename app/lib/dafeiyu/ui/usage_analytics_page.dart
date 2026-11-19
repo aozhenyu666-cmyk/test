@@ -372,6 +372,7 @@ class _UsageAnalyticsPageState extends State<UsageAnalyticsPage> {
     final slices = _asListOfMaps(_overview['timeline24h']);
     final topApps = _asListOfMaps(_overview['topApps']);
     final arbiter = _asMap(_overview['lockArbiter']);
+    final timeLedger = TimeLedgerView.fromWire(_overview['timeLedger']);
 
     final segments = <_DonutSlice>[
       _DonutSlice('主线攻坚', mainlineMin.toDouble(), colors.success),
@@ -487,6 +488,10 @@ class _UsageAnalyticsPageState extends State<UsageAnalyticsPage> {
           ),
         ),
         const SizedBox(height: 14),
+        if (timeLedger != null) ...[
+          TimeLedgerSummaryCard(ledger: timeLedger),
+          const SizedBox(height: 14),
+        ],
 
         // 2) 24-Hour Timeline Ribbon (06:00–24:00)
         GlassSurface(
@@ -1458,6 +1463,138 @@ class _CategoryBarRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// H4：跨页面复用的统一时间账 Mist Glass 摘要卡（娱乐 / 挣来净额 / 游戏 / 通行证）。
+class TimeLedgerSummaryCard extends StatelessWidget {
+  const TimeLedgerSummaryCard({super.key, required this.ledger});
+
+  final TimeLedgerView ledger;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = DshColors.of(context);
+    final scheme = theme.colorScheme;
+    final tone = (ledger.funOut && ledger.gameOut)
+        ? StatusTone.error
+        : (ledger.funOut ? StatusTone.warn : StatusTone.ok);
+    final badgeLabel = (ledger.funOut && ledger.gameOut)
+        ? '额度已用完'
+        : (ledger.funOut ? '娱乐已满' : '娱乐余 ${ledger.funLeft}m');
+
+    Widget statCell({
+      required String title,
+      required String value,
+      required String detail,
+      required Color accent,
+    }) =>
+        Expanded(
+          child: GlassSurface(
+            tier: GlassTier.pill,
+            borderRadius: AppShape.radiusMd,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    style: AppType.tabular(
+                      theme.textTheme.titleMedium!.copyWith(fontWeight: FontWeight.w700, color: accent),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    detail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary, fontSize: 10.5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+
+    final earnedDetail = ledger.penalty > 0
+        ? '挣+${ledger.earned} · 扣-${ledger.penalty}'
+        : (ledger.earnedBout > 0 || ledger.earnedBank > 0)
+            ? '局+${ledger.earnedBout} · 题+${ledger.earnedBank}'
+            : '无扣罚';
+
+    return GlassSurface(
+      tier: GlassTier.card,
+      borderRadius: AppShape.radiusLg,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(AppIcons.time, size: 17, color: scheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '今日时间账（统一额度）',
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                StatusChip(tone: tone, label: badgeLabel),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                statCell(
+                  title: '娱乐剩余',
+                  value: '${ledger.funLeft}m',
+                  detail: '已用 ${ledger.funUsed}/${ledger.funQuota}m',
+                  accent: ledger.funOut ? colors.danger : scheme.primary,
+                ),
+                const SizedBox(width: 8),
+                statCell(
+                  title: '挣来池',
+                  value: '${ledger.earnedNet}m',
+                  detail: earnedDetail,
+                  accent: colors.success,
+                ),
+                const SizedBox(width: 8),
+                statCell(
+                  title: '游戏剩余',
+                  value: '${ledger.gameLeft}m',
+                  detail: ledger.converted > 0
+                      ? '已兑 ${ledger.converted * 2}m→娱'
+                      : '已用 ${ledger.gameUsed}/${ledger.gameQuota}m',
+                  accent: ledger.gameOut ? colors.warning : colors.info,
+                ),
+              ],
+            ),
+            if (ledger.passMinutes > 0 || ledger.line.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                [
+                  if (ledger.passMinutes > 0) '通行证免扣 ${ledger.passMinutes}m',
+                  if (ledger.line.isNotEmpty) ledger.line,
+                ].join(' · '),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

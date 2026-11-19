@@ -21,8 +21,8 @@ export const TRUST_WEIGHTS = {
   'gemini-start': 1,
   'gemini-recap': 3,
   'break-kept': 2,
-  // 默认扣 15；配置 breakglassPenalty 可改（D5），trustScore 的 options.weights 覆盖它。
-  breakglass: -15,
+  // 2026-11-19 H2：破窗不再扣信用分（扣分会逼人绕道），保留账本与日判记录；options.weights 仍可覆盖。
+  breakglass: 0,
   tamper: -100,
   // 追问锁到点没裁决（超时）：默认扣 5，配置 followupPenalty 可改（第三轮 C3）。
   'followup-timeout': -5,

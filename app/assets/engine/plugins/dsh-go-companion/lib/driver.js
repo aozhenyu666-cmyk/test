@@ -61,6 +61,8 @@ export function driveMode(s = {}) {
 export function stepTakeover(prev, p = {}) {
   const now = n(p.now)
   const day = String(p.day || '')
+  const maxMs = n(p.takeoverMaxMs) > 0 ? n(p.takeoverMaxMs) : TAKEOVER_MAX_MS
+  const maxPerDay = n(p.takeoverMaxPerDay) > 0 ? Math.round(n(p.takeoverMaxPerDay)) : TAKEOVER_MAX_PER_DAY
   const s = { active: false, since: 0, reason: '', count: 0, countDay: day, releasedAt: 0, ...(prev || {}) }
   if (s.countDay !== day) Object.assign(s, { countDay: day, count: 0 })
   if (s.active) {
@@ -68,11 +70,11 @@ export function stepTakeover(prev, p = {}) {
       ((p.frontTier === 'work') && n(p.frontMinutes) >= RETURN_DWELL_MIN)
     if (p.blocked) return { state: { ...s, active: false, releasedAt: now }, event: 'end', why: '让路（紧急解除 / 深夜 / 连麦）' }
     if (returned) return { state: { ...s, active: false, releasedAt: now }, event: 'end', why: '回位了' }
-    if (now - n(s.since) >= TAKEOVER_MAX_MS) return { state: { ...s, active: false, releasedAt: now }, event: 'end', why: '到 45 分钟上限' }
+    if (now - n(s.since) >= maxMs) return { state: { ...s, active: false, releasedAt: now }, event: 'end', why: '到 ' + Math.round(maxMs / 60_000) + ' 分钟上限' }
     return { state: s, event: 'hold', why: s.reason }
   }
   if (p.mode !== 'takeover' || p.blocked) return { state: s, event: null, why: '' }
-  if (s.count >= TAKEOVER_MAX_PER_DAY) return { state: s, event: 'capped', why: '今天已经接管 ' + s.count + ' 次' }
+  if (s.count >= maxPerDay) return { state: s, event: 'capped', why: '今天已经接管 ' + s.count + ' 次' }
   if (n(s.releasedAt) && now - n(s.releasedAt) < TAKEOVER_COOLDOWN_MS) return { state: s, event: null, why: '刚解除，冷却中' }
   return { state: { ...s, active: true, since: now, reason: String(p.why || ''), count: s.count + 1 }, event: 'start', why: String(p.why || '') }
 }
@@ -117,13 +119,15 @@ export function nextDrive(s = {}) {
 
   // 3. 局之间空着（工作时段、没有局在跑）
   if (inWork && !s.boutRunning) {
+    const pushMs = n(s.boutGapPushMs) > 0 ? n(s.boutGapPushMs) : BOUT_GAP_PUSH_MS
+    const autoMs = n(s.boutGapAutoMs) > 0 ? n(s.boutGapAutoMs) : BOUT_GAP_AUTO_MS
     const items = Array.isArray(s.planItems) ? s.planItems : []
     const next = items.filter((i) => i && !i.openedAt && !i.missed && n(i.minute) >= min - 5).sort((a, b) => n(a.minute) - n(b.minute))[0]
     const endAt = n(s.lastBoutEndAt)
     const gapKey = 'gap:' + (endAt || 'none') + ':' + (next?.id || 'none')
     const soon = next && n(next.minute) - min <= 10
-    if (!soon && endAt && now - endAt >= BOUT_GAP_PUSH_MS) {
-      if (next && now - endAt >= BOUT_GAP_AUTO_MS && !seen('auto:' + next.id, 3 * 3_600_000)) {
+    if (!soon && endAt && now - endAt >= pushMs) {
+      if (next && now - endAt >= autoMs && !seen('auto:' + next.id, 3 * 3_600_000)) {
         // 推过了还没开：代码直接把今天计划里的下一局提前开掉。
         return { kind: 'auto-open', key: 'auto:' + next.id, role: 'strategist', itemId: next.id,
           text: '下一局「' + next.title + '」已经提前开了（上一局收了 ' + Math.round((now - endAt) / 60_000) + ' 分钟没动）：一句话告诉他第一步。' }

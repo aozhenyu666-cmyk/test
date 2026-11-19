@@ -24,6 +24,56 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 /**
+ * Pure JVM-testable emergency disarm quota & idempotent ID planner.
+ * Kept separate from [LockSafety] so JVM unit tests never trigger Android `Looper.getMainLooper()`.
+ */
+object DisarmCapPolicy {
+    const val DEFAULT_DAILY_CAP = 3
+    const val DISARM_MINUTES = 10
+
+    data class DisarmPlan(
+        val allowed: Boolean,
+        val nextUsed: Int,
+        val nextSeq: Int,
+        val disarmId: String,
+        val refusedWhy: String? = null,
+    )
+
+    fun planDisarm(
+        day: String,
+        storedDay: String,
+        storedUsed: Int,
+        storedSeq: Int,
+        cap: Int = DEFAULT_DAILY_CAP,
+        reason: String,
+        counted: Boolean = true,
+        source: String = if (counted) "notification" else "adb",
+    ): DisarmPlan {
+        val sameDay = storedDay == day
+        val used = if (sameDay) storedUsed.coerceAtLeast(0) else 0
+        val seq = if (sameDay) storedSeq.coerceAtLeast(0) else 0
+        val effectiveCap = cap.coerceIn(1, 10)
+        val why = reason.trim()
+        if (counted && why.length < 2) {
+            return DisarmPlan(allowed = false, nextUsed = used, nextSeq = seq, disarmId = "", refusedWhy = "要写一句理由")
+        }
+        if (counted && used >= effectiveCap) {
+            return DisarmPlan(
+                allowed = false,
+                nextUsed = used,
+                nextSeq = seq,
+                disarmId = "",
+                refusedWhy = "今天的 $effectiveCap 次紧急解除已经用完",
+            )
+        }
+        val nextSeq = seq + 1
+        val nextUsed = if (counted) used + 1 else used
+        val id = if (counted) "disarm-$day-$nextSeq" else "disarm-$day-${source.ifBlank { "adb" }}-$nextSeq"
+        return DisarmPlan(allowed = true, nextUsed = nextUsed, nextSeq = nextSeq, disarmId = id)
+    }
+}
+
+/**
  * 2026-11-18 锁机安全层。四条落锁入口（姐妹力度锁、拦截页、专注页、设置页自卫）落锁前都过这里：
  *
  *  1. [neverLock]：DSH 自己、默认桌面、系统界面、输入法、急事、代理永远不锁；
@@ -38,8 +88,12 @@ object LockSafety {
     private const val KEY_DISARM_UNTIL = "disarm_until"
     private const val KEY_DISARM_DAY = "disarm_day"
     private const val KEY_DISARM_COUNT = "disarm_count"
+    private const val KEY_DISARM_SEQ = "disarm_seq"
+    private const val KEY_DISARM_CAP = "disarm_daily_cap"
+    private const val KEY_PENDING_DISARMS = "pending_disarms"
     const val DAILY_DISARM_CAP = 3
     const val DISARM_MINUTES = 10
+    private const val MAX_PENDING_DISARMS = 20
     private const val CHANNEL = "dsh_lock_safety"
     private const val NOTIF_ID = 0x5AFE
     const val ACTION_DISARM = "io.github.ccch1mneyyy.dsh_app.DISARM"
@@ -50,6 +104,7 @@ object LockSafety {
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var shadowCache: Boolean? = null
     @Volatile private var disarmCache: Long = -1L
+    @Volatile private var dailyCapCache: Int = -1
     @Volatile private var ime: Set<String> = emptySet()
     private val lastToast = HashMap<String, Long>()
 
@@ -127,46 +182,198 @@ object LockSafety {
 
     private fun today(): String = LocalDate.now(ZoneId.of("Asia/Shanghai")).toString()
 
+    private val disarmLock = Any()
+
+    fun dailyCap(ctx: Context): Int {
+        val cached = dailyCapCache
+        if (cached > 0) return cached
+        return runCatching {
+            prefs(ctx).getInt(KEY_DISARM_CAP, DAILY_DISARM_CAP).coerceIn(1, 10)
+        }.getOrDefault(DAILY_DISARM_CAP).also { dailyCapCache = it }
+    }
+
+    fun setDailyCap(ctx: Context, cap: Int) {
+        val clamped = cap.coerceIn(1, 10)
+        if (dailyCapCache == clamped) return
+        dailyCapCache = clamped
+        runCatching { prefs(ctx).edit().putInt(KEY_DISARM_CAP, clamped).apply() }
+        ensureNotification(ctx)
+    }
+
     fun usedToday(ctx: Context): Int {
         val p = prefs(ctx)
         return if (p.getString(KEY_DISARM_DAY, "") == today()) p.getInt(KEY_DISARM_COUNT, 0) else 0
     }
 
+    /** Pure JVM-testable decision & idempotent ID planner shared by notification disarm and Gemini defer. */
+    fun planDisarm(
+        day: String,
+        storedDay: String,
+        storedUsed: Int,
+        storedSeq: Int,
+        cap: Int,
+        reason: String,
+        counted: Boolean = true,
+        source: String = if (counted) "notification" else "adb",
+    ): DisarmCapPolicy.DisarmPlan = DisarmCapPolicy.planDisarm(
+        day = day,
+        storedDay = storedDay,
+        storedUsed = storedUsed,
+        storedSeq = storedSeq,
+        cap = cap,
+        reason = reason,
+        counted = counted,
+        source = source,
+    )
+
+    data class PendingDisarm(
+        val disarmId: String,
+        val reason: String,
+        val until: Long,
+        val counted: Boolean,
+        val source: String,
+    )
+
+    private fun enqueuePendingDisarm(ctx: Context, item: PendingDisarm) {
+        synchronized(disarmLock) {
+            runCatching {
+                val p = prefs(ctx)
+                val raw = p.getString(KEY_PENDING_DISARMS, null)
+                val arr = if (raw.isNullOrBlank()) org.json.JSONArray() else org.json.JSONArray(raw)
+                val filtered = org.json.JSONArray()
+                val start = (arr.length() - (MAX_PENDING_DISARMS - 1)).coerceAtLeast(0)
+                for (i in start until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    if (obj.optString("disarmId") != item.disarmId) filtered.put(obj)
+                }
+                filtered.put(
+                    org.json.JSONObject()
+                        .put("disarmId", item.disarmId)
+                        .put("reason", item.reason)
+                        .put("until", item.until)
+                        .put("counted", item.counted)
+                        .put("source", item.source),
+                )
+                p.edit().putString(KEY_PENDING_DISARMS, filtered.toString()).apply()
+            }
+        }
+    }
+
+    fun pendingDisarms(ctx: Context): List<PendingDisarm> = synchronized(disarmLock) {
+        runCatching {
+            val raw = prefs(ctx).getString(KEY_PENDING_DISARMS, null) ?: return@runCatching emptyList()
+            val arr = org.json.JSONArray(raw)
+            buildList(arr.length()) {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("disarmId")
+                    if (id.isBlank()) continue
+                    add(
+                        PendingDisarm(
+                            disarmId = id,
+                            reason = obj.optString("reason"),
+                            until = obj.optLong("until", 0L),
+                            counted = obj.optBoolean("counted", true),
+                            source = obj.optString("source", "notification"),
+                        ),
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun ackDisarmSynced(ctx: Context, disarmId: String) {
+        if (disarmId.isBlank()) return
+        synchronized(disarmLock) {
+            runCatching {
+                val p = prefs(ctx)
+                val raw = p.getString(KEY_PENDING_DISARMS, null) ?: return@runCatching
+                val arr = org.json.JSONArray(raw)
+                val next = org.json.JSONArray()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    if (obj.optString("disarmId") != disarmId) next.put(obj)
+                }
+                p.edit().putString(KEY_PENDING_DISARMS, next.toString()).apply()
+            }
+        }
+    }
+
     sealed interface DisarmResult {
-        data class Ok(val until: Long, val usedToday: Int) : DisarmResult
+        data class Ok(val until: Long, val usedToday: Int, val disarmId: String = "") : DisarmResult
         data class Refused(val why: String) : DisarmResult
     }
 
     /**
      * 本地解除所有锁 [minutes] 分钟：不经过引擎（引擎卡死时也能用）。
-     * [counted] = 走通知栏的那条（要理由、每天 3 次）；adb 的开发者通道不计次。
+     * [counted] = 走通知栏或 Gemini 延后（共享每天 [dailyCap] 次上限）；adb 的开发者通道不计次。
      */
-    fun disarm(ctx: Context, reason: String, minutes: Int = DISARM_MINUTES, counted: Boolean = true): DisarmResult {
+    fun disarm(
+        ctx: Context,
+        reason: String,
+        minutes: Int = DISARM_MINUTES,
+        counted: Boolean = true,
+        source: String = if (counted) "notification" else "adb",
+    ): DisarmResult {
         val why = reason.trim()
-        if (counted && why.length < 2) return DisarmResult.Refused("要写一句理由")
-        val used = usedToday(ctx)
-        if (counted && used >= DAILY_DISARM_CAP) return DisarmResult.Refused("今天的 $DAILY_DISARM_CAP 次紧急解除已经用完")
-        val now = System.currentTimeMillis()
-        val until = now + minutes.coerceIn(1, 120) * 60_000L
-        disarmCache = until
-        val nextUsed = if (counted) used + 1 else used
-        runCatching {
-            prefs(ctx).edit()
-                .putLong(KEY_DISARM_UNTIL, until)
-                .putString(KEY_DISARM_DAY, today())
-                .putInt(KEY_DISARM_COUNT, nextUsed)
-                .apply()
+        val cap = dailyCap(ctx)
+        val day = today()
+        val (plan, until) = synchronized(disarmLock) {
+            val p = prefs(ctx)
+            val storedDay = p.getString(KEY_DISARM_DAY, "").orEmpty()
+            val storedUsed = p.getInt(KEY_DISARM_COUNT, 0)
+            val storedSeq = p.getInt(KEY_DISARM_SEQ, 0)
+            val planned = planDisarm(
+                day = day,
+                storedDay = storedDay,
+                storedUsed = storedUsed,
+                storedSeq = storedSeq,
+                cap = cap,
+                reason = why,
+                counted = counted,
+                source = source,
+            )
+            if (!planned.allowed) return DisarmResult.Refused(planned.refusedWhy ?: "紧急解除被拒绝")
+            val nextUntil = System.currentTimeMillis() + minutes.coerceIn(1, 120) * 60_000L
+            disarmCache = nextUntil
+            runCatching {
+                p.edit()
+                    .putLong(KEY_DISARM_UNTIL, nextUntil)
+                    .putString(KEY_DISARM_DAY, day)
+                    .putInt(KEY_DISARM_COUNT, planned.nextUsed)
+                    .putInt(KEY_DISARM_SEQ, planned.nextSeq)
+                    .apply()
+            }
+            planned to nextUntil
         }
+        val effectiveReason = why.ifBlank { "adb" }
+        enqueuePendingDisarm(
+            ctx,
+            PendingDisarm(
+                disarmId = plan.disarmId,
+                reason = effectiveReason.take(80),
+                until = until,
+                counted = counted,
+                source = source,
+            ),
+        )
         main.post {
             runCatching { InterceptPageActivity.withdrawAll() }.onFailure { Log.w(TAG, "withdraw intercept", it) }
             runCatching { FocusPageActivity.withdrawAll() }.onFailure { Log.w(TAG, "withdraw focus", it) }
-            runCatching { ProactiveRuntime.onLocalDisarm(until, why.ifBlank { "adb" }, counted) }.onFailure { Log.w(TAG, "notify runtime", it) }
             runCatching {
-                Toast.makeText(ctx.applicationContext, "已紧急解除 ${minutes} 分钟（今天第 $nextUsed 次），这件事会记进今晚的账", Toast.LENGTH_LONG).show()
+                ProactiveRuntime.onLocalDisarm(until, effectiveReason, counted, plan.disarmId, source)
+            }.onFailure { Log.w(TAG, "notify runtime", it) }
+            runCatching {
+                val msg = if (counted) {
+                    "已紧急解除 ${minutes} 分钟（今天第 ${plan.nextUsed}/$cap 次），这件事会记进今晚的账"
+                } else {
+                    "已紧急解除 ${minutes} 分钟（开发者通道）"
+                }
+                Toast.makeText(ctx.applicationContext, msg, Toast.LENGTH_LONG).show()
             }
         }
-        Log.i(TAG, "disarm until=$until counted=$counted reason=$why")
-        return DisarmResult.Ok(until, nextUsed)
+        Log.i(TAG, "disarm id=${plan.disarmId} source=$source until=$until counted=$counted reason=$why")
+        return DisarmResult.Ok(until, plan.nextUsed, plan.disarmId)
     }
 
     // ---------------------------------------------------------------- 通知栏入口
@@ -186,7 +393,7 @@ object LockSafety {
                 flags,
             )
             val action = Notification.Action.Builder(null, "紧急解除 ${DISARM_MINUTES} 分钟", pi).addRemoteInput(input).build()
-            val left = (DAILY_DISARM_CAP - usedToday(ctx)).coerceAtLeast(0)
+            val left = (dailyCap(ctx) - usedToday(ctx)).coerceAtLeast(0)
             val mode = if (shadow(ctx)) "测试模式：锁只提示不落" else "锁已生效"
             val n = Notification.Builder(ctx, CHANNEL).setSmallIcon(R.drawable.ic_stat_dsh)
                 .setContentTitle("大肥鱼 · $mode")

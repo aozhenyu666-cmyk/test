@@ -1395,18 +1395,71 @@ object ProactiveRuntime {
 
     /**
      * 本地紧急解除（[LockSafety.disarm]）：放风到 [until]，撤掉记着的力度锁，再尽力告诉插件记账。
-     * 引擎不在也照样生效：放风只看本地 prefs。
+     * 引擎不在也照样生效：放风只看本地 prefs，离线时先持久化 [disarmId]，重连后幂等补传。
      */
-    fun onLocalDisarm(until: Long, reason: String, counted: Boolean) {
+    fun onLocalDisarm(
+        until: Long,
+        reason: String,
+        counted: Boolean,
+        disarmId: String = "",
+        source: String = if (counted) "notification" else "adb",
+    ) {
         if (!::app.isInitialized) return
         setBreakUntil(until)
         force = null
         forcedApp = null
-        runCatching {
-            fetchPluginRoute(routeCallback { }, "POST", "/event", linkedMapOf(
-                "type" to "disarm", "reason" to reason.take(80), "until" to until, "counted" to counted,
-            ))
-        }.onFailure { Log.w(TAG, "disarm report", it) }
+        runCatching { releaseCompanionLock() }
+        val pending = LockSafety.pendingDisarms(app)
+        if (pending.isNotEmpty()) {
+            syncPendingDisarms()
+        } else {
+            runCatching {
+                val body = linkedMapOf<String, Any?>(
+                    "type" to "disarm",
+                    "reason" to reason.take(80),
+                    "until" to until,
+                    "counted" to counted,
+                    "source" to source,
+                )
+                if (disarmId.isNotBlank()) body["disarmId"] = disarmId
+                fetchPluginRoute(routeCallback { }, "POST", "/event", body)
+            }.onFailure { Log.w(TAG, "disarm report", it) }
+        }
+        consultPlanSoon(minGapMs = 0L)
+    }
+
+    /** 幂等补传离线期间本地记录的紧急解除 / Gemini 延后事件。 */
+    fun syncPendingDisarms() {
+        if (!::app.isInitialized || agentPort == null) return
+        val pending = LockSafety.pendingDisarms(app)
+        if (pending.isEmpty()) return
+        main.post {
+            if (agentPort == null) return@post
+            for (item in pending) {
+                fetchPluginRoute(
+                    routeCallback { res ->
+                        val errCode = (res["error"] as? Map<*, *>)?.get("code") as? String
+                        val acked = res["ok"] == true ||
+                            res["idempotent"] == true ||
+                            res["error"] == null ||
+                            errCode == "daily-cap-reached"
+                        if (acked) {
+                            LockSafety.ackDisarmSynced(app, item.disarmId)
+                        }
+                    },
+                    "POST",
+                    "/event",
+                    linkedMapOf(
+                        "type" to "disarm",
+                        "disarmId" to item.disarmId,
+                        "reason" to item.reason.take(80),
+                        "until" to item.until,
+                        "counted" to item.counted,
+                        "source" to item.source,
+                    ),
+                )
+            }
+        }
     }
 
     /** 说到做到: 赶 = back to the launcher first; then 锁 the app behind a drill. */
@@ -1453,6 +1506,10 @@ object ProactiveRuntime {
         if (lastPlanError != null) { companionPlan = null; arm(); return }
         // 测试模式开关跟插件走（插件默认开；他在中枢或对姐妹说「结束测试模式」才关）。
         (map["shadow"] as? Boolean)?.let { LockSafety.setShadow(app, it) }
+        // H1/H2：从 /plan 同步强度档对应的每日紧急解除上限（默认 3，严格档 2）。
+        val planCap = (map["emergencyDisarmDailyCap"] as? Number)?.toInt()
+            ?: ((map["intensity"] as? Map<*, *>)?.get("emergencyDisarmDailyCap") as? Number)?.toInt()
+        if (planCap != null && planCap > 0) LockSafety.setDailyCap(app, planCap)
         // 裁决器的唯一输出：先影子对比（不执法），攒够数据再切换。
         runCatching { ArbiterShadow.update(map["lock"]) }
         val nowNotif = System.currentTimeMillis()
@@ -1567,6 +1624,7 @@ object ProactiveRuntime {
         val reason = map["reason"] as? String ?: ""
         syncGuardianMirror()
         flushGuardianOfflineSoon()
+        syncPendingDisarms()
         if (wakeAt <= 0 && remoteClock == null) return
         // P2: the plugin decides, the phone executes. speak=true means this ball now; nextCheckAt is
         // when to look again afterwards. speak=false means only move the single alarm.
@@ -1815,6 +1873,7 @@ object ProactiveRuntime {
         consultPlanSoon(minGapMs = 0)
         syncGuardianMirror()
         flushGuardianOfflineSoon()
+        syncPendingDisarms()
     }
 
     /**

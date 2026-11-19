@@ -1713,6 +1713,8 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
             ),
           );
 
+    final timeLedger = TimeLedgerView.fromWire(_today['timeLedger']);
+
     final sections = <Widget>[
       ?bannerWidget,
       TaskCardPanel(channel: _channel),
@@ -1723,6 +1725,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
         )
       else ...[
         _buildBriefCard(colors),
+        if (timeLedger != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: TimeLedgerSummaryCard(ledger: timeLedger),
+          ),
         _buildFocusHeroCard(colors),
         ?_buildActiveContractCard(colors),
         const SizedBox(height: 16),

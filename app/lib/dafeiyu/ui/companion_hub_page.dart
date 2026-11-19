@@ -70,6 +70,8 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   int _clockCount = 0;
   bool? _lockShadow;
   Map<String, dynamic>? _rotate;
+  IntensityView? _intensity;
+  Map<String, dynamic>? _today;
 
   @override
   void initState() {
@@ -99,28 +101,35 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       _planDay = results[4] is Map<String, Object?> ? results[4] as Map<String, Object?> : null;
       _guardian = results[5] is GuardianPairingStatus ? results[5] as GuardianPairingStatus : null;
     });
-    unawaited(_refreshExtras());
+    _refreshExtras();
   }
 
-  Future<void> _refreshExtras() async {
-    final extras = await Future.wait<Object?>([
-      _channel.phoneStorageStatus().catchError((_) => null),
-      _channel.clockList().catchError((_) => const <Map<String, dynamic>>[]),
-      _channel.shakeDiceStatus().catchError((_) => null),
-      _channel.analyticsOp({'action': 'overview'}).catchError((_) => null),
-      _channel.storylineOp({'action': 'get'}).catchError((_) => null),
-      _channel.lockShadow().catchError((_) => null),
-      _channel.rotateOp({'action': 'status'}).catchError((_) => null),
-    ]);
-    if (!mounted) return;
-    setState(() {
-      _phoneStorage = extras[0] is Map<String, dynamic> ? extras[0] as Map<String, dynamic> : null;
-      _clockCount = extras[1] is List ? (extras[1] as List).length : 0;
-      _shakeDice = extras[2] is Map<String, dynamic> ? extras[2] as Map<String, dynamic> : null;
-      _analytics = extras[3] is Map<String, dynamic> ? extras[3] as Map<String, dynamic> : null;
-      _storyline = extras[4] is Map<String, dynamic> ? extras[4] as Map<String, dynamic> : null;
-      _lockShadow = extras[5] is bool ? extras[5] as bool : null;
-      _rotate = extras[6] is Map<String, dynamic> ? extras[6] as Map<String, dynamic> : null;
+  void _refreshExtras() {
+    void load<T>(Future<T> future, void Function(T value) apply) {
+      unawaited(
+        future.then((value) {
+          if (!mounted) return;
+          setState(() => apply(value));
+        }).catchError((_) {}),
+      );
+    }
+
+    load(_channel.phoneStorageStatus(), (v) => _phoneStorage = v);
+    load(_channel.clockList(), (v) => _clockCount = v.length);
+    load(_channel.shakeDiceStatus(), (v) => _shakeDice = v);
+    load(_channel.analyticsOp({'action': 'overview'}), (v) {
+      _analytics = v;
+      _intensity ??= IntensityView.fromWire(v);
+    });
+    load(_channel.storylineOp({'action': 'get'}), (v) => _storyline = v);
+    load(_channel.lockShadow(), (v) => _lockShadow = v);
+    load(_channel.rotateOp({'action': 'status'}), (v) => _rotate = v);
+    load(_channel.intensityStatus(), (v) {
+      if (v != null) _intensity = v;
+    });
+    load(_channel.todayStatus(), (v) {
+      _today = v;
+      _intensity ??= IntensityView.fromWire(v);
     });
   }
 
@@ -141,7 +150,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     if (!mounted) return;
     setState(() => _actionBusy = false);
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(message)));
-    unawaited(_refreshExtras());
+    _refreshExtras();
   }
 
   Widget _rotateRow(String role, String name) {
@@ -169,6 +178,100 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       _actionBusy = false;
       if (ok) _lockShadow = on;
     });
+  }
+
+  static String _intensityLabel(String tier) => switch (tier) {
+        'gentle' => '温和',
+        'strict' => '严格',
+        _ => '标准',
+      };
+
+  Future<void> _setIntensityTier(String nextTier) async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    final res = await _channel.setIntensity(nextTier);
+    if (!mounted) return;
+    setState(() {
+      _actionBusy = false;
+      if (res != null) _intensity = res;
+    });
+    final String msg;
+    if (res == null) {
+      msg = '暂未连上伴侣引擎，无法切换强度档';
+    } else if (res.pendingTier != null) {
+      msg = '已申请明日放宽至「${_intensityLabel(res.pendingTier!)}」档（改严立即生效，改松次日生效）';
+    } else {
+      msg = '已切为「${_intensityLabel(res.tier)}」档（立即生效）';
+    }
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+    if (res != null) _refreshExtras();
+  }
+
+  Widget _buildIntensityCard(BuildContext context, IntensityView? intensity) {
+    final theme = Theme.of(context);
+    final colors = DshColors.of(context);
+    final scheme = theme.colorScheme;
+    final currentTier = intensity?.tier ?? 'standard';
+    final pendingTier = intensity?.pendingTier;
+    final hardCapped = intensity?.hardCapped == true;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: GlassSurface(
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(AppIcons.configure, size: 17, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '强度档（温和 / 标准 / 严格）',
+                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  if (pendingTier != null) ...[
+                    StatusChip(
+                      tone: StatusTone.warn,
+                      label: '明日→${_intensityLabel(pendingTier)}',
+                    ),
+                  ] else if (intensity != null) ...[
+                    StatusChip(
+                      tone: hardCapped ? StatusTone.warn : StatusTone.ok,
+                      label: hardCapped ? '硬干预已满' : '硬干预 ${intensity.hardCount}/${intensity.hardCap}',
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 10),
+              SegmentedPill<String>(
+                key: const ValueKey('hub-intensity-pill'),
+                height: 36,
+                segments: const [
+                  PillSegment('gentle', '温和'),
+                  PillSegment('standard', '标准'),
+                  PillSegment('strict', '严格'),
+                ],
+                selected: currentTier,
+                onChanged: _actionBusy ? null : (tier) => unawaited(_setIntensityTier(tier)),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                pendingTier != null
+                    ? '已排队明日${intensity?.pendingEffectiveDay != null ? '（${intensity!.pendingEffectiveDay}）' : ''}放宽至「${_intensityLabel(pendingTier)}」档 · 当前仍按「${_intensityLabel(currentTier)}」执行'
+                    : '改严立即生效，改松次日生效 · 当前每日紧急解除上限 ${intensity?.emergencyDisarmDailyCap ?? 3} 次',
+                style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _launchGeminiQuick() async {
@@ -208,7 +311,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
           ),
         ),
       );
-      unawaited(_refreshExtras());
+      _refreshExtras();
     } finally {
       if (mounted) setState(() => _actionBusy = false);
     }
@@ -221,7 +324,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     try {
       final next = await _channel.setShakeDice(!current);
       if (!mounted) return;
-      unawaited(_refreshExtras());
+      _refreshExtras();
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(content: Text((next ?? !current) ? '已开启手机「摇一摇六骰子」触发器' : '已暂停摇一摇六骰触发器')),
       );
@@ -492,6 +595,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     final boutCount = planItems is List ? planItems.length : 0;
     final geminiStats = _analytics?['geminiStats'] is Map ? _analytics!['geminiStats'] as Map : const {};
     final geminiMinToday = geminiStats['minutesToday'] is num ? (geminiStats['minutesToday'] as num).toInt() : 0;
+    final timeLedger = TimeLedgerView.fromWire(_today?['timeLedger'] ?? _analytics?['timeLedger']);
 
     return AppPage.list(
       title: '大肥鱼中枢',
@@ -535,6 +639,12 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
             ),
           ),
         TaskCardPanel(channel: _channel),
+        _buildIntensityCard(context, _intensity),
+        if (timeLedger != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: TimeLedgerSummaryCard(ledger: timeLedger),
+          ),
         if (_rotate != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 14),

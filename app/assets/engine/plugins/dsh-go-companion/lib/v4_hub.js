@@ -102,6 +102,12 @@ export function createV4Hub(deps) {
     getAppLedger = () => [],
     getQuotaLine = () => '',
     getGearWhat = () => '',
+    getIntensityInfo = () => ({ intensity: 'standard', pendingIntensity: null, emergencyDisarmDailyCap: 3, hardInterventions: { count: 0, cap: 12, capped: false, left: 12 } }),
+    getPassLedgerSummary = () => null,
+    getTimeLedger = () => null,
+    onBankUnlock = null,
+    requestGeminiGate = null,
+    getEmergencyPassActive = null,
   } = deps
 
   const tz = () => zoneOr(getConfig()?.timeZone)
@@ -305,6 +311,11 @@ export function createV4Hub(deps) {
       if (judged.unlocked) {
         try {
           grantTempPass?.(judged.unlockUntil, `刷题达标 ${judged.solved} 题（${judged.unlockMinutes}m）`)
+        } catch {
+          // ignore
+        }
+        try {
+          onBankUnlock?.({ minutes: judged.unlockMinutes, solved: judged.solved, until: judged.unlockUntil, now })
         } catch {
           // ignore
         }
@@ -512,7 +523,8 @@ export function createV4Hub(deps) {
 
   function computeLockArbiter(now = Date.now(), overrides = {}) {
     const ext = loadExternal?.() || {}
-    const emergencyPass = isEmergencyPassActive(ext, now) ? ext.emergencyPass : null
+    const customEm = typeof getEmergencyPassActive === 'function' ? getEmergencyPassActive(now) : null
+    const emergencyPass = customEm || (isEmergencyPassActive(ext, now) ? ext.emergencyPass : null)
     const geminiSession = overrides.geminiSession !== undefined ? overrides.geminiSession : getGeminiSession?.(now)
     const aiWorkSession = overrides.aiWorkSession !== undefined ? overrides.aiWorkSession : getAiWorkSession?.(now)
     const contractSession = overrides.contractSession !== undefined ? overrides.contractSession : contractSessionView(now)
@@ -565,6 +577,8 @@ export function createV4Hub(deps) {
     }
     const geminiStats = getGeminiStats(targetDay, now)
     const lockArbiter = computeLockArbiter(now)
+    const timeLedger = getTimeLedger?.(now, targetDay) || null
+    const intensityInfo = getIntensityInfo?.(now) || null
     return {
       day: targetDay,
       episodesState,
@@ -577,6 +591,8 @@ export function createV4Hub(deps) {
       bankStats,
       geminiStats,
       lockArbiter,
+      timeLedger,
+      hardInterventions: intensityInfo?.hardInterventions || null,
       kbDirPath: kbPathNow(),
       storyline: loadStorylineStore(now),
       appLedger: (() => {
@@ -628,7 +644,8 @@ export function createV4Hub(deps) {
     const lines = deadlineLines(loadHorizonsSynced(), today)
     const y = loadReportsStore()?.reports?.[shiftYmdLocal(today, -1)]
     if (y?.verdict?.line) lines.push('昨天的判决（代码按账本算的，不许替他找补）：' + y.verdict.line.replace(/^今天：/, ''))
-    const q = getQuotaLine()
+    const tlLine = getTimeLedger?.(now)?.line
+    const q = tlLine || getQuotaLine()
     if (q) lines.push(q + '。用到 90 / 110 分钟时提一句，不要每轮都说。')
     if (Array.isArray(y?.appLedger) && y.appLedger.length) {
       lines.push('昨天的 App 账：' + y.appLedger.slice(0, 6).join('；'))
@@ -807,11 +824,20 @@ export function createV4Hub(deps) {
     const lockArbiter = computeLockArbiter(now, { autonomy: contractTick.autonomy })
     const activeSisterSkin = resolveActiveSisterSkin({ speaker: getSpeaker?.() || 'companion', lockArbiter })
     const unifiedTasks = getUnifiedTasks(now)
+    const intensityInfo = getIntensityInfo?.(now) || { intensity: 'standard', pendingIntensity: null, emergencyDisarmDailyCap: 3, hardInterventions: { count: 0, cap: 12, capped: false, left: 12 } }
+    const passLedger = getPassLedgerSummary?.(now) || null
+    const timeLedger = getTimeLedger?.(now, todayStr) || null
 
     return {
       v: 1,
       ok: true,
       day: todayStr,
+      intensity: intensityInfo.intensity,
+      pendingIntensity: intensityInfo.pendingIntensity || null,
+      emergencyDisarmDailyCap: intensityInfo.emergencyDisarmDailyCap,
+      hardInterventions: intensityInfo.hardInterventions,
+      ...(passLedger ? { passLedger } : {}),
+      ...(timeLedger ? { timeLedger } : {}),
       brief: {
         line: `今日专注约 ${focusMin}m · 娱乐 ${funMin}m · ${headState}`,
         focusMin,
@@ -1022,6 +1048,11 @@ export function createV4Hub(deps) {
         const minutes = Math.max(5, Math.min(180, Math.round(Number(args?.minutes) || 20)))
         const preferVoice = args?.preferVoice !== false
         const brief = buildProactiveGeminiBrief({ topic, mode, minutes, now })
+        try {
+          requestGeminiGate?.({ source: 'ai-tool', mode: 'manual', topic, geminiMode: mode, minutes, brief, now })
+        } catch {
+          // ignore gate log error
+        }
         const g = loadGemini?.() || {}
         saveGemini?.({
           ...g,

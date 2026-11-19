@@ -414,6 +414,8 @@ export function buildAnalyticsOverview({
   bankStats = null,
   geminiStats = null,
   lockArbiter = null,
+  timeLedger = null,
+  hardInterventions = null,
   kbDirPath = '',
   now = Date.now(),
   tz = DEFAULT_TZ,
@@ -531,6 +533,8 @@ export function buildAnalyticsOverview({
     topApps: cur.topApps,
     eveningReport,
     lockArbiter: lockArbiter || null,
+    timeLedger: timeLedger || null,
+    hardInterventions: hardInterventions || null,
   }
 }
 
@@ -553,6 +557,8 @@ export function generateEveningReport({
   bankStats = null,
   geminiStats = null,
   lockArbiter = null,
+  timeLedger = null,
+  hardInterventions = null,
   kbDirPath = '',
   storyline = null,
   planned = 0,
@@ -574,6 +580,8 @@ export function generateEveningReport({
     bankStats,
     geminiStats,
     lockArbiter,
+    timeLedger,
+    hardInterventions,
     kbDirPath,
     now,
     tz,
@@ -685,6 +693,12 @@ export function generateEveningReport({
   if (Array.isArray(storyline?.entries) && storyline.entries.length > 0) {
     causalHighlights.push(`今日叙事链已沉淀 ${storyline.entries.length} 个连续事件锚点，明日开场将无缝接续。`)
   }
+  if (timeLedger?.line) {
+    causalHighlights.push(`时间账：${timeLedger.line}`)
+  }
+  if (hardInterventions?.capped) {
+    causalHighlights.push(`今天硬干预已经用满（${hardInterventions.count}/${hardInterventions.cap}），余下时段仅保留深夜锁与契约逾期锁，其余改为温和提醒。`)
+  }
 
   const tomorrowDraft = []
   for (const m of Array.isArray(horizons?.medium) ? horizons.medium : []) {
@@ -778,6 +792,8 @@ export function generateEveningReport({
     generatedAt: now,
     score,
     verdict,
+    timeLedger: timeLedger || null,
+    hardInterventions: hardInterventions || null,
     appLedger: Array.isArray(appLedger) ? appLedger.slice(0, 12) : [],
     headline,
     markdown,
