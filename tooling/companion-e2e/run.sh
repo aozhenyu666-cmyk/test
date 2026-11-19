@@ -28,6 +28,9 @@ mkdir -p "$WORK/home/vault-e2e/工作" "$WORK/home/vault-e2e/私密" "$WORK/home
 printf '# 周报\n这周的结论：把第三轮的引擎接线收尾，别再开新坑。\n' > "$WORK/home/vault-e2e/工作/周报.md"
 printf '私密内容不该出现在这一球里。\n' > "$WORK/home/vault-e2e/私密/别读我.md"
 printf '{"notesPath":"%s"}\n' "$WORK_W/home/vault-e2e" > "$WORK/home/companion/config.json"
+# 挣来制（2026-11-19）：娱乐余额不再每天白给 120 分钟。这套用例测的是「有余额的自由态」里的阶梯与力度，
+# 所以先放 120 分钟作为昨天结转（北京时间的今天）。
+printf '{"v":1,"day":"%s","carryIn":120,"lastLeft":120}\n' "$(date -u -d '+8 hours' +%F 2>/dev/null || date -u -v+8H +%F)" > "$WORK/home/companion/fun-wallet.json"
 P="$(win "$ROOT/app/assets/engine/plugins")"
 { echo "- insert:"; for id in dsh-feiyu-mood dsh-go-memory dsh-go-relationship dsh-go-companion; do
   echo "    - id: $id"; echo "      name: $P/$id/lib/index.js"; done; } > "$WORK/patch.yml"

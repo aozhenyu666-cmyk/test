@@ -112,7 +112,26 @@ object LockSafety {
 
     // ---------------------------------------------------------------- 永不锁
 
+    /** 插件下发的永不锁名单（/plan 的 neverLock），存 prefs，引擎断了也照用。 */
+    @Volatile private var pluginNeverLock: Set<String>? = null
+    private const val KEY_PLUGIN_NEVER_LOCK = "plugin_never_lock"
+
+    fun setPluginNeverLock(ctx: Context, pkgs: Collection<String>) {
+        val next = pkgs.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        if (next.isEmpty() || next == pluginNeverLock) return
+        pluginNeverLock = next
+        runCatching { prefs(ctx).edit().putStringSet(KEY_PLUGIN_NEVER_LOCK, next).apply() }
+    }
+
+    private fun pluginNeverLock(ctx: Context): Set<String> {
+        pluginNeverLock?.let { return it }
+        return runCatching { prefs(ctx).getStringSet(KEY_PLUGIN_NEVER_LOCK, emptySet())?.toSet() }
+            .getOrNull().orEmpty().also { pluginNeverLock = it }
+    }
+
     fun neverLock(ctx: Context, pkg: String?): Boolean {
+        val p = pkg?.trim().orEmpty()
+        if (p.isNotEmpty() && p in pluginNeverLock(ctx)) return true
         if (ime.isEmpty()) {
             ime = runCatching {
                 ctx.getSystemService(InputMethodManager::class.java)?.enabledInputMethodList?.mapNotNull { it.packageName }?.toSet()

@@ -919,6 +919,17 @@ class ProactiveChannel {
   }
 
   /// 三层自由主线（GET /horizons & POST /horizons）。
+  /// App 分类表（POST /tiers）：list {apps:[{pkg,label}]} / set {pkg,tier} / cancel {pkg}。读不到返回 null。
+  Future<Map<String, dynamic>?> tiersOp(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('tiersOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   Future<Map<String, dynamic>?> horizonsOp([Map<String, Object?>? body]) async {
     try {
       final raw = body == null

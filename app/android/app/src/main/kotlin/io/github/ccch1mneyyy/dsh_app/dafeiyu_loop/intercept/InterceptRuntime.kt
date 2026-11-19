@@ -164,22 +164,9 @@ object InterceptRuntime {
         // A lock that is still in force comes back whenever its app does (亮屏 / 回到游戏), even
         // with the person's own interception switch off: the lock is state, the page is only its face.
         if (resurface(packageName, null, now)) return
-        if (!enabled()) return
-        // One visible DSH surface at a time. Checked *before* asking the guard, because a Block
-        // decision immediately spends the cooldown and the daily count ([InterceptGuard.onForeground]
-        // stamps lastTriggerAt and increments countToday). Refusing afterwards would charge the
-        // person for an interception that never reached the screen, and the next attempt would be
-        // swallowed by the cooldown. So: while someone else holds the screen, decide nothing at all.
-        // A chat overlay does not count as "someone else": enforcement goes first (see [takeScreen]).
-        if (screenBusy()) {
-            Log.i(TAG, "surface busy (" + VisibleSurface.holder() + "); no decision for " + packageName)
-            return
-        }
-        when (val d = g.onForeground(packageName, env(now), now)) {
-            is InterceptDecision.Block -> show(d, now)
-            is InterceptDecision.Allow -> Log.d(TAG, "allow " + packageName + ": " + d.reason)
-            InterceptDecision.Ignore -> Unit
-        }
+        // 2026-11-19 整理：「娱乐锁机」自己的名单 / 冷却 / 每日上限 / 开关不再自己判锁——
+        // 它的名单已并入插件的 App 分类表（娱乐 / 游戏），锁不锁由插件按分类 + 余额 + 局判，
+        // 经 ProactiveRuntime → [forceBlock] 落到同一张锁页。两套规则同时判，会出现「插件放行、这里又拦」。
     }
 
     /**

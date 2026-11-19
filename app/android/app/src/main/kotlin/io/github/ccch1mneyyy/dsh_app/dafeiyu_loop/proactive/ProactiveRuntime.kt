@@ -1568,6 +1568,7 @@ object ProactiveRuntime {
         if (lastPlanError != null) { companionPlan = null; arm(); return }
         // 测试模式开关跟插件走（插件默认开；他在中枢或对姐妹说「结束测试模式」才关）。
         (map["shadow"] as? Boolean)?.let { LockSafety.setShadow(app, it) }
+        (map["neverLock"] as? List<*>)?.mapNotNull { it as? String }?.let { LockSafety.setPluginNeverLock(app, it) }
         // H1/H2：从 /plan 同步强度档对应的每日紧急解除上限（默认 3，严格档 2）。
         val planCap = (map["emergencyDisarmDailyCap"] as? Number)?.toInt()
             ?: ((map["intensity"] as? Map<*, *>)?.get("emergencyDisarmDailyCap") as? Number)?.toInt()

@@ -146,7 +146,7 @@ void main() {
     expect(find.text('就绪'), findsOneWidget);
   });
 
-  testWidgets('triggers proactive tick and native focus control actions', (tester) async {
+  testWidgets('诊断组巡检；锁组有 App 分类表与哨兵配对', (tester) async {
     final ch = _FakeHubChannel();
     await pumpPhone(tester, CompanionHubPage(channel: ch));
 
@@ -157,12 +157,11 @@ void main() {
     expect(ch.tickCalls, 1);
     await popPage(tester);
 
+    // 原生专注监督不再单独入口（局本身就在手机上持久，引擎断了照样锁）。
     await tester.tap(find.byKey(const ValueKey('hub-group-lock')));
     await settlePhone(tester);
-    await tester.scrollUntilVisible(find.text('专注监督'), 200, scrollable: find.byType(Scrollable).last);
-    await tester.tap(find.text('专注监督'));
-    await settlePhone(tester);
-    expect(ch.focusCalls, 1);
+    expect(find.text('专注监督'), findsNothing);
+    expect(find.text('App 分类表'), findsOneWidget);
 
     await tester.scrollUntilVisible(find.text('大肥鱼哨兵互信配对'), 200, scrollable: find.byType(Scrollable).last);
     await tester.tap(find.text('大肥鱼哨兵互信配对'));

@@ -14,7 +14,7 @@ import '../../ui/common/overview_card.dart';
 import '../../ui/common/segmented_pill.dart';
 import '../../ui/common/status_chip.dart';
 import '../../ui/pets/pet_settings_page.dart';
-import 'intercept_page.dart';
+import 'app_tiers_page.dart';
 import 'records_page.dart';
 import 'today_cards.dart';
 import 'proactive_page.dart';
@@ -502,21 +502,6 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
         });
   }
 
-  Future<void> _openFocus() async {
-    if (_actionBusy) return;
-    setState(() => _actionBusy = true);
-    try {
-      final ok = await _channel.openFocusControl();
-      if (mounted && !ok) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          const SnackBar(content: Text('当前无法打开原生专注监督页面')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _actionBusy = false);
-    }
-  }
-
   Future<void> _triggerTick() async {
     if (_actionBusy) return;
     setState(() => _actionBusy = true);
@@ -734,19 +719,13 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
         margin: _groupMargin,
         children: [
           ListPageRow(
-            icon: AppIcons.blocked,
-            title: '娱乐锁机',
-            subtitle: '锁机名单、放行白名单、误放行一键恢复',
+            key: const ValueKey('hub-app-tiers'),
+            icon: AppIcons.appRules,
+            title: 'App 分类表',
+            subtitle: '游戏 / 娱乐 / 双用途 / 工作：锁谁、放谁都按这一张表（原「娱乐锁机」名单已并入）',
             subtitleMaxLines: 2,
             chevron: true,
-            onTap: () => _openPage(const InterceptPage()),
-          ),
-          ListPageRow(
-            icon: AppIcons.time,
-            title: '专注监督',
-            subtitle: '原生 5 秒离开拉回（引擎断开仍生效）',
-            subtitleMaxLines: 2,
-            onTap: () => unawaited(_openFocus()),
+            onTap: () => _openPage(const AppTiersPage()),
           ),
           ListPageRow(
             icon: AppIcons.permissions,
@@ -904,7 +883,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               icon: AppIcons.lock,
               iconColor: _lockShadow == false ? colors.success : colors.warning,
               title: '锁',
-              subtitle: '锁机体检 · 测试模式 · 强度档 · 锁机名单 · 专注监督 · 哨兵',
+              subtitle: '锁机体检 · 测试模式 · 强度档 · App 分类表 · 哨兵',
               subtitleMaxLines: 2,
               value: _lockShadow == null ? null : (_lockShadow! ? '测试模式' : '真锁'),
               chevron: true,

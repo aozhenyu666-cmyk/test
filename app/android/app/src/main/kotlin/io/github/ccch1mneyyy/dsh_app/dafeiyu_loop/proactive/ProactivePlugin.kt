@@ -323,6 +323,12 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/today/task", body)
             }
             "horizonsStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/horizons", null)
+            "tiersOp" -> {
+                // 2026-11-19 App 分类表：list / set / cancel，规矩在插件（改严立即、改松挂起 24 小时）。
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/tiers", body)
+            }
             "horizonsOp" -> {
                 val body = linkedMapOf<String, Any?>()
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }

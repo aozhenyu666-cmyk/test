@@ -146,9 +146,9 @@ import {
   issueAppLease, revokeAppLease,
 } from './external_agents.js'
 import { createV4Hub } from './v4_hub.js'
-import { isNeverLockPkg } from './never_lock.js'
+import { EMERGENCY_PACKAGES, PROXY_PACKAGES, SELF_PACKAGES, SYSTEM_PACKAGES, isNeverLockPkg } from './never_lock.js'
 import { contextLines, loadGeminiSetting, parseReceipt } from './trigger.js'
-import { AGREE_RE, TIER_FILE, TIER_LABEL, TIER_RANK, classifyTierChanges, parseTierFile, renderTierFile, tierOf } from './app_tiers.js'
+import { AGREE_RE, BASE_EXTRA, TIER_FILE, TIER_LABEL, TIER_RANK, classifyTierChanges, parseTierFile, renderTierFile, tierOf } from './app_tiers.js'
 import { computeQuota } from './quota.js'
 import { buildLockDecision } from './lock_decision.js'
 import { driveMode, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
@@ -6011,6 +6011,25 @@ export function apply(ctx) {
       record({ state: 'tamper', at: now, what, until })
       return { v: 1, ok: true, refuse: { until }, force: { level: 4, app: String(body?.app || ''), why: '想去设置里拆掉管控' } }
     }
+    if (type === 'emergency-exit') {
+      // 2026-11-19 出口合一：锁页长按回 DSH 的紧急退出，和紧急解除 / 破窗共用同一个每日次数。
+      // 手机那边已经先放行了（本地安全阀，不等插件）；这里只记账、扣次数。次数用完也照样记一笔（超额）。
+      const tz = zoneOr(config.timeZone)
+      const day = dayString(now, tz)
+      const info = intensityStateNow(now, tz)
+      const minutes = Math.max(3, Math.min(30, Math.round(Number(body?.minutes) || 10)))
+      const plRes = requestPass(loadPassLedger(now, tz), 'emergency', {
+        source: 'lockpage-exit',
+        reason: String(body?.reason || '锁页长按回 DSH 紧急退出').slice(0, 120),
+        durationMs: minutes * 60_000,
+        cap: info.emergencyDisarmDailyCap,
+        now,
+        day,
+      })
+      if (plRes.ok) savePassLedger(plRes.state)
+      record({ state: 'emergency-exit', at: now, minutes, counted: Boolean(plRes.ok), overCap: !plRes.ok, left: plRes.left ?? 0 })
+      return { v: 1, ok: true, counted: Boolean(plRes.ok), left: plRes.left ?? 0, cap: plRes.cap ?? info.emergencyDisarmDailyCap }
+    }
     if (type === 'breakglass') {
       // H2：破窗走统一放行账，每天最多破窗 1 次 + 与其他应急口共享每日上限；不再扣信用分（保留记账与日判）。
       const tz = zoneOr(config.timeZone)
@@ -7400,7 +7419,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7481,6 +7500,7 @@ export function apply(ctx) {
         if (path === '/storyline') return send(res, 200, v4Hub.storylineRoute(body.value || {}))
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
+        if (path === '/tiers') return send(res, 200, tiersRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
         if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
@@ -7954,10 +7974,109 @@ export function apply(ctx) {
       // 写不进去就算了：生效的是 config
     }
   }
+  /**
+   * 2026-11-19 App 分类表（手机上的那一页）：和 App分层.md 是同一张表（config.appTiers），规矩也一样——
+   * 改严立即生效；改松先挂起，24 小时后生效（期间可以撤回）。系统底座不能分层。
+   *   list   {apps:[{pkg,label}]}  → 每个 App 现在在哪一层、是不是他手动定的、有没有挂起的放松
+   *   set    {pkg, tier}           → 改严立即生效 / 改松挂起
+   *   cancel {pkg}                 → 撤回挂起的放松
+   */
+  function tiersRoute(body) {
+    const b = body && typeof body === 'object' ? body : {}
+    const action = String(b.action || 'list')
+    const now = Date.now()
+    if (action === 'list' && !vaultKb()) applyDueTierPending(now)
+    const tf = tierFnNow()
+    const pending = loadTierPending()
+    const overrides = config.appTiers || {}
+    if (action === 'list') {
+      const apps = Array.isArray(b.apps) ? b.apps : []
+      const seen = new Set()
+      const rows = []
+      for (const a of apps) {
+        const pkg = String(a?.pkg || a?.package || '').trim()
+        if (!pkg || seen.has(pkg)) continue
+        seen.add(pkg)
+        const label = String(a?.label || '')
+        const p = pending[pkg]
+        rows.push({
+          pkg, label, tier: tf(pkg, label), override: overrides[pkg] || null,
+          pendingTier: p?.tier || null, effectiveAt: p ? Number(p.since) + TIER_LOOSEN_MS : 0,
+        })
+      }
+      // 手动定过但这次没报上来的（卸载了或没装），也列出来，方便撤销。
+      for (const [pkg, tier] of Object.entries(overrides)) {
+        if (seen.has(pkg)) continue
+        rows.push({ pkg, label: '', tier: tf(pkg), override: tier, pendingTier: pending[pkg]?.tier || null, effectiveAt: pending[pkg] ? Number(pending[pkg].since) + TIER_LOOSEN_MS : 0 })
+      }
+      return { v: 1, ok: true, tiers: ['work', 'dual', 'fun', 'game'], labels: TIER_LABEL, rows, loosenDelayMs: TIER_LOOSEN_MS }
+    }
+    const pkg = String(b.pkg || '').trim()
+    if (!pkg) return { v: 1, ok: false, error: 'no-pkg', text: '没说是哪个 App。' }
+    const before = tf(pkg)
+    if (before === 'base') return { v: 1, ok: false, error: 'base', text: '系统页面永远不锁，不用分层。' }
+    if (action === 'cancel') {
+      if (pending[pkg]) {
+        delete pending[pkg]
+        saveTierPending(pending)
+        writeTierFile()
+        record({ state: 'app-tier-cancel', at: now, pkg })
+      }
+      return { v: 1, ok: true, text: '撤回了：' + pkg + ' 留在「' + TIER_LABEL[before] + '」。' }
+    }
+    if (action !== 'set') return { v: 1, ok: false, error: 'bad-action' }
+    const tier = String(b.tier || '')
+    if (!['work', 'dual', 'fun', 'game'].includes(tier)) return { v: 1, ok: false, error: 'bad-tier', text: '只能是 工作 / 双用途 / 娱乐 / 游戏。' }
+    if (before === tier) {
+      if (pending[pkg]) { delete pending[pkg]; saveTierPending(pending) }
+      return { v: 1, ok: true, applied: true, tier, text: '本来就在「' + TIER_LABEL[tier] + '」。' }
+    }
+    const loosen = (TIER_RANK[tier] ?? 1) < (TIER_RANK[before] ?? 1)
+    if (!loosen) {
+      if (pending[pkg]) { delete pending[pkg]; saveTierPending(pending) }
+      commit({ appTiers: { ...overrides, [pkg]: tier } })
+      writeTierFile()
+      record({ state: 'app-tier-set', at: now, pkg, from: before, to: tier, loosen: false, by: 'app' })
+      return { v: 1, ok: true, applied: true, tier, text: TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '：改严，立即生效。' }
+    }
+    if (!pending[pkg] || pending[pkg].tier !== tier) pending[pkg] = { tier, since: now }
+    saveTierPending(pending)
+    // 分层文件也写成他要的那一层：文件同步看到同一个放松，就按挂起时间算，不会把挂起冲掉。
+    const kb = vaultKb()
+    if (kb) {
+      try {
+        writeVaultText(join(kb, WALL_DIR, TIER_FILE), renderTierFile({ ...overrides, [pkg]: tier }, tierLabels()))
+        const st = statOf(join(kb, WALL_DIR, TIER_FILE))
+        tierSeen = { key: st ? st.mtimeMs + ':' + st.size : '', at: now }
+      } catch {}
+    }
+    record({ state: 'app-tier-pending', at: now, pkg, from: before, to: tier })
+    const at = Number(pending[pkg].since) + TIER_LOOSEN_MS
+    return { v: 1, ok: true, applied: false, tier: before, pendingTier: tier, effectiveAt: at, text: TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '：放松要等 24 小时才生效（期间可以撤回）。' }
+  }
+
+  /** 没有笔记库时，挂起的放松到点也要生效（有笔记库时由 syncTierFile 按文件判）。 */
+  function applyDueTierPending(now) {
+    const pending = loadTierPending()
+    const due = Object.entries(pending).filter(([, p]) => now - Number(p?.since) >= TIER_LOOSEN_MS)
+    if (!due.length) return
+    const next = { ...(config.appTiers || {}) }
+    for (const [pkg, p] of due) {
+      next[pkg] = p.tier
+      delete pending[pkg]
+    }
+    saveTierPending(pending)
+    commit({ appTiers: next })
+    record({ state: 'app-tiers', at: now, tighten: [], loosen: due.map(([pkg]) => pkg) })
+  }
+
   /** 读 大肥鱼/墙/App分层.md：改严立即生效，改松 24 小时后生效。 */
   function syncTierFile(now) {
     const kb = vaultKb()
-    if (!kb) return
+    if (!kb) {
+      applyDueTierPending(now)
+      return
+    }
     const file = join(kb, WALL_DIR, TIER_FILE)
     const st = statOf(file)
     const key = st ? st.mtimeMs + ':' + st.size : 'none'
@@ -9231,6 +9350,9 @@ export function apply(ctx) {
       drive: driveRes ? { mode: driveRes.mode, why: driveRes.why, takeover: driveRes.takeover?.active ? { since: driveRes.takeover.since, reason: driveRes.takeover.reason } : null } : null,
       // 测试模式：手机照常算锁，但只弹「这里本来会锁」的提示，不真锁。默认开，他自己关。
       shadow: config.lockShadow !== false,
+      // 2026-11-19 永不锁只有一份：插件这份（自己 / 急事 / 系统 / 代理 + iQOO 相册文件选图分享相机），
+      // 手机存下来、落锁前对照；手机本地的桌面 / DSH / 系统界面硬兜底照旧。
+      neverLock: [...new Set([...SELF_PACKAGES, ...EMERGENCY_PACKAGES, ...SYSTEM_PACKAGES, ...PROXY_PACKAGES, ...BASE_EXTRA])],
       autonomy: v4ContractTick.autonomy,
       planContract: v4ContractTick.contract,
       contractGraceWarning: v4ContractTick.graceWarning,

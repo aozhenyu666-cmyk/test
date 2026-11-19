@@ -422,7 +422,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('hub-group-lock')));
     await settlePhone(tester);
-    expect(find.text('娱乐锁机'), findsOneWidget);
+    expect(find.text('App 分类表'), findsOneWidget);
     await popPage(tester);
 
     await tester.tap(find.byKey(const ValueKey('hub-group-diag')));

@@ -12,7 +12,7 @@ import '../../ui/theme/theme.dart';
 import '../channels/intercept_channel.dart';
 import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
-import 'intercept_page.dart' show interceptOutcomeLabel;
+import '../dafeiyu_strings.dart';
 import 'proactive_page.dart' show ProactiveReceiptRow;
 
 enum RecordsTab { lock, proactive }
@@ -243,3 +243,13 @@ class _RecordsPageState extends State<RecordsPage> {
     );
   }
 }
+
+/// 锁机结果码说成人话；不认识的码原样显示（真回执，藏起来更糟）。
+String interceptOutcomeLabel(L10n l10n, String? outcome) => switch (outcome) {
+      'BLOCKED' => DafeiyuStrings.fromL10n(l10n).interceptOutcomeBlocked,
+      'RELEASED' => DafeiyuStrings.fromL10n(l10n).interceptOutcomeReleased,
+      'EXITED' => DafeiyuStrings.fromL10n(l10n).interceptOutcomeExited,
+      'PAUSED' => DafeiyuStrings.fromL10n(l10n).interceptOutcomePaused,
+      'NOT_SHOWN' => DafeiyuStrings.fromL10n(l10n).interceptOutcomeNotShown,
+      _ => outcome ?? '',
+    };
