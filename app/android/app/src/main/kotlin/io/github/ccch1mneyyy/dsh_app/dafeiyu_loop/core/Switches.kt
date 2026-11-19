@@ -24,8 +24,13 @@ data class Switches(
     val intercept: Boolean = false,
     /** 原生专注监督：只要它在跑，就必须读前台（即使三个旧开关都关着）。 */
     val focus: Boolean = false,
+    /**
+     * 2026-11-19：锁系统（插件裁决 + 本地规则快照）在跑。锁只要前台读数——不能因为「主动陪伴」
+     * 「娱乐拦截」这些旧开关都关着（重装后默认全关）就不读前台，那样任何锁都落不下来。
+     */
+    val lock: Boolean = false,
 ) {
-    val observeForeground: Boolean get() = triggerTest || proactive || intercept || focus
+    val observeForeground: Boolean get() = triggerTest || proactive || intercept || focus || lock
     val arbitrate: Boolean get() = triggerTest || proactive
 
     /** Whether events from [source] may be accepted / kept. */

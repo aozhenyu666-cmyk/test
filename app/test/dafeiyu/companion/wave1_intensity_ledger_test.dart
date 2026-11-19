@@ -187,10 +187,11 @@ void main() {
   testWidgets('timeLedger renders identical remaining allowance across Hub, BoutsWorkspace and UsageAnalytics', (tester) async {
     final ch = _FakeWave1Channel();
 
+    // 中枢和局页用同一张「今日使用情况」卡（时间账并在里面）。
     await pumpPhone(tester, CompanionHubPage(channel: ch));
     await settlePhone(tester);
-    expect(find.text('今日时间账（统一额度）'), findsOneWidget);
-    expect(find.text('娱乐余 102m'), findsOneWidget);
+    expect(find.text('今日使用情况'), findsOneWidget);
+    expect(find.text('102m'), findsOneWidget);
     expect(find.text('25m'), findsOneWidget);
     expect(find.text('60m'), findsOneWidget);
 

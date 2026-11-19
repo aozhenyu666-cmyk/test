@@ -219,6 +219,9 @@ class KernelMirrorTest {
     @Test fun switchesTable() {
         assertEquals(false, Switches(false, false).observeForeground)
         assertEquals(true, Switches(false, true).observeForeground)
+        // 2026-11-19：旧开关全关（重装后的默认）但锁系统在跑，也必须读前台，否则什么都锁不住。
+        assertEquals(true, Switches(false, false, lock = true).observeForeground)
+        assertEquals(false, Switches(false, false, lock = true).arbitrate)
         assertEquals(false, Switches(false, true).accepts(Switches.SOURCE_APP_ENTER))
         assertEquals(true, Switches(false, true).accepts(Switches.SOURCE_SCHEDULER))
         assertEquals(listOf(Switches.SOURCE_APP_ENTER, Switches.SOURCE_SCHEDULER), Switches(false, false).disabledSources().map { it.first })

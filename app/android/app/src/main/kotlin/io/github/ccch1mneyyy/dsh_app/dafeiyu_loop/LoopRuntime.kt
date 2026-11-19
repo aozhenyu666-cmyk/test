@@ -209,6 +209,8 @@ object LoopRuntime {
         runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.intercept.InterceptRuntime.enabled() }.getOrDefault(false),
         // 原生专注监督也一样：它只要前台读数，不需要引擎或模型。
         runCatching { FocusRuntime.isActive() }.getOrDefault(false),
+        // 锁系统：ProactiveRuntime 起来了就读前台（插件的锁、缓存的规则都靠它）。
+        lock = runCatching { ProactiveRuntime.lockWatch() }.getOrDefault(false),
     )
 
     /** The kernel closed an event: write its verdict onto the round-1 twin (no-op for other sources). */

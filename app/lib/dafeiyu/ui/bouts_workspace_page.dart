@@ -27,6 +27,7 @@ import 'plan_modality_page.dart';
 import 'strategy_horizons_page.dart';
 import 'usage_analytics_page.dart';
 import 'task_card.dart';
+import 'today_cards.dart';
 
 enum _DetailTab { queue, protocols, clock }
 enum _HorizonTab { today, medium, long }
@@ -760,189 +761,6 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       ];
     }
     return _fallbackProtocols;
-  }
-
-  /// 今日使用情况：硬日判 + 时间账 + 时间投向合成一张卡（原来分散在三张卡里）。
-  /// 点任意位置进完整的统计页（那里有完整时间账、24h 切片、App 排行、晚间总报）。
-  Widget _buildUsageCard(DshColors colors, DailyVerdictView? verdict, TimeLedgerView? ledger) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final charts = _today['charts'] is Map ? _today['charts'] as Map : const {};
-    final buckets = charts['buckets'] is Map ? charts['buckets'] as Map : const {};
-    final brief = _today['brief'] is Map ? _today['brief'] as Map : const {};
-    int m(Object? v) => v is num ? v.round() : 0;
-    final mainlineMin = buckets['mainlineMin'] is num ? m(buckets['mainlineMin']) : m(brief['focusMin']);
-    final geminiMin = buckets['geminiMin'] is num ? m(buckets['geminiMin']) : m(_today['geminiMinutesToday']);
-    final videoMin = m(buckets['videoStudyMin']);
-    final tinkerMin = m(buckets['toolTinkerMin']);
-    final funMin = buckets['funMin'] is num ? m(buckets['funMin']) : m(brief['funMin']);
-    final segments = <(String, int, Color)>[
-      ('主线攻坚', mainlineMin, colors.success),
-      ('Gemini 沟通', geminiMin, colors.info),
-      ('视频学习', videoMin, scheme.primary),
-      ('折腾工具', tinkerMin, colors.warning),
-      ('纯娱乐', funMin, colors.danger),
-    ];
-    final total = segments.fold<int>(0, (s, e) => s + e.$2);
-    final verdictTone = verdict == null
-        ? StatusTone.idle
-        : (verdict.isDone ? StatusTone.ok : (verdict.isIdle ? StatusTone.error : StatusTone.warn));
-    final verdictColor = verdict == null
-        ? colors.textTertiary
-        : (verdict.isDone ? colors.success : (verdict.isIdle ? colors.danger : colors.warning));
-    final briefLine = brief['line'] is String ? (brief['line'] as String).trim() : '';
-    final footLine = verdict != null && verdict.line.isNotEmpty ? verdict.line : briefLine;
-    final autonomy = _today['autonomy'] is Map ? _today['autonomy'] as Map : const {};
-    final relaxHint = '${autonomy['autoRewardLabel'] ?? ''}'.trim();
-    final autonomyLine = autonomy.isEmpty
-        ? ''
-        : '自律 ${autonomy['level'] ?? 'L1'} ${autonomy['name'] ?? '契约自治'}${relaxHint.isNotEmpty ? ' · $relaxHint' : ''}';
-
-    Widget stat(String label, String value, String detail, Color accent) => Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary)),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: AppType.tabular(theme.textTheme.titleLarge!.copyWith(fontWeight: FontWeight.w700, color: accent)),
-              ),
-              Text(
-                detail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary, fontSize: 10.5),
-              ),
-            ],
-          ),
-        );
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: GlassSurface(
-        key: const ValueKey('today-usage-card'),
-        tier: GlassTier.card,
-        borderRadius: AppShape.radiusLg,
-        onTap: () => unawaited(UsageAnalyticsPage.open(context, channel: _channel)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  const OverviewGlyph(AppIcons.chart, tint: 2),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('今日使用情况', style: theme.textTheme.titleMedium),
-                        const SizedBox(height: 2),
-                        Text(
-                          verdict != null ? '硬日判：${verdict.tag}' : '今天还没出日判',
-                          style: theme.textTheme.bodySmall?.copyWith(color: verdictColor, fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (verdict != null) StatusChip(tone: verdictTone, label: '${verdict.scoreLabel} ${verdict.cappedScore}'),
-                ],
-              ),
-              if (ledger != null) ...[
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    stat(
-                      '娱乐剩余',
-                      ledger.funOut ? '用完' : '${ledger.funLeft}m',
-                      '已用 ${ledger.funUsed}/${ledger.funQuota}m',
-                      ledger.funOut ? colors.danger : scheme.primary,
-                    ),
-                    stat(
-                      '挣来池',
-                      '${ledger.earnedNet}m',
-                      ledger.penalty > 0 ? '挣+${ledger.earned} · 扣-${ledger.penalty}' : '局+${ledger.earnedBout} · 题+${ledger.earnedBank}',
-                      colors.success,
-                    ),
-                    stat(
-                      '游戏剩余',
-                      ledger.gameOut ? '用完' : '${ledger.gameLeft}m',
-                      ledger.converted > 0 ? '已兑 ${ledger.converted * 2}m→娱乐' : '已用 ${ledger.gameUsed}/${ledger.gameQuota}m',
-                      ledger.gameOut ? colors.warning : colors.info,
-                    ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 14),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(999),
-                child: SizedBox(
-                  height: 8,
-                  child: Row(
-                    children: [
-                      for (final (_, minutes, color) in segments)
-                        if (minutes > 0) Expanded(flex: minutes, child: ColoredBox(color: color)),
-                      if (total == 0)
-                        Expanded(child: ColoredBox(color: scheme.outlineVariant.withValues(alpha: 0.4))),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              if (total == 0)
-                Text('今天还没记到使用时长', style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary))
-              else
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 2,
-                  children: [
-                    for (final (label, minutes, color) in segments)
-                      if (minutes > 0)
-                        Text('● $label ${minutes}m', style: theme.textTheme.bodySmall?.copyWith(color: color)),
-                  ],
-                ),
-              if (footLine.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Text(
-                  footLine,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
-                ),
-              ],
-              if (autonomyLine.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  autonomyLine,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: autonomy['unlockedRelaxation'] == true ? colors.success : colors.textTertiary,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 6),
-              Divider(height: 12, thickness: 0.5, color: scheme.outlineVariant.withValues(alpha: 0.45)),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '查看完整使用情况',
-                      style: theme.textTheme.labelLarge?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  Text('时间账 · 24h · App 排行 · 晚报', style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary)),
-                  const SizedBox(width: 4),
-                  Icon(AppIcons.forward, size: 16, color: colors.textTertiary),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   double? _runningProgress(Map<String, dynamic> cur) {
@@ -1923,6 +1741,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
 
     final sections = <Widget>[
       if (bannerWidget != null) inset(bannerWidget),
+      LockReadinessCard(channel: _channel),
       inset(TaskCardPanel(channel: _channel)),
       if (_loading)
         const Padding(
@@ -1932,7 +1751,12 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       else ...[
         inset(_buildFocusHeroCard(colors), bottom: 16),
         ?_buildActiveContractCard(colors),
-        _buildUsageCard(colors, verdict, timeLedger),
+        TodayUsageCard(
+          today: _today,
+          verdict: verdict,
+          ledger: timeLedger,
+          onTap: () => unawaited(UsageAnalyticsPage.open(context, channel: _channel)),
+        ),
         _buildMainlineCard(colors),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 4, 24, 8),

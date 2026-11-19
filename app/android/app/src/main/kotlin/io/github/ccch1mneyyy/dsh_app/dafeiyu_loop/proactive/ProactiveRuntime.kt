@@ -219,6 +219,9 @@ object ProactiveRuntime {
 
     fun proactiveEnabled(): Boolean = scheduler?.config?.enabled == true
 
+    /** 锁系统在不在：进程里 ProactiveRuntime 起来了就算（锁的判定靠插件 /plan 和本地规则快照，不靠「主动陪伴」开关）。 */
+    fun lockWatch(): Boolean = ::app.isInitialized
+
     /** The coordinator if this process created it; never creates one. */
     fun kernelOrNull(): Coordinator? = coordinator
 
@@ -1102,7 +1105,9 @@ object ProactiveRuntime {
      * transport, not a decision point.
      */
     private fun postEvent(type: String, vararg fields: Pair<String, Any?>, then: ((Map<*, *>) -> Unit)? = null) {
-        if (!::app.isInitialized || !proactiveEnabled()) return
+        if (!::app.isInitialized) return
+        // 锁相关的事件（打开被拦的 App、紧急退出、追问锁到点）跟着锁走，不看「主动陪伴」开关；其余照旧。
+        if (!proactiveEnabled() && type !in LOCK_EVENTS) return
         val body = linkedMapOf<String, Any?>("type" to type)
         for ((key, value) in fields) if (value != null) body[key] = value
         // onForeground comes off the accessibility thread; routeAnswers is main-thread only.
@@ -1389,8 +1394,11 @@ object ProactiveRuntime {
         if (defiance.isOpen) main.postDelayed(defianceTick, DEFIANCE_SAMPLE_MS)
     }
 
+    private val LOCK_EVENTS = setOf("blocked-open", "emergency-exit", "followup-timeout")
+
     private fun reportDefiance(front: String, source: String) {
-        if (!proactiveEnabled()) return
+        // 违抗复查是锁的一部分（关掉锁页 15 秒又回娱乐 = 升级拒绝模式），同样不看「主动陪伴」开关。
+        if (!::app.isInitialized) return
         val label = runCatching { InterceptRuntime.config().targets.firstOrNull { it.packageName == front }?.label }.getOrNull() ?: front
         Log.i(TAG, "defiance: ${defiance.limitMs / 1000}s in $front within ${defiance.windowMs / 60_000} min after a close ($source)")
         fetchPluginRoute(routeCallback { m ->
@@ -1481,8 +1489,15 @@ object ProactiveRuntime {
 
     /** 说到做到: 赶 = back to the launcher first; then 锁 the app behind a drill. */
     private fun enforce(f: Force, fresh: Boolean = false) {
-        if (!proactiveEnabled()) return
+        // 2026-11-19：锁不再看「主动陪伴」开关。那个开关管的是姐妹主动开口（浮层、提醒），
+        // 不是锁——以前它默认关，重装后所有锁（严格局、接管、超额封禁）在这里静默返回，表现为「什么都锁不住」。
+        // 锁的闸门只有三道：测试模式（shadowHit）、紧急解除、永不锁名单（桌面 / DSH / 系统 / 输入法 / 代理）。
+        if (!::app.isInitialized) return
         if (breaking()) return
+        if (LockSafety.disarmed(app)) {
+            Log.i(TAG, "disarmed: skip force on ${f.app}")
+            return
+        }
         // [fresh]: called with the foreground switch itself; NowFeed may not have caught up yet.
         if (f.app in NEVER_LOCK) return
         // 锁机事故总闸：DSH 自己 / 桌面 / 系统界面 / 输入法 / 代理永远不锁（锁页本身就是 DSH）。

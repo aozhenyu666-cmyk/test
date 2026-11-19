@@ -23,6 +23,7 @@ import 'intercept_page.dart';
 import 'plan_modality_page.dart';
 import 'plan_page.dart';
 import 'task_card.dart';
+import 'today_cards.dart';
 import 'proactive_page.dart';
 import 'sisters_page.dart';
 import 'strategy_horizons_page.dart';
@@ -687,17 +688,15 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
           ),
         ),
         TaskCardPanel(channel: _channel),
-        if (verdict != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: HardVerdictCard(verdict: verdict),
+        // 硬日判 + 时间账 + 时间投向合成一张（和局页同一个组件），点进去是完整统计页。
+        if (verdict != null || timeLedger != null)
+          TodayUsageCard(
+            today: {...?_analytics, ...?_today},
+            verdict: verdict,
+            ledger: timeLedger,
+            onTap: () => _openPage(UsageAnalyticsPage(channel: _channel)),
           ),
         _buildIntensityCard(context, _intensity),
-        if (timeLedger != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: TimeLedgerSummaryCard(ledger: timeLedger),
-          ),
         if (_rotate != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 14),
