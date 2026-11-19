@@ -48,10 +48,22 @@ export function leftOf(state) {
   return Math.max(0, Math.round(Number(s.earned) || 0) - Math.round(Number(s.spent) || 0))
 }
 
+/**
+ * 2026-11-19 挣来制：一局挣多少按这局实际做了多久算——实际分钟（不超过计划分钟）的 1/3，夹在 10–40。
+ * 25 分钟局 +10，45 分钟 +15，60 分钟 +20，90 分钟 +30。没有时长信息时退回设定里的固定值。
+ */
+export function rewardFor({ budgetMin = 0, openedAt = 0, now = Date.now(), config = null } = {}) {
+  const planned = Math.max(0, Math.round(Number(budgetMin) || 0))
+  const elapsed = Number(openedAt) > 0 ? Math.max(0, Math.round((Number(now) - Number(openedAt)) / 60_000)) : 0
+  const basis = planned > 0 && elapsed > 0 ? Math.min(planned, elapsed) : (planned || elapsed)
+  if (!basis) return rateOf(config)
+  return Math.max(10, Math.min(40, Math.round(basis / 3)))
+}
+
 /** 通过一局：记一笔额度。到上限就不再加。 */
-export function addForPass(state, config, now, day) {
+export function addForPass(state, config, now, day, minutes = 0) {
   const s = ofDay(state, day)
-  const add = rateOf(config)
+  const add = Number(minutes) > 0 ? Math.round(Number(minutes)) : rateOf(config)
   const earned = Math.min(EARN_MAX_PER_DAY, s.earned + add)
   return { ...s, earned, lastAt: Number(now) || 0, lastAdd: earned > s.earned ? add : 0 }
 }
@@ -89,5 +101,5 @@ export function lineOf(state) {
   const s = state || {}
   return left > 0
     ? '今天挣到 ' + Math.round(Number(s.earned) || 0) + ' 分钟放风，还剩 ' + left + ' 分钟'
-    : '今天还没有挣到的放风（每通过一局 +' + EARN_PER_PASS + ' 分钟）'
+    : '今天还没有挣到的放风（每通过一局按局长的 1/3 挣，10–40 分钟）'
 }

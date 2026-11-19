@@ -544,8 +544,8 @@ test('I6 Gemini 闸门：自动拉起 20m 冷却 + 每日上限 + 连麦中/结�
 
 // ---------------------------------------------------------------- H4 + I8
 
-test('H4 & I8 时间账单一真相：扣罚只扣挣来的、绝不扣基础；四处显示剩余额度完全一致', async () => {
-  // 纯函数校验：基础 120，挣来 15+5=20，扣罚 30（只扣完挣来的 20，基础 120 纹丝不动）
+test('H4 & I8 时间账单一真相（挣来制）：扣罚先扣挣来的再扣结转、不扣保底；四处显示余额完全一致', async () => {
+  // 挣来制：昨天结转 50 + 保底 0 + 今天挣 15+5=20 - 扣罚 30 = 40；刷了 40 分钟抖音 → 余额 0。
   let tl = emptyTimeLedger('2026-11-19')
   tl = appendTimeEntry(tl, { kind: 'earned_bout', minutes: 15, day: '2026-11-19' })
   tl = appendTimeEntry(tl, { kind: 'earned_bank', minutes: 5, day: '2026-11-19' })
@@ -555,13 +555,25 @@ test('H4 & I8 时间账单一真相：扣罚只扣挣来的、绝不扣基础；
     day: '2026-11-19',
     today: [{ app: 'com.ss.android.ugc.aweme', label: '抖音', minutes: 40 }],
     tierOf: () => 'fun',
-    funQuota: 120,
+    funQuota: 0,
     gameQuota: 60,
+    carry: 50,
   })
   assert.equal(summary.earned, 20)
   assert.equal(summary.penalty, 30)
   assert.equal(summary.earnedNet, 0, '扣罚扣光挣来的')
-  assert.equal(summary.funLeft, 120 - 40 + 30, '基础 120 + 游戏换算 30 - 已用 40 = 110，基础额度绝不被扣')
+  assert.equal(summary.penaltyApplied, 30, '挣来的不够扣，剩下 10 从结转里扣')
+  assert.equal(summary.funLeft, 0, '50 + 20 - 30 - 40 = 0')
+  assert.equal(summary.funOut, true)
+  // 保底不扣：保底 30、没挣、没结转、扣罚 100 → 仍有 30。
+  const floor = computeTimeLedger({ day: '2026-11-19', funQuota: 30, penalty: 100 })
+  assert.equal(floor.funLeft, 30)
+  // 游戏从同一个余额花，另有每日上限。
+  const g = computeTimeLedger({ day: '2026-11-19', carry: 200, gameQuota: 60, tierOf: () => 'game', today: [{ app: 'g', minutes: 50 }] })
+  assert.equal(g.funLeft, 150)
+  assert.equal(g.gameLeft, 10, '游戏今天上限 60，已玩 50')
+  // 结转有上限。
+  assert.equal(computeTimeLedger({ day: '2026-11-19', carry: 5000 }).carry, 600)
 
   // 四处一致性（/today, /analytics, /plan lock.quota, 晚报）
   await withHome(async (home) => {
@@ -939,4 +951,34 @@ test('H7 & I9 评价统一：硬日判为主、空转投入分<=39、14天自律
     assert.equal(today.body.verdict.tag, '空转')
     assert.ok(today.body.score <= 39)
   })
+})
+
+// ---------------------------------------------------------------- 挣来制：跨天结转（2026-11-19）
+
+test('挣来制：没花完的余额第二天接着用；新的一天不白给 120', async () => {
+  await withHome(async (home) => {
+    seedHome(home, { intensity: 'standard' })
+    const day = new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10)
+    const yesterday = new Date(Date.now() + 8 * 3_600_000 - 86_400_000).toISOString().slice(0, 10)
+    // 昨天最后算出的余额是 45 分钟。
+    writeFileSync(join(home, 'companion', 'fun-wallet.json'), JSON.stringify({ v: 1, day: yesterday, carryIn: 0, lastLeft: 45 }))
+    const host = makeHost({ agent: makeAgent('session-sis'), strategistAgent: makeAgent('session-big') })
+    const phone = cleanPhone({ app: 'com.tencent.mm', label: '微信', minutes: 1, screenOn: true, local: '10:00', today: [] })
+    const plan = await call(host.handler, 'POST', '/dsh-go-companion/v1/plan', { v: 1, timeZone: TZ, phone })
+    assert.equal(plan.body.timeLedger.carry, 45, '昨天的 45 分钟带进今天')
+    assert.equal(plan.body.timeLedger.funQuota, 0, '标准档没有白给的保底')
+    assert.equal(plan.body.timeLedger.funLeft, 45)
+    const w = JSON.parse(readFileSync(join(home, 'companion', 'fun-wallet.json'), 'utf8'))
+    assert.equal(w.day, day)
+    assert.equal(w.carryIn, 45)
+  })
+})
+
+test('挣来制：一局挣多少 = 实际分钟（不超计划）的 1/3，夹在 10–40', async () => {
+  const { rewardFor } = await import('../lib/earned.js')
+  const t0 = 1_000_000_000
+  assert.equal(rewardFor({ budgetMin: 45, openedAt: t0, now: t0 + 45 * 60_000 }), 15)
+  assert.equal(rewardFor({ budgetMin: 90, openedAt: t0, now: t0 + 95 * 60_000 }), 30, '超时做不多给')
+  assert.equal(rewardFor({ budgetMin: 90, openedAt: t0, now: t0 + 6 * 60_000 }), 10, '开 90 分钟局、6 分钟交差只给 10')
+  assert.equal(rewardFor({ budgetMin: 180, openedAt: t0, now: t0 + 180 * 60_000 }), 40, '一局最多 40')
 })

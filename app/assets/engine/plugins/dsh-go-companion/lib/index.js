@@ -168,7 +168,7 @@ import {
 } from './pass_ledger.js'
 import { arbitrateSpeak } from './speak_arbiter.js'
 import { buildStandardGeminiBrief, markGeminiSessionEnded, normalizeGeminiGate, requestGemini } from './gemini_gate.js'
-import { appendTimeEntry, computeTimeLedger, normalizeTimeLedger } from './time_ledger.js'
+import { appendTimeEntry, CARRY_CAP_MIN, computeTimeLedger, normalizeTimeLedger } from './time_ledger.js'
 import { createLockBus } from './lock_bus.js'
 import {
   markWorkStatus, migrateLegacyToWorkStore, mirrorWorkStoreToLegacy, normalizeWorkStore,
@@ -1696,8 +1696,30 @@ export function apply(ctx) {
     return next
   }
 
+  /**
+   * 2026-11-19 挣来制的跨天余额：fun-wallet.json 记「今天从昨天带进来多少」和「今天最后一次算出的余额」。
+   * 换天时把昨天最后的余额（≤ CARRY_CAP_MIN）结转成今天的 carryIn。只往后滚，不回头改旧的一天。
+   */
+  function walletCarryIn(day) {
+    const w = readState(stateFile('fun-wallet.json'), null) || {}
+    const wDay = String(w.day || '')
+    if (wDay === day) return Math.max(0, Number(w.carryIn) || 0)
+    if (wDay && day < wDay) return 0
+    const carryIn = wDay ? Math.min(CARRY_CAP_MIN, Math.max(0, Math.round(Number(w.lastLeft) || 0))) : 0
+    writeJson(stateFile('fun-wallet.json'), { v: 1, day, carryIn, lastLeft: carryIn, prevDay: wDay, prevLeft: Math.max(0, Number(w.lastLeft) || 0) })
+    if (wDay) record({ state: 'wallet-carry', at: Date.now(), day, carryIn, from: wDay })
+    return carryIn
+  }
+
+  function walletNote(day, left) {
+    const w = readState(stateFile('fun-wallet.json'), null) || {}
+    if (String(w.day || '') !== day || Number(w.lastLeft) === left) return
+    writeJson(stateFile('fun-wallet.json'), { ...w, lastLeft: left })
+  }
+
   function timeLedgerNow(now = Date.now(), tz = zoneOr(config.timeZone), phone = lastPhone) {
     const day = dayString(now, tz)
+    const carry = walletCarryIn(day)
     const info = intensityStateNow(now, tz)
     const tlState = loadTimeLedger(now, tz)
     const sumBoutInLedger = tlState.entries
@@ -1715,7 +1737,9 @@ export function apply(ctx) {
       funQuota: info.thresholds.funQuotaMin,
       gameQuota: info.thresholds.gameQuotaMin,
       earnedBout: legacyEarnedExtra,
+      carry,
     })
+    walletNote(day, tl.funLeft)
     lastQuota = tl
     return tl
   }
@@ -9894,7 +9918,9 @@ export function apply(ctx) {
           if (hId) v4Hub?.horizonsRoute?.({ action: 'upsert', id: hId, bumpStep: true })
         } catch {}
         const before = todayEarned(now, tz)
-        const next = earnedRt.addForPass(before, config, now, before.day)
+        // 挣来制：这一局挣多少按实际做了多久（≤ 计划分钟）的 1/3 算，10–40 分钟。
+        const reward = earnedRt.rewardFor({ budgetMin: live.budgetMin, openedAt: live.openedAt, now, config })
+        const next = earnedRt.addForPass(before, config, now, before.day, reward)
         saveEarned(next)
         if (next.lastAdd) {
           earnt = '放风 +' + next.lastAdd + ' 分钟（今天还剩 ' + earnedRt.leftOf(next) + ' 分钟）'
@@ -9908,6 +9934,9 @@ export function apply(ctx) {
           })
           if (plRes.ok) savePassLedger(plRes.state)
           recordTimeEntryNow({ kind: 'earned_bout', minutes: next.lastAdd, reason: '通过一局验收', at: now, tz })
+          try {
+            earnt = '娱乐余额 +' + next.lastAdd + ' 分钟（现在共 ' + timeLedgerNow(now, tz).funLeft + ' 分钟，没花完明天接着用）'
+          } catch {}
         }
       } else if (r.state === 'escalated') {
         recordBreachPenalty('moderate', now, zoneOr(config.timeZone))

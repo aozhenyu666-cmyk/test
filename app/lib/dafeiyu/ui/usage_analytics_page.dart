@@ -1513,8 +1513,8 @@ class TimeLedgerSummaryCard extends StatelessWidget {
         ? StatusTone.error
         : (ledger.funOut ? StatusTone.warn : StatusTone.ok);
     final badgeLabel = (ledger.funOut && ledger.gameOut)
-        ? '额度已用完'
-        : (ledger.funOut ? '娱乐已满' : '娱乐余 ${ledger.funLeft}m');
+        ? '余额用完'
+        : (ledger.funOut ? '余额用完' : '娱乐余 ${ledger.funLeft}m');
 
     Widget statCell({
       required String title,
@@ -1577,7 +1577,7 @@ class TimeLedgerSummaryCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '今日时间账（统一额度）',
+                    '今日时间账（挣来制）',
                     style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ),
@@ -1588,25 +1588,23 @@ class TimeLedgerSummaryCard extends StatelessWidget {
             Row(
               children: [
                 statCell(
-                  title: '娱乐剩余',
+                  title: '娱乐余额',
                   value: '${ledger.funLeft}m',
-                  detail: '已用 ${ledger.funUsed}/${ledger.funQuota}m',
+                  detail: ledger.carry > 0 ? '含结转 ${ledger.carry}m' : '用 ${ledger.funUsed}m',
                   accent: ledger.funOut ? colors.danger : scheme.primary,
                 ),
                 const SizedBox(width: 8),
                 statCell(
-                  title: '挣来池',
-                  value: '${ledger.earnedNet}m',
+                  title: '今天挣来',
+                  value: '+${ledger.earned}m',
                   detail: earnedDetail,
                   accent: colors.success,
                 ),
                 const SizedBox(width: 8),
                 statCell(
-                  title: '游戏剩余',
+                  title: '游戏还能玩',
                   value: '${ledger.gameLeft}m',
-                  detail: ledger.converted > 0
-                      ? '已兑 ${ledger.converted * 2}m→娱'
-                      : '已用 ${ledger.gameUsed}/${ledger.gameQuota}m',
+                  detail: '上限 ${ledger.gameQuota}m/天',
                   accent: ledger.gameOut ? colors.warning : colors.info,
                 ),
               ],

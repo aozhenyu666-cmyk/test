@@ -116,21 +116,21 @@ class TodayUsageCard extends StatelessWidget {
                 Row(
                   children: [
                     stat(
-                      '娱乐剩余',
-                      ledger.funOut ? '用完' : '${ledger.funLeft}m',
-                      '已用 ${ledger.funUsed}/${ledger.funQuota}m',
+                      '娱乐余额',
+                      ledger.funOut ? '0m' : '${ledger.funLeft}m',
+                      ledger.carry > 0 ? '含昨天结转 ${ledger.carry}m' : '没花完的明天接着用',
                       ledger.funOut ? colors.danger : scheme.primary,
                     ),
                     stat(
-                      '挣来池',
-                      '${ledger.earnedNet}m',
-                      ledger.penalty > 0 ? '挣+${ledger.earned} · 扣-${ledger.penalty}' : '局+${ledger.earnedBout} · 题+${ledger.earnedBank}',
+                      '今天挣来',
+                      '+${ledger.earned}m',
+                      ledger.penalty > 0 ? '扣罚 -${ledger.penalty}m' : '局+${ledger.earnedBout} · 题+${ledger.earnedBank}',
                       colors.success,
                     ),
                     stat(
-                      '游戏剩余',
-                      ledger.gameOut ? '用完' : '${ledger.gameLeft}m',
-                      ledger.converted > 0 ? '已兑 ${ledger.converted * 2}m→娱乐' : '已用 ${ledger.gameUsed}/${ledger.gameQuota}m',
+                      '游戏还能玩',
+                      '${ledger.gameLeft}m',
+                      '每天上限 ${ledger.gameQuota}m',
                       ledger.gameOut ? colors.warning : colors.info,
                     ),
                   ],

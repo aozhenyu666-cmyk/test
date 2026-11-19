@@ -192,7 +192,7 @@ void main() {
     await settlePhone(tester);
     expect(find.text('今日使用情况'), findsOneWidget);
     expect(find.text('102m'), findsOneWidget);
-    expect(find.text('25m'), findsOneWidget);
+    expect(find.text('+35m'), findsOneWidget);
     expect(find.text('60m'), findsOneWidget);
 
     // 局页：时间账并进了「今日使用情况」一张卡（娱乐剩余 / 挣来池 / 游戏剩余），数字必须和另外两页一致。
@@ -200,19 +200,19 @@ void main() {
     await settlePhone(tester);
     expect(find.text('今日使用情况'), findsOneWidget);
     expect(find.text('102m'), findsOneWidget);
-    expect(find.text('25m'), findsOneWidget);
+    expect(find.text('+35m'), findsOneWidget);
     expect(find.text('60m'), findsOneWidget);
     // 点这张卡就进完整的统计页（完整时间账在那里）。
     await tester.tap(find.text('今日使用情况'));
     await settlePhone(tester);
     expect(find.byType(UsageAnalyticsPage), findsOneWidget);
-    expect(find.text('今日时间账（统一额度）'), findsOneWidget);
+    expect(find.text('今日时间账（挣来制）'), findsOneWidget);
 
     await pumpPhone(tester, UsageAnalyticsPage(channel: ch));
     await settlePhone(tester);
-    expect(find.text('今日时间账（统一额度）'), findsOneWidget);
+    expect(find.text('今日时间账（挣来制）'), findsOneWidget);
     expect(find.text('娱乐余 102m'), findsOneWidget);
-    expect(find.text('25m'), findsOneWidget);
+    expect(find.text('+35m'), findsOneWidget);
     expect(find.text('60m'), findsOneWidget);
   });
 }

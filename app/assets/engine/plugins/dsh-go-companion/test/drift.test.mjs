@@ -68,6 +68,9 @@ const SIS = 'session-sis'
 function setup(home, extra = {}) {
   mkdirSync(join(home, 'companion'), { recursive: true })
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, quietStart: 12, quietEnd: 12, ...extra }))
+  // 挣来制：余额不是每天白给的。这组用例测的是「有余额时刷抖音」，所以先放 120 分钟结转进来。
+  const today = new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10)
+  writeFileSync(join(home, 'companion', 'fun-wallet.json'), JSON.stringify({ v: 1, day: today, carryIn: 120, lastLeft: 120 }))
   const sis = agentOf(SIS)
   const h = host({ [SIS]: sis })
   const plan = (phone) => call(h.handler(), 'POST', '/dsh-go-companion/v1/plan', { roll: 100, timeZone: 'Asia/Shanghai', phone })

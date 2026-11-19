@@ -1,11 +1,10 @@
 // dsh-go-companion · 统一时间账（2026-11-19 · H4）
 //
-// 把额度（fun_base / game_base）、挣来的（earned_bout / earned_bank / break）、
-// 扣罚（penalty，只扣挣来的部分，绝不扣基础额度）、用掉的（used_fun / used_game / used_dual_outside_pass）、
-// 换算（converted_game_to_fun，2:1）收在同一本账。
+// 2026-11-19 挣来制：娱乐 / 游戏都从一个余额里花，余额 = 昨天结转 + 保底（标准档 0）+ 今天挣来的 - 扣罚。
+// 挣：局验收通过（按局长 1/3，10–40 分钟）、题库（10 题 5 分钟）、破窗；扣：违约扣罚。没花完的跨天结转（≤600）。
 // 中枢（/today）、分析页（/analytics）、锁页（/plan lock.quota）、晚报、姐妹上下文全部取这同一个输出。
 
-import { FUN_QUOTA_MIN, GAME_QUOTA_MIN, GAME_TO_FUN_RATE } from './quota.js'
+import { GAME_QUOTA_MIN } from './quota.js'
 
 export const TIME_ENTRY_KINDS = Object.freeze([
   'fun_base',
@@ -68,9 +67,16 @@ export function appendTimeEntry(rawState, { kind, minutes = 0, reason = '', at =
   }
 }
 
+/** 余额跨天结转的上限：再多也不能把一整天买下来。 */
+export const CARRY_CAP_MIN = 600
+
 /**
- * 统一时间账单一真相计算函数。
- * 扣罚（penalty）只从挣来的池子（earnedBout + earnedBank + earnedBreak）里扣，绝不扣基础额度（funQuota / gameQuota）。
+ * 统一时间账单一真相计算函数（2026-11-19 改为「挣来制」）。
+ *
+ * 娱乐不再是每天白给的 120 分钟：可用余额 = 昨天结转（carry）+ 每日保底（funQuota，标准档 0）
+ * + 今天挣来的（局验收 / 题库 / 破窗）- 扣罚。娱乐和游戏都从这一个余额里花；
+ * 游戏另有每日上限（gameQuota，不是白给的额度）。没花完的余额明天接着用（上限 CARRY_CAP_MIN）。
+ * 扣罚只扣结转和挣来的，不扣保底。
  */
 export function computeTimeLedger({
   state = null,
@@ -78,8 +84,10 @@ export function computeTimeLedger({
   today = [],
   tierOf = () => 'other',
   passMinutes = 0,
-  funQuota = FUN_QUOTA_MIN,
+  funQuota = 0,
   gameQuota = GAME_QUOTA_MIN,
+  carry = 0,
+  carryCap = CARRY_CAP_MIN,
   earnedBout = 0,
   earnedBank = 0,
   earnedBreak = 0,
@@ -105,9 +113,6 @@ export function computeTimeLedger({
     else if (e.kind === 'used_dual_outside_pass') extraDualUsed += m
   }
 
-  // 若外层同时传了显式增量与账本记录（比如 earned.json 兼容），避免调用方传错时重复加：
-  // 约定：调用方若直接用 time-ledger.json 记账，则不重复传 earnedBout/earnedBank/penalty；
-  // 若某测试直接传了 earnedBout/penalty（且账本里还没有），上面已兼容。
   let phoneFun = 0
   let phoneGame = 0
   let phoneDual = 0
@@ -121,38 +126,42 @@ export function computeTimeLedger({
   }
 
   const baseFun = posInt(funQuota)
-  const baseGame = posInt(gameQuota)
+  const gameCap = posInt(gameQuota)
+  const carryIn = Math.min(posInt(carryCap) || CARRY_CAP_MIN, posInt(carry))
   const dualCounted = Math.max(0, phoneDual - posInt(passMinutes)) + extraDualUsed
   const funUsed = phoneFun + extraFunUsed + dualCounted
   const gameUsed = phoneGame + extraGameUsed
 
   const earned = sumBout + sumBank + sumBreak
-  const penaltyApplied = Math.min(earned, sumPenalty)
+  // 扣罚先扣今天挣来的，再扣结转；保底不扣。
+  const penaltyApplied = Math.min(earned + carryIn, sumPenalty)
   const earnedNet = Math.max(0, earned - sumPenalty)
-
-  const funCap = baseFun + earnedNet
-  const gameRemain = Math.max(0, baseGame - gameUsed)
-  const maxConvertible = Math.floor(gameRemain / GAME_TO_FUN_RATE)
-  const funAvail = funCap + maxConvertible
-  const funLeft = Math.max(0, funAvail - funUsed)
-  const converted = Math.max(0, Math.min(funUsed - funCap, maxConvertible))
-  const gameLeft = Math.max(0, gameRemain - converted * GAME_TO_FUN_RATE)
+  const avail = carryIn + baseFun + earned - penaltyApplied
+  const balance = Math.max(0, avail - funUsed - gameUsed)
+  const gameLeft = Math.min(Math.max(0, gameCap - gameUsed), balance)
+  const funLeft = balance
+  const carryOut = Math.min(posInt(carryCap) || CARRY_CAP_MIN, balance)
 
   const line = formatTimeLedgerLine({
     funLeft,
     gameLeft,
     funUsed,
     gameUsed,
-    converted,
+    converted: 0,
     earned,
     earnedNet,
     penalty: sumPenalty,
+    carry: carryIn,
+    base: baseFun,
   })
 
   return {
     day: s.day || String(day || ''),
     funQuota: baseFun,
-    gameQuota: baseGame,
+    gameQuota: gameCap,
+    carry: carryIn,
+    carryOut,
+    carryCap: posInt(carryCap) || CARRY_CAP_MIN,
     earnedBout: sumBout,
     earnedBank: sumBank,
     earnedBreak: sumBreak,
@@ -164,24 +173,23 @@ export function computeTimeLedger({
     funUsed,
     dualCounted,
     gameUsed,
-    converted,
+    converted: 0,
+    balance,
     funLeft,
     gameLeft,
-    funOut: funUsed >= funAvail,
+    funOut: funLeft <= 0,
     gameOut: gameLeft <= 0,
     line,
   }
 }
 
-export function formatTimeLedgerLine({ funLeft, gameLeft, funUsed, gameUsed, converted, earned, earnedNet, penalty }) {
-  const parts = []
-  if (earned > 0) {
-    parts.push(`含挣来的 ${earned}m` + (penalty > 0 ? `，扣罚 ${penalty}m 后净 +${earnedNet}m` : ''))
-  } else if (penalty > 0) {
-    parts.push(`今日扣罚 ${penalty}m，基础额度不受影响`)
-  }
-  return '今日娱乐已用 ' + funUsed + ' 分钟、还剩 ' + funLeft + ' 分钟' +
-    (parts.length ? '（' + parts.join('；') + '）' : '') +
-    '；游戏已用 ' + gameUsed + '、还剩 ' + gameLeft + ' 分钟' +
-    (converted ? '（已有 ' + converted * GAME_TO_FUN_RATE + ' 分钟游戏额度换成娱乐）' : '')
+export function formatTimeLedgerLine({ funLeft, gameLeft, funUsed, gameUsed, earned, penalty, carry = 0, base = 0 }) {
+  const src = []
+  if (carry > 0) src.push(`昨天结转 ${carry}m`)
+  if (base > 0) src.push(`保底 ${base}m`)
+  if (earned > 0) src.push(`今天挣 ${earned}m`)
+  if (penalty > 0) src.push(`扣罚 ${penalty}m`)
+  return '娱乐余额 ' + funLeft + ' 分钟（' + (src.length ? src.join('、') : '今天还没挣到——过一局验收就有') + '）' +
+    '；今天已用娱乐 ' + funUsed + '、游戏 ' + gameUsed + ' 分钟' +
+    (gameLeft < funLeft ? '；游戏今天还能玩 ' + gameLeft + ' 分钟' : '')
 }

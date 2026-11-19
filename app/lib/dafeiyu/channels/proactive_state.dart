@@ -2138,7 +2138,7 @@ class DailyVerdictView {
 class TimeLedgerView {
   const TimeLedgerView({
     this.day = '',
-    this.funQuota = 120,
+    this.funQuota = 0,
     this.gameQuota = 60,
     this.earnedBout = 0,
     this.earnedBank = 0,
@@ -2156,6 +2156,8 @@ class TimeLedgerView {
     this.funOut = false,
     this.gameOut = false,
     this.line = '',
+    this.carry = 0,
+    this.carryCap = 600,
   });
 
   final String day;
@@ -2178,6 +2180,10 @@ class TimeLedgerView {
   final bool gameOut;
   final String line;
 
+  /// 挣来制：从昨天结转进今天的分钟（≤ [carryCap]）。
+  final int carry;
+  final int carryCap;
+
   static TimeLedgerView? fromWire(Object? raw) {
     if (raw is! Map || raw.isEmpty) return null;
     int i(Object? v, [int d = 0]) => v is num ? v.round() : d;
@@ -2188,7 +2194,7 @@ class TimeLedgerView {
         : (earned - penalty < 0 ? 0 : earned - penalty);
     return TimeLedgerView(
       day: raw['day'] is String ? raw['day'] as String : '',
-      funQuota: i(raw['funQuota'], 120),
+      funQuota: i(raw['funQuota'], 0),
       gameQuota: i(raw['gameQuota'], 60),
       earnedBout: i(raw['earnedBout']),
       earnedBank: i(raw['earnedBank']),
@@ -2206,6 +2212,8 @@ class TimeLedgerView {
       funOut: raw['funOut'] == true,
       gameOut: raw['gameOut'] == true,
       line: raw['line'] is String ? raw['line'] as String : '',
+      carry: i(raw['carry']),
+      carryCap: i(raw['carryCap'], 600),
     );
   }
 }
