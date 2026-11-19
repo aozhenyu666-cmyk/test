@@ -6,6 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
+import { CONTEXT_BLOCK_TABLE } from './budget.js'
 
 const require = createRequire(import.meta.url)
 let DatabaseSync = null
@@ -205,4 +206,23 @@ export function exportImportantMemories(db, kbDir, now = Date.now()) {
   } catch {
     return false
   }
+}
+
+/**
+ * H8（C10）把所有候选上下文块按 lib/budget.js 的 CONTEXT_BLOCK_TABLE 归一成统一块列表，
+ * 自动补齐表内定义的默认 layer / priority（显式传入时允许覆盖）。
+ */
+export function buildUnifiedContextBlocks(entries = []) {
+  const out = []
+  for (const item of Array.isArray(entries) ? entries : []) {
+    if (!item || !item.id) continue
+    const text = String(item.text || '')
+    if (!text) continue
+    const spec = CONTEXT_BLOCK_TABLE[item.id]
+    const layer = item.layer || spec?.layer
+    if (!layer) continue
+    const priority = item.priority !== undefined ? item.priority : (spec?.priority ?? 0)
+    out.push({ id: item.id, layer, priority, text })
+  }
+  return out
 }

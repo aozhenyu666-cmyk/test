@@ -49,7 +49,7 @@ import {
   seedFromCommitments,
   seedFromMemory,
 } from './garden.js'
-import { lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood, readMoodSummary } from './context.js'
+import { buildUnifiedContextBlocks, lastReplyClass, exportImportantMemories, readCommitments, readCorePersona, readMood, readMoodSummary } from './context.js'
 import { cleanPhone, funToday, worthObserving } from './phone.js'
 // 外接 APP：他自己声明的应用名单（config.apps）压过内置的娱乐类包名表。
 import { blockDuringLock, cleanApps, declaredFun, emergencyPackages, remark, roleOf } from './apps.js'
@@ -205,6 +205,7 @@ import {
 } from './wall_auditor.js'
 import { executeCapability } from './capabilities.js'
 import { matchLorebook } from '../../dsh-go-memory/lib/lorebook.js'
+import { SHARED_DIALOG_SEEN, appendDialog, isPluginInjectedText, recentHumanDialog, trimDialog } from '../../dsh-go-memory/lib/dialog.js'
 import {
   AUDIT_DIR, PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText, rulesNeedSwitchKeys,
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,

@@ -17,7 +17,7 @@ import { openStore } from './store.js'
 import { importFishMemory } from './migrate.js'
 import { memoryView } from './view.js'
 import { extractAutoFacts } from './auto_facts.js'
-import { appendDialog, dialogLines, readDialog, trimDialog, userTextOf } from './dialog.js'
+import { SHARED_DIALOG_SEEN, appendDialog, dialogLines, readDialog, trimDialog, userTextOf } from './dialog.js'
 import {
   correct, exportMarkdown, forget, listTopics, markTopicAsked, dateOf, maintain, pickTopicToAsk,
   publicFact, publicTopic, recall, remember, resolveTopic, normalizeScope, scopeOfSession, search,
@@ -109,7 +109,7 @@ export function apply(ctx) {
   const disposers = []
   const lastText = new Map()   // sid -> 这一轮用户刚说的话（检索线索）
   const lastPrevText = new Map() // sid -> 上一句用户说过的话（短回复时拼进检索，防失忆）
-  const dialogSeen = new Map() // 同一句的去重窗口（引擎可能对同一条消息发两次事件）
+  const dialogSeen = SHARED_DIALOG_SEEN // 跨插件共享去重窗口（防 memory 与 companion 双写）
   let dialogTrimmedAt = 0
   const mounted = new Map()    // sid -> { agent, offs }
 

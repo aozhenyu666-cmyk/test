@@ -167,6 +167,8 @@ flutter:
     - assets/engine/plugins/dsh-go-companion/
     - assets/engine/plugins/dsh-go-companion/lib/
     - assets/engine/plugins/dsh-go-companion/lib/protocols/
+    - assets/engine/plugins/dsh-go-companion/lib/routes/
+    - assets/engine/plugins/dsh-go-companion/lib/tools/
     # 社区 hub content shipped with the app (lib/state/community_state.dart),
     # shown until a newer community.json is fetched.
     - assets/community/

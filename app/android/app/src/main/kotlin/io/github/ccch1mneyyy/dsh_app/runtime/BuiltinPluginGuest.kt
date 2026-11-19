@@ -274,6 +274,14 @@ object BuiltinPluginGuest {
                 // 2026-11-19 Wave 2 统一方案 v2（锁总线 / 任务单表 workStore）
                 "lib/lock_bus.js",
                 "lib/work_store.js",
+                // 2026-11-19 Wave 3 统一方案 v2（H9 index.js 路由与工具模块化拆分）
+                "lib/routes/plan_route.js",
+                "lib/routes/bouts_routes.js",
+                "lib/routes/domain_routes.js",
+                "lib/routes/persona_context.js",
+                "lib/routes/wall_ladder.js",
+                "lib/tools/sister_tools.js",
+                "lib/tools/global_tools.js",
             ),
         ),
     )
@@ -306,7 +314,12 @@ object BuiltinPluginGuest {
      * date are left alone. False (and no overlay file) when anything is
      * missing, so the launch leaves the whole set out instead of half-loading.
      */
-    fun writeFiles(context: Context, rootfs: File): Boolean {
+    fun writeFiles(context: Context, rootfs: File): Boolean =
+        writeFilesFrom(rootfs) { assetPath ->
+            context.assets.open(assetPath).use { it.readBytes() }
+        }
+
+    internal fun writeFilesFrom(rootfs: File, openAsset: (String) -> ByteArray): Boolean {
         val patch = file(rootfs)
         return try {
             val dir = File(rootfs, GUEST_DIR.removePrefix("/"))
@@ -314,7 +327,7 @@ object BuiltinPluginGuest {
             if (!dir.isDirectory && !dir.mkdirs()) throw IOException("could not create ${dir.path}")
             for (plugin in PLUGINS) {
                 for (name in plugin.files) {
-                    val bytes = context.assets.open("$ASSET_ROOT/${plugin.id}/$name").use { it.readBytes() }
+                    val bytes = openAsset("$ASSET_ROOT/${plugin.id}/$name")
                     val target = File(dir, "${plugin.id}/$name")
                     if (!target.parentFile.isDirectory && !target.parentFile.mkdirs() && !target.parentFile.isDirectory) {
                         throw IOException("could not create ${target.parentFile.path}")

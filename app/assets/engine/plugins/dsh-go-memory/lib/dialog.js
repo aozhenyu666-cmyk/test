@@ -31,6 +31,13 @@ export function overlap(query, text) {
 /** 插件塞进会话的话（主动发球、系统提醒）不是他说的。 */
 const PLUGIN_RE = /^[（(]这不是.{0,12}说的话|^\[系统|^<system|^（系统/
 
+/** 跨插件共享的写入去重窗口（同进程内 dsh-go-memory 与 dsh-go-companion 共用，防双写）。 */
+export const SHARED_DIALOG_SEEN = new Map()
+
+export function isPluginInjectedText(text) {
+  return PLUGIN_RE.test(String(text || '').trim())
+}
+
 /**
  * 从引擎的 inbox 事件里认出「他本人说的话」。认不出就返回空串。
  * 消息带 source 时只收 kind=user；不带 source 的按内容兜底排除插件提示。
@@ -72,21 +79,45 @@ export function readDialog(dir) {
   return out
 }
 
-/** 记一句。同一会话 10 秒内的同一句只记一次（引擎可能对同一条消息发两次事件）。 */
+/** 记一句。同一目录同一会话 10 秒内的同一句只记一次（引擎或多插件可能对同一条消息触发两次）。 */
 export function appendDialog(dir, { sid = '', text = '', at = Date.now() } = {}, cache = null) {
   const t = normalizeText(text).slice(0, MAX_TEXT)
-  if (!t) return false
-  const key = sid + '\u0000' + t
-  if (cache) {
-    const last = cache.get(key)
-    if (last && at - last < 10_000) return false
-    cache.set(key, at)
-    if (cache.size > 200) cache.delete(cache.keys().next().value)
-  }
+  if (!t || PLUGIN_RE.test(t)) return false
   const file = dialogPath(dir)
+  if (cache) {
+    const exactKey = file + '\u0000' + String(sid || '') + '\u0000' + t
+    const looseKey = file + '\u0000*\u0000' + t
+    const lastExact = cache.get(exactKey)
+    const lastLoose = cache.get(looseKey)
+    if ((lastExact && Math.abs(at - lastExact) < 10_000) || (lastLoose && Math.abs(at - lastLoose) < 2_500)) return false
+    cache.set(exactKey, at)
+    cache.set(looseKey, at)
+    while (cache.size > 400) cache.delete(cache.keys().next().value)
+  }
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   appendFileSync(file, JSON.stringify({ at, sid: String(sid || ''), text: t }) + '\n', { encoding: 'utf8', mode: 0o600 })
   return true
+}
+
+/**
+ * 读取最近一段时间内的本人原话（按时间升序，最多 limit 条），
+ * 供 dsh-go-companion 在重启后恢复 recentHuman（会话换班交接、App 分层放松同意核对、晚间反思输入）。
+ */
+export function recentHumanDialog(dir, { limit = 12, maxAgeMs = 48 * 3_600_000, now = Date.now(), sid = '' } = {}) {
+  const cap = Math.max(1, Number(limit) || 12)
+  const rows = readDialog(dir).filter((r) => {
+    const at = Number(r.at) || 0
+    if (at <= 0 || at > now + 60_000) return false
+    if (maxAgeMs > 0 && now - at > maxAgeMs) return false
+    if (sid && String(r.sid || '') !== String(sid)) return false
+    const t = normalizeText(r.text)
+    return Boolean(t) && !PLUGIN_RE.test(t)
+  })
+  return rows.slice(-cap).map((r) => ({
+    at: Number(r.at),
+    sid: String(r.sid || ''),
+    text: normalizeText(r.text).slice(0, 200),
+  }))
 }
 
 /** 超过上限就只留最新的 DIALOG_MAX 行（原子重写）。 */

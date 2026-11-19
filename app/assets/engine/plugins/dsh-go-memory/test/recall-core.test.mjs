@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { emptyDoc, normalizeKind, recall, remember } from '../lib/model.js'
-import { appendDialog, dialogLines, readDialog, trimDialog, userTextOf } from '../lib/dialog.js'
+import { SHARED_DIALOG_SEEN, appendDialog, dialogLines, readDialog, recentHumanDialog, trimDialog, userTextOf } from '../lib/dialog.js'
 
 const DAY = 86_400_000
 const T0 = Date.UTC(2026, 10, 10, 4, 0)
@@ -81,7 +81,7 @@ test('原话留底：落盘 0600、去重、按时间召回、跨会话、对得
     assert.equal(appendDialog(dir, { sid: 'a', text: '今天好累', at: T0 - 55_000 }, seen), false)
     appendDialog(dir, { sid: 'b', text: '跟姐姐说一声我晚点交', at: T0 - 30_000 }, seen)
     appendDialog(dir, { sid: 'a', text: '帮我看看简历', at: T0 }, seen)
-    assert.equal((statSync(join(dir, 'dialog.jsonl')).mode & 0o777), 0o600)
+    if (process.platform !== 'win32') assert.equal((statSync(join(dir, 'dialog.jsonl')).mode & 0o777), 0o600)
     const rows = readDialog(dir)
     assert.equal(rows.length, 4)
     const lines = dialogLines(rows, { query: '帮我看看简历', now: T0 + 1000 })
@@ -104,4 +104,20 @@ test('召回文本带上原话那一块', () => {
   const r = recall(doc, { scope: 'global', query: '嗯', dialog: [{ when: '今天 10:00', text: '我有点不想去面试了' }] }, T0 + DAY)
   assert.match(r.text, /他最近说过的话/)
   assert.match(r.text, /不想去面试/)
+})
+
+test('H8 recentHumanDialog 与 SHARED_DIALOG_SEEN：跨插件同句去重、过滤系统提示、按时窗恢复最近原话', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialog-h8-'))
+  try {
+    assert.equal(appendDialog(dir, { sid: 's1', text: '行，把知乎改回双用途吧', at: T0 }, SHARED_DIALOG_SEEN), true)
+    assert.equal(appendDialog(dir, { sid: '', text: '行，把知乎改回双用途吧', at: T0 + 200 }, SHARED_DIALOG_SEEN), false, 'companion 与 memory 同句不双写')
+    assert.equal(appendDialog(dir, { sid: 's1', text: '（这不是主人说的话，是主动发球提示）', at: T0 + 500 }, SHARED_DIALOG_SEEN), false, '插件提示不落原话库')
+    appendDialog(dir, { sid: 's2', text: '今晚九点交初稿', at: T0 + 5000 }, SHARED_DIALOG_SEEN)
+    const got = recentHumanDialog(dir, { limit: 4, maxAgeMs: 30 * 60_000, now: T0 + 10_000 })
+    assert.equal(got.length, 2)
+    assert.equal(got[0].text, '行，把知乎改回双用途吧')
+    assert.equal(got[1].text, '今晚九点交初稿')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

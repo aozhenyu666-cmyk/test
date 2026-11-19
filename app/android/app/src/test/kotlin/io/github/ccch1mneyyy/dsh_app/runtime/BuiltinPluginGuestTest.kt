@@ -96,4 +96,49 @@ class BuiltinPluginGuestTest {
             }
         }
     }
+
+    @Test fun everyListedPluginFileExistsOnDiskWithoutDuplicates() {
+        val assets = generateSequence(File("").absoluteFile) { it.parentFile }
+            .map { File(it, "app/assets/engine/plugins") }
+            .firstOrNull { it.isDirectory }
+            ?: return
+        for (plugin in BuiltinPluginGuest.PLUGINS) {
+            assertEquals(
+                "${plugin.id} manifest must not contain duplicate entries",
+                plugin.files.distinct(),
+                plugin.files,
+            )
+            val missing = plugin.files.filterNot { File(File(assets, plugin.id), it).isFile }
+            assertEquals(
+                "${plugin.id} manifest must not list non-existent asset files",
+                emptyList<String>(),
+                missing,
+            )
+        }
+    }
+
+    @Test fun writeFilesFromCreatesNestedSubdirectoriesAndAbortsCleanlyOnMissingAsset() {
+        val rootfs = java.nio.file.Files.createTempDirectory("dsh-guest-test").toFile()
+        try {
+            val ok = BuiltinPluginGuest.writeFilesFrom(rootfs) { assetPath ->
+                "// $assetPath".toByteArray()
+            }
+            assertEquals("writeFilesFrom should succeed when all assets open", true, ok)
+            assertEquals("plugins.patch.yml must be written", true, BuiltinPluginGuest.file(rootfs).isFile)
+            for (plugin in BuiltinPluginGuest.PLUGINS) {
+                for (rel in plugin.files) {
+                    val deployed = File(rootfs, "opt/dsh-app/plugins/${plugin.id}/$rel")
+                    assertEquals("nested file must be deployed: ${plugin.id}/$rel", true, deployed.isFile)
+                }
+            }
+
+            val failed = BuiltinPluginGuest.writeFilesFrom(rootfs) {
+                throw java.io.IOException("simulated missing asset")
+            }
+            assertEquals("writeFilesFrom must return false when any asset is missing", false, failed)
+            assertEquals("plugins.patch.yml must be removed on partial failure", false, BuiltinPluginGuest.file(rootfs).exists())
+        } finally {
+            rootfs.deleteRecursively()
+        }
+    }
 }
