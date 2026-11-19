@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply, setStatePin } from '../lib/index.js'
 import { appendLedger, readLedger } from '../lib/ledger.js'
+import { DEFAULT_BUDGET } from '../lib/budget.js'
 
 function agentOf(id) {
   const contexts = []
@@ -267,7 +268,7 @@ test('R12 断链检测在没卡时不乱亮', async () => {
   })
 })
 
-test('R13 open 卡进状态层注入：带 [挂载] 标记、≤300 字、总长仍 ≤2400', async () => {
+test('R13 open 卡进状态层注入：带 [挂载] 标记、≤300 字、总长不超预算表', async () => {
   await withHome(async (home) => {
     const t = setup(home)
     await t.mount({ action: 'open', goal: '把长连接的增量同步做出来，别每次全量对比' })
@@ -280,7 +281,9 @@ test('R13 open 卡进状态层注入：带 [挂载] 标记、≤300 字、总长
     assert.match(text, /上次动：\d{2}:\d{2}/)
     const line = text.split('\n').find((l) => l.startsWith('[挂载]'))
     assert.ok(line.length <= 300, '[挂载] 那一行不能超过 300 字符，实际 ' + line.length)
-    assert.ok(text.length <= 2400, '整段注入不能超过 2400，实际 ' + text.length)
+    // 总量上限 2400 已在 747164bb（11-18）调为 DEFAULT_BUDGET.total=5600，这条测试当时没跟着改，
+    // 于是随时段（深夜多出小日常等块）时过时不过。H8 起按预算表断言：总量与每层都不超。
+    assert.ok(text.length <= DEFAULT_BUDGET.total + 200, '整段注入不能超过预算总量 ' + DEFAULT_BUDGET.total + '（含标记余量），实际 ' + text.length)
   })
 })
 

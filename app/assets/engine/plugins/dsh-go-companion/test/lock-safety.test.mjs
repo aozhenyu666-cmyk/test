@@ -201,3 +201,15 @@ test('/rotate：写交接 → 绑新对话（不能和姐姐同一个）→ 轮�
     assert.match(readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8'), /session-rotate/)
   })
 })
+
+test('H8：引擎重启后，他在 App 里说过的原话还在（从账本恢复），交接里带得上', async () => {
+  await withHome(async (home) => {
+    seed(home, { strategistSessionId: 'session-big' })
+    writeFileSync(join(home, 'companion', 'ledger.jsonl'),
+      JSON.stringify({ v: 1, state: 'human', at: Date.now() - 60_000, sessionId: 'session-abc', text: '我今晚十点前把行测资料分析做完' }) + '\n')
+    const host = makeHost({ agent: makeAgent() })
+    const prep = await call(host.handler, 'POST', '/dsh-go-companion/v1/rotate', { action: 'prepare', role: 'companion' })
+    assert.equal(prep.body.ok, true)
+    assert.match(prep.body.preview, /他：我今晚十点前把行测资料分析做完/)
+  })
+})

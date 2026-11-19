@@ -39,6 +39,7 @@ export function recentDialog(entries, { sessionId = '', limit = 16 } = {}) {
   for (const e of Array.isArray(entries) ? entries : []) {
     if (!e || typeof e.text !== 'string' || !e.text.trim()) continue
     if (e.state === 'say-text') out.push({ who: '他', at: Number(e.at) || 0, text: e.text })
+    else if (e.state === 'human' && (!sessionId || String(e.sessionId || '') === String(sessionId))) out.push({ who: '他', at: Number(e.at) || 0, text: e.text })
     else if (e.state === 'generated' && (!sessionId || String(e.sessionId || '') === String(sessionId))) out.push({ who: '你', at: Number(e.at) || 0, text: e.text })
   }
   return out.slice(-limit)
@@ -60,15 +61,22 @@ export function buildHandoff({ roleName = '鱼丸', owner = '他', dialog = [], 
     for (const x of xs) lines.push('- ' + x.slice(0, 200))
     lines.push('')
   }
+  // 顺序就是重要度：上下文里交接块有上限（1000 字），被截时先保住答应过的、没聊完的和原话。
   sec('他答应过、还没做完的', commitments)
   sec('没聊完的话题', topics)
-  if (String(stance || '').trim()) sec('你们之前定下的立场', String(stance).split('\n'))
+  const seen = new Set()
+  const talk = []
+  for (const d of [...(Array.isArray(dialog) ? dialog : []), ...(Array.isArray(humanRecent) ? humanRecent : []).map((h) => ({ who: '他', text: h.text }))]) {
+    const t = String(d?.text || '').replace(/\s+/g, ' ').slice(0, 120)
+    if (!t || seen.has(d.who + t)) continue
+    seen.add(d.who + t)
+    talk.push(d.who + '：' + t)
+  }
+  sec('最后几句原话（照原样，别改写）', talk.slice(-16))
   sec('最近的 Gemini 回执', gemini)
   if (verdictLine) sec('昨天的判决', [verdictLine])
+  if (String(stance || '').trim()) sec('你们之前定下的立场', String(stance).split('\n'))
   sec('关于' + owner + '（常驻）', facts.slice(0, 6))
-  const talk = (Array.isArray(dialog) ? dialog : []).map((d) => d.who + '：' + String(d.text).replace(/\s+/g, ' ').slice(0, 120))
-  const extra = (Array.isArray(humanRecent) ? humanRecent : []).map((h) => '他：' + String(h.text || '').slice(0, 120))
-  sec('最后几句原话（照原样，别改写）', [...talk, ...extra].slice(-16))
   return lines.join('\n').slice(0, 2600)
 }
 

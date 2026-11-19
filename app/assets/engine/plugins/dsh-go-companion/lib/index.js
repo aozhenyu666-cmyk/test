@@ -1395,7 +1395,8 @@ export function apply(ctx) {
         lastHumanAt.set(String(session?.id || ''), Date.now())
         rememberHuman(stripInjection(text))
         // 落进账本：引擎重启也知道他刚说过话（阶梯不会把聊过的球当成没接，发球也知道他多久前说的话）。
-        record({ state: 'human', at: Date.now(), sessionId: String(session?.id || '') })
+        // H8：原话落盘（≤300 字、剥掉注入标记）——换班交接、放松核对重启后照样有据。
+        record({ state: 'human', at: Date.now(), sessionId: String(session?.id || ''), text: stripInjection(text).replace(/\s+/g, ' ').trim().slice(0, 300) || undefined })
         try {
           const snippet = stripInjection(text).replace(/\s+/g, ' ').trim().slice(0, 80)
           if (snippet) {
@@ -8295,6 +8296,18 @@ export function apply(ctx) {
   // ---------------------------------------------------------------- 2026-11-18 裁决器唯一输出：分层、额度、通行证
   /** 他最近说过的话（核对「他刚说过行」用）。 */
   const recentHuman = []
+  // H8：引擎重启后从账本恢复 24 小时内的原话（App 里打的字记在 human，浮层里说的记在 say-text）。
+  try {
+    const since = Date.now() - 24 * 3_600_000
+    for (const e of readLedger(home(), 600)) {
+      if ((e?.state === 'human' || e?.state === 'say-text') && typeof e.text === 'string' && e.text.trim() && Number(e.at) >= since) {
+        recentHuman.push({ at: Number(e.at), text: e.text.replace(/\s+/g, ' ').trim().slice(0, 200) })
+      }
+    }
+    while (recentHuman.length > 12) recentHuman.shift()
+  } catch {
+    // 账本读不到就从空开始
+  }
   function rememberHuman(text) {
     const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200)
     if (!t) return

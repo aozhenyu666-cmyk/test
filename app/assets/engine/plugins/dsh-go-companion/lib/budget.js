@@ -19,6 +19,49 @@ export const DEFAULT_BUDGET = {
   perLayer: { constraint: 1800, state: 2400, content: 1800 },
 }
 
+/**
+ * H8（2026-11-19）单块上限：状态层 / 内容层里，一块最多占这么多字，防止某一块把同层的都挤掉。
+ * 按整行保留（从上往下装，装不下的行整行丢），只有第一行自己就超长时才截那一行。
+ * 约束层不设单块上限（它永不裁，超了照旧抛错）。没列出的块不限。
+ */
+export const BLOCK_CAPS = Object.freeze({
+  handoff: 1000,
+  reflect: 520,
+  verifier: 420,
+  'v4-skills': 320,
+  'intraday-storyline': 320,
+  nightly: 300,
+  notes: 400,
+  'vault-pick': 400,
+  clues: 300,
+  telemetry: 300,
+  lorebook: 400,
+  relationship: 300,
+  deposit: 260,
+  gemini: 300,
+  vibe: 220,
+  'inner-os': 220,
+  'life-slice': 180,
+})
+
+/** 按整行把一块压到 cap 以内。 */
+export function capBlockText(text, cap) {
+  const s = String(text || '')
+  if (!cap || s.length <= cap) return s
+  const out = []
+  let n = 0
+  for (const line of s.split('\n')) {
+    const add = (out.length ? 1 : 0) + line.length
+    if (n + add > cap) {
+      if (!out.length) return line.slice(0, Math.max(1, cap - 1)) + '…'
+      break
+    }
+    out.push(line)
+    n += add
+  }
+  return out.join('\n')
+}
+
 const charsOf = (block) => String(block.text).length
 // 同优先级保持传进来的顺序：调用方按语义排好了，别在这里再打乱。
 const byPriority = (a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0)
@@ -46,7 +89,9 @@ export function stripInjection(text) {
 export function fitBudget(blocks, budget) {
   const total = Number(budget?.total) || DEFAULT_BUDGET.total
   const perLayer = { ...DEFAULT_BUDGET.perLayer, ...(budget?.perLayer || {}) }
+  const caps = { ...BLOCK_CAPS, ...(budget?.blockCaps || {}) }
   const list = (blocks || []).filter((b) => b && LAYERS.includes(b.layer) && String(b.text || '').length)
+    .map((b) => (b.layer !== 'constraint' && caps[b.id] ? { ...b, text: capBlockText(b.text, caps[b.id]) } : b))
   const layer = (id) => list.filter((b) => b.layer === id)
 
   const kept = []
