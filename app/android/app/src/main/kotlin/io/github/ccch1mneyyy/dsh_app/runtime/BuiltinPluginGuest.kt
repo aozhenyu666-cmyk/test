@@ -265,6 +265,8 @@ object BuiltinPluginGuest {
                 "lib/reflect.js",
                 // 2026-11-18 当下任务卡
                 "lib/card.js",
+                // H9：从 index.js 搬出的运行时读写与配置
+                "lib/runtime_io.js",
                 // 2026-11-19 Wave 1 统一方案 v2（强度表 / 放行账 / 发球仲裁 / Gemini 闸门 / 时间账）
                 "lib/intensity.js",
                 "lib/pass_ledger.js",
