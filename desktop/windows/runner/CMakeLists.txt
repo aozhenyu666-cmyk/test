@@ -33,8 +33,16 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
-target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "shell32.lib" "advapi32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
+# Companion native watchdog process compiled into the same Release directory.
+add_executable(dsh_fish_watchdog WIN32
+  "watchdog_main.cpp"
+)
+apply_standard_settings(dsh_fish_watchdog)
+target_compile_definitions(dsh_fish_watchdog PRIVATE "NOMINMAX")
+target_link_libraries(dsh_fish_watchdog PRIVATE "shell32.lib")
+
 # Run the Flutter tool portions of the build. This must not be removed.
-add_dependencies(${BINARY_NAME} flutter_assemble)
+add_dependencies(${BINARY_NAME} flutter_assemble dsh_fish_watchdog)

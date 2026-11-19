@@ -1,24 +1,40 @@
 import 'package:flutter/material.dart';
 
-import '../services/dsh_bridge.dart';
-import '../services/pc_sensor.dart';
+import '../models/guard_models.dart';
+import '../services/pc_guard_controller.dart';
 import '../theme/mist_theme.dart';
 
 /// Compact always-on-top capsule mode shown at top-right when coding or studying.
 class MiniCapsuleHud extends StatelessWidget {
   const MiniCapsuleHud({super.key, required this.controller});
 
-  final DesktopController controller;
+  final PcGuardController controller;
 
   @override
   Widget build(BuildContext context) {
-    final s = controller.latestSample;
-    final cat = s?.category ?? PcActivityCategory.other;
-    final statusColor = cat == PcActivityCategory.entertainment
-        ? MistColors.crimson
-        : cat.isFocus
-            ? MistColors.emerald
-            : MistColors.cobalt;
+    final now = controller.currentNowUtcMs;
+    final sample = controller.latestSample;
+    final tier = sample?.classification.tier ?? ActivityTier.dual;
+    final isAfk = sample?.isAfk ?? false;
+    final statusColor = isAfk
+        ? MistColors.amber
+        : switch (tier) {
+            ActivityTier.work || ActivityTier.neverBlock => MistColors.emerald,
+            ActivityTier.blocked => MistColors.crimson,
+            ActivityTier.dual => MistColors.cobalt,
+          };
+
+    final inFocus = controller.focusSession.isActiveAt(now);
+    final remainEntMin =
+        (controller.rules.dailyEntertainmentLimitMin -
+                controller.ledger.entertainmentMinutes)
+            .clamp(0, 999)
+            .toStringAsFixed(0);
+    final subtitle = inFocus
+        ? '专注锁剩余 ${(controller.focusSession.remainingSecondsAt(now) / 60).ceil()}m · ${controller.focusSession.taskName}'
+        : (sample != null && sample.snapshot.app.isNotEmpty)
+            ? '${sample.snapshot.app} | 娱乐余 ${remainEntMin}m'
+            : '大肥鱼 PC 严防待命 · 娱乐余 ${remainEntMin}m';
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -33,7 +49,10 @@ class MiniCapsuleHud extends StatelessWidget {
                 Container(
                   width: 10,
                   height: 10,
-                  decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                    color: statusColor,
+                    shape: BoxShape.circle,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -42,15 +61,16 @@ class MiniCapsuleHud extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${cat.label} · 专注 ${(s?.focusMinutes ?? 0).toStringAsFixed(1)}m',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                        '${isAfk ? "离开键盘" : tier.label} · 专注 ${controller.ledger.workMinutes.toStringAsFixed(1)}m',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                       Text(
-                        controller.enableVideoSliceTimer
-                            ? '3 分钟切片倒计时：${controller.videoSliceSecondsLeft}s'
-                            : (s?.app.isNotEmpty == true ? '${s!.app} | ${s.title}' : 'DSH Go 大肥鱼哨兵待命'),
+                        subtitle,
                         style: const TextStyle(fontSize: 11.5),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -58,11 +78,7 @@ class MiniCapsuleHud extends StatelessWidget {
                     ],
                   ),
                 ),
-                IconButton(
-                  tooltip: '立即触发反思卡片',
-                  onPressed: controller.triggerManualMediaPause,
-                  icon: const Icon(Icons.casino_rounded, size: 20),
-                ),
+                const SizedBox(width: 8),
                 FilledButton(
                   onPressed: () => controller.setCapsuleMode(false),
                   child: const Text('展开', style: TextStyle(fontSize: 12)),

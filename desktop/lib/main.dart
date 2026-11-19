@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'services/dsh_bridge.dart';
+import 'services/pc_guard_controller.dart';
 import 'theme/mist_theme.dart';
 import 'ui/desktop_shell.dart';
 
@@ -14,7 +14,7 @@ void main() {
 class DshGoFishPcApp extends StatefulWidget {
   const DshGoFishPcApp({super.key, this.controller, this.autoInit = true});
 
-  final DesktopController? controller;
+  final PcGuardController? controller;
   final bool autoInit;
 
   @override
@@ -22,13 +22,13 @@ class DshGoFishPcApp extends StatefulWidget {
 }
 
 class _DshGoFishPcAppState extends State<DshGoFishPcApp> {
-  late final DesktopController _controller;
+  late final PcGuardController _controller;
   bool _darkMode = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = widget.controller ?? DesktopController();
+    _controller = widget.controller ?? PcGuardController();
     if (widget.autoInit) {
       unawaited(_controller.init());
     }
@@ -48,7 +48,7 @@ class _DshGoFishPcAppState extends State<DshGoFishPcApp> {
       listenable: _controller,
       builder: (context, _) {
         return MaterialApp(
-          title: 'DSH Go 大肥鱼 · PC',
+          title: '大肥鱼 · PC 严防哨兵',
           debugShowCheckedModeBanner: false,
           theme: buildMistTheme(Brightness.light),
           darkTheme: buildMistTheme(Brightness.dark),

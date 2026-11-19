@@ -1,7 +1,7 @@
 name: dsh_go_fish_pc
-description: "DSH Go 大肥鱼 · Windows PC 端伴侣使用与双端专注哨兵客户端"
+description: "DSH Go 大肥鱼 · Windows 独立严防自律与 AI 裁决客户端"
 publish_to: 'none'
-version: 1.0.0+1
+version: 2.0.0+1
 
 environment:
   sdk: ^3.13.5
@@ -11,10 +11,6 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   crypto: ^3.0.6
-  dsh_client:
-    path: ../packages/dsh_client
-  dsh_remote:
-    path: ../packages/dsh_remote
 
 dev_dependencies:
   flutter_test:

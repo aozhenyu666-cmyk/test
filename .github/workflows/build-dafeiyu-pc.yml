@@ -2,12 +2,10 @@ name: Build 大肥鱼 PC Windows 客户端
 
 on:
   push:
-    branches: [dafeiyu-apk, feat/dafeiyu-v3-on-1016]
+    branches: [feat/dafeiyu-v3-on-1016]
     paths:
       - ".github/workflows/build-dafeiyu-pc.yml"
       - "desktop/**"
-      - "packages/dsh_client/**"
-      - "packages/dsh_remote/**"
   workflow_dispatch:
 
 permissions:
@@ -41,7 +39,10 @@ jobs:
         run: |
           $outDir = "desktop/build/windows/x64/runner/Release"
           if (-not (Test-Path "$outDir/dsh_go_fish_pc.exe")) {
-            throw "Missing built executable in $outDir"
+            throw "Missing built main executable in $outDir"
+          }
+          if (-not (Test-Path "$outDir/dsh_fish_watchdog.exe")) {
+            throw "Missing built watchdog executable in $outDir"
           }
           Compress-Archive -Path "$outDir/*" -DestinationPath "DSH-Go-Fish-PC-Windows-x64.zip" -Force
           $hash = (Get-FileHash "DSH-Go-Fish-PC-Windows-x64.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -63,10 +64,11 @@ jobs:
         run: |
           $tag = "fish-pc-build-${{ github.run_number }}"
           @(
-            "## DSH Go 大肥鱼 · Windows PC 端 #${{ github.run_number }}"
+            "## DSH Go 大肥鱼 · Windows 独立严防哨兵 #${{ github.run_number }}"
             ""
-            '- Pure-Dart `dsh_remote` (`Noise_IK` P2P/Relay) + Tailscale/LAN直连手机端 Companion。'
-            '- 支持鱼丸/鲸澜双线对话、Plan/Wall/Sisters/Deposit、六骰打卡、Git Diff 交墙验真与 Win32 前台/AFK/3分钟视频切片自动暂停。'
+            '- 完全独立运行于 Windows，不依赖手机连接；包含主程序 `dsh_go_fish_pc.exe` 与原生 C++ 互保守护进程 `dsh_fish_watchdog.exe`。'
+            '- 明确严格的本地规则与持久化账本：改严立即生效、改松进入 12 小时冷却队列、关闭隐藏至托盘、开机自启、高阻力随机码+理由+60s冷静期退出、铁锁专注倒计时禁止提前撤防。'
+            '- OpenAI 兼容 AI 接口（DeepSeek / Gemini / OpenAI / Ollama / 自定义）：自动识别灰区站点学习/摸鱼、限时学习通行证审批与真实账本复盘参谋。'
           ) | Set-Content -Path PC_NOTES.md -Encoding utf8
           gh release create $tag `
             DSH-Go-Fish-PC-Windows-x64.zip PC-SHA256.txt `
