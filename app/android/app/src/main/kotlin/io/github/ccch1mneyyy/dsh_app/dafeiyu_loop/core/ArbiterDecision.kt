@@ -33,6 +33,15 @@ data class ArbiterDecision(
         const val MODE_ALLOWLIST = "allowlist"
         const val MODE_FREE = "free"
 
+        /**
+         * 裁决结果的保质期：引擎每分钟左右会给一份新的。超过这么久没更新（引擎挂了 / 断连），
+         * 手机就不再按这份旧裁决执法，退回旧的规则快照（那边每条规则都带到期时间）。
+         * 否则一份「接管白名单」会在引擎挂掉后一直锁下去。
+         */
+        const val FRESH_MS = 10 * 60_000L
+
+        fun isFresh(receivedAt: Long, now: Long): Boolean = receivedAt > 0 && now - receivedAt in 0..FRESH_MS
+
         /** 从 /plan 的 `lock` 读；读不懂就返回 null（当作没有新裁决，什么都不改）。 */
         fun fromWire(raw: Any?): ArbiterDecision? {
             val m = raw as? Map<*, *> ?: return null

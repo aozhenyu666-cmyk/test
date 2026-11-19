@@ -258,7 +258,8 @@ test('I10 每天硬干预达上限后，只剩深夜锁和契约逾期锁，其�
   // /plan 集成校验：硬干预满额时，白天娱乐雷达不再落强锁（force.level === 0），仅提醒
   await withHome(async (home) => {
     seedHome(home, { mode: 'coach', intensity: 'gentle' })
-    const today = new Date().toISOString().slice(0, 10)
+    // 北京时间的「今天」：UTC 日期在北京 0:00–8:00 会停在前一天，CI 在这个时段跑会误判。
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
     writeFileSync(join(home, 'companion', 'hard-interventions.json'), JSON.stringify({
       v: 1,
       day: today,
@@ -280,8 +281,14 @@ test('I10 每天硬干预达上限后，只剩深夜锁和契约逾期锁，其�
       }),
     })
     assert.equal(p.body.hardInterventions.capped, true)
-    assert.equal(p.body.force.level, 0, 'I10: 达到硬干预日上限后降级为只提醒')
-    assert.equal(p.body.force.app, undefined)
+    // 深夜锁（0:30–7:00，按服务端时钟）本来就不受硬干预上限约束（isLockExemptFromDailyCap）。
+    // 测试只改了手机上报的本地时间，CI 若恰在北京深夜跑，服务端会判深夜锁——这时锁是对的，原因必须是深夜。
+    if (p.body.lockArbiter?.source === 'NIGHT_CURFEW') {
+      assert.equal(p.body.lock?.priority, 'P4', 'I10: 满额时还在锁，只能是深夜锁')
+    } else {
+      assert.equal(p.body.force.level, 0, 'I10: 达到硬干预日上限后降级为只提醒')
+      assert.equal(p.body.force.app, undefined)
+    }
   })
 })
 

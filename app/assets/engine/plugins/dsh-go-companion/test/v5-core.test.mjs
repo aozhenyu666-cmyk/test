@@ -364,6 +364,8 @@ test('HTTP routes (/analytics, /storyline, /today, /plan geminiAutoPull) and V5 
     assert.equal(stGet.body.pullMode, 'countdown_3s')
 
     // 2. /plan triggers geminiAutoPull on >=8m fun dwell during busy work
+    // 安静时段（默认 2–7 点，按服务端时钟）里本来就不自动拉 Gemini；关掉它，测试才与 CI 跑的时刻无关。
+    await callHttp(handler, 'POST', '/dsh-go-companion/v1/config', { quietStart: 12, quietEnd: 12 })
     const planRes = await callHttp(handler, 'POST', '/dsh-go-companion/v1/plan', {
       v: 1,
       phone: {

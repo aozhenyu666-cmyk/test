@@ -43,4 +43,13 @@ class ArbiterDecisionTest {
         assertNull(ArbiterDecision.fromWire(mapOf("mode" to "weird")))
         assertNull(ArbiterDecision.fromWire(null))
     }
+
+    @Test
+    fun `a decision older than ten minutes is stale and must not be enforced`() {
+        val now = 1_000_000_000L
+        assertTrue(ArbiterDecision.isFresh(now - 60_000L, now))
+        assertFalse(ArbiterDecision.isFresh(now - ArbiterDecision.FRESH_MS - 1, now))
+        assertFalse(ArbiterDecision.isFresh(0L, now))
+        assertFalse(ArbiterDecision.isFresh(now + 60_000L, now))
+    }
 }

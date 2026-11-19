@@ -86,6 +86,7 @@ object ArbiterShadow {
     private const val PREFS = "dsh_arbiter_enforce"
     private const val KEY_ENFORCE = "arbiter_enforce"
     @Volatile private var current: ArbiterDecision? = null
+    @Volatile private var receivedAt: Long = 0L
     @Volatile private var enforceCache: Boolean? = null
     private val lastLogged = HashMap<String, Long>()
 
@@ -111,7 +112,8 @@ object ArbiterShadow {
         val p = pkg?.trim().orEmpty()
         return ArbiterEnforcePolicy.evaluate(
             arbiterEnforce = true,
-            decision = current,
+            // 过期的裁决（引擎超过 10 分钟没给新的）不执法，退回旧路径。
+            decision = current?.takeIf { ArbiterDecision.isFresh(receivedAt, System.currentTimeMillis()) },
             pkg = p,
             neverLock = p.isNotEmpty() && LockSafety.neverLock(ctx, p),
             disarmed = LockSafety.disarmed(ctx),
@@ -122,6 +124,7 @@ object ArbiterShadow {
 
     fun update(raw: Any?) {
         current = ArbiterDecision.fromWire(raw)
+        receivedAt = if (current != null) System.currentTimeMillis() else 0L
     }
 
     fun current(): ArbiterDecision? = current
