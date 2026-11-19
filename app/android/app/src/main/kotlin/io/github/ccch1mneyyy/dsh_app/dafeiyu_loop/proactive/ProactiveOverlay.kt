@@ -983,12 +983,12 @@ object ProactiveOverlay {
     }
 
     /**
-     * 自绘 60dp 物理立体骰面 + 380ms 弹性翻滚定格动画：
-     * 1 点醒目朱红大圆芯、4 点双红、2/3/5/6 高对比墨青点阵，角落附微缩数字标。
+     * 自绘 60dp 立体骰子 + 380ms 弹性翻滚定格动画：
+     * 象牙白骰面、暖灰细边、软阴影；1、4 点朱红，其余墨黑，点有凹陷的明暗。
      */
     private class DiceFaceView(
         context: Context,
-        private val palette: OverlayPalette,
+        @Suppress("UNUSED_PARAMETER") palette: OverlayPalette,
         initialFace: Int,
     ) : View(context) {
         private var currentFace = initialFace.coerceIn(1, 6)
@@ -998,9 +998,6 @@ object ProactiveOverlay {
             style = android.graphics.Paint.Style.STROKE
         }
         private val pipPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-        private val badgePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            textAlign = android.graphics.Paint.Align.RIGHT
-        }
         private val rect = android.graphics.RectF()
 
         fun playRoll(targetFace: Int) {
@@ -1044,25 +1041,54 @@ object ProactiveOverlay {
             super.onDetachedFromWindow()
         }
 
+        // 2026-11-19：不再用主题色（蓝）描边——改成真骰子的样子：象牙白渐变骰面、暖灰细边、底部软阴影、
+        // 有立体感的点（1、4 点朱红，其余墨黑）。深浅色主题下都是同一颗骰子。
+        private val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        private val highlightPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+        }
+        private var faceShader: android.graphics.Shader? = null
+        private var shaderFor = 0f
+
         override fun onDraw(canvas: android.graphics.Canvas) {
             super.onDraw(canvas)
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
-            val pad = w * 0.06f
-            rect.set(pad, pad, w - pad, h - pad)
-            val radius = w * 0.24f
+            val pad = w * 0.08f
+            val radius = w * 0.2f
 
-            // 底板 + 描边（微立体高光）
-            facePaint.color = palette.pressed
+            // 软阴影：往下错一点、半透明，让骰子「立」在卡片上。
+            shadowPaint.color = android.graphics.Color.argb(46, 0, 0, 0)
+            rect.set(pad + w * 0.02f, pad + w * 0.06f, w - pad + w * 0.01f, h - pad + w * 0.06f)
+            canvas.drawRoundRect(rect, radius, radius, shadowPaint)
+
+            rect.set(pad, pad, w - pad, h - pad)
+            if (faceShader == null || shaderFor != h) {
+                faceShader = android.graphics.LinearGradient(
+                    0f, pad, 0f, h - pad,
+                    android.graphics.Color.parseColor("#FFFFFF"),
+                    android.graphics.Color.parseColor("#E9E3D8"),
+                    android.graphics.Shader.TileMode.CLAMP,
+                )
+                shaderFor = h
+            }
+            facePaint.shader = faceShader
             canvas.drawRoundRect(rect, radius, radius, facePaint)
-            borderPaint.color = palette.accent
-            borderPaint.strokeWidth = (w * 0.045f).coerceAtLeast(2f)
+            facePaint.shader = null
+            // 暖灰细边（不是主题色）+ 顶部一道高光。
+            borderPaint.color = android.graphics.Color.parseColor("#CFC6B8")
+            borderPaint.strokeWidth = (w * 0.022f).coerceAtLeast(1.2f)
             canvas.drawRoundRect(rect, radius, radius, borderPaint)
+            highlightPaint.color = android.graphics.Color.argb(170, 255, 255, 255)
+            highlightPaint.strokeWidth = (w * 0.02f).coerceAtLeast(1f)
+            val inset = w * 0.035f
+            rect.set(pad + inset, pad + inset, w - pad - inset, h - pad - inset)
+            canvas.drawArc(rect, 200f, 140f, false, highlightPaint)
 
             val cx = w / 2f
             val cy = h / 2f
-            val off = w * 0.24f
+            val off = w * 0.215f
             val positions: List<Pair<Float, Float>> = when (currentFace) {
                 1 -> listOf(cx to cy)
                 2 -> listOf(cx - off to cy - off, cx + off to cy + off)
@@ -1075,16 +1101,19 @@ object ProactiveOverlay {
                     cx - off to cy + off, cx + off to cy + off,
                 )
             }
-            val redPip = android.graphics.Color.parseColor("#E04F44")
-            val r = if (currentFace == 1) w * 0.145f else w * 0.088f
+            val red = currentFace == 1 || currentFace == 4
+            val light = android.graphics.Color.parseColor(if (red) "#F0605A" else "#4A505C")
+            val dark = android.graphics.Color.parseColor(if (red) "#B3261E" else "#15181E")
+            val r = if (currentFace == 1) w * 0.13f else w * 0.075f
             for (pt in positions) {
-                pipPaint.color = if (currentFace == 1 || currentFace == 4) redPip else palette.ink
+                // 凹进去的点：左上亮、右下暗。
+                pipPaint.shader = android.graphics.RadialGradient(
+                    pt.first - r * 0.35f, pt.second - r * 0.35f, r * 1.4f, light, dark,
+                    android.graphics.Shader.TileMode.CLAMP,
+                )
                 canvas.drawCircle(pt.first, pt.second, r, pipPaint)
             }
-
-            badgePaint.color = palette.muted
-            badgePaint.textSize = w * 0.19f
-            canvas.drawText(currentFace.toString(), w - pad * 2.1f, h - pad * 1.9f, badgePaint)
+            pipPaint.shader = null
         }
     }
 }
