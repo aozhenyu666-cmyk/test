@@ -330,8 +330,9 @@ void main() {
       await tester.scrollUntilVisible(find.text('大肥鱼中枢'), 300, scrollable: find.byType(Scrollable).first);
       await tester.tap(find.text('大肥鱼中枢'));
       await tester.pumpAndSettle();
-      await tester.scrollUntilVisible(find.text('主动搭话与诊断'), 300, scrollable: find.byType(Scrollable).first);
-      await tester.tap(find.text('主动搭话与诊断'));
+      await tester.tap(find.byKey(const ValueKey('hub-group-fish')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('主动搭话'));
       await tester.pumpAndSettle();
       expect(find.byType(ProactivePage), findsOneWidget);
     });

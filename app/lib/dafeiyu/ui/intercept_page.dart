@@ -26,6 +26,7 @@ import '../../ui/theme/theme.dart';
 import '../../ui/phone/action_log_page.dart' show formatLogTime;
 import '../../ui/phone/hold_to_confirm.dart';
 import '../dafeiyu_strings.dart';
+import 'records_page.dart';
 import 'app_picker_dialog.dart';
 import 'bank_manager_page.dart';
 
@@ -673,13 +674,19 @@ class _InterceptPageState extends State<InterceptPage> {
             if ((status?.receipts ?? const []).isEmpty)
               ListPageRow(icon: AppIcons.pending, title: DafeiyuStrings.fromL10n(l10n).interceptReceiptsEmpty)
             else
-              for (final r in status!.receipts.take(20))
+              for (final r in status!.receipts.take(5))
                 ListPageRow(
                   icon: AppIcons.chat,
                   title: interceptOutcomeLabel(l10n, r.outcome),
                   subtitle: r.packageName,
                   value: formatLogTime(DateTime.fromMillisecondsSinceEpoch(r.endedAt)),
                 ),
+            ListPageRow(
+              icon: AppIcons.history,
+              title: '全部锁机记录 · 清理',
+              chevron: true,
+              onTap: () => unawaited(RecordsPage.open(context, tab: RecordsTab.lock)),
+            ),
           ],
         ),
       ],

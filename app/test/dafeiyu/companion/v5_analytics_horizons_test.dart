@@ -5,6 +5,7 @@ import 'package:dsh_app/dafeiyu/ui/companion_hub_page.dart';
 import 'package:dsh_app/dafeiyu/ui/plan_modality_page.dart';
 import 'package:dsh_app/dafeiyu/ui/strategy_horizons_page.dart';
 import 'package:dsh_app/dafeiyu/ui/usage_analytics_page.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../phone/harness.dart';
@@ -401,33 +402,31 @@ void main() {
     expect(ch.horizonsCalls.any((c) => c['action'] == 'push_to_today'), isTrue);
   });
 
-  testWidgets('CompanionHubPage switches between 4 decks cleanly and preserves spotlight grid', (tester) async {
+  testWidgets('CompanionHubPage：四组设置，每项只出现一次；日常功能不在中枢', (tester) async {
     final ch = _FakeV5Channel();
     await pumpPhone(tester, CompanionHubPage(channel: ch));
     await settlePhone(tester);
 
-    // Default: 总览全部
-    expect(find.text('📊 每日统计与晚间总报'), findsOneWidget);
-    expect(find.text('🧭 三层战略作战室'), findsOneWidget);
-    expect(find.text('⚡ 主动唤起 Gemini'), findsOneWidget);
-    expect(find.text('📑 计划与契约台'), findsOneWidget);
+    for (final k in ['hub-group-fish', 'hub-group-lock', 'hub-group-data', 'hub-group-diag']) {
+      expect(find.byKey(ValueKey(k)), findsOneWidget);
+    }
+    // 统计、计划、四部门都不在中枢了（在局 / 墙）。
+    expect(find.text('📊 每日统计与晚间总报'), findsNothing);
+    expect(find.text('每日四部门'), findsNothing);
 
-    // Switch to 战略与统计
-    await tester.tap(find.text('战略与统计'));
-    await settlePhone(tester);
-    expect(find.text('晚间 AI 可视化总报'), findsOneWidget);
-    expect(find.text('备考题库中心'), findsOneWidget);
-
-    // Switch to 姐妹与主动
-    await tester.tap(find.text('姐妹与主动'));
+    await tester.tap(find.byKey(const ValueKey('hub-group-fish')));
     await settlePhone(tester);
     expect(find.text('立即唤起 Gemini Live'), findsOneWidget);
     expect(find.text('双姐妹桌宠皮肤（.zip 导入）'), findsOneWidget);
+    await popPage(tester);
 
-    // Switch to 护栏与底座
-    await tester.tap(find.text('护栏与底座'));
+    await tester.tap(find.byKey(const ValueKey('hub-group-lock')));
     await settlePhone(tester);
     expect(find.text('娱乐锁机'), findsOneWidget);
+    await popPage(tester);
+
+    await tester.tap(find.byKey(const ValueKey('hub-group-diag')));
+    await settlePhone(tester);
     expect(find.text('一键热重启主动引擎'), findsOneWidget);
   });
 
@@ -437,7 +436,7 @@ void main() {
     await settlePhone(tester);
 
     // 两个入口改成原生的行：主线卡底部「三层战略主线」，使用情况卡底部「查看完整使用情况」。
-    expect(find.text('三层战略主线'), findsOneWidget);
+    expect(find.text('全部计划'), findsOneWidget);
     expect(find.text('查看完整使用情况'), findsOneWidget);
     expect(find.text('● Gemini 沟通 28m'), findsOneWidget);
 

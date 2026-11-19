@@ -114,3 +114,9 @@ ProviderContainer containerOf(WidgetTester tester) =>
     ProviderScope.containerOf(tester.element(find.byType(MaterialApp)));
 
 PhoneState phoneOf(WidgetTester tester) => containerOf(tester).read(phoneProvider);
+
+/// AppPage 的返回键不是 Cupertino 的那个，直接让导航器退一页。
+Future<void> popPage(WidgetTester tester) async {
+  tester.state<NavigatorState>(find.byType(Navigator).last).pop();
+  await settlePhone(tester);
+}

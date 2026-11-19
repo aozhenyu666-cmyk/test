@@ -157,6 +157,21 @@ class LedgerBookTest {
         assertEquals(2, book.state.receipts.size)
     }
 
+    @Test fun clearingReceiptsDropsOnlyTheOldDetailAndKeepsTheCounts() {
+        val book = intercept()
+        book.onTriggered("old", wall)
+        book.onEnded(receipt("old", InterceptOutcome.RELEASED))
+        wall += 10 * 86_400_000L
+        book.onTriggered("new", wall)
+        book.onEnded(receipt("new", InterceptOutcome.EXITED))
+        assertEquals(1, book.clearReceipts(wall - 86_400_000L))
+        assertEquals(listOf("new"), book.state.receipts.map { it.eventId })
+        assertEquals(2, book.state.triggerCount)
+        assertEquals(1, book.clearReceipts(Long.MAX_VALUE))
+        assertEquals(0, book.state.receipts.size)
+        assertEquals(1, book.state.userReleasedCount)
+    }
+
     @Test fun aBlockedPageThatWasNeverSeenIsNotCountedAsBlocked() {
         val book = intercept()
         book.onTriggered("i1", wall)

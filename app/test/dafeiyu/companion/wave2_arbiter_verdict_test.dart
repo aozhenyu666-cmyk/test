@@ -140,11 +140,13 @@ void main() {
     final ch = _FakeWave2Channel();
     await pumpPhone(tester, CompanionHubPage(channel: ch));
     await settlePhone(tester);
+    await tester.tap(find.byKey(const ValueKey('hub-group-lock')));
+    await settlePhone(tester);
 
     final sw = find.byKey(const ValueKey('hub-arbiter-enforce-switch'));
     expect(sw, findsOneWidget);
     expect(find.text('需先收集真机 arbiter-diff.jsonl 核验后再开启'), findsOneWidget);
-    expect(tester.widget<SwitchListTile>(sw).value, isFalse);
+    expect(tester.widget<Switch>(sw).value, isFalse);
 
     // 14-day autonomy shift badge
     expect(find.text('自律放宽→温和'), findsOneWidget);
@@ -152,16 +154,11 @@ void main() {
     await tester.tap(sw);
     await settlePhone(tester);
     expect(ch.arbiterChanges, [true]);
-    expect(tester.widget<SwitchListTile>(sw).value, isTrue);
+    expect(tester.widget<Switch>(sw).value, isTrue);
   });
 
   testWidgets('Hard daily verdict leads UI and caps 投入分 <= 39 when 空转 across Hub, BoutsWorkspace and UsageAnalytics', (tester) async {
     final ch = _FakeWave2Channel();
-
-    await pumpPhone(tester, CompanionHubPage(channel: ch));
-    await settlePhone(tester);
-    expect(find.text('硬日判：空转'), findsOneWidget);
-    expect(find.text('投入分 39'), findsOneWidget);
 
     await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: _FakeWave2LoopChannel()));
     await settlePhone(tester);

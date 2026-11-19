@@ -365,6 +365,12 @@ class InterceptChannel {
         .toList();
   }
 
+  /// 清理模态：删掉 [olderThanDays] 天前的锁机记录（0 = 全清）。计数不动。返回删了几条。
+  Future<int> clearReceipts({int olderThanDays = 0}) async {
+    final raw = await _call<Object?>('clearReceipts', {'olderThanDays': olderThanDays});
+    return raw is num ? raw.toInt() : 0;
+  }
+
   /// Pause from the settings page (the kernel pauses everything for its default window).
   /// The channel answers with the guard's boolean, so the page re-reads status() afterwards.
   Future<bool> pause() async => await _call<Object?>('pause') == true;

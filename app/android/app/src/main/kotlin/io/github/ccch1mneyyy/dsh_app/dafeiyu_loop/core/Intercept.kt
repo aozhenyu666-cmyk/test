@@ -725,6 +725,9 @@ class InterceptGuard(
         ledger.state.receipts.takeLast(limit.coerceAtLeast(0)).reversed()
     }
 
+    /** 清理模态：删掉 [before] 之前的锁机记录（计数不动）。 */
+    fun clearReceipts(before: Long): Int = synchronized(lock) { ledger.clearReceipts(before) }
+
     // ---------------------------------------------------------------- internals
 
     private fun endOpen(

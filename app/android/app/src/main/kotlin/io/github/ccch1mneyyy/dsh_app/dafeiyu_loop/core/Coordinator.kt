@@ -251,6 +251,15 @@ class Coordinator(
     fun queued(): List<ProactiveEvent> = synchronized(lock) { queue.toList() }
     /** Closed events, newest first. */
     fun receipts(limit: Int = 50): List<ProactiveEvent> = synchronized(lock) { receipts.reversed().take(limit) }
+    /** 清理模态：删掉 [before] 之前创建的已结束事件（Long.MAX_VALUE = 全清）。返回删了几条。 */
+    fun clearReceipts(before: Long): Int = synchronized(lock) {
+        val n = receipts.size
+        receipts.removeAll { it.request.createdAt < before }
+        val removed = n - receipts.size
+        if (removed > 0) persist()
+        removed
+    }
+
     fun find(eventId: String): ProactiveEvent? = synchronized(lock) {
         active?.takeIf { it.eventId == eventId } ?: queue.firstOrNull { it.eventId == eventId } ?: receipts.lastOrNull { it.eventId == eventId }
     }

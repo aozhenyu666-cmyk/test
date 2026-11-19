@@ -117,6 +117,20 @@ class ProactiveLedgerBook(private val store: SnapshotStore) {
     }
 
     /** Bookkeeping shared by both entry points; false when this fact was already applied. */
+    /**
+     * 2026-11-19 清理模态：删掉 [before] 之前结束的锁机记录（Long.MAX_VALUE = 全清）。
+     * 只删明细，计数（拦了几次、放了几次）不动。返回删了几条。
+     */
+    fun clearReceipts(before: Long): Int = synchronized(lock) {
+        val kept = state.receipts.filter { it.endedAt >= before }
+        val removed = state.receipts.size - kept.size
+        if (removed > 0) {
+            state = state.copy(receipts = kept)
+            persist()
+        }
+        removed
+    }
+
     private fun apply(key: String): Boolean {
         if (!applied.add(key)) return false
         while (applied.size > APPLIED_CAP) applied.remove(applied.first())

@@ -52,6 +52,12 @@ class InterceptPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 InterceptRuntime.ensure(context)
                 result.success(InterceptRuntime.receipts(call.argument<Int>("limit") ?: 50).map { it.toMap() })
             }
+            "clearReceipts" -> {
+                InterceptRuntime.ensure(context)
+                val days = call.argument<Int>("olderThanDays") ?: 0
+                val before = if (days <= 0) Long.MAX_VALUE else System.currentTimeMillis() - days * 86_400_000L
+                result.success(InterceptRuntime.clearReceipts(before))
+            }
             "pause" -> {
                 InterceptRuntime.ensure(context)
                 result.success(InterceptRuntime.onPaused(null))

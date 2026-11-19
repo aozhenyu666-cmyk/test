@@ -7,6 +7,8 @@ import '../channels/proactive_state.dart';
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/status_chip.dart';
 import 'companion_hub_page.dart';
+import 'bank_manager_page.dart';
+import 'deposit_page.dart';
 import 'plan_modality_page.dart';
 import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
@@ -37,6 +39,7 @@ class _WallPageState extends State<WallPage> {
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
   WallThread? _thread;
   Map<String, Object?>? _status;
+  Map<String, dynamic>? _today;
   bool _loading = true;
   bool _failed = false;
   String _failedWhy = '';
@@ -49,6 +52,10 @@ class _WallPageState extends State<WallPage> {
 
   Future<void> _refresh() async {
     setState(() => _loading = true);
+    // 出口次数、题库设定从 /today 来；慢了也不挡墙本身的状态和记录，单独读。
+    unawaited(_channel.todayStatus().then((t) {
+      if (mounted && t != null) setState(() => _today = t);
+    }).catchError((_) {}));
     final thread = await _channel.wallThread();
     final status = await _channel.wallStatus();
     if (!mounted) return;
@@ -102,6 +109,9 @@ class _WallPageState extends State<WallPage> {
             title: '审查记录 · ${_thread!.bubbles.length} 条（点判定可申诉）',
             children: [for (final b in _thread!.bubbles) _bubble(l, b)],
           ),
+        const SizedBox(height: 20),
+        _dueToday(),
+        _wayOut(),
         const SizedBox(height: 20),
         _actions(l),
         const SizedBox(height: 20),
@@ -237,6 +247,84 @@ class _WallPageState extends State<WallPage> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 今天要交给墙的：每日四部门（从中枢挪过来——它本来就是交给墙验的）。
+  Widget _dueToday() {
+    final colors = DshColors.of(context);
+    final missing = _status?['depositMissing'] is String ? _status!['depositMissing'] as String : '';
+    return ListPageCard(
+      title: '今天要交的',
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      children: [
+        ListPageRow(
+          key: const ValueKey('wall-deposit'),
+          icon: AppIcons.edit,
+          iconColor: missing.isEmpty ? colors.success : colors.warning,
+          title: '每日四部门',
+          subtitle: missing.isEmpty ? '信息收集 · 谋划思考 · 行为管理 · 统筹规划' : '还没交：$missing',
+          subtitleMaxLines: 2,
+          chevron: true,
+          onTap: () async {
+            await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const DepositPage()));
+            if (mounted) unawaited(_refresh());
+          },
+        ),
+      ],
+    );
+  }
+
+  /// 出不去怎么办：所有解锁出口列在一处，今天还剩几次也在这里说清。
+  /// 紧急解除、破窗、紧急通行、长按回 DSH 共用同一个每日次数（插件 passLedger.emergency 按 disarmId 去重计）。
+  Widget _wayOut() {
+    final colors = DshColors.of(context);
+    final pl = _today?['passLedger'] is Map ? _today!['passLedger'] as Map : const {};
+    final em = pl['emergency'] is Map ? pl['emergency'] as Map : const {};
+    final cap = em['cap'] is num ? (em['cap'] as num).toInt() : (_today?['emergencyDisarmDailyCap'] is num ? (_today!['emergencyDisarmDailyCap'] as num).toInt() : 3);
+    final left = em['left'] is num ? (em['left'] as num).toInt() : null;
+    final bank = _today?['bankSummary'] is Map ? _today!['bankSummary'] as Map : const {};
+    final need = bank['requiredCount'] is num ? (bank['requiredCount'] as num).toInt() : 10;
+    final mins = bank['unlockMinutes'] is num ? (bank['unlockMinutes'] as num).toInt() : 5;
+    return ListPageCard(
+      key: const ValueKey('wall-way-out'),
+      title: '出不去怎么办',
+      children: [
+        ListPageRow(
+          icon: AppIcons.warning,
+          iconColor: colors.danger,
+          title: '紧急解除',
+          subtitle: '下拉通知栏点「紧急解除」写一句理由，10 分钟不锁。破窗、长按回 DSH 也算在这几次里',
+          subtitleMaxLines: 3,
+          value: left == null ? '每天 $cap 次' : '剩 $left/$cap',
+        ),
+        ListPageRow(
+          icon: AppIcons.done,
+          iconColor: colors.success,
+          title: '过一局验收',
+          subtitle: '挣娱乐余额：按局长的 1/3（10–40 分钟），没花完明天接着用',
+          subtitleMaxLines: 2,
+        ),
+        ListPageRow(
+          icon: AppIcons.skill,
+          iconColor: colors.info,
+          title: '刷题',
+          subtitle: '答对 $need 题挣 $mins 分钟余额',
+          chevron: true,
+          onTap: () => unawaited(BankManagerPage.open(context, channel: _channel)),
+        ),
+        const ListPageRow(
+          icon: AppIcons.chat,
+          title: '找鲸澜要通行证',
+          subtitle: '在对话里说清楚要用哪个 App、做什么、多久；她判，给一段限时通行',
+          subtitleMaxLines: 2,
+        ),
+        const ListPageRow(
+          icon: AppIcons.history,
+          title: '对判定不服',
+          subtitle: '看下面「申诉」：只收新的物理证据',
+        ),
+      ],
     );
   }
 

@@ -158,7 +158,7 @@ void main() {
     expect(find.text('推进 v4.1 收尾'), findsOneWidget);
     expect(find.text('严格锁'), findsOneWidget);
     expect(find.text('摇一骰'), findsOneWidget);
-    expect(find.text('锁机与白名单'), findsOneWidget);
+    expect(find.text('执行记录'), findsOneWidget);
 
     // 调整运行中白名单并点确认按钮，确认命令可靠发出
     await tester.tap(find.text('调整白名单'));
@@ -250,13 +250,16 @@ void main() {
     await pumpPhone(tester, CompanionHubPage(channel: ch));
     await settlePhone(tester);
 
-    await tester.scrollUntilVisible(find.text('手机目录与 Obsidian 自动挂载'), 200);
+    await tester.tap(find.byKey(const ValueKey('hub-group-data')));
+    await settlePhone(tester);
     expect(find.text('手机目录与 Obsidian 自动挂载'), findsOneWidget);
     await tester.tap(find.text('手机目录与 Obsidian 自动挂载'));
     await settlePhone(tester);
     expect(ch.storageGranted, isTrue);
 
-    await tester.scrollUntilVisible(find.text('一键热重启主动引擎'), 200);
+    await popPage(tester);
+    await tester.tap(find.byKey(const ValueKey('hub-group-diag')));
+    await settlePhone(tester);
     await tester.tap(find.text('一键热重启主动引擎'));
     await settlePhone(tester);
     expect(ch.restartCalls, 1);

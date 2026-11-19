@@ -4,9 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../dafeiyu/dafeiyu_strings.dart';
 import '../../dafeiyu/ui/companion_hub_page.dart';
-import '../../dafeiyu/ui/loop_test_page.dart';
 import '../../l10n/l10n.dart';
 import '../../runtime/local_footprint.dart';
 import '../../runtime/runtime_bridge.dart';
@@ -519,15 +517,9 @@ class _PhoneControlScreenState extends ConsumerState<PhoneControlScreen> {
                     icon: AppIcons.bot,
                     iconColor: Theme.of(context).colorScheme.primary,
                     title: '大肥鱼中枢',
-                    subtitle: '今日计划、两姐妹角色卡、墙与申诉、娱乐锁机、专注监督与主动搭话的统一入口',
+                    subtitle: '两条鱼、锁、数据与诊断的设置（日常功能都在「局」和「墙」）',
                     subtitleMaxLines: 2,
                     onTap: () => _push(const CompanionHubPage()),
-                  ),
-                  ListPageRow(
-                    icon: AppIcons.play,
-                    title: DafeiyuStrings.of(context).loopEntryTitle,
-                    subtitle: DafeiyuStrings.of(context).loopEntrySubtitle,
-                    onTap: () => _push(const LoopTestPage()),
                   ),
                 ],
               ),

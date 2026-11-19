@@ -7,37 +7,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../plugins/native/native_model.dart' show NativePanel;
-import '../../plugins/native/native_state.dart' show nativeContributionsProvider, rereadNativeContributions;
 import '../channels/proactive_state.dart';
-import '../../state/sessions_state.dart' show currentSessionProvider, sessionsProvider;
+import '../../state/sessions_state.dart' show sessionsProvider;
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
 import '../../ui/common/segmented_pill.dart';
 import '../../ui/common/status_chip.dart';
-import '../../ui/common/tile_grid.dart';
 import '../../ui/pets/pet_settings_page.dart';
-import 'bank_manager_page.dart';
-import 'deposit_page.dart';
 import 'intercept_page.dart';
-import 'plan_modality_page.dart';
-import 'plan_page.dart';
-import 'task_card.dart';
+import 'records_page.dart';
 import 'today_cards.dart';
 import 'proactive_page.dart';
 import 'sisters_page.dart';
-import 'strategy_horizons_page.dart';
 import 'usage_analytics_page.dart';
 import 'wall_page.dart';
-import '../../ui/plugins/native/native_panel.dart';
 import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
-import 'bout_voice_page.dart';
 import 'bouts_workspace_page.dart';
 import 'voice_settings_page.dart';
-
-enum _HubDeck { all, strategy, sisters, guardrails }
 
 class CompanionHubPage extends ConsumerStatefulWidget {
   const CompanionHubPage({super.key, this.channel});
@@ -57,7 +45,6 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
 
   bool _loading = true;
   bool _actionBusy = false;
-  _HubDeck _deck = _HubDeck.all;
   Map<String, Object?>? _wallStatus;
   ProactiveStatus? _proactive;
   DepositView? _deposit;
@@ -73,7 +60,6 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   bool? _arbiterEnforce;
   Map<String, dynamic>? _rotate;
   IntensityView? _intensity;
-  Map<String, dynamic>? _today;
 
   @override
   void initState() {
@@ -131,7 +117,6 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       if (v != null) _intensity = v;
     });
     load(_channel.todayStatus(), (v) {
-      _today = v;
       _intensity ??= IntensityView.fromWire(v);
     });
   }
@@ -321,28 +306,6 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(content: Text(ok ? '⚡ 已触发 Gemini 主动唤起' : '未能拉起 Gemini，请检查悬浮窗与无障碍权限')),
       );
-    } finally {
-      if (mounted) setState(() => _actionBusy = false);
-    }
-  }
-
-  Future<void> _rollDiceNow() async {
-    if (_actionBusy) return;
-    setState(() => _actionBusy = true);
-    try {
-      final res = await _channel.rollDiceNow();
-      if (!mounted) return;
-      final dice = res?['dice'];
-      final name = res?['name'] ?? '';
-      final ask = res?['ask'] ?? '';
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(
-            dice != null ? '🎲 骰$dice · $name：$ask' : '已触发六骰思维微干预',
-          ),
-        ),
-      );
-      _refreshExtras();
     } finally {
       if (mounted) setState(() => _actionBusy = false);
     }
@@ -603,40 +566,302 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     return (tone, title, subtitle, footer);
   }
 
-  NativePanel? _boutsPanel() {
-    final plugin = ref.watch(nativeContributionsProvider).plugin('dsh-go-companion');
-    for (final panel in plugin?.panels ?? const <NativePanel>[]) {
-      if (panel.id == 'bouts') return panel;
-    }
-    return null;
+  /// 每次 setState 都跳一下：推出去的分组页跟着重建（开关一拨，分组页立刻变）。
+  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _tick.value++;
+  }
+
+  @override
+  void dispose() {
+    _tick.dispose();
+    super.dispose();
+  }
+
+  /// 分组页：和中枢共用同一份状态和同一套动作，只是分开摆。
+  void _openGroup(String title, String subtitle, List<Widget> Function(BuildContext ctx) children) {
+    unawaited(Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ValueListenableBuilder<int>(
+          valueListenable: _tick,
+          builder: (ctx, _, _) => AppPage.list(
+            title: title,
+            subtitle: Text(subtitle),
+            actions: [
+              GlassIconButton(icon: AppIcons.refresh, tooltip: '刷新状态', onPressed: () => unawaited(_refresh())),
+            ],
+            children: children(ctx),
+          ),
+        ),
+      ),
+    ));
+  }
+
+  static const _groupMargin = EdgeInsets.fromLTRB(16, 0, 16, 20);
+
+  /// 两条鱼：她们是谁、记住了什么、什么时候开口、用什么声音、长什么样。
+  List<Widget> _fishGroup(BuildContext ctx) {
+    final colors = DshColors.of(ctx);
+    final appealLeft = _sisters?.audit.done;
+    final geminiStats = _analytics?['geminiStats'] is Map ? _analytics!['geminiStats'] as Map : const {};
+    final geminiMinToday = geminiStats['minutesToday'] is num ? (geminiStats['minutesToday'] as num).toInt() : 0;
+    final shakeOn = _shakeDice?['enabled'] != false;
+    return [
+      ListPageCard(
+        title: '人设与记忆',
+        margin: _groupMargin,
+        children: [
+          ListPageRow(
+            icon: AppIcons.team,
+            title: '姐妹与记忆',
+            subtitle: '鱼丸与鲸澜的人格卡、记住的事实与基础操作通过率',
+            subtitleMaxLines: 2,
+            value: appealLeft != null ? '今日完成 $appealLeft' : null,
+            chevron: true,
+            onTap: () => _openPage(const SistersPage()),
+          ),
+          if (_rotate != null) ...[
+            _rotateRow('companion', '鱼丸'),
+            _rotateRow('strategist', '鲸澜'),
+          ],
+        ],
+      ),
+      ListPageCard(
+        title: '开口与连麦',
+        margin: _groupMargin,
+        children: [
+          ListPageRow(
+            icon: AppIcons.notificationsOff,
+            title: '主动搭话',
+            subtitle: '她们多久主动开口一次、免打扰时段（只管说话，不管锁）',
+            subtitleMaxLines: 2,
+            value: _proactive == null ? null : (_proactive!.config.enabled ? '已开启' : '未开启'),
+            chevron: true,
+            onTap: () => _openPage(const ProactivePage()),
+          ),
+          ListPageRow(
+            icon: AppIcons.trajectory,
+            title: 'Gemini 连麦策略',
+            subtitle: '3 秒浮窗自动接通 / 零秒强拉 / 仅温和提醒',
+            subtitleMaxLines: 2,
+            value: geminiMinToday > 0 ? '今日 ${geminiMinToday}m' : null,
+            chevron: true,
+            onTap: () => _openPage(UsageAnalyticsPage(channel: _channel, initialTab: AnalyticsTab.gemini)),
+          ),
+          ListPageRow(
+            icon: AppIcons.askAi,
+            title: '立即唤起 Gemini Live',
+            subtitle: '自动装入今日连续脉络开聊',
+            onTap: _actionBusy ? null : () => unawaited(_launchGeminiQuick()),
+          ),
+        ],
+      ),
+      ListPageCard(
+        title: '声音、形象与骰子',
+        margin: _groupMargin,
+        children: [
+          ListPageRow(
+            icon: AppIcons.voice,
+            title: '声线（鱼丸 / 鲸澜 / 局官）',
+            subtitle: '三个角色各自的音色与试听',
+            chevron: true,
+            onTap: () => _openPage(const VoiceSettingsPage()),
+          ),
+          ListPageRow(
+            icon: AppIcons.pet,
+            title: '双姐妹桌宠皮肤（.zip 导入）',
+            subtitle: '导入鱼丸 yuwan-girl.zip / 鲸澜 jinglan-girl.zip，发球时自动换肤',
+            subtitleMaxLines: 2,
+            chevron: true,
+            onTap: () => _openPage(const PetSettingsPage()),
+          ),
+          ListPageRow(
+            icon: AppIcons.overlayBall,
+            iconColor: shakeOn ? colors.success : null,
+            title: '摇一摇弹六骰',
+            subtitle: '亮屏时轻晃两下手机弹出六骰卡片；局页「摇一骰」随时可点',
+            subtitleMaxLines: 2,
+            badge: StatusChip(tone: shakeOn ? StatusTone.ok : StatusTone.idle, label: shakeOn ? '监听中' : '已暂停'),
+            onTap: _actionBusy ? null : () => unawaited(_toggleShakeDice()),
+          ),
+        ],
+      ),
+    ];
+  }
+
+  /// 锁：落不落得下来、落多重、锁谁放谁。
+  List<Widget> _lockGroup(BuildContext ctx) {
+    final colors = DshColors.of(ctx);
+    return [
+      LockReadinessCard(channel: _channel),
+      ListPageCard(
+        title: '锁怎么落',
+        margin: _groupMargin,
+        children: [
+          if (_lockShadow != null)
+            ListPageRow(
+              icon: AppIcons.info,
+              iconColor: _lockShadow! ? colors.info : colors.success,
+              title: '测试模式（锁只提示，不真锁）',
+              subtitle: _lockShadow!
+                  ? '现在：锁不会落下，只弹「这里本来会锁」。测完关掉，锁才真的生效'
+                  : '现在：锁真的生效。被锁出不来时，下拉通知栏点「紧急解除」',
+              subtitleMaxLines: 3,
+              trailing: Switch.adaptive(
+                value: _lockShadow!,
+                onChanged: _actionBusy ? null : (v) => unawaited(_setLockShadow(v)),
+              ),
+            ),
+          ListPageRow(
+            icon: AppIcons.verified,
+            title: '统一裁决器执法（arbiterEnforce）',
+            subtitle: '需先收集真机 arbiter-diff.jsonl 核验后再开启',
+            subtitleMaxLines: 2,
+            trailing: Switch.adaptive(
+              key: const ValueKey('hub-arbiter-enforce-switch'),
+              value: _arbiterEnforce ?? false,
+              onChanged: _actionBusy ? null : (v) => unawaited(_setArbiterEnforce(v)),
+            ),
+          ),
+        ],
+      ),
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: _buildIntensityCard(ctx, _intensity)),
+      ListPageCard(
+        title: '锁谁、放谁',
+        margin: _groupMargin,
+        children: [
+          ListPageRow(
+            icon: AppIcons.blocked,
+            title: '娱乐锁机',
+            subtitle: '锁机名单、放行白名单、误放行一键恢复',
+            subtitleMaxLines: 2,
+            chevron: true,
+            onTap: () => _openPage(const InterceptPage()),
+          ),
+          ListPageRow(
+            icon: AppIcons.time,
+            title: '专注监督',
+            subtitle: '原生 5 秒离开拉回（引擎断开仍生效）',
+            subtitleMaxLines: 2,
+            onTap: () => unawaited(_openFocus()),
+          ),
+          ListPageRow(
+            icon: AppIcons.permissions,
+            iconColor: (_guardian?.paired ?? false) ? colors.success : null,
+            title: '大肥鱼哨兵互信配对',
+            subtitle: '查看同签名互信状态，或生成 6 位配对码绑定独立「大肥鱼哨兵」App',
+            subtitleMaxLines: 2,
+            value: _guardian == null
+                ? null
+                : (_guardian!.paired
+                    ? (_guardian!.sameCert ? '免码互信' : '已配对')
+                    : (_guardian!.installed ? '待配对' : '未安装')),
+            onTap: () => unawaited(_openGuardianPairDialog()),
+          ),
+        ],
+      ),
+    ];
+  }
+
+  /// 数据：Obsidian 挂载、导入记忆、给外部 AI 的交接。
+  List<Widget> _dataGroup(BuildContext ctx) {
+    final colors = DshColors.of(ctx);
+    final granted = _phoneStorage?['granted'] == true;
+    return [
+      ListPageCard(
+        title: '笔记库与记忆',
+        margin: _groupMargin,
+        children: [
+          ListPageRow(
+            icon: AppIcons.files,
+            iconColor: granted ? colors.success : colors.warning,
+            title: '手机目录与 Obsidian 自动挂载',
+            subtitle: granted ? '已授权全盘读取，Obsidian 库自动检索就绪' : '未挂载 /sdcard 目录，点击一键授权并热重启让姐妹读到 Obsidian 笔记',
+            subtitleMaxLines: 2,
+            badge: StatusChip(tone: granted ? StatusTone.ok : StatusTone.warn, label: granted ? '已挂载' : '需授权'),
+            onTap: _actionBusy ? null : () => unawaited(_enableStorage()),
+          ),
+          ListPageRow(
+            icon: AppIcons.files,
+            iconColor: Theme.of(ctx).colorScheme.primary,
+            title: '生成记忆模板并导入 Obsidian 数据库',
+            subtitle: '在 大肥鱼/导入/ 生成模板并去重写入记忆库，让鱼丸和鲸澜马上记住你',
+            subtitleMaxLines: 2,
+            value: '立即导入',
+            onTap: _actionBusy ? null : () => unawaited(_importMemoryNow()),
+          ),
+          ListPageRow(
+            icon: AppIcons.copy,
+            title: '复制跨 AI 交接上下文（Cognitive OS）',
+            subtitle: '汇总三铁律、思维模型、我.md 与六骰碎记，一键粘贴给 Gemini / 外部 AI',
+            subtitleMaxLines: 2,
+            value: '一键复制',
+            onTap: _actionBusy ? null : () => unawaited(_copyHandoffPacket()),
+          ),
+        ],
+      ),
+    ];
+  }
+
+  /// 诊断：卡住了怎么办、出过什么事。
+  List<Widget> _diagGroup(BuildContext ctx) {
+    return [
+      ListPageCard(
+        title: '引擎',
+        margin: _groupMargin,
+        children: [
+          ListPageRow(
+            icon: AppIcons.restart,
+            title: '一键热重启主动引擎',
+            subtitle: '后台长期无响应或切库后立即拉起，并自动补发中断对话',
+            subtitleMaxLines: 2,
+            onTap: _actionBusy ? null : () => unawaited(_restartEngineNow()),
+          ),
+          ListPageRow(
+            icon: AppIcons.agentLoop,
+            title: _actionBusy ? '正在唤醒大肥鱼…' : '立即触发一次状态巡检',
+            subtitle: '主动内核对齐屏幕与节奏',
+            onTap: _actionBusy ? null : () => unawaited(_triggerTick()),
+          ),
+          ListPageRow(
+            icon: AppIcons.queued,
+            title: '时钟与队列',
+            subtitle: 'Cron / 高频 / 循环番茄闹钟',
+            value: _clockCount > 0 ? '$_clockCount 个时钟' : null,
+            chevron: true,
+            onTap: () => _openPage(BoutsWorkspacePage(channel: _channel)),
+          ),
+        ],
+      ),
+      ListPageCard(
+        title: '记录',
+        margin: _groupMargin,
+        children: [
+          ListPageRow(
+            icon: AppIcons.history,
+            title: '执行记录',
+            subtitle: '锁机与主动提醒的每一次结果；长了可以清理',
+            chevron: true,
+            onTap: () => unawaited(RecordsPage.open(ctx)),
+          ),
+        ],
+      ),
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = DshColors.of(context);
-    final bouts = _boutsPanel();
-    final currentSession = ref.watch(currentSessionProvider);
     final (tone, title, subtitle, footer) = _overviewMeta();
-    final depositDone = _deposit?.items.where((e) => e.done).length ?? 0;
-    final depositTotal = _deposit?.items.length ?? 0;
-    final appealLeft = _sisters?.audit.done;
-    final planNeedsGate = _sisters?.planGate ?? false;
     final locked = _wallStatus?['locked'] == true;
-    final planItems = (_planDay?['plan'] is Map ? (_planDay!['plan'] as Map)['items'] : null);
-    final boutCount = planItems is List ? planItems.length : 0;
-    final geminiStats = _analytics?['geminiStats'] is Map ? _analytics!['geminiStats'] as Map : const {};
-    final geminiMinToday = geminiStats['minutesToday'] is num ? (geminiStats['minutesToday'] as num).toInt() : 0;
-    final timeLedger = TimeLedgerView.fromWire(_today?['timeLedger'] ?? _analytics?['timeLedger']);
-    final report = _analytics?['eveningReport'] is Map ? _analytics!['eveningReport'] as Map : const {};
-    final verdict = DailyVerdictView.fromWire(
-      _today?['verdict'] ?? _analytics?['verdict'] ?? report['verdict'],
-      scoreRaw: _today?['score'] ?? _analytics?['score'] ?? report['score'],
-      scoreLabelRaw: _today?['scoreLabel'] ?? _analytics?['scoreLabel'] ?? report['scoreLabel'],
-    );
+    final granted = _phoneStorage?['granted'] == true;
 
     return AppPage.list(
       title: '大肥鱼中枢',
-      subtitle: const Text('今日计划、每日四部门、姐妹记忆与系统护栏的一站入口'),
+      subtitle: const Text('设置：两条鱼 · 锁 · 数据 · 诊断（日常的事在「局」和「墙」）'),
       actions: [
         GlassIconButton(
           icon: AppIcons.refresh,
@@ -659,565 +884,52 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
           onTap: () => unawaited(_refresh()),
           onFooterTap: () => _openPage(const WallPage()),
         ),
-        if (_lockShadow != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: Card(
-              child: SwitchListTile(
-                title: const Text('测试模式（锁只提示，不真锁）'),
-                subtitle: Text(
-                  _lockShadow!
-                      ? '现在：锁不会落下，只弹「这里本来会锁」。测完关掉，锁才真的生效'
-                      : '现在：锁真的生效。被锁出不来时，下拉通知栏点「紧急解除」',
-                ),
-                value: _lockShadow!,
-                onChanged: _actionBusy ? null : (v) => unawaited(_setLockShadow(v)),
-              ),
-            ),
-          ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: Card(
-            child: SwitchListTile(
-              key: const ValueKey('hub-arbiter-enforce-switch'),
-              title: const Text('统一裁决器执法（arbiterEnforce）'),
-              subtitle: const Text('需先收集真机 arbiter-diff.jsonl 核验后再开启'),
-              value: _arbiterEnforce ?? false,
-              onChanged: _actionBusy ? null : (v) => unawaited(_setArbiterEnforce(v)),
-            ),
-          ),
-        ),
-        TaskCardPanel(channel: _channel),
-        // 硬日判 + 时间账 + 时间投向合成一张（和局页同一个组件），点进去是完整统计页。
-        if (verdict != null || timeLedger != null)
-          TodayUsageCard(
-            today: {...?_analytics, ...?_today},
-            verdict: verdict,
-            ledger: timeLedger,
-            onTap: () => _openPage(UsageAnalyticsPage(channel: _channel)),
-          ),
-        _buildIntensityCard(context, _intensity),
-        if (_rotate != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: Card(
-              child: Column(
-                children: [
-                  _rotateRow('companion', '鱼丸'),
-                  _rotateRow('strategist', '鲸澜'),
-                ],
-              ),
-            ),
-          ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: SegmentedPill<_HubDeck>(
-            segments: const [
-              PillSegment(_HubDeck.all, '总览全部'),
-              PillSegment(_HubDeck.strategy, '战略与统计'),
-              PillSegment(_HubDeck.sisters, '姐妹与主动'),
-              PillSegment(_HubDeck.guardrails, '护栏与底座'),
-            ],
-            selected: _deck,
-            onChanged: (next) => setState(() => _deck = next),
-          ),
-        ),
-        if (_deck == _HubDeck.all) ...[
-          TileGrid(
-            columns: 2,
-            spacing: 12,
-            padding: EdgeInsets.zero,
-            children: [
-              FeatureCard(
-                icon: AppIcons.chart,
-                tint: 0,
-                badge: '大屏',
-                title: '📊 每日统计与晚间总报',
-                subtitle: '24h 切片 · 90 天热力图',
-                onTap: () => _openPage(UsageAnalyticsPage(channel: _channel)),
-              ),
-              FeatureCard(
-                icon: AppIcons.planMode,
-                tint: 6,
-                badge: '主航道',
-                title: '🧭 三层战略作战室',
-                subtitle: '长期北极星 · 中期战役',
-                onTap: () => _openPage(StrategyHorizonsPage(channel: _channel)),
-              ),
-              FeatureCard(
-                icon: AppIcons.askAi,
-                tint: 7,
-                badge: geminiMinToday > 0 ? '${geminiMinToday}m' : '共脑',
-                title: '⚡ 主动唤起 Gemini',
-                subtitle: '同日脉络带入与拉起策略',
-                onTap: () => _openPage(
-                  UsageAnalyticsPage(channel: _channel, initialTab: AnalyticsTab.gemini),
-                ),
-              ),
-              FeatureCard(
-                icon: AppIcons.jobs,
-                tint: 4,
-                badge: '契约',
-                title: '📑 计划与契约台',
-                subtitle: '契约共创 · 全天排局表',
-                onTap: () => _openPage(PlanModalityPage(channel: _channel)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-        ],
-        if (_deck == _HubDeck.strategy) ...[
-          TileGrid(
-            columns: 2,
-            spacing: 12,
-            padding: EdgeInsets.zero,
-            children: [
-              FeatureCard(
-                icon: AppIcons.planMode,
-                tint: 6,
-                badge: '北极星',
-                title: '三层战略作战室',
-                subtitle: '长期航道 · 中期战役 · 一键拆入',
-                onTap: () => _openPage(StrategyHorizonsPage(channel: _channel)),
-              ),
-              FeatureCard(
-                icon: AppIcons.jobs,
-                tint: 4,
-                badge: '契约',
-                title: '计划与契约台',
-                subtitle: '契约验收 · 全天排局时间表',
-                onTap: () => _openPage(PlanModalityPage(channel: _channel)),
-              ),
-              FeatureCard(
-                icon: AppIcons.chart,
-                tint: 0,
-                badge: '90天',
-                title: '每日统计与热力图',
-                subtitle: '24h 甘特带 · 长期堆叠对比',
-                onTap: () => _openPage(UsageAnalyticsPage(channel: _channel)),
-              ),
-              FeatureCard(
-                icon: AppIcons.featured,
-                tint: 2,
-                badge: '21:30',
-                title: '晚间 AI 可视化总报',
-                subtitle: '今日战果评分 · 明日三件套',
-                onTap: () => _openPage(
-                  UsageAnalyticsPage(channel: _channel, initialTab: AnalyticsTab.report),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          ListPageCard(
-            title: '备考题库与四部门审计',
-            children: [
-              ListPageRow(
-                icon: AppIcons.skill,
-                title: '备考题库中心',
-                subtitle: '导入真题 · 锁屏答对 10 题解锁 5 分钟',
-                subtitleMaxLines: 2,
-                onTap: () => _openPage(BankManagerPage(channel: _channel)),
-              ),
-              ListPageRow(
-                icon: AppIcons.calendar,
-                title: '今日计划（时间块）',
-                subtitle: '按时间块排定每日几局与必需/允许应用',
-                subtitleMaxLines: 2,
-                onTap: () => _openPage(const PlanPage()),
-              ),
-              ListPageRow(
-                icon: AppIcons.jobs,
-                title: '每日四部门',
-                subtitle: '信息收集 · 谋划思考 · 行为管理 · 统筹规划',
-                subtitleMaxLines: 2,
-                value: depositTotal > 0 ? '$depositDone/$depositTotal 段' : null,
-                onTap: () => _openPage(const DepositPage()),
-              ),
-            ],
-          ),
-        ] else if (_deck == _HubDeck.sisters) ...[
-          TileGrid(
-            columns: 2,
-            spacing: 12,
-            padding: EdgeInsets.zero,
-            children: [
-              FeatureCard(
-                icon: AppIcons.team,
-                tint: 2,
-                badge: '双生',
-                title: '姐妹与记忆',
-                subtitle: '鱼丸 & 鲸澜人设、记忆与审计',
-                onTap: () => _openPage(const SistersPage()),
-              ),
-              FeatureCard(
-                icon: AppIcons.askAi,
-                tint: 7,
-                badge: '强拉',
-                title: '立即唤起 Gemini Live',
-                subtitle: '自动装入今日连续脉络开聊',
-                onTap: _actionBusy ? null : () => unawaited(_launchGeminiQuick()),
-              ),
-              FeatureCard(
-                icon: AppIcons.voice,
-                tint: 3,
-                badge: 'TTS',
-                title: '姐妹与局官语音声线',
-                subtitle: '三角色独立音色与试听',
-                onTap: () => _openPage(const VoiceSettingsPage()),
-              ),
-              FeatureCard(
-                icon: AppIcons.overlayBall,
-                tint: 5,
-                badge: '64dp',
-                title: '摇一骰 · 轻思考微干预',
-                subtitle: '立即触发 3D 大骰子卡片',
-                onTap: _actionBusy ? null : () => unawaited(_rollDiceNow()),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          ListPageCard(
-            title: '同日脉络、声线与桌宠',
-            children: [
-              ListPageRow(
-                icon: AppIcons.trajectory,
-                title: '同日连续叙事流 & Gemini 共脑策略',
-                subtitle: '切换 3秒浮窗自动接通 / 零秒铁血强拉 / 仅温和提醒',
-                subtitleMaxLines: 2,
-                value: geminiMinToday > 0 ? '今日 ${geminiMinToday}m' : '打开',
-                onTap: () => _openPage(
-                  UsageAnalyticsPage(channel: _channel, initialTab: AnalyticsTab.gemini),
-                ),
-              ),
-              ListPageRow(
-                icon: AppIcons.pet,
-                title: '双姐妹桌宠皮肤（.zip 导入）',
-                subtitle: '导入鱼丸 yuwan-girl.zip / 鲸澜 jinglan-girl.zip 并联动发球自动换肤',
-                subtitleMaxLines: 2,
-                onTap: () => _openPage(const PetSettingsPage()),
-              ),
-              ListPageRow(
-                icon: AppIcons.voice,
-                title: '局官语音交互',
-                subtitle: '局官念题与实时语音作答',
-                onTap: () => _openPage(const BoutVoicePage()),
-              ),
-              ListPageRow(
-                icon: AppIcons.notificationsOff,
-                title: '主动搭话与诊断',
-                subtitle: '主动提醒间隔、免打扰时段、PC 联动账本与日志导出',
-                subtitleMaxLines: 2,
-                value: _proactive == null ? null : (_proactive!.config.enabled ? '已开启' : '未开启'),
-                onTap: () => _openPage(const ProactivePage()),
-              ),
-            ],
-          ),
-        ] else if (_deck == _HubDeck.guardrails) ...[
-          ListPageCard(
-            title: '模式、锁机与哨兵护栏',
-            children: [
-              ListPageRow(
-                icon: AppIcons.blocked,
-                title: '娱乐锁机',
-                subtitle: '严格/联动/训练锁机模式、黑名单清单、误放行白名单一键恢复',
-                subtitleMaxLines: 2,
-                onTap: () => _openPage(const InterceptPage()),
-              ),
-              ListPageRow(
-                icon: AppIcons.verified,
-                iconColor: locked ? colors.warning : colors.success,
-                title: '墙与申诉',
-                subtitle: '控制塔冷酷审计记录、规则阈值与物理证据申诉',
-                subtitleMaxLines: 2,
-                value: locked ? '门禁中' : '查看',
-                onTap: () => _openPage(const WallPage()),
-              ),
-              ListPageRow(
-                icon: AppIcons.time,
-                title: '专注监督',
-                subtitle: '原生 5 秒离开拉回与独立守护界面（引擎断开仍生效）',
-                subtitleMaxLines: 2,
-                onTap: () => unawaited(_openFocus()),
-              ),
-              ListPageRow(
-                icon: AppIcons.permissions,
-                iconColor: (_guardian?.paired ?? false) ? colors.success : null,
-                title: '大肥鱼哨兵互信配对',
-                subtitle: '查看同签名互信状态，或生成 6 位配对码绑定独立「大肥鱼哨兵」App',
-                subtitleMaxLines: 2,
-                value: _guardian == null
-                    ? null
-                    : (_guardian!.paired
-                        ? (_guardian!.sameCert ? '免码互信' : '已配对')
-                        : (_guardian!.installed ? '待配对' : '未安装')),
-                onTap: () => unawaited(_openGuardianPairDialog()),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          ListPageCard(
-            title: 'Obsidian 挂载与内核底座',
-            children: [
-              ListPageRow(
-                icon: AppIcons.queued,
-                title: '局工作台与时钟内核',
-                subtitle: '快速开严格专时、管理 Cron / 高频 / 循环番茄闹钟',
-                subtitleMaxLines: 2,
-                value: _clockCount > 0 ? '$_clockCount 个时钟' : '打开',
-                onTap: () => _openPage(BoutsWorkspacePage(channel: _channel)),
-              ),
-              ListPageRow(
-                icon: AppIcons.files,
-                iconColor: (_phoneStorage?['granted'] == true) ? colors.success : colors.warning,
-                title: '手机目录与 Obsidian 自动挂载',
-                subtitle: (_phoneStorage?['granted'] == true)
-                    ? '已授权全盘读取，Obsidian 库自动检索就绪'
-                    : '未挂载 /sdcard 目录，点击一键授权并热重启让姐妹读到 Obsidian 笔记',
-                subtitleMaxLines: 2,
-                badge: StatusChip(
-                  tone: (_phoneStorage?['granted'] == true) ? StatusTone.ok : StatusTone.warn,
-                  label: (_phoneStorage?['granted'] == true) ? '已挂载' : '需授权',
-                ),
-                onTap: _actionBusy ? null : () => unawaited(_enableStorage()),
-              ),
-              ListPageRow(
-                icon: AppIcons.files,
-                iconColor: Theme.of(context).colorScheme.primary,
-                title: '生成记忆模板并导入 Obsidian 数据库',
-                subtitle: '在 大肥鱼/导入/ 生成模板数据库文件并一键去重写入记忆库，让鱼丸和鲸澜马上记住你',
-                subtitleMaxLines: 2,
-                value: '立即导入',
-                onTap: _actionBusy ? null : () => unawaited(_importMemoryNow()),
-              ),
-              ListPageRow(
-                icon: AppIcons.copy,
-                title: '复制跨 AI 交接上下文（Cognitive OS）',
-                subtitle: '汇总三铁律、03_Thinking_Models、我.md 与六骰碎记，一键粘贴给 Gemini / 外部 AI',
-                subtitleMaxLines: 2,
-                value: '一键复制',
-                onTap: _actionBusy ? null : () => unawaited(_copyHandoffPacket()),
-              ),
-              ListPageRow(
-                icon: AppIcons.restart,
-                title: '一键热重启主动引擎',
-                subtitle: '遇到后台长期无响应或切库后立即拉起接管，并自动补发中断对话',
-                subtitleMaxLines: 2,
-                onTap: _actionBusy ? null : () => unawaited(_restartEngineNow()),
-              ),
-            ],
-          ),
-        ] else ...[
-        TileGrid(
-          columns: 2,
-          spacing: 12,
-          padding: EdgeInsets.zero,
-          children: [
-            FeatureCard(
-              icon: AppIcons.today,
-              tint: planNeedsGate ? 4 : 1,
-              badge: bouts != null ? '进局' : (boutCount > 0 ? '$boutCount 局' : '去排局'),
-              title: '今日的局',
-              subtitle: bouts != null ? '进入实时原生推进面' : '排定今日几局与白名单',
-              onTap: () {
-                if (bouts != null) {
-                  _openPage(NativePanelPage(panel: bouts, sessionId: currentSession));
-                } else {
-                  rereadNativeContributions(ref);
-                  _openPage(const PlanPage());
-                }
-              },
-            ),
-            FeatureCard(
-              icon: AppIcons.voice,
-              tint: 3,
-              badge: '连麦',
-              title: '局官语音交互',
-              subtitle: '局官念题与实时语音作答',
-              onTap: () => _openPage(const BoutVoicePage()),
-            ),
-            FeatureCard(
-              icon: AppIcons.overlayBall,
-              tint: 5,
-              badge: _shakeDice?['lastDice'] is num && (_shakeDice!['lastDice'] as num) > 0
-                  ? '骰${_shakeDice!['lastDice']}'
-                  : '摇一骰',
-              title: '摇一骰 · 轻思考微干预',
-              subtitle: (_shakeDice?['enabled'] != false) ? '亮屏轻晃两下即出浮窗' : '手动摇一骰触发',
-              onTap: _actionBusy ? null : () => unawaited(_rollDiceNow()),
-            ),
-            FeatureCard(
-              icon: AppIcons.agentLoop,
-              tint: 0,
-              badge: _actionBusy ? '巡检中' : '唤醒',
-              title: _actionBusy ? '正在唤醒大肥鱼…' : '立即触发一次状态巡检',
-              subtitle: '主动内核对齐屏幕与节奏',
-              onTap: _actionBusy ? null : () => unawaited(_triggerTick()),
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
         ListPageCard(
+          title: '设置',
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
           children: [
             ListPageRow(
-              icon: AppIcons.verified,
-              iconColor: (_shakeDice?['enabled'] != false) ? colors.success : null,
-              title: '摇一摇六骰悬浮监听',
-              subtitle: '亮屏时轻晃两下手机自动弹出六骰思考卡片（不占权限、可复制给 Gemini）',
-              subtitleMaxLines: 2,
-              badge: StatusChip(
-                tone: (_shakeDice?['enabled'] != false) ? StatusTone.ok : StatusTone.idle,
-                label: (_shakeDice?['enabled'] != false) ? '监听中' : '已暂停',
-              ),
-              onTap: _actionBusy ? null : () => unawaited(_toggleShakeDice()),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        ListPageCard(
-          title: '每日自治',
-          children: [
-            ListPageRow(
-              icon: AppIcons.calendar,
-              iconColor: planNeedsGate ? colors.warning : null,
-              title: '今日计划',
-              subtitle: planNeedsGate
-                  ? '今日尚未排局 · 请先设置必需应用与允许应用'
-                  : '一局一行：时间预算、工作包与晨间 10 分钟接单窗口',
-              subtitleMaxLines: 2,
-              badge: planNeedsGate ? const StatusChip(tone: StatusTone.warn, label: '待排局') : null,
-              onTap: () => _openPage(const PlanPage()),
-            ),
-            ListPageRow(
-              icon: AppIcons.jobs,
-              iconColor: depositTotal > 0 && depositDone == depositTotal ? colors.success : null,
-              title: '每日四部门',
-              subtitle: '信息收集 · 谋划思考 · 行为管理 · 统筹规划（含白天碎片记事）',
-              subtitleMaxLines: 2,
-              value: depositTotal > 0 ? '$depositDone/$depositTotal 段' : null,
-              onTap: () => _openPage(const DepositPage()),
-            ),
-            ListPageRow(
-              icon: AppIcons.verified,
-              iconColor: locked ? colors.warning : colors.success,
-              title: '墙与申诉',
-              subtitle: '控制塔冷酷审计记录、规则阈值与物理证据申诉',
-              subtitleMaxLines: 2,
-              value: locked ? '门禁中' : '查看',
-              onTap: () => _openPage(const WallPage()),
-            ),
-            ListPageRow(
+              key: const ValueKey('hub-group-fish'),
               icon: AppIcons.team,
-              title: '姐妹与记忆',
-              subtitle: '鱼丸与鲸澜双人格卡、记住的事实与基础操作通过率',
+              iconColor: colors.info,
+              title: '两条鱼',
+              subtitle: '姐妹与记忆 · 会话换班 · 主动搭话 · Gemini · 声线 · 桌宠 · 摇一摇',
               subtitleMaxLines: 2,
-              value: appealLeft != null ? '今日完成 $appealLeft' : null,
-              onTap: () => _openPage(const SistersPage()),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        ListPageCard(
-          title: '护栏与环境',
-          children: [
-            ListPageRow(
-              icon: AppIcons.blocked,
-              title: '娱乐锁机',
-              subtitle: '严格/联动/训练锁机模式、黑名单清单、误放行白名单一键恢复',
-              subtitleMaxLines: 2,
-              onTap: () => _openPage(const InterceptPage()),
+              value: _proactive == null ? null : (_proactive!.config.enabled ? '主动开' : '主动关'),
+              chevron: true,
+              onTap: () => _openGroup('两条鱼', '她们是谁、记住什么、什么时候开口', _fishGroup),
             ),
             ListPageRow(
-              icon: AppIcons.time,
-              title: '专注监督',
-              subtitle: '原生 5 秒离开拉回与独立守护界面（引擎断开仍生效）',
+              key: const ValueKey('hub-group-lock'),
+              icon: AppIcons.lock,
+              iconColor: _lockShadow == false ? colors.success : colors.warning,
+              title: '锁',
+              subtitle: '锁机体检 · 测试模式 · 强度档 · 锁机名单 · 专注监督 · 哨兵',
               subtitleMaxLines: 2,
-              onTap: () => unawaited(_openFocus()),
+              value: _lockShadow == null ? null : (_lockShadow! ? '测试模式' : '真锁'),
+              chevron: true,
+              onTap: () => _openGroup('锁', '落不落得下来、落多重、锁谁放谁', _lockGroup),
             ),
             ListPageRow(
-              icon: AppIcons.notificationsOff,
-              title: '主动搭话与诊断',
-              subtitle: '主动提醒间隔、免打扰时段、PC 联动账本与日志导出',
-              subtitleMaxLines: 2,
-              value: _proactive == null ? null : (_proactive!.config.enabled ? '已开启' : '未开启'),
-              onTap: () => _openPage(const ProactivePage()),
-            ),
-            ListPageRow(
-              icon: AppIcons.permissions,
-              iconColor: (_guardian?.paired ?? false) ? colors.success : null,
-              title: '大肥鱼哨兵互信配对',
-              subtitle: '查看同签名互信状态，或生成 6 位配对码绑定独立「大肥鱼哨兵」App',
-              subtitleMaxLines: 2,
-              value: _guardian == null
-                  ? null
-                  : (_guardian!.paired
-                      ? (_guardian!.sameCert ? '免码互信' : '已配对')
-                      : (_guardian!.installed ? '待配对' : '未安装')),
-              onTap: () => unawaited(_openGuardianPairDialog()),
-            ),
-            ListPageRow(
-              icon: AppIcons.pet,
-              title: '桌面宠物',
-              subtitle: '桌面悬浮形象、气泡提问与双姐妹互动样式',
-              subtitleMaxLines: 2,
-              onTap: () => _openPage(const PetSettingsPage()),
-            ),
-            ListPageRow(
-              icon: AppIcons.voice,
-              title: '姐妹与局官语音声线',
-              subtitle: '独立配置鱼丸 / 鲸澜 / 局官音色、MiMo/OpenAI TTS 与试听',
-              subtitleMaxLines: 2,
-              onTap: () => _openPage(const VoiceSettingsPage()),
-            ),
-            ListPageRow(
-              icon: AppIcons.queued,
-              title: '局工作台与时钟内核',
-              subtitle: '快速开严格专时、管理 Cron / 高频 / 循环番茄闹钟',
-              subtitleMaxLines: 2,
-              value: _clockCount > 0 ? '$_clockCount 个时钟' : '打开',
-              onTap: () => _openPage(BoutsWorkspacePage(channel: _channel)),
-            ),
-            ListPageRow(
+              key: const ValueKey('hub-group-data'),
               icon: AppIcons.files,
-              iconColor: (_phoneStorage?['granted'] == true) ? colors.success : colors.warning,
-              title: '手机目录与 Obsidian 自动挂载',
-              subtitle: (_phoneStorage?['granted'] == true)
-                  ? '已授权全盘读取，Obsidian 库自动检索就绪'
-                  : '未挂载 /sdcard 目录，点击一键授权并热重启让姐妹读到 Obsidian 笔记',
-              subtitleMaxLines: 2,
-              badge: StatusChip(
-                tone: (_phoneStorage?['granted'] == true) ? StatusTone.ok : StatusTone.warn,
-                label: (_phoneStorage?['granted'] == true) ? '已挂载' : '需授权',
-              ),
-              onTap: _actionBusy ? null : () => unawaited(_enableStorage()),
+              iconColor: granted ? colors.success : null,
+              title: '数据',
+              subtitle: 'Obsidian 挂载 · 导入记忆 · 复制交接',
+              value: _phoneStorage == null ? null : (granted ? '已挂载' : '需授权'),
+              chevron: true,
+              onTap: () => _openGroup('数据', '笔记库、记忆与交接', _dataGroup),
             ),
             ListPageRow(
-              icon: AppIcons.files,
-              iconColor: Theme.of(context).colorScheme.primary,
-              title: '生成记忆模板并导入 Obsidian 数据库',
-              subtitle: '在 大肥鱼/导入/ 生成模板数据库文件并一键去重写入记忆库，让鱼丸和鲸澜马上记住你',
-              subtitleMaxLines: 2,
-              value: '立即导入',
-              onTap: _actionBusy ? null : () => unawaited(_importMemoryNow()),
-            ),
-            ListPageRow(
-              icon: AppIcons.copy,
-              title: '复制跨 AI 交接上下文（Cognitive OS）',
-              subtitle: '汇总三铁律、03_Thinking_Models、我.md 与六骰碎记，一键粘贴给 Gemini / 外部 AI',
-              subtitleMaxLines: 2,
-              value: '一键复制',
-              onTap: _actionBusy ? null : () => unawaited(_copyHandoffPacket()),
-            ),
-            ListPageRow(
+              key: const ValueKey('hub-group-diag'),
               icon: AppIcons.restart,
-              title: '一键热重启主动引擎',
-              subtitle: '遇到后台长期无响应或切库后立即拉起接管，并自动补发中断对话',
-              subtitleMaxLines: 2,
-              onTap: _actionBusy ? null : () => unawaited(_restartEngineNow()),
+              title: '诊断',
+              subtitle: '重启引擎 · 状态巡检 · 时钟 · 执行记录',
+              chevron: true,
+              onTap: () => _openGroup('诊断', '卡住了怎么办、出过什么事', _diagGroup),
             ),
           ],
         ),
-        ],
       ],
     );
   }

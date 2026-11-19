@@ -166,6 +166,8 @@ void main() {
     final ch = _FakeWave1Channel();
     await pumpPhone(tester, CompanionHubPage(channel: ch));
     await settlePhone(tester);
+    await tester.tap(find.byKey(const ValueKey('hub-group-lock')));
+    await settlePhone(tester);
 
     expect(find.byKey(const ValueKey('hub-intensity-pill')), findsOneWidget);
     expect(find.text('强度档（温和 / 标准 / 严格）'), findsOneWidget);
@@ -187,14 +189,7 @@ void main() {
   testWidgets('timeLedger renders identical remaining allowance across Hub, BoutsWorkspace and UsageAnalytics', (tester) async {
     final ch = _FakeWave1Channel();
 
-    // 中枢和局页用同一张「今日使用情况」卡（时间账并在里面）。
-    await pumpPhone(tester, CompanionHubPage(channel: ch));
-    await settlePhone(tester);
-    expect(find.text('今日使用情况'), findsOneWidget);
-    expect(find.text('102m'), findsOneWidget);
-    expect(find.text('+35m'), findsOneWidget);
-    expect(find.text('60m'), findsOneWidget);
-
+    // 中枢改成纯设置页：今日使用情况只在局页（每项只出现一次）。
     // 局页：时间账并进了「今日使用情况」一张卡（娱乐剩余 / 挣来池 / 游戏剩余），数字必须和另外两页一致。
     await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: _FakeWave1LoopChannel()));
     await settlePhone(tester);

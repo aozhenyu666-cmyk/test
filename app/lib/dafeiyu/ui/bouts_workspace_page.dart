@@ -22,9 +22,9 @@ import 'app_picker_dialog.dart';
 import 'bank_manager_page.dart';
 import 'bout_voice_page.dart';
 import 'companion_hub_page.dart';
-import 'intercept_page.dart';
+import 'plan_hub_page.dart';
 import 'plan_modality_page.dart';
-import 'strategy_horizons_page.dart';
+import 'records_page.dart';
 import 'usage_analytics_page.dart';
 import 'task_card.dart';
 import 'today_cards.dart';
@@ -1295,11 +1295,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
         ListPageRow(
           icon: AppIcons.planMode,
           iconColor: theme.colorScheme.primary,
-          title: '三层战略主线',
-          subtitle: '长期北极星 · 中期战役 · 截止日',
+          title: '全部计划',
+          subtitle: '时间块排程 · 契约验收 · 三层战略主线',
           value: '${longList.length} 长 · ${medList.length} 中',
           chevron: true,
-          onTap: () => unawaited(StrategyHorizonsPage.open(context, channel: _channel)),
+          onTap: () => unawaited(PlanHubPage.open(context, channel: _channel, loopChannel: _loop)),
         ),
       ],
     );
@@ -1601,30 +1601,30 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       children: [
         FeatureCard(
-          key: const ValueKey('today-capsule-plan-modality'),
+          key: const ValueKey('today-capsule-plan'),
           icon: AppIcons.planMode,
           tint: 4,
-          badge: '契约验收',
-          title: 'AI 计划模态',
-          subtitle: '查 App · 设验收点 · 1m 转严锁',
-          onTap: () => unawaited(PlanModalityPage.open(context, channel: _channel, loopChannel: _loop)),
+          badge: '三层',
+          title: '计划',
+          subtitle: '时间块 · 契约验收 · 长线',
+          onTap: () => unawaited(PlanHubPage.open(context, channel: _channel, loopChannel: _loop)),
         ),
         FeatureCard(
           key: const ValueKey('today-capsule-bank'),
           icon: AppIcons.skill,
           tint: 2,
-          badge: '10题开5分',
-          title: '备考题库中心',
-          subtitle: '导入真题 · 刷题解锁时长',
+          badge: '10题5分',
+          title: '题库',
+          subtitle: '刷题挣娱乐余额',
           onTap: () => unawaited(BankManagerPage.open(context, channel: _channel)),
         ),
         FeatureCard(
           key: const ValueKey('today-capsule-dice'),
           icon: AppIcons.overlayBall,
           tint: 5,
-          badge: '64dp 立体',
+          badge: '摇一摇也行',
           title: '摇一骰',
-          subtitle: '触发 3D 大骰子微干预',
+          subtitle: '六骰微干预',
           onTap: _busy ? null : () => unawaited(_rollDice()),
         ),
         FeatureCard(
@@ -1633,29 +1633,27 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           tint: 3,
           badge: '连麦',
           title: '语音 / Gemini',
-          subtitle: '实时语音与姐妹过招',
+          subtitle: '局官念题与实时作答',
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const BoutVoicePage()),
           ),
         ),
         FeatureCard(
-          key: const ValueKey('today-capsule-intercept'),
-          icon: AppIcons.verified,
+          key: const ValueKey('today-capsule-records'),
+          icon: AppIcons.history,
           tint: 1,
-          badge: '护栏',
-          title: '锁机与白名单',
-          subtitle: '应用增删 / 恢复严格锁',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => InterceptPage(loopChannel: _loop)),
-          ),
+          badge: '可清理',
+          title: '执行记录',
+          subtitle: '锁机 · 主动提醒',
+          onTap: () => unawaited(RecordsPage.open(context)),
         ),
         FeatureCard(
           key: const ValueKey('today-capsule-hub'),
           icon: AppIcons.settings,
           tint: 6,
-          badge: '中枢',
-          title: '全部后台',
-          subtitle: '20 项中枢与工具箱',
+          badge: '四组',
+          title: '设置',
+          subtitle: '鱼 · 锁 · 数据 · 诊断',
           onTap: () => unawaited(CompanionHubPage.open(context, channel: _channel)),
         ),
       ],

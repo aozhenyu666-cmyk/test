@@ -247,6 +247,16 @@ class ProactiveChannel {
     }
   }
 
+  /// 清理模态：删掉 [olderThanDays] 天前的主动记录（0 = 全清）。返回删了几条；没接上返回 null。
+  Future<int?> clearReceipts({int olderThanDays = 0}) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('clearReceipts', {'olderThanDays': olderThanDays});
+      return raw is num ? raw.toInt() : 0;
+    } on Exception {
+      return null;
+    }
+  }
+
   /// "The person sent a message": the scheduler steps back for a while.
   Future<bool> userActivity() async {
     try {

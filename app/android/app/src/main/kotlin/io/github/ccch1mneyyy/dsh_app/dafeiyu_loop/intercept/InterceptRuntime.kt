@@ -421,6 +421,8 @@ object InterceptRuntime {
 
     fun receipts(limit: Int = 50): List<InterceptReceipt> = guard?.receipts(limit) ?: emptyList()
 
+    fun clearReceipts(before: Long): Int = guard?.clearReceipts(before) ?: 0
+
     /** Facts read just before deciding, the same shape the proactive Gate has. */
     private fun env(now: Long): InterceptEnv {
         val core = PhoneControl.peek()

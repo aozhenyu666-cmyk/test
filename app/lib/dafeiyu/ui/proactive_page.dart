@@ -13,8 +13,8 @@ import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../../ui/phone/action_log_page.dart' show formatLogTime;
-import 'loop_test_page.dart' show loopClock;
 import '../dafeiyu_strings.dart';
+import 'records_page.dart';
 
 /// 璁剧疆 鈫?鎵嬫満鎿嶆帶 鈫?涓诲姩鎼瘽: the proactive kernel's own page.
 ///
@@ -710,7 +710,13 @@ class _ProactivePageState extends State<ProactivePage> {
             if (_receipts.isEmpty)
               ListPageRow(icon: AppIcons.history, iconColor: colors.textTertiary, title: DafeiyuStrings.fromL10n(l10n).proactiveReceiptsEmpty)
             else
-              for (final r in _receipts) _ReceiptRow(r),
+              for (final r in _receipts.take(5)) ProactiveReceiptRow(r),
+            ListPageRow(
+              icon: AppIcons.history,
+              title: '全部主动记录 · 清理',
+              chevron: true,
+              onTap: () => unawaited(RecordsPage.open(context, tab: RecordsTab.proactive)),
+            ),
           ],
         ),
         const SizedBox(height: 24),
@@ -938,8 +944,9 @@ String proactiveOutcomeLabel(L10n l10n, String? outcome) => switch (outcome) {
   _ => outcome,
 };
 
-class _ReceiptRow extends StatelessWidget {
-  const _ReceiptRow(this.receipt);
+/// 一条主动记录（执行记录页也用这一行，不另画一份）。
+class ProactiveReceiptRow extends StatelessWidget {
+  const ProactiveReceiptRow(this.receipt, {super.key});
 
   final ProactiveReceipt receipt;
 
@@ -985,3 +992,11 @@ class _ReceiptRow extends StatelessWidget {
   }
 }
 
+
+/// "23:00" from minutes after midnight.
+String loopClock(int minuteOfDay) {
+  final m = minuteOfDay.clamp(0, 1439);
+  final h = (m ~/ 60).toString().padLeft(2, '0');
+  final mm = (m % 60).toString().padLeft(2, '0');
+  return '$h:$mm';
+}

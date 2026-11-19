@@ -105,6 +105,11 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 result.success(ProactiveScheduler.configMap(ProactiveRuntime.schedulerConfig()))
             }
             "receipts" -> result.success(ProactiveRuntime.ensure(context).receipts(call.argument<Int>("limit") ?: 50).map(CoreCodecPublic::event))
+            "clearReceipts" -> {
+                val days = call.argument<Int>("olderThanDays") ?: 0
+                val before = if (days <= 0) Long.MAX_VALUE else System.currentTimeMillis() - days * 86_400_000L
+                result.success(ProactiveRuntime.ensure(context).clearReceipts(before))
+            }
             "agentHttp" -> {
                 val id = call.argument<String>("requestId")
                 if (id == null) { result.success(false); return }

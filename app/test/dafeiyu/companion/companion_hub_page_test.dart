@@ -132,8 +132,9 @@ void main() {
     expect(find.text('大肥鱼中枢'), findsWidgets);
     expect(find.text('专注守护 · 娱乐锁开启中'), findsOneWidget);
     expect(find.text('锁定中'), findsOneWidget);
-    expect(find.text('待排局'), findsOneWidget);
-    expect(find.text('1/2 段'), findsOneWidget);
+    // 今日计划去了「计划」，四部门去了「墙」；姐妹在「两条鱼」组里。
+    await tester.tap(find.byKey(const ValueKey('hub-group-fish')));
+    await settlePhone(tester);
     expect(find.text('今日完成 3'), findsOneWidget);
   });
 
@@ -149,14 +150,21 @@ void main() {
     final ch = _FakeHubChannel();
     await pumpPhone(tester, CompanionHubPage(channel: ch));
 
+    await tester.tap(find.byKey(const ValueKey('hub-group-diag')));
+    await settlePhone(tester);
     await tester.tap(find.text('立即触发一次状态巡检'));
     await settlePhone(tester);
     expect(ch.tickCalls, 1);
+    await popPage(tester);
 
+    await tester.tap(find.byKey(const ValueKey('hub-group-lock')));
+    await settlePhone(tester);
+    await tester.scrollUntilVisible(find.text('专注监督'), 200, scrollable: find.byType(Scrollable).last);
     await tester.tap(find.text('专注监督'));
     await settlePhone(tester);
     expect(ch.focusCalls, 1);
 
+    await tester.scrollUntilVisible(find.text('大肥鱼哨兵互信配对'), 200, scrollable: find.byType(Scrollable).last);
     await tester.tap(find.text('大肥鱼哨兵互信配对'));
     await settlePhone(tester);
     expect(find.text('生成 6 位配对码'), findsOneWidget);
@@ -180,20 +188,18 @@ void main() {
     expect(find.text('大肥鱼中枢'), findsWidgets);
   });
 
-  testWidgets('triggers six-dice roll and Obsidian memory import', (tester) async {
+  testWidgets('数据组：Obsidian 记忆导入与交接复制', (tester) async {
     final ch = _FakeHubChannel();
     await pumpPhone(tester, CompanionHubPage(channel: ch));
-
-    await tester.tap(find.text('摇一骰 · 轻思考微干预'));
+    await tester.tap(find.byKey(const ValueKey('hub-group-data')));
     await settlePhone(tester);
-    expect(ch.rollDiceCalls, 1);
 
-    await tester.scrollUntilVisible(find.text('生成记忆模板并导入 Obsidian 数据库'), 200);
+    await tester.scrollUntilVisible(find.text('生成记忆模板并导入 Obsidian 数据库'), 200, scrollable: find.byType(Scrollable).last);
     await tester.tap(find.text('生成记忆模板并导入 Obsidian 数据库'));
     await settlePhone(tester);
     expect(ch.importMemoryCalls, 1);
 
-    await tester.scrollUntilVisible(find.text('复制跨 AI 交接上下文（Cognitive OS）'), 200);
+    await tester.scrollUntilVisible(find.text('复制跨 AI 交接上下文（Cognitive OS）'), 200, scrollable: find.byType(Scrollable).last);
     await tester.tap(find.text('复制跨 AI 交接上下文（Cognitive OS）'));
     await settlePhone(tester);
     expect(ch.handoffCalls, 1);
