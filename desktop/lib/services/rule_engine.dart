@@ -84,7 +84,7 @@ class RuleEngine {
     'qqbrowser',
   };
 
-  static const String _challengeAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  static const String _challengeAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
   static String normalizeApp(String app) {
     var lower = app.trim().toLowerCase();

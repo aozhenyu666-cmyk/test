@@ -25,10 +25,14 @@ jobs:
 
       - name: Pub get, analyze & run desktop tests
         working-directory: desktop
+        shell: pwsh
         run: |
           flutter pub get
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           flutter analyze --no-fatal-infos
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           flutter test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows Release executable
         working-directory: desktop

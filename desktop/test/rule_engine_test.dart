@@ -141,10 +141,10 @@ void main() {
     expect(minBrowser.allowed, isFalse);
     expect(minBrowser.action, EnforcementAction.minimizeAndShield);
 
-    // Grey zone on Bilibili during focus with AI configured -> queryAi
+    // Grey zone on Bilibili (ambiguous title) during focus with AI configured -> queryAi
     final queryBili = RuleEngine.evaluateEnforcement(
       app: 'chrome',
-      title: 'bilibili 某公开课',
+      title: 'bilibili 推荐视频合集',
       isAfk: false,
       rules: rules,
       ledger: ledgerOk,
