@@ -267,6 +267,22 @@ export function recordHardIntervention(rawStore, {
   }
 }
 
+/** 结合 14 天自律等级的生效强度：自律达标往松挪一档（绝不超过一档、不低于 gentle），不达标立即恢复。 */
+export function resolveEffectiveIntensity(configOrState, { autonomy = null, now = Date.now(), tz = DEFAULT_TZ } = {}) {
+  const base = resolveIntensityState(configOrState, { now, tz })
+  const baseRank = INTENSITY_RANK[base.intensity]
+  const unlocked = Boolean(autonomy?.unlockedRelaxation)
+  const effectiveRank = unlocked ? Math.max(0, baseRank - 1) : baseRank
+  const effectiveIntensity = INTENSITY_TIERS[effectiveRank] || base.intensity
+  const autonomyShift = effectiveRank - baseRank
+  return {
+    ...base,
+    effectiveIntensity,
+    autonomyShift,
+    thresholds: thresholdsForIntensity(effectiveIntensity),
+  }
+}
+
 /** 上限用满后，只保留深夜锁和契约逾期锁。 */
 export function isLockExemptFromDailyCap({ wallKind = null, contractOverdue = false } = {}) {
   return wallKind === 'night' || Boolean(contractOverdue)

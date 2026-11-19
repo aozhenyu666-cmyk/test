@@ -1714,6 +1714,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           );
 
     final timeLedger = TimeLedgerView.fromWire(_today['timeLedger']);
+    final verdict = DailyVerdictView.fromWire(
+      _today['verdict'],
+      scoreRaw: _today['score'],
+      scoreLabelRaw: _today['scoreLabel'],
+    );
 
     final sections = <Widget>[
       ?bannerWidget,
@@ -1724,6 +1729,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           child: Center(child: CircularProgressIndicator()),
         )
       else ...[
+        if (verdict != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: HardVerdictCard(verdict: verdict),
+          ),
         _buildBriefCard(colors),
         if (timeLedger != null)
           Padding(

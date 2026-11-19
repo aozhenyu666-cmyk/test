@@ -1,9 +1,13 @@
-// 2026-11-19 Wave 1（H1–H4）核心不变式与单元测试：
+// 2026-11-19 Wave 1 + Wave 2（H1–H7）核心不变式（I1–I12）与单元测试：
+//   I1  系统底座在任何模式/任何组合下都不会出现在 lock 的锁目标里，也不会被 decideApp 判为锁
+//   I2  只要 lock.mode != open，why 和 unlockHow 都不为空
 //   I3  任意时刻至少存在一个脱身出口
 //   I4  紧急解除期间：lock.mode == open；不接管、不自动拉 Gemini、不发 P2–P5 球
 //   I5  发球仲裁每次最多选一球；除 P1–P2 外每小时不超过强度表上限
 //   I6  两次自动拉起 Gemini 至少间隔 20 分钟；连麦中及结束后 10 分钟内不拉；达上限不拉
+//   I7  同一个工作包在 workStore 里只有一份；五个旧视图各自统计的「今天几件」相等
 //   I8  时间账剩余额度在 /today、/analytics、/plan（lock.quota）、晚报、姐妹上下文完全一致
+//   I9  硬日判为「空转」时，投入分 <= 39
 //   I10 每天硬干预次数 ≤ 强度表上限；超出后只剩深夜锁和契约逾期锁，晚报写明「今天硬干预已经用满」
 //   I11 改松强度档不会当天生效，跨天（dayString 滚到次日）后生效；姐妹工具只能改严
 //   I12 假时钟在 01:20、03:40、08:30、14:10、22:10 北京时间均成立
@@ -23,6 +27,7 @@ import {
   hardInterventionStatus,
   isLockExemptFromDailyCap,
   recordHardIntervention,
+  resolveEffectiveIntensity,
   resolveIntensityState,
   thresholdsForIntensity,
 } from '../lib/intensity.js'
@@ -45,6 +50,12 @@ import { generateEveningReport } from '../lib/analytics_center.js'
 import { cleanPhone } from '../lib/phone.js'
 import { returnAction } from '../lib/driver.js'
 import { trustScore } from '../lib/trust.js'
+import { isBasePkg } from '../lib/app_tiers.js'
+import { createLockBus, pruneExpiredRequests, upsertLockRequest } from '../lib/lock_bus.js'
+import { computeUnifiedLockArbiter, LOCK_PRIORITIES } from '../lib/unified_arbiter.js'
+import { buildLockDecision, decideApp } from '../lib/lock_decision.js'
+import { migrateLegacyToWorkStore, mirrorWorkStoreToLegacy, upsertWorkItem } from '../lib/work_store.js'
+import { evaluateAutonomy14d } from '../lib/autonomy.js'
 
 const TZ = 'Asia/Shanghai'
 
@@ -626,5 +637,299 @@ test('I12 假时钟在 01:20、03:40、08:30、14:10、22:10 北京时间全量�
 
     // I10: 硬干预满额时仅深夜锁与契约逾期锁豁免
     assert.equal(isLockExemptFromDailyCap({ wallKind: isNight ? 'night' : 'default', contractOverdue: false }), isNight)
+
+    // I1 & I2: 任意时刻任意锁模式都不锁底座，且非 open 必有非空 why / unlockHow
+    const dec = buildLockDecision({
+      arbiter: computeUnifiedLockArbiter({
+        wall: isNight ? { locked: true, kind: 'night', why: '深夜睡眠锁' } : { locked: false },
+        takeoverSession: hm === '14:10' ? { allow: ['md.obsidian'], until: now + 600_000, why: '接管回位' } : null,
+        now,
+      }),
+      installed: [
+        { pkg: 'com.bbk.launcher2', label: '桌面' },
+        { pkg: 'com.ss.android.ugc.aweme', label: '抖音' },
+      ],
+      quota: { funOut: true, gameOut: true, line: '额度已用完' },
+      now,
+    })
+    assert.equal(decideApp(dec, 'com.bbk.launcher2', isBasePkg).lock, false, `${hm} 底座永不锁`)
+    if (dec.mode !== 'open') {
+      assert.ok(String(dec.why || '').trim().length > 0, `${hm} why 不能为空`)
+      assert.ok(String(dec.unlockHow || '').trim().length > 0, `${hm} unlockHow 不能为空`)
+    }
+
+    // I9: 任何时段空转晚报投入分 <= 39
+    const r = generateEveningReport({
+      day: '2026-11-19',
+      usageReport: { totalMinutes: 180, funMinutes: 0, rows: [{ app: 'md.obsidian', minutes: 180, fun: false }] },
+      ledger: [],
+      now,
+      tz: TZ,
+    })
+    assert.equal(r.verdict.tag, '空转')
+    assert.ok(r.score <= 39, `${hm} 空转投入分 ${r.score} 必须 <= 39`)
   }
+})
+
+// ---------------------------------------------------------------- H5 + I1 + I2（锁总线、P2.5 接管、arbiterEnforce 开关）
+
+test('H5 lock_bus：过期自动修剪、来源撤销防幽灵锁、P2.5 接管优先级与 HTTP arbiterEnforce 开关', async () => {
+  const now = cstMs('2026-11-19', '14:10')
+
+  // 1) lock_bus 自动修剪与来源撤销
+  let raw = null
+  const bus = createLockBus({ load: () => raw, save: (s) => { raw = s } })
+  bus.upsert({ id: 'req-radar', source: 'radar', kind: 'deny', apps: ['com.ss.android.ugc.aweme'], until: now + 60_000, why: '刷太久' }, now)
+  bus.upsert({ id: 'req-expired', source: 'switch', kind: 'deny', apps: ['tv.danmaku.bili'], until: now - 10, why: '已过期' }, now)
+  assert.equal(bus.list(now).length, 1, '写入后读取自动修剪过期锁')
+  bus.revokeBySource('radar', { now })
+  assert.equal(bus.list(now).length, 0, 'revokeBySource 彻底清除幽灵锁')
+
+  // 2) P2.5 TAKEOVER_STRICT 位于 P2 CONTRACT_OVERDUE_STRICT 与 P3 BOUT_STRICT 之间
+  assert.ok(LOCK_PRIORITIES.indexOf('CONTRACT_OVERDUE_STRICT') < LOCK_PRIORITIES.indexOf('TAKEOVER_STRICT'))
+  assert.ok(LOCK_PRIORITIES.indexOf('TAKEOVER_STRICT') < LOCK_PRIORITIES.indexOf('BOUT_STRICT'))
+
+  const p2OverP25 = computeUnifiedLockArbiter({
+    contractSession: { strict: true, until: now + 600_000, why: '契约逾期' },
+    takeoverSession: { until: now + 600_000, why: '接管回位' },
+    now,
+  })
+  assert.equal(p2OverP25.priority, 'P2')
+
+  const p25OverP3 = computeUnifiedLockArbiter({
+    takeoverSession: { until: now + 600_000, allow: ['md.obsidian'], why: '系统接管强制回位' },
+    presetStrict: { until: now + 600_000, allow: ['md.obsidian'], why: '普通严格局' },
+    now,
+  })
+  assert.equal(p25OverP3.priority, 'P2.5')
+  assert.equal(p25OverP3.source, 'TAKEOVER_STRICT')
+
+  // 3) I1 & I2：所有系统底座永不被锁，所有非 open 锁皆带 why 与 unlockHow
+  const baseApps = [
+    'com.bbk.launcher2',
+    'io.github.ccch1mneyyy.dsh_app.fish',
+    'com.android.systemui',
+    'com.baidu.input',
+    'moe.nb4a',
+    'com.android.dialer',
+    'com.android.providers.media.module',
+    'com.android.documentsui',
+  ]
+  const installed = [
+    ...baseApps.map((pkg) => ({ pkg, label: pkg })),
+    { pkg: 'com.ss.android.ugc.aweme', label: '抖音' },
+    { pkg: 'md.obsidian', label: 'Obsidian' },
+    { pkg: 'com.android.chrome', label: 'Chrome' },
+  ]
+  const modes = [
+    { priority: 'P1', source: 'GEMINI_LIVE_CELL', label: '连麦', why: '连麦中', unlockHow: '完成连麦', allow: [] },
+    { priority: 'P2', source: 'CONTRACT_OVERDUE_STRICT', label: '契约', why: '契约逾期', unlockHow: '交验收', allow: ['md.obsidian'] },
+    { priority: 'P2.5', source: 'TAKEOVER_STRICT', label: '接管', why: '接管中', unlockHow: '回正事', allow: ['md.obsidian'] },
+    { priority: 'P3', source: 'BOUT_STRICT', label: '严格局', why: '专注局', unlockHow: '完成局', allow: ['md.obsidian'] },
+    { priority: 'P4', source: 'NIGHT_CURFEW', label: '深夜', why: '深夜睡', unlockHow: '早7点开', allow: [] },
+    { priority: 'P5', source: 'CONTRACT_FLEX', label: '护航', why: '契约护航', unlockHow: '提交验收', allow: ['md.obsidian'] },
+    { priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自由', why: '自由态', unlockHow: '保持节奏', allow: ['*'] },
+  ]
+  for (const arb of modes) {
+    const dec = buildLockDecision({
+      arbiter: arb,
+      installed,
+      quota: { funOut: true, gameOut: true, line: '今日娱乐额度已用完' },
+      radarDeny: [{ app: 'com.bbk.launcher2', until: now + 60_000, why: '尝试锁桌面' }, { app: 'com.ss.android.ugc.aweme', until: now + 60_000, why: '抖音临时锁' }],
+      now,
+    })
+    assert.notEqual(dec.mode, 'open')
+    assert.ok(String(dec.why).trim().length > 0, `${arb.priority} why 非空`)
+    assert.ok(String(dec.unlockHow).trim().length > 0, `${arb.priority} unlockHow 非空`)
+    for (const bp of baseApps) {
+      assert.equal(dec.deny.some((d) => d.app === bp), false, `I1: ${arb.priority} deny 不含 ${bp}`)
+      assert.equal(dec.needPass.includes(bp), false, `I1: ${arb.priority} needPass 不含 ${bp}`)
+      assert.equal(decideApp(dec, bp, isBasePkg).lock, false, `I1: ${arb.priority} decideApp 不锁 ${bp}`)
+    }
+  }
+
+  // 4) HTTP arbiterEnforce 默认 false，POST /config 可开关并在 /status /plan /today 一致曝光；紧急解除清除锁总线
+  await withHome(async (home) => {
+    seedHome(home)
+    const sis = makeAgent('session-sis')
+    const host = makeHost({ agent: sis, strategistAgent: makeAgent('session-big') })
+
+    const s0 = await call(host.handler, 'GET', '/dsh-go-companion/v1/status')
+    assert.equal(s0.body.arbiterEnforce, false)
+    assert.equal(s0.body.config.arbiterEnforce, false)
+
+    const cfgSet = await call(host.handler, 'POST', '/dsh-go-companion/v1/config', { arbiterEnforce: true })
+    assert.equal(cfgSet.body.config.arbiterEnforce, true)
+
+    const t1 = await call(host.handler, 'GET', '/dsh-go-companion/v1/today')
+    assert.equal(t1.body.arbiterEnforce, true)
+
+    // 先触发一次临时封禁，再发 disarm 必须撤销 lockBus 幽灵锁
+    await sis.tools.block_apps.execute({ apps: ['com.ss.android.ugc.aweme'], hours: 2, reason: '防走神' })
+    const busBefore = JSON.parse(readFileSync(join(home, 'companion', 'lock-requests.json'), 'utf8'))
+    assert.ok(busBefore.requests.some((r) => r.apps.includes('com.ss.android.ugc.aweme')))
+
+    await call(host.handler, 'POST', '/dsh-go-companion/v1/event', {
+      type: 'disarm', disarmId: 'disarm-ghost-clear', reason: '临时急事', until: Date.now() + 600_000,
+    })
+    const busAfter = JSON.parse(readFileSync(join(home, 'companion', 'lock-requests.json'), 'utf8'))
+    assert.equal(busAfter.requests.some((r) => r.source === 'sister' || r.source === 'radar'), false, '紧急解除撤销锁总线上的拦截请求')
+  })
+})
+
+// ---------------------------------------------------------------- H6 + I7（任务单表 work.json + 五视图等数 + 主线自动回涨）
+
+test('H6 & I7 work_store：一次性迁移去重、五视图今天几件相等、push_to_today 完局主线 +1', async () => {
+  const now = cstMs('2026-11-19', '14:10')
+
+  // 1) work_store 单元测试：同一工作包去重合并，只留一份
+  const migrated = migrateLegacyToWorkStore({
+    planItems: [{ id: 'p1', title: '资料分析 200 题', protocolId: 'execute', minute: 600, budget: 45, need: ['md.obsidian'] }],
+    dailyTasks: [{ id: 'd1', task: '资料分析200题', evidence: '完成错题卡', due: 720, minutes: 45, dept: '谋划思考' }, { id: 'd2', task: '修改简历', evidence: '更新2段', due: 900, minutes: 30, dept: '执行' }],
+    boutQueue: [{ id: 'b1', title: '资料分析 200 题', protocolId: 'execute', minutes: 50 }],
+    day: '2026-11-19',
+    now,
+  })
+  assert.equal(migrated.items.length, 2, 'I7: 同名任务合并去重只剩 2 份')
+  const mirrored = mirrorWorkStoreToLegacy(migrated)
+  assert.equal(mirrored.planItems.length, 2)
+  assert.equal(mirrored.dailyTasks.length, 2)
+  assert.equal(mirrored.boutQueue.length, 2)
+  assert.equal(mirrored.unifiedTasks.length, 2)
+  assert.equal(mirrored.totalCount, 2)
+
+  // 2) HTTP 集成：push_to_today 产生 source='horizon' 条目并被所有视图一致计数；过关自动 doneSteps + 1
+  await withHome(async (home) => {
+    seedHome(home)
+    const host = makeHost({ agent: makeAgent('session-sis'), strategistAgent: makeAgent('session-big') })
+
+    const hz = await call(host.handler, 'POST', '/dsh-go-companion/v1/horizons', {
+      action: 'upsert', horizon: 'medium', title: '行测冲刺战役', targetSteps: 5,
+    })
+    const hzId = hz.body.item.id
+    assert.equal(hz.body.item.doneSteps, 0)
+
+    const pushed = await call(host.handler, 'POST', '/dsh-go-companion/v1/horizons', {
+      action: 'push_to_today', id: hzId, subtask: '资料分析 20 题', minutes: 45,
+    })
+    assert.equal(pushed.body.ok, true)
+
+    await call(host.handler, 'POST', '/dsh-go-companion/v1/today/task', {
+      title: '修改简历第二段', minutes: 30, allow: ['md.obsidian'],
+    })
+
+    const wsDisk = JSON.parse(readFileSync(join(home, 'companion', 'work.json'), 'utf8'))
+    assert.equal(wsDisk.items.length, 2)
+    assert.equal(wsDisk.items.find((x) => x.links?.horizonId === hzId)?.source, 'horizon')
+
+    // 五视图统计的「今天几件」全部相等
+    const planDay = await call(host.handler, 'GET', '/dsh-go-companion/v1/plan/day')
+    const bouts = await call(host.handler, 'GET', '/dsh-go-companion/v1/bouts')
+    const today = await call(host.handler, 'GET', '/dsh-go-companion/v1/today')
+    assert.equal(planDay.body.plan.items.length, 2)
+    assert.equal(planDay.body.numbers.planned, 2)
+    assert.equal(bouts.body.queue.length, 2)
+    assert.equal(today.body.unifiedTasks.length, 2)
+    assert.equal(today.body.allQueueCount, 2)
+
+    // 完成带 horizonId 的工作包：使用 micro-landing-3m 协议（开局并回答通过，校验 horizon doneSteps + 1）
+    const hWork = wsDisk.items.find((x) => x.links?.horizonId === hzId)
+    const started = await call(host.handler, 'POST', '/dsh-go-companion/v1/bouts', {
+      action: 'start',
+      id: hWork.id,
+      protocolId: 'micro-landing-3m',
+      allow: ['md.obsidian'],
+      packet: { goal: hWork.title, first: '打开题本写第一题', deliverable: '完成20题错因分析', acceptKind: 'evidence', acceptWhat: '有具体结果和错因' },
+    })
+    assert.equal(started.body.ok, true)
+    for (let step = 0; step < 4; step++) {
+      const a = await call(host.handler, 'POST', '/dsh-go-companion/v1/bouts', {
+        action: 'answer', text: `第${step + 1}步交付：已经完成 20 题，正确率 85%，错因在于基期比重找错分母。`,
+      })
+      if (a.body?.state === 'closed') break
+    }
+    const hzAfter = await call(host.handler, 'GET', '/dsh-go-companion/v1/horizons')
+    const updatedItem = hzAfter.body.horizons.medium.find((m) => m.id === hzId)
+    assert.equal(updatedItem.doneSteps, 1, '完成带 links.horizonId 的工作包后主线进度自动 +1')
+  })
+})
+
+// ---------------------------------------------------------------- H7 + I9（评价统一、空转 <=39、14 天自律、信用分仅限通行证）
+
+test('H7 & I9 评价统一：硬日判为主、空转投入分<=39、14天自律仅挪强度一档且快速降级、信用分仅限通行证', async () => {
+  const now = cstMs('2026-11-19', '22:10')
+
+  // 1) I9：即使专心 180 分钟（rawScore > 39），只要硬日判为「空转」，投入分必须 <= 39 且标签为「投入分」
+  const emptyReport = generateEveningReport({
+    day: '2026-11-19',
+    usageReport: {
+      totalMinutes: 200,
+      funMinutes: 0,
+      rows: [{ app: 'md.obsidian', label: 'Obsidian', minutes: 180, fun: false }],
+    },
+    ledger: [],
+    now,
+    tz: TZ,
+  })
+  assert.equal(emptyReport.verdict.tag, '空转')
+  assert.equal(emptyReport.scoreLabel, '投入分')
+  assert.ok(emptyReport.score <= 39, `I9: 空转时投入分 ${emptyReport.score} 必须 <= 39`)
+  assert.doesNotMatch(emptyReport.headline, /战力/)
+  assert.match(emptyReport.headline, /投入 \d+\/100/)
+
+  // 2) H7 14 天滚动自律窗口：连续多日稳态达标才能 L2/L3 往松挪一档；一旦连续空转/逾期立刻降级恢复
+  const goodDays = []
+  const goodReports = {}
+  for (let i = 1; i <= 7; i++) {
+    const d = `2026-11-${String(12 + i).padStart(2, '0')}`
+    goodDays.push({ day: d, bouts: { opened: 2, passed: 2, self: 2 }, selfOpenRatio: 1, deliverRatio: 1 })
+    goodReports[d] = { verdict: { tag: '达成' } }
+  }
+  const earned = evaluateAutonomy14d({ days: goodDays, reports: goodReports, ledger: [], todayDay: '2026-11-19', now })
+  assert.equal(earned.unlockedRelaxation, true)
+  assert.equal(earned.shift, -1)
+
+  const strictShifted = resolveEffectiveIntensity({ intensity: 'strict' }, { autonomy: earned, now, tz: TZ })
+  assert.equal(strictShifted.intensity, 'strict')
+  assert.equal(strictShifted.effectiveIntensity, 'standard', '自律达标将严格往松挪一档到标准')
+  assert.equal(strictShifted.autonomyShift, -1)
+
+  const gentleFloor = resolveEffectiveIntensity({ intensity: 'gentle' }, { autonomy: earned, now, tz: TZ })
+  assert.equal(gentleFloor.effectiveIntensity, 'gentle', '不低于用户选择档位的更松边界')
+  assert.equal(gentleFloor.autonomyShift, 0)
+
+  // 降级比升级快：最近出现 2 天空转 -> 立即撤销松绑并降级
+  const degradedReports = { ...goodReports, '2026-11-18': { verdict: { tag: '空转' } }, '2026-11-19': { verdict: { tag: '空转' } } }
+  const downgraded = evaluateAutonomy14d({ days: goodDays, reports: degradedReports, ledger: [], todayDay: '2026-11-19', now })
+  assert.equal(downgraded.level, 'L0')
+  assert.equal(downgraded.unlockedRelaxation, false)
+  assert.equal(downgraded.shift, 0)
+
+  const reverted = resolveEffectiveIntensity({ intensity: 'strict' }, { autonomy: downgraded, now, tz: TZ })
+  assert.equal(reverted.effectiveIntensity, 'strict', '不达标立即恢复用户自选严格档')
+  assert.equal(reverted.autonomyShift, 0)
+
+  // 3) 信用分仅限通行证审批 + HTTP /today & /analytics 返回投入分 <=39 与 effectiveIntensity
+  await withHome(async (home) => {
+    seedHome(home, { intensity: 'strict' })
+    const host = makeHost({ agent: makeAgent('session-sis'), strategistAgent: makeAgent('session-big') })
+
+    // 写入多次违抗把信用分拉低 (< 35)，测试 grant_task_lease 拒绝无 whyAgain，但 /plan 不因此额外加锁或阻断
+    const ledPath = join(home, 'companion', 'ledger.jsonl')
+    const baseAt = Date.now() - 1000
+    const lowTrustRows = [1, 2, 3].map((i) => JSON.stringify({ state: 'defied', at: baseAt + i }))
+    writeFileSync(ledPath, lowTrustRows.join('\n') + '\n')
+
+    const noWhy = host.globalTools.grant_task_lease.execute({ app: 'com.android.chrome', taskGoal: '查资料' })
+    assert.equal(noWhy.ok, false, '低信用分未填 whyAgain 拒绝直接批通行证')
+    const withWhy = host.globalTools.grant_task_lease.execute({ app: 'com.android.chrome', taskGoal: '查资料', whyAgain: '确需检索报名表' })
+    assert.equal(withWhy.ok, true, '填了 whyAgain 后可批')
+
+    const today = await call(host.handler, 'GET', '/dsh-go-companion/v1/today')
+    assert.equal(today.body.effectiveIntensity, 'strict')
+    assert.equal(today.body.autonomyShift, 0)
+    assert.equal(today.body.scoreLabel, '投入分')
+    assert.equal(today.body.verdict.tag, '空转')
+    assert.ok(today.body.score <= 39)
+  })
 })

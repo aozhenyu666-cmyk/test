@@ -63,3 +63,120 @@ export function evaluateAutonomyLevel({
     ...relaxation,
   }
 }
+
+function shiftYmd(ymd, deltaDays) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ''))
+  if (!m) return ''
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + Number(deltaDays || 0)))
+  return dt.toISOString().slice(0, 10)
+}
+
+/**
+ * H7：按 14 天滚动窗口计算自律等级（主动开局比、交付率、空转天数、紧急解除次数）。
+ * 纪律：降级比升级快；只用来决定是否把强度表往松挪一档（不单独绕过锁）。
+ */
+export function evaluateAutonomy14d({
+  days = [],
+  reports = {},
+  ledger = [],
+  todayStats = null,
+  todayDay = '',
+  overdueCheckpoints = 0,
+  now = Date.now(),
+  dayOf = (ms) => new Date(ms).toISOString().slice(0, 10),
+} = {}) {
+  const anchorDay = /^\d{4}-\d{2}-\d{2}$/.test(String(todayDay || '')) ? String(todayDay) : dayOf(now)
+  const windowDates = []
+  for (let i = 13; i >= 0; i--) {
+    windowDates.push(shiftYmd(anchorDay, -i))
+  }
+  const dateSet = new Set(windowDates)
+  const dayMap = new Map()
+  for (const d of Array.isArray(days) ? days : []) {
+    if (d?.day && dateSet.has(String(d.day))) dayMap.set(String(d.day), d)
+  }
+
+  let activeDays = 0
+  let idleDays = 0
+  let recentIdleDays3d = 0
+  const selfOpenRatios = []
+  const deliverRatios = []
+
+  const recent3Set = new Set(windowDates.slice(-3))
+  for (const ds of windowDates) {
+    const rep = reports?.[ds] || null
+    const dg = dayMap.get(ds) || (ds === anchorDay ? todayStats : null)
+    const opened = Number(dg?.bouts?.opened ?? dg?.opened ?? 0)
+    const selfOpened = Number(dg?.bouts?.self ?? dg?.self ?? 0)
+    const passed = Number(dg?.bouts?.passed ?? dg?.passed ?? 0)
+    const sr = dg?.selfOpenRatio !== undefined && dg?.selfOpenRatio !== null
+      ? Number(dg.selfOpenRatio)
+      : (opened > 0 ? selfOpened / opened : null)
+    const dr = dg?.deliverRatio !== undefined && dg?.deliverRatio !== null
+      ? Number(dg.deliverRatio)
+      : (opened > 0 ? passed / opened : null)
+
+    const isIdleByReport = rep?.verdict?.tag === '空转'
+    const isActiveByReport = Boolean(rep && rep.verdict?.tag && rep.verdict.tag !== '空转')
+    const hasActivity = Boolean(rep || opened > 0 || sr !== null || dr !== null)
+    if (hasActivity) activeDays++
+    if (isIdleByReport || (!isActiveByReport && opened > 0 && dr !== null && dr === 0 && (rep ? rep.verdict?.tag === '空转' : false))) {
+      idleDays++
+      if (recent3Set.has(ds)) recentIdleDays3d++
+    }
+    if (sr !== null && Number.isFinite(sr)) selfOpenRatios.push(sr)
+    if (dr !== null && Number.isFinite(dr)) deliverRatios.push(dr)
+  }
+
+  const disarms = (Array.isArray(ledger) ? ledger : []).filter((e) => {
+    if (!e || e.counted === false) return false
+    if (!['disarm', 'emergency-pass-grant', 'breakglass'].includes(e.state)) return false
+    const d = dayOf(Number(e.at) || 0)
+    return dateSet.has(d)
+  }).length
+
+  const avg = (arr) => (arr.length ? Math.round((arr.reduce((s, v) => s + v, 0) / arr.length) * 100) / 100 : 0)
+  const selfOpenRatio = avg(selfOpenRatios)
+  const deliverRatio = avg(deliverRatios)
+  const overdue = Math.max(0, Number(overdueCheckpoints) || 0)
+
+  // 降级比升级快：近 3 天出现 >=2 天空转、14 天累计空转 >=4 天、紧急解除 >=5 次、或当下契约逾期 → 立刻 L0
+  let level = 'L1'
+  if (overdue > 0 || recentIdleDays3d >= 2 || idleDays >= 4 || disarms >= 5) {
+    level = 'L0'
+  } else if (activeDays >= 10 && deliverRatio >= 0.8 && selfOpenRatio >= 0.5 && idleDays === 0 && recentIdleDays3d === 0 && disarms <= 2) {
+    level = 'L3'
+  } else if (activeDays >= 5 && deliverRatio >= 0.65 && selfOpenRatio >= 0.5 && idleDays <= 2 && recentIdleDays3d === 0 && disarms <= 4) {
+    level = 'L2'
+  }
+
+  const unlockedRelaxation = level === 'L2' || level === 'L3'
+  const meta = AUTONOMY_LEVELS.find((x) => x.level === level) || AUTONOMY_LEVELS[1]
+  const netScore = Math.max(0, Math.min(100, Math.round(deliverRatio * 55 + selfOpenRatio * 25 + Math.min(20, activeDays * 2) - idleDays * 10 - disarms * 5)))
+  const relaxation = {
+    L0: { strictBias: true, recommendedGraceSec: 15, autoRewardLabel: '近期存在空转/违约或高频解除：保持当前用户自选强度' },
+    L1: { strictBias: false, recommendedGraceSec: 45, autoRewardLabel: '14 天窗口积累中（需 ≥5 天稳定交付与低空转方自动松一档）' },
+    L2: { strictBias: false, recommendedGraceSec: 120, autoRewardLabel: '14 天自律达标 · 强度自动往松挪一档' },
+    L3: { strictBias: false, recommendedGraceSec: 300, autoRewardLabel: '14 天高信赖自治 · 强度自动往松挪一档' },
+  }[level]
+
+  return {
+    level,
+    name: meta.name,
+    desc: meta.desc,
+    windowDays: 14,
+    netScore,
+    unlockedRelaxation,
+    shift: unlockedRelaxation ? -1 : 0,
+    metrics: {
+      activeDays,
+      idleDays,
+      recentIdleDays3d,
+      selfOpenRatio,
+      deliverRatio,
+      disarms,
+      overdueCount: overdue,
+    },
+    ...relaxation,
+  }
+}

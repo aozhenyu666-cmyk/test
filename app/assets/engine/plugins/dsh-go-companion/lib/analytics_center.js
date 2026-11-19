@@ -12,7 +12,7 @@ import { digestOf, segsOf } from './episodes.js'
 import { GEMINI_PACKAGES } from './gemini.js'
 import { classifyUsageBucket } from './telemetry_charts.js'
 import { DEFAULT_TZ, hm as zoneHm, minuteOfDay, startOfDay } from './tz.js'
-import { dayVerdict, ledgerFacts, missedOn } from './verdict.js'
+import { dayVerdict, ledgerFacts, missedOn, VERDICT_IDLE } from './verdict.js'
 
 export const HISTORY_VERSION = 1
 export const MAX_HISTORY_DAYS = 365
@@ -416,6 +416,8 @@ export function buildAnalyticsOverview({
   lockArbiter = null,
   timeLedger = null,
   hardInterventions = null,
+  todayVerdict = null,
+  todayScore = null,
   kbDirPath = '',
   now = Date.now(),
   tz = DEFAULT_TZ,
@@ -532,9 +534,96 @@ export function buildAnalyticsOverview({
     heatmap90d,
     topApps: cur.topApps,
     eveningReport,
+    verdict: eveningReport?.verdict || todayVerdict || null,
+    score: eveningReport ? eveningReport.score : (todayScore ?? null),
+    scoreLabel: '投入分',
     lockArbiter: lockArbiter || null,
     timeLedger: timeLedger || null,
     hardInterventions: hardInterventions || null,
+  }
+}
+
+/** 统一日判 + 投入分计算（H7 & I9：硬日判为「空转」时投入分强制 <= 39）。 */
+export function computeDailyEvaluation({
+  targetDay,
+  buckets = { mainlineMin: 0, videoStudyMin: 0, geminiMin: 0, toolTinkerMin: 0, funMin: 0, tinkerWarning: false },
+  ledger = [],
+  contract = null,
+  horizons = null,
+  planned = 0,
+  tz = DEFAULT_TZ,
+  now = Date.now(),
+} = {}) {
+  const day = targetDay || dayString(now, tz)
+  const b = buckets
+  const completedTasks = []
+  const seen = new Set()
+  for (const e of Array.isArray(ledger) ? ledger : []) {
+    if (!e || dayString(num(e.at), tz) !== day) continue
+    if (['bout-close', 'bout-done', 'checkpoint-passed', 'quiz-unlock'].includes(e.state)) {
+      const title = String(e.title || e.goal || e.note || e.state).slice(0, 60)
+      const k = `${e.state}:${title}`
+      if (seen.has(k)) continue
+      seen.add(k)
+      completedTasks.push({
+        kind: e.state,
+        title,
+        minutes: Math.max(0, Math.round(num(e.minutes))),
+        at: zoneHm(num(e.at, now), tz),
+      })
+    }
+  }
+  if (Array.isArray(contract?.checkpoints)) {
+    for (const cp of contract.checkpoints) {
+      if (cp?.status === 'passed' && dayString(num(cp.verifiedAt), tz) === day) {
+        const title = `契约验收：${cp.title}`
+        if (!seen.has(`cp:${title}`)) {
+          seen.add(`cp:${title}`)
+          completedTasks.push({
+            kind: 'checkpoint-passed',
+            title,
+            minutes: 0,
+            at: zoneHm(num(cp.verifiedAt, now), tz),
+          })
+        }
+      }
+    }
+  }
+
+  const violationsToday = (Array.isArray(ledger) ? ledger : []).filter(
+    (e) => e && dayString(num(e.at), tz) === day && ['defied', 'emergency-exit', 'checkpoint-overdue-locked'].includes(e.state),
+  ).length
+
+  const facts = ledgerFacts(ledger, (e) => dayString(num(e.at), tz) === day)
+  const verdict = dayVerdict({
+    delivered: completedTasks.length,
+    planned,
+    receiptsOk: facts.receiptsOk,
+    receiptsMissing: facts.receiptsMissing,
+    funMin: b.funMin,
+    focusMin: b.mainlineMin + b.videoStudyMin,
+    disarms: facts.disarms,
+    violations: violationsToday,
+    missedDeadlines: missedOn(horizons, shiftYmd(day, 1)),
+  })
+
+  const focusTotal = b.mainlineMin + b.videoStudyMin + b.geminiMin
+  const focusPts = Math.min(50, Math.round(focusTotal / 3.6))
+  const taskPts = Math.min(30, completedTasks.length * 10)
+  const ratioBonus = focusTotal > 0 ? Math.round(20 * (focusTotal / Math.max(1, focusTotal + b.funMin))) : 0
+  const penalty = Math.min(30, violationsToday * 8 + (b.tinkerWarning ? 6 : 0))
+  const rawScore = Math.max(0, Math.min(100, focusPts + taskPts + ratioBonus - penalty))
+  // I9：硬日判为「空转」时，投入分强制 <= 39
+  const score = verdict.tag === VERDICT_IDLE ? Math.min(39, rawScore) : rawScore
+
+  return {
+    verdict,
+    score,
+    scoreLabel: '投入分',
+    rawScore,
+    completedTasks,
+    violationsToday,
+    focusTotal,
   }
 }
 
@@ -559,6 +648,8 @@ export function generateEveningReport({
   lockArbiter = null,
   timeLedger = null,
   hardInterventions = null,
+  todayVerdict = null,
+  todayScore = null,
   kbDirPath = '',
   storyline = null,
   planned = 0,
@@ -589,73 +680,27 @@ export function generateEveningReport({
   const b = overview.buckets
   const gStats = overview.geminiStats || { minutesToday: b.geminiMin, sessionsCount: 0, recapsCount: 0, recentRecaps: [] }
 
-  // 收集当日完成事件与违纪事件
-  const completedTasks = []
-  const seen = new Set()
-  for (const e of Array.isArray(ledger) ? ledger : []) {
-    if (!e || dayString(num(e.at), tz) !== targetDay) continue
-    if (['bout-close', 'bout-done', 'checkpoint-passed', 'quiz-unlock'].includes(e.state)) {
-      const title = String(e.title || e.goal || e.note || e.state).slice(0, 60)
-      const k = `${e.state}:${title}`
-      if (seen.has(k)) continue
-      seen.add(k)
-      completedTasks.push({
-        kind: e.state,
-        title,
-        minutes: Math.max(0, Math.round(num(e.minutes))),
-        at: zoneHm(num(e.at, now), tz),
-      })
-    }
-  }
-  if (Array.isArray(contract?.checkpoints)) {
-    for (const cp of contract.checkpoints) {
-      if (cp?.status === 'passed' && dayString(num(cp.verifiedAt), tz) === targetDay) {
-        const title = `契约验收：${cp.title}`
-        if (!seen.has(`cp:${title}`)) {
-          seen.add(`cp:${title}`)
-          completedTasks.push({
-            kind: 'checkpoint-passed',
-            title,
-            minutes: 0,
-            at: zoneHm(num(cp.verifiedAt, now), tz),
-          })
-        }
-      }
-    }
-  }
-
-  const violationsToday = (Array.isArray(ledger) ? ledger : []).filter(
-    (e) => e && dayString(num(e.at), tz) === targetDay && ['defied', 'emergency-exit', 'checkpoint-overdue-locked'].includes(e.state),
-  ).length
-
-  const focusTotal = b.mainlineMin + b.videoStudyMin + b.geminiMin
-  const focusPts = Math.min(50, Math.round(focusTotal / 3.6))
-  const taskPts = Math.min(30, completedTasks.length * 10)
-  const ratioBonus = focusTotal > 0 ? Math.round(20 * (focusTotal / Math.max(1, focusTotal + b.funMin))) : 0
-  const penalty = Math.min(30, violationsToday * 8 + (b.tinkerWarning ? 6 : 0))
-  const score = Math.max(0, Math.min(100, focusPts + taskPts + ratioBonus - penalty))
+  // 2026-11-19 H7：日判为主，投入分从属于日判（空转 <= 39）
+  const evalOut = computeDailyEvaluation({
+    targetDay,
+    buckets: b,
+    ledger,
+    contract,
+    horizons,
+    planned,
+    tz,
+    now,
+  })
+  const { verdict, score, completedTasks, violationsToday, focusTotal } = evalOut
 
   const verdictTag =
+    verdict.tag === VERDICT_IDLE ? '今日未形成有效交付（空转）' :
     score >= 80 ? '主线推进扎实' :
     score >= 60 ? '稳步推进中' :
     score >= 40 ? '有推进但存在分心损耗' :
     '主线投入偏低，明日需尽早开局'
 
-  // 2026-11-18 验收器：硬判决（空转 / 部分 / 达成）由代码按账本算，放在最前面，不让软话盖过去。
-  const facts = ledgerFacts(ledger, (e) => dayString(num(e.at), tz) === targetDay)
-  const verdict = dayVerdict({
-    delivered: completedTasks.length,
-    planned,
-    receiptsOk: facts.receiptsOk,
-    receiptsMissing: facts.receiptsMissing,
-    funMin: b.funMin,
-    focusMin: b.mainlineMin + b.videoStudyMin,
-    disarms: facts.disarms,
-    violations: violationsToday,
-    missedDeadlines: missedOn(horizons, shiftYmd(targetDay, 1)),
-  })
-
-  const headline = `${targetDay} · 【${verdict.tag}】${verdictTag}（战力 ${score}/100 · 主线与共脑 ${focusTotal}m / 娱乐 ${b.funMin}m）`
+  const headline = `${targetDay} · 【${verdict.tag}】${verdictTag}（投入 ${score}/100 · 主线与共脑 ${focusTotal}m / 娱乐 ${b.funMin}m）`
 
   const pieSlices = [
     ['主线攻坚', b.mainlineMin],
@@ -744,7 +789,7 @@ export function generateEveningReport({
     '',
     `> **${verdict.line}**`,
     '',
-    `> 战力总评：${score}/100 · ${headline}`,
+    `> 投入分总评：${score}/100 · ${headline}`,
     '',
     '## 一、时间投入分布图',
     '',
@@ -791,6 +836,7 @@ export function generateEveningReport({
     day: targetDay,
     generatedAt: now,
     score,
+    scoreLabel: '投入分',
     verdict,
     timeLedger: timeLedger || null,
     hardInterventions: hardInterventions || null,

@@ -9,7 +9,7 @@
 
 import { join } from 'node:path'
 import { cleanBankUnlockState, judgeQuizAnswer, parseBankSmart, pickNextQuizQuestion } from './bank_unlock.js'
-import { evaluateAutonomyLevel } from './autonomy.js'
+import { evaluateAutonomy14d, evaluateAutonomyLevel } from './autonomy.js'
 import {
   archivePathInKb,
   cleanHorizons,
@@ -37,6 +37,7 @@ import {
 } from './dept_skills.js'
 import {
   buildAnalyticsOverview,
+  computeDailyEvaluation,
   generateEveningReport,
   normalizeHistoryStore,
   normalizeReportsStore,
@@ -102,12 +103,19 @@ export function createV4Hub(deps) {
     getAppLedger = () => [],
     getQuotaLine = () => '',
     getGearWhat = () => '',
-    getIntensityInfo = () => ({ intensity: 'standard', pendingIntensity: null, emergencyDisarmDailyCap: 3, hardInterventions: { count: 0, cap: 12, capped: false, left: 12 } }),
+    getIntensityInfo = () => ({ intensity: 'standard', effectiveIntensity: 'standard', autonomyShift: 0, pendingIntensity: null, emergencyDisarmDailyCap: 3, hardInterventions: { count: 0, cap: 12, capped: false, left: 12 } }),
     getPassLedgerSummary = () => null,
     getTimeLedger = () => null,
     onBankUnlock = null,
     requestGeminiGate = null,
     getEmergencyPassActive = null,
+    getWorkStore = null,
+    upsertWorkItemNow = null,
+    markWorkStatusNow = null,
+    getArbiterEnforce = () => false,
+    getLockRequests = () => [],
+    getTodayBrainStats = null,
+    onContractClear = null,
   } = deps
 
   const tz = () => zoneOr(getConfig()?.timeZone)
@@ -175,25 +183,21 @@ export function createV4Hub(deps) {
   function computeAutonomy(now = Date.now()) {
     const tzName = tz()
     const day = dayString(now, tzName)
-    const ledger = readLedger(home(), 300)
-    const todayEntries = ledger.filter((e) => e && dayString(Number(e.at) || 0, tzName) === day)
-    const completedBouts = todayEntries.filter((e) => e.state === 'bout-close' || e.state === 'bout-done').length
-    const checkpointsPassed = todayEntries.filter((e) => e.state === 'checkpoint-passed').length
-    const violationsToday = todayEntries.filter((e) => e.state === 'defied' || e.state === 'emergency-exit').length
-    const bankSt = loadBankUnlock()
+    const ledger = readLedger(home(), 1500)
+    const reports = loadReportsStore()?.reports || {}
+    const brainView = typeof getTodayBrainStats === 'function' ? (getTodayBrainStats(now) || {}) : {}
+    const digests = Array.isArray(brainView.digests) ? brainView.digests : []
     const contract = loadContract()
     const overdueCheckpoints = (contract?.checkpoints || []).filter((c) => c.status === 'overdue_locked').length
-    const rep = usageReportView(now, tzName)
-    const funMin = Number(rep.funMinutes) || 0
-    const focusMin = Math.max(0, (Number(rep.totalMinutes) || 0) - funMin)
-    return evaluateAutonomyLevel({
-      completedBouts,
-      checkpointsPassed,
-      quizSolvedToday: bankSt.stats.correct,
-      focusMinutes: focusMin,
-      funMinutes: funMin,
-      violationsToday,
+    return evaluateAutonomy14d({
+      days: digests,
+      reports,
+      ledger,
+      todayStats: brainView.today || null,
+      todayDay: day,
       overdueCheckpoints,
+      now,
+      dayOf: (ms) => dayString(ms, tzName),
     })
   }
 
@@ -213,16 +217,29 @@ export function createV4Hub(deps) {
       const all = [...cur.medium, ...cur.long]
       const target = all.find((x) => x.id === String(body?.id || ''))
       if (!target) return { v: 1, ok: false, error: '未找到对应主线条目' }
-      const existing = planDayRoute({ action: 'list' })?.plan?.items || []
+      const defaultApps = Array.isArray(getConfig()?.defaultAllow) && getConfig().defaultAllow.length
+        ? getConfig().defaultAllow
+        : ['md.obsidian', 'com.tencent.mm']
+      const apps = Array.isArray(body?.apps) && body.apps.length ? body.apps : defaultApps
       const newTask = {
         id: `hz-${now.toString(36).slice(-5)}`,
+        source: 'horizon',
         title: `${target.title}${body?.subtask ? `：${String(body.subtask).slice(0, 40)}` : ''}`.slice(0, 80),
         protocolId: 'execute',
         minutes: Math.max(15, Math.min(180, Number(body?.minutes) || 45)),
+        apps,
+        need: apps,
+        allow: apps,
         parentHorizonId: target.id,
+        links: { horizonId: target.id, contractCpId: '' },
         strict: true,
       }
-      planDayRoute({ action: 'set', items: [...existing, newTask], by: 'horizon' })
+      if (typeof upsertWorkItemNow === 'function') {
+        upsertWorkItemNow(newTask, { now, mirror: true })
+      } else {
+        const existing = planDayRoute({ action: 'list' })?.plan?.items || []
+        planDayRoute({ action: 'set', items: [...existing, newTask], by: 'horizon' })
+      }
       record({ state: 'horizon-push-today', at: now, horizonId: target.id, title: newTask.title })
       return { v: 1, ok: true, pushed: newTask, horizons: cur }
     }
@@ -436,6 +453,21 @@ export function createV4Hub(deps) {
       })
       if (!next) return { v: 1, ok: false, error: '契约格式无效，至少提供 title 和 checkpoints' }
       saveContract(next)
+      if (typeof upsertWorkItemNow === 'function') {
+        for (const cp of next.checkpoints || []) {
+          upsertWorkItemNow({
+            id: cp.id || next.id,
+            source: 'contract',
+            title: cp.title || next.title,
+            due: cp.dueAt || undefined,
+            minutes: mins,
+            apps: next.allowedApps,
+            packet: { goal: cp.title || next.title, deliverable: cp.expectedDeliverable },
+            status: 'pending',
+            links: { horizonId: next.horizonId || '', contractCpId: cp.id || '' },
+          }, { now, mirror: false })
+        }
+      }
       record({ state: 'plan-contract-set', at: now, id: next.id, title: next.title, checkpoints: next.checkpoints.length })
       recordStoryline({
         kind: 'contract_set',
@@ -465,10 +497,14 @@ export function createV4Hub(deps) {
         if (!res.contract?.strictEscalated) {
           try {
             presetRt?.strictOff?.(now, 'contract-passed')
+            onContractClear?.(now, 'contract-passed')
           } catch {
             // ignore
           }
         }
+        try {
+          markWorkStatusNow?.({ id: res.checkpoint.id, title: res.checkpoint.title, status: 'passed', now })
+        } catch {}
         if (res.contract?.horizonId) {
           horizonsRoute({ action: 'upsert', id: res.contract.horizonId, bumpStep: true })
         }
@@ -479,6 +515,7 @@ export function createV4Hub(deps) {
       saveContract(null)
       try {
         presetRt?.strictOff?.(now, 'contract-cleared')
+        onContractClear?.(now, 'contract-cleared')
       } catch {
         // ignore
       }
@@ -532,20 +569,27 @@ export function createV4Hub(deps) {
     const presetStrict = overrides.presetStrict !== undefined ? overrides.presetStrict : presetRt?.sessionView?.(now)
     const wall = overrides.wall !== undefined ? overrides.wall : getWallDecision?.(now)
     const autonomy = overrides.autonomy || computeAutonomy(now)
+    const lockRequests = overrides.lockRequests !== undefined ? overrides.lockRequests : (getLockRequests?.(now) || [])
     return computeUnifiedLockArbiter({
       emergencyPass,
       geminiSession,
       aiWorkSession,
+      takeoverSession: overrides.takeoverSession,
       contractSession,
       taskLease,
       presetStrict,
       wall,
       autonomy,
+      lockRequests,
       now,
     })
   }
 
   function getUnifiedTasks(now = Date.now()) {
+    const ws = typeof getWorkStore === 'function' ? getWorkStore(now) : null
+    if (ws && Array.isArray(ws.unifiedTasks)) {
+      return ws.unifiedTasks
+    }
     const bouts = boutsGetRoute()
     const plan = planDayRoute({ action: 'list' })
     const daily = loadDailyToday?.(now) || { tasks: [] }
@@ -689,7 +733,7 @@ export function createV4Hub(deps) {
     recordStoryline({
       kind: 'evening_report',
       actor: 'strategist',
-      summary: `生成 ${targetDay} 晚间总报告（${report.verdict?.tag || ''} · 战力 ${report.score}/100）`,
+      summary: `生成 ${targetDay} 晚间总报告（${report.verdict?.tag || ''} · 投入 ${report.score}/100）`,
       at: now,
     }, now)
     return report
@@ -705,13 +749,34 @@ export function createV4Hub(deps) {
     if (action === 'generate_report') {
       const report = generateAndSaveEveningReport(targetDay, now)
       const inputs = buildReportInputs(targetDay, now)
-      const overview = buildAnalyticsOverview({ ...inputs, rangeDays })
+      const overview = buildAnalyticsOverview({
+        ...inputs,
+        todayVerdict: report.verdict,
+        todayScore: report.score,
+        rangeDays,
+      })
       return { v: 1, ok: true, report, overview }
     }
 
     if (targetDay === dayString(now, tzName)) syncTodayHistory(now)
     const inputs = buildReportInputs(targetDay, now)
-    return buildAnalyticsOverview({ ...inputs, rangeDays })
+    const pre = buildAnalyticsOverview({ ...inputs, rangeDays })
+    const evalOut = computeDailyEvaluation({
+      targetDay,
+      buckets: pre.buckets,
+      ledger: inputs.ledger,
+      contract: inputs.contract,
+      horizons: inputs.horizons,
+      planned: inputs.planned,
+      tz: tzName,
+      now,
+    })
+    return {
+      ...pre,
+      verdict: pre.eveningReport?.verdict || evalOut.verdict,
+      score: pre.eveningReport ? pre.eveningReport.score : evalOut.score,
+      scoreLabel: '投入分',
+    }
   }
 
   function storylineRoute(body = {}) {
@@ -824,18 +889,42 @@ export function createV4Hub(deps) {
     const lockArbiter = computeLockArbiter(now, { autonomy: contractTick.autonomy })
     const activeSisterSkin = resolveActiveSisterSkin({ speaker: getSpeaker?.() || 'companion', lockArbiter })
     const unifiedTasks = getUnifiedTasks(now)
-    const intensityInfo = getIntensityInfo?.(now) || { intensity: 'standard', pendingIntensity: null, emergencyDisarmDailyCap: 3, hardInterventions: { count: 0, cap: 12, capped: false, left: 12 } }
+    const intensityInfo = getIntensityInfo?.(now, contractTick.autonomy) || {
+      intensity: 'standard',
+      effectiveIntensity: 'standard',
+      autonomyShift: 0,
+      pendingIntensity: null,
+      emergencyDisarmDailyCap: 3,
+      hardInterventions: { count: 0, cap: 12, capped: false, left: 12 },
+    }
     const passLedger = getPassLedgerSummary?.(now) || null
     const timeLedger = getTimeLedger?.(now, todayStr) || null
+    const ledgerRecent = readLedger(home(), 500)
+    const evalToday = computeDailyEvaluation({
+      targetDay: todayStr,
+      buckets: charts.buckets,
+      ledger: ledgerRecent,
+      contract: contractTick.contract,
+      horizons,
+      planned: unifiedTasks.length,
+      tz: tzName,
+      now,
+    })
 
     return {
       v: 1,
       ok: true,
       day: todayStr,
+      arbiterEnforce: Boolean(getArbiterEnforce?.()),
       intensity: intensityInfo.intensity,
+      effectiveIntensity: intensityInfo.effectiveIntensity || intensityInfo.intensity,
+      autonomyShift: Number(intensityInfo.autonomyShift) || 0,
       pendingIntensity: intensityInfo.pendingIntensity || null,
       emergencyDisarmDailyCap: intensityInfo.emergencyDisarmDailyCap,
       hardInterventions: intensityInfo.hardInterventions,
+      verdict: evalToday.verdict,
+      score: evalToday.score,
+      scoreLabel: '投入分',
       ...(passLedger ? { passLedger } : {}),
       ...(timeLedger ? { timeLedger } : {}),
       brief: {
@@ -848,13 +937,13 @@ export function createV4Hub(deps) {
       },
       running: bouts.running,
       strict: Boolean(bouts.strict || contractTick.forceStrictByContract),
-      tasks,
+      tasks: tasks.length ? tasks : unifiedTasks.slice(0, 3),
       unifiedTasks,
-      allQueueCount: queue.length,
+      allQueueCount: unifiedTasks.length,
       defaultAllow: Array.isArray(getConfig()?.defaultAllow) && getConfig().defaultAllow.length ? getConfig().defaultAllow : ['md.obsidian', 'com.tencent.mm'],
       recentApps: Array.isArray(plan.recent) ? plan.recent : [],
       lastDice: Number(getLastRolledDice?.()) || 0,
-      heartbeat: (!bouts.running && queue.length === 0) ? 'HEARTBEAT_OK' : 'ACTIVE',
+      heartbeat: (!bouts.running && unifiedTasks.length === 0) ? 'HEARTBEAT_OK' : 'ACTIVE',
       // V4 新增富数据：图表、三层主线、自律分级、计划契约与题库概况
       charts,
       horizons,
@@ -1021,7 +1110,7 @@ export function createV4Hub(deps) {
         const r = res.report
         return {
           ok: true,
-          text: `✓ 已生成 ${r.day} 晚间可视化总报告（战力 ${r.score}/100）：${r.headline}${r.path ? `\n已同步写入：${r.path}` : ''}`,
+          text: `✓ 已生成 ${r.day} 晚间可视化总报告（投入 ${r.score}/100）：${r.headline}${r.path ? `\n已同步写入：${r.path}` : ''}`,
           report: r,
         }
       },

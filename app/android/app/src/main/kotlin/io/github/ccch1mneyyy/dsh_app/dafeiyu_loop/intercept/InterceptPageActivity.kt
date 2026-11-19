@@ -28,6 +28,7 @@ import io.github.ccch1mneyyy.dsh_app.MainActivity
 import io.github.ccch1mneyyy.dsh_app.R
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.InterceptRules
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ArbiterShadow
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveOverlay
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime
 import io.github.ccch1mneyyy.dsh_app.i18n.AppStrings
@@ -47,6 +48,7 @@ class InterceptPageActivity : Activity() {
     private var eventId: String? = null
     private var packageName: String? = null
     private var why: String? = null
+    private var unlockHow: String? = null
     private var lockMode: String = InterceptRules.MODE_TRAINING
     private var todayCount: Int = 1
     private var reported = false
@@ -125,7 +127,13 @@ class InterceptPageActivity : Activity() {
         }
         eventId = id
         packageName = start.getStringExtra(EXTRA_PACKAGE)
-        why = start.getStringExtra(EXTRA_WHY)
+        why = start.getStringExtra(EXTRA_WHY)?.takeIf { it.isNotBlank() }
+        unlockHow = start.getStringExtra(EXTRA_UNLOCK_HOW)?.takeIf { it.isNotBlank() }
+        if (ArbiterShadow.enforceEnabled(this)) {
+            val arbiter = ArbiterShadow.current()
+            if (why.isNullOrBlank()) why = arbiter?.why?.takeIf { it.isNotBlank() }
+            if (unlockHow.isNullOrBlank()) unlockHow = arbiter?.unlockHow?.takeIf { it.isNotBlank() }
+        }
         lockMode = InterceptRules.normalizeLockMode(
             start.getStringExtra(EXTRA_LOCK_MODE) ?: InterceptRuntime.effectiveLockMode(),
         )
@@ -658,11 +666,23 @@ class InterceptPageActivity : Activity() {
             })
 
             val whyLine = why
-            if (!whyLine.isNullOrBlank()) {
+            val unlockLine = unlockHow
+            if (!whyLine.isNullOrBlank() || !unlockLine.isNullOrBlank()) {
+                val combined = buildString {
+                    if (!whyLine.isNullOrBlank()) {
+                        append(AppStrings.get(ctx, R.string.proactive_overlay_reply, whyLine))
+                    }
+                    if (!unlockLine.isNullOrBlank()) {
+                        if (isNotEmpty()) append("\n")
+                        append("解锁方式：")
+                        append(unlockLine)
+                    }
+                }
                 addView(TextView(ctx).apply {
-                    text = AppStrings.get(ctx, R.string.proactive_overlay_reply, whyLine)
+                    text = combined
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                     setTextColor(palette.onTonal)
+                    setLineSpacing(0f, 1.25f)
                     setPadding(dp(12), dp(9), dp(12), dp(9))
                     background = GradientDrawable().apply {
                         cornerRadius = dp(12).toFloat()
@@ -977,6 +997,7 @@ class InterceptPageActivity : Activity() {
         private const val EXTRA_LOCK_MODE = "intercept_lock_mode"
         private const val EXTRA_OPEN_SINCE = "intercept_open_since"
         private const val EXTRA_TODAY_COUNT = "intercept_today_count"
+        private const val EXTRA_UNLOCK_HOW = "intercept_unlock_how"
 
         private const val PROOF_STEP_MS = 100L
         private const val MAX_PROOF_ATTEMPTS = 20
@@ -997,6 +1018,7 @@ class InterceptPageActivity : Activity() {
             lockMode: String = InterceptRules.MODE_TRAINING,
             openSinceWall: Long = System.currentTimeMillis(),
             todayCount: Int = 1,
+            unlockHow: String? = null,
         ): Boolean = runCatching {
             context.startActivity(
                 Intent(context, InterceptPageActivity::class.java)
@@ -1006,6 +1028,7 @@ class InterceptPageActivity : Activity() {
                     .putExtra(EXTRA_LOCK_MODE, InterceptRules.normalizeLockMode(lockMode))
                     .putExtra(EXTRA_OPEN_SINCE, openSinceWall)
                     .putExtra(EXTRA_TODAY_COUNT, todayCount)
+                    .putExtra(EXTRA_UNLOCK_HOW, unlockHow?.take(200))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or Intent.FLAG_ACTIVITY_NO_ANIMATION),
             )
         }.isSuccess

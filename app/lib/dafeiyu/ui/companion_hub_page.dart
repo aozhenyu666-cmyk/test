@@ -69,6 +69,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   Map<String, dynamic>? _storyline;
   int _clockCount = 0;
   bool? _lockShadow;
+  bool? _arbiterEnforce;
   Map<String, dynamic>? _rotate;
   IntensityView? _intensity;
   Map<String, dynamic>? _today;
@@ -123,6 +124,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     });
     load(_channel.storylineOp({'action': 'get'}), (v) => _storyline = v);
     load(_channel.lockShadow(), (v) => _lockShadow = v);
+    load(_channel.arbiterEnforce(), (v) => _arbiterEnforce = v);
     load(_channel.rotateOp({'action': 'status'}), (v) => _rotate = v);
     load(_channel.intensityStatus(), (v) {
       if (v != null) _intensity = v;
@@ -180,6 +182,25 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     });
   }
 
+  Future<void> _setArbiterEnforce(bool on) async {
+    setState(() => _actionBusy = true);
+    final ok = await _channel.setArbiterEnforce(on);
+    if (!mounted) return;
+    setState(() {
+      _actionBusy = false;
+      if (ok) _arbiterEnforce = on;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? (on ? '已开启统一裁决器执法（永不锁/测试模式/紧急解除仍最高优先）' : '已切回裁决器影子模式（仅记录 arbiter-diff.jsonl）')
+              : '暂未连上伴侣引擎，无法切换裁决器执法开关',
+        ),
+      ),
+    );
+  }
+
   static String _intensityLabel(String tier) => switch (tier) {
         'gentle' => '温和',
         'strict' => '严格',
@@ -235,6 +256,13 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
                       style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                     ),
                   ),
+                  if (intensity != null && intensity.hasAutonomyShift) ...[
+                    StatusChip(
+                      tone: StatusTone.ok,
+                      label: '自律放宽→${_intensityLabel(intensity.resolvedEffectiveTier)}',
+                    ),
+                    const SizedBox(width: 6),
+                  ],
                   if (pendingTier != null) ...[
                     StatusChip(
                       tone: StatusTone.warn,
@@ -263,8 +291,10 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               const SizedBox(height: 8),
               Text(
                 pendingTier != null
-                    ? '已排队明日${intensity?.pendingEffectiveDay != null ? '（${intensity!.pendingEffectiveDay}）' : ''}放宽至「${_intensityLabel(pendingTier)}」档 · 当前仍按「${_intensityLabel(currentTier)}」执行'
-                    : '改严立即生效，改松次日生效 · 当前每日紧急解除上限 ${intensity?.emergencyDisarmDailyCap ?? 3} 次',
+                    ? '已排队明日${intensity?.pendingEffectiveDay != null ? '（${intensity!.pendingEffectiveDay}）' : ''}放宽至「${_intensityLabel(pendingTier)}」档 · 当前仍按「${_intensityLabel(intensity?.resolvedEffectiveTier ?? currentTier)}」执行'
+                    : (intensity != null && intensity.hasAutonomyShift
+                        ? '14 天自律达标已自动放宽一档 · 实际按「${_intensityLabel(intensity.resolvedEffectiveTier)}」执行 · 紧急解除上限 ${intensity.emergencyDisarmDailyCap} 次'
+                        : '改严立即生效，改松次日生效 · 当前每日紧急解除上限 ${intensity?.emergencyDisarmDailyCap ?? 3} 次'),
                 style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
               ),
             ],
@@ -596,6 +626,12 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
     final geminiStats = _analytics?['geminiStats'] is Map ? _analytics!['geminiStats'] as Map : const {};
     final geminiMinToday = geminiStats['minutesToday'] is num ? (geminiStats['minutesToday'] as num).toInt() : 0;
     final timeLedger = TimeLedgerView.fromWire(_today?['timeLedger'] ?? _analytics?['timeLedger']);
+    final report = _analytics?['eveningReport'] is Map ? _analytics!['eveningReport'] as Map : const {};
+    final verdict = DailyVerdictView.fromWire(
+      _today?['verdict'] ?? _analytics?['verdict'] ?? report['verdict'],
+      scoreRaw: _today?['score'] ?? _analytics?['score'] ?? report['score'],
+      scoreLabelRaw: _today?['scoreLabel'] ?? _analytics?['scoreLabel'] ?? report['scoreLabel'],
+    );
 
     return AppPage.list(
       title: '大肥鱼中枢',
@@ -638,7 +674,24 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               ),
             ),
           ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Card(
+            child: SwitchListTile(
+              key: const ValueKey('hub-arbiter-enforce-switch'),
+              title: const Text('统一裁决器执法（arbiterEnforce）'),
+              subtitle: const Text('需先收集真机 arbiter-diff.jsonl 核验后再开启'),
+              value: _arbiterEnforce ?? false,
+              onChanged: _actionBusy ? null : (v) => unawaited(_setArbiterEnforce(v)),
+            ),
+          ),
+        ),
         TaskCardPanel(channel: _channel),
+        if (verdict != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: HardVerdictCard(verdict: verdict),
+          ),
         _buildIntensityCard(context, _intensity),
         if (timeLedger != null)
           Padding(

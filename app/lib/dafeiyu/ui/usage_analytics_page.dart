@@ -229,7 +229,15 @@ class _UsageAnalyticsPageState extends State<UsageAnalyticsPage> {
 
   Future<void> _copyReportMarkdown(Map<String, dynamic> report) async {
     final md = '${report['markdown'] ?? ''}'.trim();
-    final fallback = '# ${report['day'] ?? _day} 每日复盘总报（${report['score'] ?? 0}分）\n\n${report['headline'] ?? ''}';
+    final verdict = DailyVerdictView.fromWire(
+      report['verdict'] ?? _overview['verdict'],
+      scoreRaw: report['score'] ?? _overview['score'],
+      scoreLabelRaw: report['scoreLabel'] ?? _overview['scoreLabel'],
+    );
+    final label = verdict?.scoreLabel ?? '投入分';
+    final score = verdict?.cappedScore ?? _asInt(report['score'], 0);
+    final head = verdict != null ? '硬日判：${verdict.tag} · $label $score分' : '$label $score分';
+    final fallback = '# ${report['day'] ?? _day} 每日复盘总报（$head）\n\n${report['headline'] ?? ''}';
     await Clipboard.setData(ClipboardData(text: md.isNotEmpty ? md : fallback));
     if (!mounted) return;
     setState(() => _banner = '✓ 已复制报告 Markdown（含 Mermaid 图表）到剪贴板');
@@ -373,6 +381,12 @@ class _UsageAnalyticsPageState extends State<UsageAnalyticsPage> {
     final topApps = _asListOfMaps(_overview['topApps']);
     final arbiter = _asMap(_overview['lockArbiter']);
     final timeLedger = TimeLedgerView.fromWire(_overview['timeLedger']);
+    final report = _asMap(_overview['eveningReport']);
+    final verdict = DailyVerdictView.fromWire(
+      _overview['verdict'] ?? report['verdict'],
+      scoreRaw: _overview['score'] ?? report['score'],
+      scoreLabelRaw: _overview['scoreLabel'] ?? report['scoreLabel'],
+    );
 
     final segments = <_DonutSlice>[
       _DonutSlice('主线攻坚', mainlineMin.toDouble(), colors.success),
@@ -385,6 +399,10 @@ class _UsageAnalyticsPageState extends State<UsageAnalyticsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (verdict != null) ...[
+          HardVerdictCard(verdict: verdict),
+          const SizedBox(height: 14),
+        ],
         // 1) Donut Ring + 4 KPI Cards
         GlassSurface(
           tier: GlassTier.card,
@@ -906,8 +924,17 @@ class _UsageAnalyticsPageState extends State<UsageAnalyticsPage> {
   Widget _buildReportTab(ThemeData theme, DshColors colors) {
     final scheme = theme.colorScheme;
     final report = _asMap(_overview['eveningReport']);
+    final verdict = DailyVerdictView.fromWire(
+      report['verdict'] ?? _overview['verdict'],
+      scoreRaw: report['score'] ?? _overview['score'],
+      scoreLabelRaw: report['scoreLabel'] ?? _overview['scoreLabel'],
+    );
     final hasReport = report.isNotEmpty && ('${report['headline'] ?? ''}'.isNotEmpty || report['score'] != null);
-    final score = _asInt(report['score'], 0).clamp(0, 100);
+    final score = verdict != null ? verdict.cappedScore : _asInt(report['score'], 0).clamp(0, 100);
+    final scoreLabel = verdict?.scoreLabel ??
+        (report['scoreLabel'] is String && (report['scoreLabel'] as String).trim().isNotEmpty
+            ? (report['scoreLabel'] as String).trim()
+            : '投入分');
     final headline = '${report['headline'] ?? '今日尚未生成晚间 AI 可视化总报告'}';
     final completedTasks = _asListOfMaps(report['completedTasks']);
     final causal = [
@@ -930,6 +957,10 @@ class _UsageAnalyticsPageState extends State<UsageAnalyticsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (verdict != null) ...[
+          HardVerdictCard(verdict: verdict),
+          const SizedBox(height: 14),
+        ],
         GlassSurface(
           tier: GlassTier.card,
           borderRadius: AppShape.radiusLg,
@@ -956,7 +987,7 @@ class _UsageAnalyticsPageState extends State<UsageAnalyticsPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '$_day 晚间 AI 总评',
+                            '$_day 晚间 AI 总评 · $scoreLabel',
                             style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary),
                           ),
                           const SizedBox(height: 4),
@@ -1590,6 +1621,66 @@ class TimeLedgerSummaryCard extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// H7：跨页面复用的硬日判主结论卡（达成 / 部分 / 空转 + 投入分，空转时上限 39）。
+class HardVerdictCard extends StatelessWidget {
+  const HardVerdictCard({super.key, required this.verdict});
+
+  final DailyVerdictView verdict;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = DshColors.of(context);
+    final tone = verdict.isDone
+        ? StatusTone.ok
+        : (verdict.isIdle ? StatusTone.error : StatusTone.warn);
+    final accent = verdict.isDone
+        ? colors.success
+        : (verdict.isIdle ? colors.danger : colors.warning);
+    final icon = verdict.isDone
+        ? AppIcons.success
+        : (verdict.isIdle ? AppIcons.warning : AppIcons.verified);
+
+    return GlassSurface(
+      tier: GlassTier.card,
+      borderRadius: AppShape.radiusLg,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 17, color: accent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '硬日判：${verdict.tag}',
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, color: accent),
+                  ),
+                ),
+                StatusChip(
+                  tone: tone,
+                  label: '${verdict.scoreLabel} ${verdict.cappedScore}',
+                ),
+              ],
+            ),
+            if (verdict.line.isNotEmpty || verdict.reasons.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                verdict.line.isNotEmpty ? verdict.line : verdict.reasons.join(' · '),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
               ),
             ],
           ],

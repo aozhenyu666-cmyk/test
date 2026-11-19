@@ -384,6 +384,23 @@ class ProactiveChannel {
     }
   }
 
+  /// H5：读取裁决器执法开关状态（默认关）；读不到返回 null。
+  Future<bool?> arbiterEnforce() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('companionConfig', const <String, Object?>{});
+      if (raw is! Map || raw['error'] is Map) return null;
+      final cfg = raw['config'] is Map ? raw['config'] as Map : const {};
+      final v = raw['arbiterEnforce'] ?? cfg['arbiterEnforce'];
+      return v is bool ? v : null;
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// H5：切换裁决器执法开关（`POST /config { arbiterEnforce }`）。
+  Future<bool> setArbiterEnforce(bool enabled) =>
+      setCompanionConfig(<String, Object?>{'arbiterEnforce': enabled});
+
   /// B5 试听：让手机用系统 TTS 念一句（`voiceTry`）。
   ///
   /// 返回 null = 真的念完了；否则是降级原因（`no-tts` / `dnd` / `muted` / `session`）。
@@ -1976,10 +1993,12 @@ class DrillOpJudge {
   }
 }
 
-/// H1：统一强度表状态（温和 / 标准 / 严格）与每日硬干预/紧急解除上限。
+/// H1/H7：统一强度表状态（温和 / 标准 / 严格）、14 天自律位移与每日硬干预/紧急解除上限。
 class IntensityView {
   const IntensityView({
     this.tier = 'standard',
+    this.effectiveTier,
+    this.autonomyShift = 0,
     this.pendingTier,
     this.pendingEffectiveDay,
     this.emergencyDisarmDailyCap = 3,
@@ -1989,8 +2008,14 @@ class IntensityView {
     this.hardLeft = 12,
   });
 
-  /// `gentle` | `standard` | `strict`
+  /// `gentle` | `standard` | `strict`（用户自选档）
   final String tier;
+
+  /// 14 天自律位移后的实际执行档（空则等于 [tier]）
+  final String? effectiveTier;
+
+  /// `0` 或 `-1`（自律达标往松挪一档）
+  final int autonomyShift;
   final String? pendingTier;
   final String? pendingEffectiveDay;
   final int emergencyDisarmDailyCap;
@@ -1998,6 +2023,10 @@ class IntensityView {
   final int hardCap;
   final bool hardCapped;
   final int hardLeft;
+
+  String get resolvedEffectiveTier => effectiveTier ?? tier;
+
+  bool get hasAutonomyShift => autonomyShift < 0 && resolvedEffectiveTier != tier;
 
   static String normalizeTier(String? raw) => switch (raw?.trim().toLowerCase()) {
         'gentle' => 'gentle',
@@ -2009,10 +2038,19 @@ class IntensityView {
     if (raw is! Map || raw['error'] is Map) return null;
     final cfg = raw['config'] is Map ? raw['config'] as Map : const {};
     final tierRaw = raw['intensity'] ?? cfg['intensity'];
+    final effRaw = raw['effectiveIntensity'] ?? cfg['effectiveIntensity'];
+    final shiftRaw = raw['autonomyShift'] ??
+        cfg['autonomyShift'] ??
+        (raw['autonomy'] is Map ? (raw['autonomy'] as Map)['shift'] : null);
     final pendingRaw = raw['pendingIntensity'] ?? cfg['pendingIntensity'];
     final capRaw = raw['emergencyDisarmDailyCap'] ?? cfg['emergencyDisarmDailyCap'];
     final hardRaw = raw['hardInterventions'] ?? cfg['hardInterventions'];
-    if (tierRaw is! String && pendingRaw == null && capRaw is! num && hardRaw is! Map) {
+    if (tierRaw is! String &&
+        effRaw is! String &&
+        shiftRaw is! num &&
+        pendingRaw == null &&
+        capRaw is! num &&
+        hardRaw is! Map) {
       return null;
     }
     String? pendingTier;
@@ -2029,8 +2067,12 @@ class IntensityView {
     final hardCap = hard['cap'] is num ? (hard['cap'] as num).toInt() : 12;
     final hardCount = hard['count'] is num ? (hard['count'] as num).toInt() : 0;
     final hardLeft = hard['left'] is num ? (hard['left'] as num).toInt() : (hardCap - hardCount).clamp(0, hardCap);
+    final baseTier = normalizeTier(tierRaw is String ? tierRaw : null);
+    final resolvedEff = effRaw is String && effRaw.isNotEmpty ? normalizeTier(effRaw) : null;
     return IntensityView(
-      tier: normalizeTier(tierRaw is String ? tierRaw : null),
+      tier: baseTier,
+      effectiveTier: resolvedEff,
+      autonomyShift: shiftRaw is num ? shiftRaw.toInt() : 0,
       pendingTier: pendingTier,
       pendingEffectiveDay: pendingDay,
       emergencyDisarmDailyCap: capRaw is num ? capRaw.toInt() : 3,
@@ -2038,6 +2080,56 @@ class IntensityView {
       hardCap: hardCap,
       hardCapped: hard['capped'] == true,
       hardLeft: hardLeft,
+    );
+  }
+}
+
+/// H7：统一日评结论——硬日判为主（达成 / 部分 / 空转），投入分为辅（空转时 ≤ 39）。
+class DailyVerdictView {
+  const DailyVerdictView({
+    required this.tag,
+    this.line = '',
+    this.reasons = const [],
+    this.score = 0,
+    this.scoreLabel = '投入分',
+  });
+
+  /// `达成` | `部分` | `空转`
+  final String tag;
+  final String line;
+  final List<String> reasons;
+  final int score;
+  final String scoreLabel;
+
+  bool get isIdle => tag == '空转';
+  bool get isDone => tag == '达成';
+
+  /// I9：硬日判为「空转」时，投入分最多 39。
+  int get cappedScore => isIdle ? score.clamp(0, 39) : score.clamp(0, 100);
+
+  static DailyVerdictView? fromWire(Object? raw, {Object? scoreRaw, Object? scoreLabelRaw}) {
+    final m = raw is Map ? raw : null;
+    final rawTag = m != null ? (m['tag'] ?? m['verdict']) : (raw is String ? raw : null);
+    if (rawTag is! String || rawTag.trim().isEmpty) return null;
+    final tag = rawTag.trim();
+    final rawScore = scoreRaw is num
+        ? scoreRaw.round()
+        : (m != null && m['score'] is num ? (m['score'] as num).round() : 0);
+    final label = scoreLabelRaw is String && scoreLabelRaw.trim().isNotEmpty
+        ? scoreLabelRaw.trim()
+        : (m != null && m['scoreLabel'] is String && (m['scoreLabel'] as String).trim().isNotEmpty
+            ? (m['scoreLabel'] as String).trim()
+            : '投入分');
+    return DailyVerdictView(
+      tag: tag,
+      line: m != null && m['line'] is String ? (m['line'] as String).trim() : '',
+      reasons: [
+        if (m != null && m['reasons'] is List)
+          for (final r in m['reasons'] as List)
+            if (r is String && r.trim().isNotEmpty) r.trim(),
+      ],
+      score: tag == '空转' ? rawScore.clamp(0, 39) : rawScore.clamp(0, 100),
+      scoreLabel: label,
     );
   }
 }

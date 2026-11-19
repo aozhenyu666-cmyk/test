@@ -160,7 +160,7 @@ import { resolveActiveSisterSkin } from './unified_arbiter.js'
 import {
   DEFAULT_INTENSITY, applyIntensityChange, hardInterventionStatus, isLockExemptFromDailyCap,
   isValidIntensity, normalizeHardInterventions, normalizeIntensity, recordHardIntervention,
-  resolveIntensityState, thresholdsForIntensity,
+  resolveEffectiveIntensity, resolveIntensityState, thresholdsForIntensity,
 } from './intensity.js'
 import {
   isEmergencyActive as isPassEmergencyActive, normalizePassLedger, passLedgerSummary,
@@ -169,6 +169,11 @@ import {
 import { arbitrateSpeak } from './speak_arbiter.js'
 import { buildStandardGeminiBrief, markGeminiSessionEnded, normalizeGeminiGate, requestGemini } from './gemini_gate.js'
 import { appendTimeEntry, computeTimeLedger, normalizeTimeLedger } from './time_ledger.js'
+import { createLockBus } from './lock_bus.js'
+import {
+  markWorkStatus, migrateLegacyToWorkStore, mirrorWorkStoreToLegacy, normalizeWorkStore,
+  removeWorkItem, replaceWorkSource, upsertWorkItem,
+} from './work_store.js'
 
 /**
  * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
@@ -256,6 +261,7 @@ const DEFAULTS = Object.freeze({
   proactiveTools: true,
   // 念出来（B5）：默认关。关着浮层照常，只是不出声——不联网的系统 TTS 也得他自己点头。
   voice: false,
+  arbiterEnforce: false,
   companionCard: '',
   strategistCard: '',
   // 做题模式：默认关，主线是聊天。说"开始做题 / 做题模式"打开，"别出题了"关掉。
@@ -1071,7 +1077,7 @@ export function apply(ctx) {
       const face = { ...temper, ...(FACES.find((f) => f.face === faceId) || {}), face: faceId }
       const force = decideForce({
         phone, tide: water, mode, noTake: silence.noTake, control: config.control !== false, funToday: funToday(phone),
-        grace: Number(brain.graceUntil) > now && trustNow(now).band !== 'low',
+        grace: Number(brain.graceUntil) > now,
         refuse: refuseUntilAt(now) > now,
       })
       // 上一题没回 / 答糊弄了：这一球必须是说他 + 同一类题重问。
@@ -1830,13 +1836,188 @@ export function apply(ctx) {
     earnedRt.ofDay(readState(stateFile('earned.json'), null), startOfDay(now, tz))
   const saveEarned = (e) => writeJson(stateFile('earned.json'), e)
 
-  // ---- 2026-11-19 H1–H4 统一出口状态读写 ----
+  // ---- 2026-11-19 H1–H7 统一出口状态读写 ----
+  const lockBus = createLockBus({
+    load: () => readState(stateFile('lock-requests.json'), null),
+    save: (s) => writeJson(stateFile('lock-requests.json'), s),
+  })
+
+  function funAppsForLockBus() {
+    const tf = tierFnNow()
+    return (Array.isArray(lastInstalled) ? lastInstalled : [])
+      .map((a) => String(a?.pkg || ''))
+      .filter((pkg) => pkg && (tf(pkg) === 'fun' || tf(pkg) === 'game') && !isNeverLockPkg(pkg))
+  }
+
+  function syncLockBusPatch(patch, now = Date.now()) {
+    if (!patch || typeof patch !== 'object') return
+    if (patch.aiWorkSession !== undefined) {
+      const s = patch.aiWorkSession
+      if (s && Number(s.until) > now && Array.isArray(s.allow) && s.allow.length) {
+        const isTakeover = s.by === 'takeover'
+        lockBus.upsert({
+          id: isTakeover ? 'aiwork-takeover' : 'aiwork-' + (s.by || 'contract'),
+          source: isTakeover ? 'takeover' : 'contract',
+          kind: 'allowlist',
+          allow: s.allow,
+          until: Number(s.until),
+          why: s.why || (isTakeover ? '系统接管强制回位' : '专时严格锁定'),
+          unlockHow: isTakeover ? '回到指定正事应用即自动解除（或到期/使用紧急解除）' : '完成本轮任务或到期自动解锁',
+          priority: isTakeover ? 'P2.5' : 'P2',
+          replaceSource: true,
+        }, now)
+      } else {
+        lockBus.revokeBySource('takeover', { now })
+        for (const id of ['aiwork-contract', 'aiwork-clock', 'aiwork-loop', 'aiwork-panel', 'aiwork-bout', 'aiwork-takeover']) {
+          lockBus.revokeBySource('contract', { id, now })
+        }
+      }
+    }
+    if (patch.refuseUntil !== undefined) {
+      if (Number(patch.refuseUntil) > now) {
+        const src = String(patch.refuseBy || config.refuseBy || 'sister')
+        lockBus.upsert({
+          id: 'refuse-' + src,
+          source: src,
+          kind: 'deny',
+          apps: funAppsForLockBus(),
+          until: Number(patch.refuseUntil),
+          why: '拒绝模式：暂时锁定娱乐应用',
+          priority: 'P6',
+        }, now)
+      } else {
+        for (const src of ['radar', 'switch', 'sister']) {
+          lockBus.revokeBySource(src, { id: 'refuse-' + src, now })
+        }
+        lockBus.revokeBySource('sister', { id: 'refuse-ai', now })
+        lockBus.revokeBySource('sister', { id: 'refuse-tool', now })
+      }
+    }
+    if (Array.isArray(patch.blockExtra)) {
+      if (patch.blockExtra.length === 0) {
+        lockBus.revokeBySource('radar', { now })
+        lockBus.revokeBySource('sister', { now })
+        lockBus.revokeBySource('switch', { now })
+      } else {
+        for (const b of patch.blockExtra) {
+          if (b?.app && Number(b.until) > now && !isNeverLockPkg(b.app)) {
+            lockBus.upsert({
+              id: 'block-' + (b.by || 'sister') + '-' + b.app,
+              source: b.by || 'sister',
+              kind: 'deny',
+              apps: [b.app],
+              until: Number(b.until),
+              why: b.why || '临时锁定中',
+              priority: 'P6',
+            }, now)
+          }
+        }
+      }
+    }
+    if (patch.taskLease !== undefined) {
+      const tl = patch.taskLease
+      if (tl && Number(tl.until) > now && tl.app) {
+        lockBus.upsert({
+          id: 'task-lease',
+          source: 'lease',
+          kind: 'allowlist',
+          allow: tl.allow || [tl.app],
+          until: Number(tl.until),
+          why: tl.goal || '双用途任务通行证',
+          priority: 'P5',
+          replaceSource: true,
+        }, now)
+      } else {
+        lockBus.revokeBySource('lease', { now })
+      }
+    }
+  }
+
+  function loadRawWorkStore(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const day = dayString(now, tz)
+    return normalizeWorkStore(readState(stateFile('work.json'), null), { day, now })
+  }
+
+  function mirrorWorkStoreToFiles(ws, now = Date.now(), tz = zoneOr(config.timeZone), { touchPlan = true } = {}) {
+    const saved = { ...ws, updatedAt: now }
+    writeJson(stateFile('work.json'), saved)
+    let horizons = null
+    try {
+      horizons = readState(stateFile('horizons.json'), null)
+    } catch {}
+    const mirrored = mirrorWorkStoreToLegacy(saved, { horizons })
+    if (touchPlan) {
+      const dayStart = startOfDay(now, tz)
+      const prevPlan = planOf(readState(stateFile('plan.json'), null), dayStart)
+      const nextPlan = {
+        ...prevPlan,
+        v: 1,
+        day: dayStart,
+        at: now,
+        items: mirrored.planItems,
+      }
+      writeJson(stateFile('plan.json'), nextPlan)
+    }
+    try {
+      const curDaily = readState(stateFile('daily.json'), null)
+      if (curDaily && Number(curDaily.day) === startOfDay(now, tz)) {
+        writeJson(stateFile('daily.json'), { ...curDaily, tasks: mirrored.dailyTasks })
+      }
+    } catch {}
+    return { store: saved, mirrored }
+  }
+
+  function workStoreNow(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const day = dayString(now, tz)
+    const dayStart = startOfDay(now, tz)
+    const rawWs = loadRawWorkStore(now, tz)
+    const rawPlan = readState(stateFile('plan.json'), null)
+    const planToday = planOf(rawPlan, dayStart)
+    const rawDaily = readState(stateFile('daily.json'), null)
+    const dailyTasks = rawDaily && dayString(Number(rawDaily.at || rawDaily.day || now), tz) === day && Array.isArray(rawDaily.tasks)
+      ? rawDaily.tasks
+      : []
+    const contract = readState(stateFile('plan-contract.json'), null)
+    // 一次性迁移 + 兼容直接写入 plan.json/daily.json/contract 的旧测试（外部写入时间戳更新时自动合入）
+    const needMigrate = !rawWs.migratedAt ||
+      (Number(rawPlan?.at) > rawWs.updatedAt) ||
+      (Number(contract?.updatedAt) > rawWs.updatedAt) ||
+      (dailyTasks.length > 0 && rawWs.items.length === 0)
+    let ws = rawWs
+    if (needMigrate) {
+      ws = migrateLegacyToWorkStore({
+        state: rawWs,
+        planItems: planToday.items || [],
+        dailyTasks,
+        contract,
+        day,
+        now,
+        tz,
+      })
+      writeJson(stateFile('work.json'), ws)
+    }
+    let horizons = null
+    try {
+      horizons = readState(stateFile('horizons.json'), null)
+    } catch {}
+    const mirrored = mirrorWorkStoreToLegacy(ws, { horizons })
+    return { store: ws, ...mirrored }
+  }
+
   const loadHardInterventions = (now = Date.now(), tz = zoneOr(config.timeZone)) =>
     normalizeHardInterventions(readState(stateFile('hard-interventions.json'), null), dayString(now, tz))
   const saveHardInterventions = (s) => writeJson(stateFile('hard-interventions.json'), s)
 
-  function intensityStateNow(now = Date.now(), tz = zoneOr(config.timeZone)) {
-    const res = resolveIntensityState(config, { now, tz })
+  function intensityStateNow(now = Date.now(), tz = zoneOr(config.timeZone), autonomyOpt = undefined) {
+    let autonomy = autonomyOpt
+    if (autonomy === undefined) {
+      try {
+        autonomy = v4Hub?.computeAutonomy?.(now) || null
+      } catch {
+        autonomy = null
+      }
+    }
+    const res = resolveEffectiveIntensity(config, { autonomy, now, tz })
     if (res.promoted) {
       config = { ...config, intensity: res.intensity, pendingIntensity: null }
       try { writeConfig(config) } catch {}
@@ -1845,11 +2026,13 @@ export function apply(ctx) {
     const day = dayString(now, tz)
     const hardInterventions = hardInterventionStatus(loadHardInterventions(now, tz), {
       day,
-      tier: res.intensity,
+      tier: res.effectiveIntensity,
       cap: res.thresholds.hardInterventionDailyCap,
     })
     return {
       intensity: res.intensity,
+      effectiveIntensity: res.effectiveIntensity,
+      autonomyShift: res.autonomyShift,
       pendingIntensity: res.pendingIntensity,
       thresholds: res.thresholds,
       emergencyDisarmDailyCap: res.thresholds.emergencyDisarmDailyCap,
@@ -2278,6 +2461,7 @@ export function apply(ctx) {
         const gateRes = requestGeminiViaGate({ source: 'preset', mode: 'auto', topic: String(why || '').slice(0, 100), minutes, geminiMode: 'interrogate', now })
         if (!gateRes.allowed) return
         saveGemini({ ...loadGemini(), session: { topic: String(why || '').slice(0, 100), mode: 'interrogate', minutes, startedAt: now, until, by: 'preset', cell: ALL_LOCK } })
+        lockBus.upsert({ id: 'gemini-cell', source: 'gemini-cell', kind: 'allowlist', allow: [], until, why: String(why || '连麦全锁'), priority: 'P1', replaceSource: true }, now)
       },
       tool: (tool, until, topic) => {
         const now = Date.now()
@@ -2285,12 +2469,38 @@ export function apply(ctx) {
         const gateRes = requestGeminiViaGate({ source: 'preset', mode: 'auto', topic, minutes, geminiMode: 'think', now })
         if (!gateRes.allowed) return
         saveGemini({ ...loadGemini(), session: { topic, mode: 'think', minutes, startedAt: now, until, by: 'preset' } })
-        saveGeminiSchedule({ at: now + 500, topic, minutes, mode: 'think', by: 'preset' })
+        saveGeminiSchedule({ at: now + 500, topic, minutes, mode: 'think', by: 'preset', alreadyGated: true })
+        lockBus.upsert({ id: 'gemini-cell', source: 'gemini-cell', kind: 'allowlist', allow: geminiPackages(), until, why: topic || 'Gemini 连麦', priority: 'P1', replaceSource: true }, now)
       },
       plan: (until) => saveLadderDoc({ ...loadLadderDoc(), planUntil: until }),
       tighten: (why) => tightenNow(Date.now(), zoneOr(config.timeZone), { reason: String(why || '预案').slice(0, 100), by: 'preset' }),
     },
   })
+  const _presetStrictNow = presetRt.strictNow
+  presetRt.strictNow = (now = Date.now(), why = '', by = 'user') => {
+    const r = _presetStrictNow(now, why, by)
+    if (r?.ok) {
+      const sv = presetRt.sessionView(now)
+      lockBus.upsert({
+        id: 'preset-strict',
+        source: 'preset',
+        kind: 'allowlist',
+        allow: sv?.allow || r.allow || [],
+        until: sv?.until || (now + 6 * 3_600_000),
+        why: sv?.why || why || '严格模式锁定中',
+        unlockHow: '完成本局收工验收，或在锁屏答对 10 道真题换取 5 分钟通行',
+        priority: 'P3',
+        replaceSource: true,
+      }, now)
+    }
+    return r
+  }
+  const _presetStrictOff = presetRt.strictOff
+  presetRt.strictOff = (now = Date.now(), by = 'user') => {
+    const r = _presetStrictOff(now, by)
+    lockBus.revokeBySource('preset', { now })
+    return r
+  }
   /** 墙的默认锁归「全天默认锁」这条预案管：它没生效，墙就不上默认锁（收紧、深夜锁照旧）。 */
   const wallCfgNow = () => (presetRt.isActive('default-lock') ? config : { ...config, wall: { ...(config.wall || {}), defaultLock: false } })
   const leaseSessionView = (now) => {
@@ -2492,6 +2702,9 @@ export function apply(ctx) {
   function commit(patch) {
     config = { ...config, ...patch }
     try {
+      syncLockBusPatch(patch, Date.now())
+    } catch {}
+    try {
       writeConfig(config)
     } catch {
       // 这一轮照样生效
@@ -2563,13 +2776,28 @@ export function apply(ctx) {
     if (!v.satisfied) return { ok: true, text: '记下了：这轮不算过。锁还在，说清它什么时候解决。' }
     const patch = { followup: closeLock(config.followup, { now, by: 'verdict' }) }
     if (v.kind === 'morning' && v.tasks) {
-      // 晨间立项的任务进当日文件（晚上对账按完成物逐项找证据）。
+      // 晨间立项的任务进 workStore 并镜像当日文件（晚上对账按完成物逐项找证据）。
       const tz = zoneOr(config.timeZone)
       const state = loadDaily(loadDailyState(), now, tz)
       const next = { ...state, tasks: v.tasks, review: state.review }
       const wrote = writeDaily(kbDir(notesDir(), home()), next, {}, fourNumbers())
       if (wrote.ok) patch.daily = { day: state.day, tasks: v.tasks.length, at: now }
       saveDailyState(next)
+      try {
+        const wsCur = workStoreNow(now, tz).store
+        const wsNext = replaceWorkSource(wsCur, 'daily', v.tasks.map((t) => ({
+          id: t.id,
+          source: 'daily',
+          title: t.task,
+          due: t.due,
+          minutes: t.minutes,
+          dept: t.dept,
+          evidence: t.evidence,
+          packet: { goal: t.task, deliverable: t.evidence },
+          status: 'pending',
+        })), { day: dayString(now, tz), now })
+        writeJson(stateFile('work.json'), { ...wsNext, migratedAt: wsNext.migratedAt || now, updatedAt: now })
+      } catch {}
     }
     if (v.kind === 'review' || v.kind === 'morning') {
       // 验收/立项过了：放风（复用第二轮那段 breakUntil 语义，放风期间不下发任何锁）。
@@ -2885,7 +3113,7 @@ export function apply(ctx) {
     getGearWhat: () => (effectiveGear(config, Date.now()) === 'busy' ? config.gearWhat : ''),
     getAppLedger: (now) => appLedgerLines(now),
     getQuotaLine: () => (lastQuota ? lastQuota.line : ''),
-    getIntensityInfo: (now) => intensityStateNow(now),
+    getIntensityInfo: (now, autonomy) => intensityStateNow(now, zoneOr(config.timeZone), autonomy),
     getPassLedgerSummary: (now = Date.now()) => {
       const tz = zoneOr(config.timeZone)
       const info = intensityStateNow(now, tz)
@@ -2897,6 +3125,28 @@ export function apply(ctx) {
     },
     getTimeLedger: (now = Date.now()) => timeLedgerNow(now, zoneOr(config.timeZone), lastPhone),
     getEmergencyPassActive: (now = Date.now()) => activeEmergencyInfo(now, zoneOr(config.timeZone)),
+    getWorkStore: (now = Date.now()) => workStoreNow(now, zoneOr(config.timeZone)),
+    upsertWorkItemNow: (item, { now = Date.now(), mirror = true } = {}) => {
+      const tz = zoneOr(config.timeZone)
+      const cur = workStoreNow(now, tz).store
+      const res = upsertWorkItem(cur, item, { day: dayString(now, tz), now })
+      if (res.ok) {
+        if (mirror) mirrorWorkStoreToFiles(res.state, now, tz)
+        else writeJson(stateFile('work.json'), res.state)
+      }
+      return res
+    },
+    markWorkStatusNow: ({ id = '', title = '', status = 'done', now = Date.now() } = {}) => {
+      const tz = zoneOr(config.timeZone)
+      const cur = workStoreNow(now, tz).store
+      const res = markWorkStatus(cur, { id, title, status, day: dayString(now, tz), now })
+      if (res.ok) mirrorWorkStoreToFiles(res.state, now, tz)
+      return res
+    },
+    getArbiterEnforce: () => Boolean(config.arbiterEnforce),
+    getLockRequests: (now = Date.now()) => lockBus.list(now),
+    getTodayBrainStats: (now = Date.now()) => brainRt.view(now),
+    onContractClear: (now = Date.now()) => { lockBus.revokeBySource('contract', { now }) },
     onBankUnlock: ({ minutes, solved, until, now = Date.now() } = {}) => {
       const tz = zoneOr(config.timeZone)
       const day = dayString(now, tz)
@@ -3749,12 +3999,7 @@ export function apply(ctx) {
         const apps = want.filter((a) => !NEVER_BLOCK.includes(a))
         if (!apps.length) return { ok: false, text: skipped.length ? '这些永远不封：' + skipped.join('、') : '没有有效的包名。' }
         const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && Number(b.until) > now && !apps.includes(b.app))
-        config = { ...config, blockExtra: [...keep, ...apps.map((app) => ({ app, until, by: role }))].slice(-30) }
-        try {
-          writeConfig(config)
-        } catch {
-          // 这一轮照样生效
-        }
+        commit({ blockExtra: [...keep, ...apps.map((app) => ({ app, until, by: role }))].slice(-30) })
         record({ state: 'block', at: now, apps, until, by: role, reason: String(args.reason || '').slice(0, 120) })
         return { ok: true, text: '封了 ' + apps.join('、') + '，到 ' + zoneMd(until, zoneOr(config.timeZone)) + ' ' + zoneHm(until, zoneOr(config.timeZone)) + '。' + (skipped.length ? '（' + skipped.join('、') + ' 永远不封）' : '') }
       },
@@ -4122,6 +4367,8 @@ export function apply(ctx) {
     const tz = zoneOr(config.timeZone)
     const day = startOfDay(now, tz)
     const stored = planOf(readState(stateFile('plan.json'), null), day)
+    const wsSnap = workStoreNow(now, tz)
+    const wsPlan = wsSnap.planItems.length > 0 ? { ...stored, items: wsSnap.planItems } : stored
     const action = String(body?.action || 'list')
     if (action !== 'set' && action !== 'confirm') {
       // 手机那边要用「最近用过的 App」给选择器排序：这正是每次 /plan 都送上来的那一串，
@@ -4141,12 +4388,13 @@ export function apply(ctx) {
         passed: Number(dg.bouts?.passed) || 0,
         bad: Number(dg.bouts?.bad) || 0,
         self: Number(dg.bouts?.self) || 0,
+        planned: wsSnap.totalCount,
       }
       // 第三项：十分钟倒计时按主机时钟算（手机的钟可能不准），只剩毫秒数给手机显示。
-      const leftMs = stored.accepted ? 0 : Math.max(0, (Number(stored.at) || 0) + PLAN_CONFIRM_MS - now)
+      const leftMs = wsPlan.accepted ? 0 : Math.max(0, (Number(wsPlan.at) || 0) + PLAN_CONFIRM_MS - now)
       return {
-        v: 1, ok: true, plan: stored, min: zoneMinuteOfDay(now, tz), recent, protocols, numbers,
-        acceptLeftMs: leftMs, sentence: planSentence(stored),
+        v: 1, ok: true, plan: wsPlan, workItems: wsSnap.store.items, min: zoneMinuteOfDay(now, tz), recent, protocols, numbers,
+        acceptLeftMs: leftMs, sentence: planSentence(wsPlan),
       }
     }
     const raw = Array.isArray(body?.items) ? body.items : []
@@ -4167,6 +4415,12 @@ export function apply(ctx) {
     // 写之前过一遍 normItem（planOf 会做），坏条目直接丢掉，不留半张计划。
     const next = planOf({ ...plan, day, edits: (Number(stored.edits) || 0) + 1, accepted: true, at: now }, day)
     writeJson(stateFile('plan.json'), next)
+    // H6：同步写入 workStore（单表权威源）
+    try {
+      const wsCur = workStoreNow(now, tz).store
+      const wsNext = replaceWorkSource(wsCur, 'plan', next.items, { day: dayString(now, tz), now })
+      writeJson(stateFile('work.json'), { ...wsNext, migratedAt: wsNext.migratedAt || now, updatedAt: now })
+    } catch {}
     record({ state: 'plan-edit', at: now, items: next.items.length, by: String(body?.by || 'panel') })
     return { v: 1, ok: true, plan: next, text: '计划定了：' + next.items.length + ' 局。' }
   }
@@ -4791,6 +5045,11 @@ export function apply(ctx) {
         if (!pkg) return { ok: false, text: '没认出要租约的应用名。' }
         if (isPureGame(pkg, args.app)) {
           return { ok: false, text: '硬规矩拦回：纯游戏绝不可通过聊天租约当场放行。' }
+        }
+        // H7：信用分仅影响双用途通行证（不越界干涉锁）；低信用分必须给出 whyAgain 说明
+        const trust = trustNow(now)
+        if (trust.score < 35 && !String(args.whyAgain || '').trim()) {
+          return { ok: false, text: `当前信用分偏低（${trust.score}/100），本次申请 ${pkg} 通行证请填写 whyAgain 说明具体必要性。` }
         }
         const mins = Math.max(5, Math.min(30, Math.round(Number(args.minutes) || 15)))
         const tzL = zoneOr(config.timeZone)
@@ -6058,7 +6317,14 @@ export function apply(ctx) {
           countToday: plRes.countToday,
         },
       })
-      try { presetRt.strictOff(now, 'disarm') } catch {}
+      try {
+        presetRt.strictOff(now, 'disarm')
+        lockBus.revokeBySource('takeover', { now })
+        lockBus.revokeBySource('contract', { now })
+        lockBus.revokeBySource('radar', { now })
+        lockBus.revokeBySource('switch', { now })
+        lockBus.revokeBySource('sister', { now })
+      } catch {}
       record({
         state: 'disarm',
         at: now,
@@ -6104,12 +6370,7 @@ export function apply(ctx) {
       const label = typeof body?.label === 'string' ? body.label.slice(0, 40) : app
       const mins = effectiveMode(config, now) === 'coach' ? 60 : 30
       const until = Math.max(now + mins * 60_000, Number(config.refuseUntil) || 0)
-      config = { ...config, refuseUntil: until, refuseBy: config.refuseBy || 'defied', muteUntil: 0 }
-      try {
-        writeConfig(config)
-      } catch {
-        // 这一轮照样生效
-      }
+      commit({ refuseUntil: until, refuseBy: config.refuseBy || 'defied', muteUntil: 0 })
       pendingDefiance = { app, label, at: now, until, source: String(body?.source || 'overlay').slice(0, 20) }
       record({ state: 'defied', at: now, app, label, until, source: pendingDefiance.source })
       // 违抗打开追问锁（原因：违抗）。挂着没问过的义务趁这次一并问掉（下次违抗时再问）。
@@ -6125,12 +6386,7 @@ export function apply(ctx) {
     //   notif      —— 任务期间拦下的一条通知（只要 App 和标题，不要正文）：攒着，任务结束一次性简报。
     if (type === 'tamper') {
       const until = Math.max(now + 60 * 60_000, Number(config.refuseUntil) || 0)
-      config = { ...config, refuseUntil: until, refuseBy: config.refuseBy || 'tamper', muteUntil: 0 }
-      try {
-        writeConfig(config)
-      } catch {
-        // 这一轮照样生效
-      }
+      commit({ refuseUntil: until, refuseBy: config.refuseBy || 'tamper', muteUntil: 0 })
       const what = typeof body?.what === 'string' ? body.what.slice(0, 60) : '设置'
       pendingDefiance = { app: 'settings', label: '系统设置（' + what + '）', at: now, until, source: 'tamper' }
       record({ state: 'tamper', at: now, what, until })
@@ -6179,6 +6435,11 @@ export function apply(ctx) {
         // 这一轮照样生效
       }
       presetRt.strictOff(now, 'breakglass')
+      lockBus.revokeBySource('takeover', { now })
+      lockBus.revokeBySource('contract', { now })
+      lockBus.revokeBySource('radar', { now })
+      lockBus.revokeBySource('switch', { now })
+      lockBus.revokeBySource('sister', { now })
       record({ state: 'breakglass', at: now, minutes, penalty: 0, steps: Number(body?.steps) || undefined, note: typeof body?.note === 'string' ? body.note.slice(0, 300) : undefined })
       return { v: 1, ok: true, breakUntil: until, until, penalty: 0, countToday: plRes.countToday, left: plRes.left, cap: plRes.cap }
     }
@@ -7645,7 +7906,14 @@ export function apply(ctx) {
                 countToday: resEp.countToday,
               },
             })
-            try { presetRt.strictOff(now, 'emergency-pass') } catch {}
+            try {
+              presetRt.strictOff(now, 'emergency-pass')
+              lockBus.revokeBySource('takeover', { now })
+              lockBus.revokeBySource('contract', { now })
+              lockBus.revokeBySource('radar', { now })
+              lockBus.revokeBySource('switch', { now })
+              lockBus.revokeBySource('sister', { now })
+            } catch {}
             record({ state: 'emergency-pass-grant', at: now, until: resEp.until, reason: resEp.why, countToday: resEp.countToday })
           }
           return send(res, resEp.ok ? 200 : 400, { v: 1, ...resEp, remainingToday: resEp.left })
@@ -7967,11 +8235,14 @@ export function apply(ctx) {
     return {
       enabled: config.enabled,
       intensity: intInfo.intensity,
+      effectiveIntensity: intInfo.effectiveIntensity,
+      autonomyShift: intInfo.autonomyShift,
       pendingIntensity: intInfo.pendingIntensity,
       emergencyDisarmDailyCap: intInfo.emergencyDisarmDailyCap,
       intensityThresholds: intInfo.thresholds,
       refuseUntil: Number(config.refuseUntil) > Date.now() ? Number(config.refuseUntil) : 0,
       lockShadow: config.lockShadow !== false,
+      arbiterEnforce: Boolean(config.arbiterEnforce),
       sessionId: config.sessionId ?? null,
       quietStart: config.quietStart,
       quietEnd: config.quietEnd,
@@ -8133,6 +8404,16 @@ export function apply(ctx) {
     const workActive = busy || Boolean(run) || Boolean(aiTask(config, now)) || Boolean(contract)
     const why = run ? '局进行中：' + (run.kind || '这一局') : contract ? contract.why : busy ? '忙时：' + (config.gearWhat || '正事') : '专时进行中'
     const taskLease = config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null
+    const busDeny = []
+    for (const r of lockBus.list(now)) {
+      if (r.kind !== 'deny') continue
+      for (const app of r.apps || []) {
+        if (!isNeverLockPkg(app)) busDeny.push({ app, until: Number(r.until) || 0, why: r.why || '临时锁' })
+      }
+    }
+    const extraDeny = (Array.isArray(config.blockExtra) ? config.blockExtra : [])
+      .filter((b) => b && Number(b.until) > now && !isNeverLockPkg(b.app))
+      .map((b) => ({ app: b.app, until: Number(b.until), why: b.why || '临时锁' }))
     return buildLockDecision({
       arbiter: lockArbiter,
       work: {
@@ -8149,9 +8430,7 @@ export function apply(ctx) {
       tierOf: tierFnNow(),
       quota,
       lease: taskLease,
-      radarDeny: (Array.isArray(config.blockExtra) ? config.blockExtra : [])
-        .filter((b) => b && Number(b.until) > now && !isNeverLockPkg(b.app))
-        .map((b) => ({ app: b.app, until: Number(b.until), why: b.why || '临时锁' })),
+      radarDeny: [...extraDeny, ...busDeny],
       now,
     })
   }
@@ -8201,7 +8480,7 @@ export function apply(ctx) {
     }
     let planItems = []
     try {
-      planItems = (planDayRoute({ action: 'list' }).plan?.items || []).map((i) => ({ id: i.id, title: i.title, minute: i.minute, openedAt: i.openedAt, missed: i.missed, first: i.packet?.first }))
+      planItems = workStoreNow(now, tz).planItems.map((i) => ({ id: i.id, title: i.title, minute: i.minute, openedAt: i.openedAt, missed: i.missed, first: i.packet?.first }))
     } catch {
       planItems = []
     }
@@ -8460,6 +8739,10 @@ export function apply(ctx) {
     try {
       const h = readState(stateFile('horizons.json'), null) || {}
       horizons = [...(h.long || []), ...(h.medium || [])].slice(0, 8).map((i) => (i.horizon === 'long' ? '长期' : '中期') + '：' + i.title + ' ' + i.doneSteps + '/' + i.targetSteps + (i.due ? ' 截止 ' + i.due : ''))
+      const ws = workStoreNow(now, tz)
+      if (ws.totalCount > 0) {
+        horizons.unshift(`今日 workStore 共 ${ws.totalCount} 件（已完成 ${ws.doneCount}，待推进 ${ws.openCount}）`)
+      }
     } catch {}
     let notes = []
     try {
@@ -8584,7 +8867,7 @@ export function apply(ctx) {
     const emergencyActiveInitial = Boolean(emergencyNow)
     // 行为雷达 0ms 先行判定：晨间开机直奔娱乐 / 纯游戏连玩 / 未收录短视频与信息流 / 租约偏航（静音/免打扰时段不越权抢跑）
     const radarAllowed = config.control !== false && body?.skipRadar !== true && !(Number(config.muteUntil) > now) && !inQuiet(now, config.quietStart, config.quietEnd, tz)
-    const inJudgeGrace = Number(loadBrain()?.graceUntil) > now && trustNow(now).band !== 'low' && !(refuseUntilAt(now) > now)
+    const inJudgeGrace = Number(loadBrain()?.graceUntil) > now && !(refuseUntilAt(now) > now)
     const penaltyNow = loadPenalty(now, tz)
     const rawRadar = radarAllowed
       ? evalBehaviorRadar({
@@ -8871,8 +9154,7 @@ export function apply(ctx) {
     const limits = modeLimits(config, mode)
     const force = decideForce({
       phone, tide: water, mode, noTake: silence.noTake, control: config.control !== false, funToday: funToday(phone),
-      // 信用分低：讲理由也不松（今天糊弄过她们）。
-      grace: Number(mind.brain.graceUntil) > now && trust.band !== 'low',
+      grace: Number(mind.brain.graceUntil) > now,
       refuse: refuseUntilAt(now) > now,
     })
     seedFromMemory(garden, candidates, now)
@@ -8888,8 +9170,8 @@ export function apply(ctx) {
     const autoPre = v4Hub.computeAutonomy(now)
     const autoGapScale = (water.band === 'sink' || water.band === 'trap') ? 1.0 : v4Hub.autonomyGapScale(autoPre)
     const rawMinGap = lastRhythm?.night === 'late'
-      ? Math.min(8 * 60_000, trustGap(tideGap(limits.minGapMs, water.band), trust.band))
-      : trustGap(tideGap(limits.minGapMs, water.band), trust.band)
+      ? Math.min(8 * 60_000, tideGap(limits.minGapMs, water.band))
+      : tideGap(limits.minGapMs, water.band)
     const out = decide({
       // 教练模式更勤，伙伴更松；再按水位收紧：陷得越深越勤，间隔带随机，不让他摸出规律。
       // 在沉 / 陷住了就不掷骰子：该开口就开口。达标至 L2/L3 时按正向泄压系数放宽常规冷却。
@@ -9187,13 +9469,21 @@ export function apply(ctx) {
       : (hardCapDowngrade
           ? '今天硬干预已经用满，改为温和提醒'
           : (radar.triggered ? (radar.forceWhy || force.why) : force.why))
-    const effectiveForceRelease = emergencyActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && trust.band !== 'low' && Number(mind.brain.graceUntil) > now)))
+    const effectiveForceRelease = emergencyActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && Number(mind.brain.graceUntil) > now)))
     const mediaAction = !emergencyActive && !hardCapDowngrade && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     const speakerOut = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
+    const takeoverActiveSession = !hardCapDowngrade && driveRes?.takeover?.active
+      ? {
+          allow: takeoverAllow(),
+          until: Number(config.aiWorkSession?.until) || (now + (intensityNow.thresholds.takeoverMaxMin || 45) * 60_000),
+          why: '接管：' + String(driveRes.takeover.reason || '回到正事'),
+        }
+      : null
     let lockArbiter = v4Hub.computeLockArbiter(now, {
       autonomy: v4ContractTick.autonomy,
       wall: { locked: (emergencyActive || hardCapDowngrade) ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
-      ...(hardCapDowngrade ? { aiWorkSession: null, presetStrict: null } : {}),
+      takeoverSession: takeoverActiveSession,
+      ...(hardCapDowngrade ? { aiWorkSession: null, presetStrict: null, takeoverSession: null } : {}),
     })
     if (hardCapDowngrade && !['P0', 'P2', 'P4'].includes(lockArbiter.priority)) {
       lockArbiter = {
@@ -9288,7 +9578,7 @@ export function apply(ctx) {
         }
       }
     }
-    const intensityFinal = intensityStateNow(now, tz)
+    const intensityFinal = intensityStateNow(now, tz, v4ContractTick.autonomy)
     const passLedger = passLedgerSummary(loadPassLedger(now, tz), {
       day: dayString(now, tz),
       cap: intensityFinal.emergencyDisarmDailyCap,
@@ -9296,7 +9586,10 @@ export function apply(ctx) {
     })
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
+      arbiterEnforce: Boolean(config.arbiterEnforce),
       intensity: intensityFinal.intensity,
+      effectiveIntensity: intensityFinal.effectiveIntensity,
+      autonomyShift: intensityFinal.autonomyShift,
       pendingIntensity: intensityFinal.pendingIntensity,
       emergencyDisarmDailyCap: intensityFinal.emergencyDisarmDailyCap,
       hardInterventions: intensityFinal.hardInterventions,
@@ -9401,7 +9694,10 @@ export function apply(ctx) {
       v: 1,
       version: '0.2.0',
       config: publicConfig(),
+      arbiterEnforce: Boolean(config.arbiterEnforce),
       intensity: intInfo.intensity,
+      effectiveIntensity: intInfo.effectiveIntensity,
+      autonomyShift: intInfo.autonomyShift,
       pendingIntensity: intInfo.pendingIntensity,
       emergencyDisarmDailyCap: intInfo.emergencyDisarmDailyCap,
       hardInterventions: intInfo.hardInterventions,
@@ -9917,7 +10213,15 @@ export function apply(ctx) {
     const now = Date.now()
     const goal = String(opts.goal || '').trim().slice(0, 120)
     const budgetMin = Number(opts.minutes) > 0 ? Math.max(5, Math.min(240, Math.round(Number(opts.minutes)))) : 0
-    live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, goal, budgetMin, openedAt: now }
+    const workId = String(opts.workId || '').trim()
+    const parentHorizonId = String(opts.parentHorizonId || '').trim()
+    live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, goal, budgetMin, openedAt: now, workId, parentHorizonId }
+    try {
+      const tzW = zoneOr(config.timeZone)
+      const wsCur = workStoreNow(now, tzW).store
+      const mk = markWorkStatus(wsCur, { id: workId, title: goal || pkt?.goal || '', status: 'running', day: dayString(now, tzW), now })
+      if (mk.ok) mirrorWorkStoreToFiles(mk.state, now, tzW)
+    } catch {}
     record({ state: 'bout-open', at: now, protocolId: protocol.id, department: dept, via: 'panel' })
     try {
       v4Hub?.recordStoryline?.({ kind: 'bout_start', actor: 'user', summary: `开局「${goal || protocol.name || protocol.id}」`, at: now }, now)
@@ -9974,6 +10278,14 @@ export function apply(ctx) {
       if (passed) {
         const tz = zoneOr(config.timeZone)
         reliefPenaltyOnPass(now, tz)
+        // H6：验收通过更新 workStore 并自动回涨关联三层主线进度（horizon.doneSteps + 1）
+        try {
+          const wsCur = workStoreNow(now, tz).store
+          const mk = markWorkStatus(wsCur, { id: live.workId || '', title: live.goal || live.packet?.goal || '', status: 'done', day: dayString(now, tz), now })
+          if (mk.ok) mirrorWorkStoreToFiles(mk.state, now, tz)
+          const hId = live.parentHorizonId || mk.item?.links?.horizonId || ''
+          if (hId) v4Hub?.horizonsRoute?.({ action: 'upsert', id: hId, bumpStep: true })
+        } catch {}
         const before = todayEarned(now, tz)
         const next = earnedRt.addForPass(before, config, now, before.day)
         saveEarned(next)
@@ -10115,16 +10427,19 @@ export function apply(ctx) {
         : (Array.isArray(body?.allow) ? { need: body.allow, allow: body.allow } : undefined)
       let packet = body?.packet
       let goal = body?.title
-      if ((!protocolId || !apps) && body?.id) {
+      let workId = String(body?.id || '')
+      let parentHorizonId = String(body?.parentHorizonId || '')
+      if ((!protocolId || !apps || !parentHorizonId) && body?.id) {
         const queued = (planDayRoute({ action: 'list' }).plan?.items || []).find((it) => String(it?.id || '') === String(body.id))
         if (queued) {
           if (!protocolId) protocolId = String(queued.protocolId || '')
           if (!apps && (queued.need?.length || queued.allow?.length)) apps = { need: queued.need || [], allow: queued.allow || [] }
           if (!packet && queued.packet) packet = queued.packet
           if (!goal && queued.title) goal = queued.title
+          if (!parentHorizonId && queued.parentHorizonId) parentHorizonId = String(queued.parentHorizonId)
         }
       }
-      const r = startBout(protocolId, { apps, packet, department: body?.department, goal, minutes: body?.minutes, by: body?.by || 'panel' })
+      const r = startBout(protocolId, { apps, packet, department: body?.department, goal, minutes: body?.minutes, by: body?.by || 'panel', workId, parentHorizonId })
       if (r.ok && body?.strict === true && apps && ([...(apps.need || []), ...(apps.allow || [])].length > 0)) {
         presetRt.strictNow(Date.now(), String(goal || '面板严格局'), 'panel')
       }
@@ -10292,6 +10607,10 @@ export function apply(ctx) {
         return true
       })
       const saved = planDayRoute({ action: 'set', items: filtered, by: String(body?.by || 'today') })
+      try {
+        const wsNext = removeWorkItem(workStoreNow(now, tz).store, { id: targetId, title: targetTitle, day: dayString(now, tz), now })
+        mirrorWorkStoreToFiles(wsNext, now, tz)
+      } catch {}
       return { v: 1, ...saved, tasks: (saved.plan?.items || []).slice(0, 3) }
     }
     const title = String(body?.title || body?.text || '').trim().slice(0, 80)
@@ -10578,6 +10897,7 @@ function mergeConfig(current, body) {
     if (typeof body.proactiveTools === 'boolean') next.proactiveTools = body.proactiveTools
     // 测试模式（影子锁）：所有锁只提示「这里本来会锁」，不真锁。只认他手动开关（模型工具只能关）。
     if (typeof body.lockShadow === 'boolean') next.lockShadow = body.lockShadow
+    if (typeof body.arbiterEnforce === 'boolean') next.arbiterEnforce = body.arbiterEnforce
     if (typeof body.fullToolAccess === 'boolean') next.fullToolAccess = body.fullToolAccess
     // B5：念出来。默认关，只认布尔。
     if (typeof body.voice === 'boolean') next.voice = body.voice

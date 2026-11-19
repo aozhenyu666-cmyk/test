@@ -140,6 +140,27 @@ object InterceptRuntime {
         // 2026-11-18 锁机安全：紧急解除期间什么都不锁；桌面 / DSH 自己 / 系统界面永远不锁。
         if (LockSafety.disarmed(app, now)) return
         if (LockSafety.neverLock(app, packageName)) return
+        // H5：arbiterEnforce=true 且已有裁决器输出时，只认 ArbiterDecision.decide 执法。
+        val arbiterOutcome = runCatching {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ArbiterShadow.evaluateForEnforce(app, packageName)
+        }.getOrNull()
+        if (arbiterOutcome != null) {
+            if (arbiterOutcome.reasonTag == "shadow") {
+                LockSafety.shadowHit(app, packageName, arbiterOutcome.why, "arbiter")
+                return
+            }
+            if (!arbiterOutcome.shouldLock) return
+            if (resurface(packageName, arbiterOutcome.why, now, arbiterOutcome.unlockHow)) return
+            if (screenBusy()) {
+                Log.i(TAG, "surface busy (" + VisibleSurface.holder() + "); no arbiter lock for " + packageName)
+                return
+            }
+            val d = g.force(packageName, null, env(now), now, strict = true)
+            if (d is InterceptDecision.Block) {
+                show(d, now, arbiterOutcome.why, arbiterOutcome.unlockHow)
+            }
+            return
+        }
         // A lock that is still in force comes back whenever its app does (亮屏 / 回到游戏), even
         // with the person's own interception switch off: the lock is state, the page is only its face.
         if (resurface(packageName, null, now)) return
@@ -166,7 +187,14 @@ object InterceptRuntime {
      * book, whatever this feature's own switch and caps say (see [InterceptGuard.force]). False when
      * nothing was shown; the companion asks again within a minute, so a busy screen only delays it.
      */
-    fun forceBlock(context: Context, packageName: String, label: String?, why: String? = null, strict: Boolean = false): Boolean {
+    fun forceBlock(
+        context: Context,
+        packageName: String,
+        label: String?,
+        why: String? = null,
+        strict: Boolean = false,
+        unlockHow: String? = null,
+    ): Boolean {
         val g = ensure(context)
         val now = System.currentTimeMillis()
         expireStale(now)
@@ -176,14 +204,14 @@ object InterceptRuntime {
         }
         // A lock already in force: show it again if its page is not on screen (or let a superseded
         // one go and decide this app afresh).
-        if (resurface(packageName, why, now)) return true
+        if (resurface(packageName, why, now, unlockHow)) return true
         if (screenBusy()) return false
         val d = g.force(packageName, label, env(now), now, strict)
         if (d !is InterceptDecision.Block) {
             Log.d(TAG, "companion lock skipped for " + packageName + ": " + ((d as? InterceptDecision.Allow)?.reason ?: "ignore"))
             return false
         }
-        show(d, now, why)
+        show(d, now, why, unlockHow)
         return true
     }
 
@@ -207,6 +235,7 @@ object InterceptRuntime {
     /** What the open lock's page showed, so it can be shown again after 灭屏 / 切走. */
     private var openLabel: String? = null
     private var openWhy: String? = null
+    private var openUnlockHow: String? = null
 
     /** A lock nobody resolved in this long is stale (its page is long gone). */
     private const val STALE_OPEN_MS = 30 * 60_000L
@@ -229,7 +258,7 @@ object InterceptRuntime {
      *    ended, so the new app can be decided normally (false);
      *  * anything else (launcher, DSH, phone) → the lock stays, nothing to show.
      */
-    private fun resurface(packageName: String, why: String?, now: Long): Boolean {
+    private fun resurface(packageName: String, why: String?, now: Long, unlockHow: String? = null): Boolean {
         val g = guard ?: return false
         val open = g.openEventId() ?: return false
         if (InterceptPageActivity.isOnScreen(open)) return true
@@ -242,6 +271,7 @@ object InterceptRuntime {
             val ok = InterceptPageActivity.start(
                 app, open, packageName, label, config().trainingMs, now + PAGE_TTL_MS, why ?: openWhy,
                 lockMode = effectiveLockMode(), openSinceWall = g.state.openSinceWall, todayCount = g.state.countToday,
+                unlockHow = unlockHow ?: openUnlockHow,
             )
             if (!ok) VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, open)
             Log.i(TAG, "lock resurfaced for " + packageName + " (" + open + ") ok=" + ok)
@@ -279,7 +309,7 @@ object InterceptRuntime {
         return VisibleSurface.claim(VisibleSurface.OWNER_INTERCEPT, eventId)
     }
 
-    private fun show(block: InterceptDecision.Block, now: Long, why: String? = null) {
+    private fun show(block: InterceptDecision.Block, now: Long, why: String? = null, unlockHow: String? = null) {
         // 测试模式：决定照记，页面不弹——记成 NOT_SHOWN，免得占着一把「开着的锁」。
         if (LockSafety.shadowHit(app, block.target.packageName, why, "intercept")) {
             guard?.onUnavailable(block.eventId, "shadow", System.currentTimeMillis())
@@ -295,10 +325,12 @@ object InterceptRuntime {
         }
         openLabel = block.target.label
         openWhy = why
+        openUnlockHow = unlockHow
         val ok = InterceptPageActivity.start(
             app, block.eventId, block.target.packageName, block.target.label,
             config().trainingMs, now + PAGE_TTL_MS, why,
             lockMode = effectiveLockMode(), openSinceWall = now, todayCount = guard?.state?.countToday ?: 1,
+            unlockHow = unlockHow,
         )
         if (!ok) {
             VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, block.eventId)

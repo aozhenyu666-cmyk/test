@@ -47,6 +47,6 @@ export function isNeverLockPkg(pkg, extra = []) {
   if (Array.isArray(extra) && extra.includes(s)) return true
   const low = s.toLowerCase()
   if (low.endsWith('.launcher') || low.endsWith('.launcher2') || low.endsWith('.launcher3')) return true
-  if (/(inputmethod|keyboard|gboard)/.test(low)) return true
+  if (/(inputmethod|\.input(?:$|_|\.)|keyboard|gboard|wetype)/.test(low)) return true
   return false
 }

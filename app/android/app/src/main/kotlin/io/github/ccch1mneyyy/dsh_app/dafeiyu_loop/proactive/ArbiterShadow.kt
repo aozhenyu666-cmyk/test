@@ -8,15 +8,117 @@ import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionFactsOf
 import java.io.File
 
 /**
- * 2026-11-18 裁决器影子对比：新裁决只计算、不执法。每次切 App，和旧逻辑比一下，
- * 结论不一样就记一行到 files/loop/arbiter-diff.jsonl（同一个 App 同一种分歧 10 分钟只记一次）。
- * 攒几天看这份记录：分歧都在预期内，再把手机切成只认新裁决。
+ * Pure JVM-testable enforcement evaluator when `arbiterEnforce` is enabled.
+ * Guarantees I1 ([neverLock] / [isSystem] always open), I4 ([disarmed] always open),
+ * test-mode shadow precedence, and I2 (non-empty [why] & [unlockHow] whenever [shouldLock] is true).
+ */
+data class ArbiterEnforceOutcome(
+    val shouldLock: Boolean,
+    val why: String,
+    val unlockHow: String,
+    val needPass: Boolean = false,
+    val priority: String = "",
+    val reasonTag: String = "",
+)
+
+object ArbiterEnforcePolicy {
+    fun evaluate(
+        arbiterEnforce: Boolean,
+        decision: ArbiterDecision?,
+        pkg: String?,
+        neverLock: Boolean,
+        disarmed: Boolean,
+        shadow: Boolean,
+        isSystem: Boolean = false,
+    ): ArbiterEnforceOutcome? {
+        if (!arbiterEnforce || decision == null) return null
+        val p = pkg?.trim().orEmpty()
+        if (p.isEmpty() || neverLock || isSystem) {
+            return ArbiterEnforceOutcome(shouldLock = false, why = "base", unlockHow = "", reasonTag = "never_lock")
+        }
+        if (disarmed) {
+            return ArbiterEnforceOutcome(shouldLock = false, why = "disarmed", unlockHow = "", reasonTag = "disarmed")
+        }
+        val verdict = decision.decide(p) { false }
+        if (!verdict.lock) {
+            return ArbiterEnforceOutcome(
+                shouldLock = false,
+                why = verdict.why,
+                unlockHow = decision.unlockHow,
+                needPass = false,
+                priority = decision.priority,
+                reasonTag = "arbiter_open",
+            )
+        }
+        if (shadow) {
+            return ArbiterEnforceOutcome(
+                shouldLock = false,
+                why = verdict.why.ifBlank { decision.why },
+                unlockHow = decision.unlockHow,
+                needPass = verdict.needPass,
+                priority = decision.priority,
+                reasonTag = "shadow",
+            )
+        }
+        val effectiveWhy = verdict.why.ifBlank { decision.why }.ifBlank { "当前处于专注保护" }
+        val effectiveUnlock = decision.unlockHow.ifBlank {
+            if (verdict.needPass) "先跟鲸澜申请通行证" else "完成当前局或刷题解锁"
+        }
+        return ArbiterEnforceOutcome(
+            shouldLock = true,
+            why = effectiveWhy,
+            unlockHow = effectiveUnlock,
+            needPass = verdict.needPass,
+            priority = decision.priority,
+            reasonTag = "arbiter_lock",
+        )
+    }
+}
+
+/**
+ * 2026-11-18 裁决器影子对比与 H5 执法开关（默认关）：
+ * - `arbiterEnforce == false`：只计算并记分歧到 files/loop/arbiter-diff.jsonl，不执法；
+ * - `arbiterEnforce == true`：由 [evaluateForEnforce] 给出唯一裁决，同时永不锁/测试模式/紧急解除仍优先于一切。
  */
 object ArbiterShadow {
     private const val TAG = "DshArbiterShadow"
     private const val DEDUPE_MS = 10 * 60_000L
+    private const val PREFS = "dsh_arbiter_enforce"
+    private const val KEY_ENFORCE = "arbiter_enforce"
     @Volatile private var current: ArbiterDecision? = null
+    @Volatile private var enforceCache: Boolean? = null
     private val lastLogged = HashMap<String, Long>()
+
+    fun enforceEnabled(ctx: Context): Boolean {
+        enforceCache?.let { return it }
+        return runCatching {
+            ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENFORCE, false)
+        }.getOrDefault(false).also { enforceCache = it }
+    }
+
+    fun setEnforceEnabled(ctx: Context, on: Boolean) {
+        if (enforceCache == on) return
+        enforceCache = on
+        runCatching {
+            ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_ENFORCE, on).apply()
+        }
+        Log.i(TAG, "arbiterEnforce=$on")
+    }
+
+    fun evaluateForEnforce(ctx: Context, pkg: String?): ArbiterEnforceOutcome? {
+        if (!enforceEnabled(ctx)) return null
+        val p = pkg?.trim().orEmpty()
+        return ArbiterEnforcePolicy.evaluate(
+            arbiterEnforce = true,
+            decision = current,
+            pkg = p,
+            neverLock = p.isNotEmpty() && LockSafety.neverLock(ctx, p),
+            disarmed = LockSafety.disarmed(ctx),
+            shadow = LockSafety.shadow(ctx),
+            isSystem = p.isNotEmpty() && SessionFactsOf.isSystem(ctx, p),
+        )
+    }
 
     fun update(raw: Any?) {
         current = ArbiterDecision.fromWire(raw)

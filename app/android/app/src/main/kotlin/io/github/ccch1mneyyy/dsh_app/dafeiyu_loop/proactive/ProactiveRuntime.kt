@@ -1236,6 +1236,23 @@ object ProactiveRuntime {
         val restless = synchronized(switches) { switches.count { tNow - it.first <= 90_000L } >= 5 }
         if (restless) consultPlanSoon(minGapMs = 5_000L)
         val now = System.currentTimeMillis()
+        // H5: 当 arbiterEnforce 开启且已有裁决器输出时，直接按 ArbiterDecision.decide 执法（永不锁/测试模式/紧急解除仍优先于一切）。
+        val arbiterOutcome = ArbiterShadow.evaluateForEnforce(app, packageName)
+        if (arbiterOutcome != null) {
+            when {
+                arbiterOutcome.reasonTag == "shadow" -> {
+                    LockSafety.shadowHit(app, packageName, arbiterOutcome.why, "arbiter")
+                }
+                arbiterOutcome.shouldLock -> {
+                    val f = Force(4, packageName, arbiterOutcome.why, now + FORCE_HOLD_MS, refuse = true)
+                    force = f
+                    enforce(f, fresh = true)
+                    onBlockedOpen(packageName)
+                }
+            }
+            consultPlanSoon(minGapMs = 15_000L)
+            return
+        }
         // 拒绝模式: lock now, at the door; the /plan answer would come a second later.
         // C2: also with the engine dead — this reads only the cached rules and the local clock.
         if (now < lockUntil(now) && listed(packageName)) {
@@ -1475,6 +1492,36 @@ object ProactiveRuntime {
         }
         val front = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
         if (!fresh && front != f.app) return
+        val arbiterOutcome = ArbiterShadow.evaluateForEnforce(app, f.app)
+        if (arbiterOutcome != null) {
+            when {
+                arbiterOutcome.reasonTag == "shadow" -> {
+                    LockSafety.shadowHit(app, f.app, arbiterOutcome.why, "companion-arbiter")
+                    return
+                }
+                !arbiterOutcome.shouldLock -> {
+                    Log.i(TAG, "arbiterEnforce open: skip force on ${f.app} (${arbiterOutcome.reasonTag})")
+                    return
+                }
+                else -> {
+                    if (f.refuse && VisibleSurface.isHeldBy(VisibleSurface.OWNER_PROACTIVE)) {
+                        VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, null)
+                    }
+                    val shown = runCatching {
+                        InterceptRuntime.forceBlock(
+                            app,
+                            f.app,
+                            null,
+                            arbiterOutcome.why,
+                            strict = f.refuse,
+                            unlockHow = arbiterOutcome.unlockHow,
+                        )
+                    }.getOrDefault(false)
+                    Log.i(TAG, "arbiterEnforce force=${f.level} ${f.app} shown=$shown")
+                    return
+                }
+            }
+        }
         // 测试模式：只提示「这里本来会锁」，不真锁。
         if (LockSafety.shadowHit(app, f.app, f.why, "companion")) return
         if (f.refuse && VisibleSurface.isHeldBy(VisibleSurface.OWNER_PROACTIVE)) {
@@ -1510,7 +1557,8 @@ object ProactiveRuntime {
         val planCap = (map["emergencyDisarmDailyCap"] as? Number)?.toInt()
             ?: ((map["intensity"] as? Map<*, *>)?.get("emergencyDisarmDailyCap") as? Number)?.toInt()
         if (planCap != null && planCap > 0) LockSafety.setDailyCap(app, planCap)
-        // 裁决器的唯一输出：先影子对比（不执法），攒够数据再切换。
+        // H5：同步裁决器执法开关（默认关）并更新裁决器输出。
+        (map["arbiterEnforce"] as? Boolean)?.let { ArbiterShadow.setEnforceEnabled(app, it) }
         runCatching { ArbiterShadow.update(map["lock"]) }
         val nowNotif = System.currentTimeMillis()
         if (nowNotif - lastSafetyNotifAt > 5 * 60_000L) {
@@ -1547,6 +1595,17 @@ object ProactiveRuntime {
         // 赶回桌面后前台是桌面，插件看到的力度本来就是 0——那时解锁等于锁几秒就自己打开游戏。
         if (level < 3 && f?.get("release") == true) releaseCompanionLock()
         force?.let { enforce(it) }
+        if (force == null && ArbiterShadow.enforceEnabled(app)) {
+            val fg = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
+            if (!fg.isNullOrBlank()) {
+                val outcome = ArbiterShadow.evaluateForEnforce(app, fg)
+                if (outcome != null && outcome.shouldLock) {
+                    enforce(Force(4, fg, outcome.why, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true))
+                } else if (outcome?.reasonTag == "shadow") {
+                    LockSafety.shadowHit(app, fg, outcome.why, "companion-arbiter")
+                }
+            }
+        }
         (map["media"] as? String)?.takeIf { it == "pause" || it == "resume" }?.let { PhoneMediaControl.control(app, it) }
         // 连麦舱：同一份分级判定（sessionFront），不再各写一份"非白名单就锁"。
         if (sessionActive()) sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app)

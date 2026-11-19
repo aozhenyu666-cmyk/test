@@ -271,6 +271,9 @@ object BuiltinPluginGuest {
                 "lib/speak_arbiter.js",
                 "lib/gemini_gate.js",
                 "lib/time_ledger.js",
+                // 2026-11-19 Wave 2 统一方案 v2（锁总线 / 任务单表 workStore）
+                "lib/lock_bus.js",
+                "lib/work_store.js",
             ),
         ),
     )

@@ -10,11 +10,13 @@
 // 每一份都带 why（为什么）和 unlockHow（怎么解），锁页显示的就是它，和执法永远一致。
 // 原来那些锁（雷达、姐妹力度、切换次数、契约、专时、连麦、深夜）都只是这里的输入。
 
-import { WORK_DEFAULT } from './app_tiers.js'
+import { isBasePkg, WORK_DEFAULT } from './app_tiers.js'
 import { GEMINI_PACKAGES } from './gemini.js'
-import { PROXY_PACKAGES } from './never_lock.js'
+import { isNeverLockPkg, PROXY_PACKAGES } from './never_lock.js'
 
 const uniq = (xs) => [...new Set(xs.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()))]
+const safeBase = (pkg) => isBasePkg(pkg) || isNeverLockPkg(pkg)
+const nonEmpty = (s, fallback) => (typeof s === 'string' && s.trim() ? s.trim() : fallback)
 
 /**
  * @param {object} p
@@ -42,22 +44,27 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
   }
 
   if (a.priority === 'P0') {
-    return { ...base, mode: 'open', allow: [], deny: [], needPass: [], why: a.why || '紧急放行中', unlockHow: a.unlockHow || '' }
+    return { ...base, mode: 'open', allow: [], deny: [], needPass: [], why: nonEmpty(a.why, '紧急放行中'), unlockHow: nonEmpty(a.unlockHow, '倒计时结束后恢复') }
   }
 
-  // P1–P4：裁决器已经给了「只许哪些」。连麦舱补上 Gemini 和代理。
-  if (['P1', 'P2', 'P3', 'P4'].includes(a.priority)) {
-    const extra = a.priority === 'P1' ? [...GEMINI_PACKAGES, ...PROXY_PACKAGES] : []
-    const withLease = a.priority === 'P3' && leaseApp ? [leaseApp] : []
+  // P1–P4（含 P2.5 接管）：裁决器已经给了「只许哪些」。连麦舱补上 Gemini 和代理；接管补工作应用。
+  if (['P1', 'P2', 'P2.5', 'P3', 'P4'].includes(a.priority)) {
+    const extra = a.priority === 'P1'
+      ? [...GEMINI_PACKAGES, ...PROXY_PACKAGES]
+      : (a.priority === 'P2.5' ? [...WORK_DEFAULT, ...ofTier('work'), ...GEMINI_PACKAGES, ...PROXY_PACKAGES] : [])
+    const withLease = (a.priority === 'P3' || a.priority === 'P2.5') && leaseApp ? [leaseApp] : []
     const allow = Array.isArray(a.allow) && !a.allow.includes('*') ? a.allow : []
+    const needPass = (a.priority === 'P3' || a.priority === 'P2.5')
+      ? ofTier('dual').filter((p) => p !== leaseApp && !allow.includes(p) && !safeBase(p))
+      : []
     return {
       ...base,
       mode: 'allowlist',
       allow: uniq([...allow, ...extra, ...withLease]),
       deny: [],
-      needPass: a.priority === 'P3' ? ofTier('dual').filter((p) => p !== leaseApp) : [],
-      why: a.why || a.label,
-      unlockHow: a.unlockHow || '',
+      needPass,
+      why: nonEmpty(a.why, nonEmpty(a.label, '规则严格锁定中')),
+      unlockHow: nonEmpty(a.unlockHow, '完成本轮任务或到期后自动解锁'),
     }
   }
 
@@ -74,40 +81,46 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
       mode: 'allowlist',
       allow,
       deny: [],
-      needPass: ofTier('dual').filter((p) => !allow.includes(p)),
-      why: work?.why || a.why || '正在干活：只放行工作 App 和这一局声明的 App',
+      needPass: ofTier('dual').filter((p) => !allow.includes(p) && !safeBase(p)),
+      why: nonEmpty(work?.why || a.why, '正在干活：只放行工作 App 和这一局声明的 App'),
       unlockHow: '双用途 App 先跟鲸澜说清用途领通行证；娱乐等收工或进自由态再用',
     }
   }
 
-  // 自由态：只锁临时锁、额度用完的那一层。
+  // 自由态：只锁临时锁、额度用完的那一层（底座与永不锁 App 绝不进 deny / needPass）。
   const q = quota || { funOut: false, gameOut: false }
   const deny = []
   for (const d of Array.isArray(radarDeny) ? radarDeny : []) {
-    if (d?.app && (!d.until || Number(d.until) > now)) deny.push({ app: String(d.app), until: Number(d.until) || 0, why: String(d.why || '临时锁') })
+    const pkg = String(d?.app || '').trim()
+    if (pkg && !safeBase(pkg) && (!d.until || Number(d.until) > now)) {
+      deny.push({ app: pkg, until: Number(d.until) || 0, why: nonEmpty(d.why, '临时锁') })
+    }
   }
-  if (q.funOut) for (const p of ofTier('fun')) deny.push({ app: p, until: 0, why: '今天的娱乐额度用完了' })
-  if (q.gameOut) for (const p of ofTier('game')) deny.push({ app: p, until: 0, why: '今天的游戏额度用完了' })
+  if (q.funOut) for (const p of ofTier('fun')) if (!safeBase(p)) deny.push({ app: p, until: 0, why: '今天的娱乐额度用完了' })
+  if (q.gameOut) for (const p of ofTier('game')) if (!safeBase(p)) deny.push({ app: p, until: 0, why: '今天的游戏额度用完了' })
   const seen = new Set()
   const denyUniq = deny.filter((d) => (seen.has(d.app) ? false : seen.add(d.app)))
+  const needPassFree = q.funOut ? ofTier('dual').filter((p) => p !== leaseApp && !safeBase(p)) : []
   return {
     ...base,
     mode: 'free',
     allow: [],
     deny: denyUniq,
-    needPass: q.funOut ? ofTier('dual').filter((p) => p !== leaseApp) : [],
-    why: q.line || '自由态',
-    unlockHow: q.funOut ? '额度用完：通过一局验收 +15 分钟，或明天再来' : '额度内随便用',
+    needPass: needPassFree,
+    why: nonEmpty(q.line, denyUniq.length ? (denyUniq[0].why || '临时锁定中') : '自由态'),
+    unlockHow: q.funOut
+      ? '额度用完：通过一局验收 +15 分钟，或明天再来'
+      : (denyUniq.length ? '临时锁：到期自动解除，或回到正事 App / 使用紧急放行' : '额度内随便用'),
   }
 }
 
 /** 手机那段逻辑的 JS 版（测试和对比用；Kotlin 侧同构）。返回 {lock, why, pass?}。 */
-export function decideApp(decision, pkg, isBase) {
-  if (!pkg || isBase(pkg)) return { lock: false, why: 'base' }
+export function decideApp(decision, pkg, isBase = () => false) {
+  if (!pkg || isBase(pkg) || safeBase(pkg)) return { lock: false, why: 'base' }
   const d = decision || { mode: 'open' }
   if (d.mode === 'open') return { lock: false, why: 'open' }
   if ((d.needPass || []).includes(pkg)) return { lock: true, why: '先跟鲸澜申请通行证', pass: true }
-  if (d.mode === 'allowlist') return (d.allow || []).includes(pkg) ? { lock: false, why: 'allow' } : { lock: true, why: d.why }
+  if (d.mode === 'allowlist') return (d.allow || []).includes(pkg) ? { lock: false, why: 'allow' } : { lock: true, why: nonEmpty(d.why, '白名单锁定中') }
   const hit = (d.deny || []).find((x) => x.app === pkg)
-  return hit ? { lock: true, why: hit.why } : { lock: false, why: 'free' }
+  return hit ? { lock: true, why: nonEmpty(hit.why, '临时锁') } : { lock: false, why: 'free' }
 }
