@@ -436,8 +436,9 @@ void main() {
     await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: _FakeV5LoopChannel()));
     await settlePhone(tester);
 
-    expect(find.text('🧭 三层战略主线（长期北极星 · 中期战役）▸'), findsOneWidget);
-    expect(find.text('📊 全屏统计与晚间报告 ▸'), findsOneWidget);
+    // 两个入口改成原生的行：主线卡底部「三层战略主线」，使用情况卡底部「查看完整使用情况」。
+    expect(find.text('三层战略主线'), findsOneWidget);
+    expect(find.text('查看完整使用情况'), findsOneWidget);
     expect(find.text('● Gemini 沟通 28m'), findsOneWidget);
 
     await pumpPhone(tester, PlanModalityPage(channel: ch, loopChannel: _FakeV5LoopChannel()));

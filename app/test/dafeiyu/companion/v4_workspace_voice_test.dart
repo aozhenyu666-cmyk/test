@@ -179,6 +179,34 @@ void main() {
     expect(ch.controlOps, ['clk_pomodoro:pause']);
   });
 
+  testWidgets('局详情：点此刻焦距进完整页，同一套动作（放行 / 调白名单 / 收工验收）', (tester) async {
+    final ch = _FakeV4Channel();
+    await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: _FakeLoopChannel()));
+    await settlePhone(tester);
+
+    await tester.tap(find.text('推进 v4.1 收尾'));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('bout-detail-page')), findsOneWidget);
+    expect(find.text('局详情'), findsWidgets);
+    expect(find.text('分钟后到点'), findsOneWidget);
+    // 放行列表显示 App 名字（从手机读到的），不是包名。
+    expect(find.text('Obsidian'), findsWidgets);
+    expect(find.text('md.obsidian'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('bout-detail-allow')));
+    await settlePhone(tester);
+    await tester.tap(find.text('Firefox 浏览器'));
+    await settlePhone(tester);
+    await tester.tap(find.byKey(const ValueKey('app-picker-confirm')));
+    await settlePhone(tester);
+    expect(ch.boutCommands.last['action'], 'allow');
+
+    await tester.ensureVisible(find.byKey(const ValueKey('bout-detail-close')));
+    await tester.tap(find.byKey(const ValueKey('bout-detail-close')));
+    await settlePhone(tester);
+    expect(ch.boutCommands.last['action'], 'close');
+  });
+
   testWidgets('Today workbench defaults to strict lock for one-line launch and selects installed whitelist apps', (tester) async {
     final ch = _FakeV4Channel();
     ch.bouts = {'running': null, 'queue': []};

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../plugins/native/native_model.dart' show NativePanel;
+import '../../ui/common/app_sheet.dart' show groupTitleStyle;
 import '../../ui/common/capsule_chip.dart';
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
@@ -78,7 +79,6 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
   };
   bool _allowDirty = false;
   bool _strictMode = true;
-  bool _chartsExpanded = false;
   _HorizonTab _horizonTab = _HorizonTab.today;
   final _goalCtrl = TextEditingController();
   final _horizonCtrl = TextEditingController();
@@ -182,13 +182,24 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
   void initState() {
     super.initState();
     unawaited(_refresh());
+    unawaited(_loadAppLabels());
     _poller = Timer.periodic(const Duration(seconds: 5), (_) {
       if (mounted) unawaited(_refresh(silent: true));
     });
   }
 
+  /// 每次 setState 都跳一下：推出去的「局详情」页跟着重建，和局页永远是同一份状态。
+  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _tick.value++;
+  }
+
   @override
   void dispose() {
+    _tick.dispose();
     _poller?.cancel();
     _goalCtrl.dispose();
     _horizonCtrl.dispose();
@@ -248,7 +259,37 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     return _fullQueue.take(3).toList();
   }
 
-  String _labelOf(String pkg) => _appLabels[pkg] ?? pkg;
+  /// 手机上读不到名字时的兜底（他常用的这几个），别让包名直接露在界面上。
+  static const Map<String, String> _knownLabels = {
+    'com.fenbi.android.servant': '粉笔',
+    'com.baidu.netdisk': '百度网盘',
+    'com.hpbr.bosszhipin': 'BOSS 直聘',
+    'com.quark.browser': '夸克',
+    'com.android.chrome': 'Chrome',
+    'com.openai.chatgpt': 'ChatGPT',
+    'com.anthropic.claude': 'Claude',
+    'moe.nb4a': 'NekoBox',
+  };
+
+  String _labelOf(String pkg) {
+    final known = _appLabels[pkg] ?? _knownLabels[pkg];
+    if (known != null) return known;
+    for (final p in _whitelistPresets) {
+      if (p.package == pkg) return p.label;
+    }
+    return pkg;
+  }
+
+  /// 进页面读一次手机上装的 App 名字，放行列表就显示「粉笔」而不是包名。
+  Future<void> _loadAppLabels() async {
+    final apps = await _loop.apps();
+    if (!mounted || apps.isEmpty) return;
+    setState(() {
+      for (final a in apps) {
+        if (a.label.trim().isNotEmpty && a.label != a.package) _appLabels.putIfAbsent(a.package, () => a.label);
+      }
+    });
+  }
 
   String _formatCountdown(num? wallMs) {
     if (wallMs == null || wallMs <= 0) return '--';
@@ -721,34 +762,185 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     return _fallbackProtocols;
   }
 
-  Widget _buildBriefCard(DshColors colors) {
-    final brief = _today['brief'];
-    final cur = _runningBout;
-    final queue = _todayTasks;
-    final defaultLine = cur != null
-        ? '正在推进「${cur['title'] ?? '专注'}」${cur['strict'] == true ? '（严格锁开启）' : ''}'
-        : (queue.isNotEmpty ? '今日主线 ${queue.length} 项待推进 · 下一项「${queue.first['title'] ?? '待开局'}」' : '今日节奏由你定 · 一句话即可开启严格专注');
-    final briefLine = brief is Map && '${brief['line'] ?? ''}'.trim().isNotEmpty ? '${brief['line']}' : defaultLine;
-    final focusM = brief is Map && brief['focusMin'] is num ? (brief['focusMin'] as num).toInt() : 0;
-    final funM = brief is Map && brief['funMin'] is num ? (brief['funMin'] as num).toInt() : 0;
+  /// 今日使用情况：硬日判 + 时间账 + 时间投向合成一张卡（原来分散在三张卡里）。
+  /// 点任意位置进完整的统计页（那里有完整时间账、24h 切片、App 排行、晚间总报）。
+  Widget _buildUsageCard(DshColors colors, DailyVerdictView? verdict, TimeLedgerView? ledger) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final charts = _today['charts'] is Map ? _today['charts'] as Map : const {};
+    final buckets = charts['buckets'] is Map ? charts['buckets'] as Map : const {};
+    final brief = _today['brief'] is Map ? _today['brief'] as Map : const {};
+    int m(Object? v) => v is num ? v.round() : 0;
+    final mainlineMin = buckets['mainlineMin'] is num ? m(buckets['mainlineMin']) : m(brief['focusMin']);
+    final geminiMin = buckets['geminiMin'] is num ? m(buckets['geminiMin']) : m(_today['geminiMinutesToday']);
+    final videoMin = m(buckets['videoStudyMin']);
+    final tinkerMin = m(buckets['toolTinkerMin']);
+    final funMin = buckets['funMin'] is num ? m(buckets['funMin']) : m(brief['funMin']);
+    final segments = <(String, int, Color)>[
+      ('主线攻坚', mainlineMin, colors.success),
+      ('Gemini 沟通', geminiMin, colors.info),
+      ('视频学习', videoMin, scheme.primary),
+      ('折腾工具', tinkerMin, colors.warning),
+      ('纯娱乐', funMin, colors.danger),
+    ];
+    final total = segments.fold<int>(0, (s, e) => s + e.$2);
+    final verdictTone = verdict == null
+        ? StatusTone.idle
+        : (verdict.isDone ? StatusTone.ok : (verdict.isIdle ? StatusTone.error : StatusTone.warn));
+    final verdictColor = verdict == null
+        ? colors.textTertiary
+        : (verdict.isDone ? colors.success : (verdict.isIdle ? colors.danger : colors.warning));
+    final briefLine = brief['line'] is String ? (brief['line'] as String).trim() : '';
+    final footLine = verdict != null && verdict.line.isNotEmpty ? verdict.line : briefLine;
     final autonomy = _today['autonomy'] is Map ? _today['autonomy'] as Map : const {};
-    final autoLvl = '${autonomy['level'] ?? 'L1'}';
-    final autoName = '${autonomy['name'] ?? '契约自治'}';
-    final relaxHint = '${autonomy['autoRewardLabel'] ?? ''}';
-    final strictActive = cur != null && (cur['strict'] == true || cur['mode'] == 'strict');
+    final relaxHint = '${autonomy['autoRewardLabel'] ?? ''}'.trim();
+    final autonomyLine = autonomy.isEmpty
+        ? ''
+        : '自律 ${autonomy['level'] ?? 'L1'} ${autonomy['name'] ?? '契约自治'}${relaxHint.isNotEmpty ? ' · $relaxHint' : ''}';
 
-    return OverviewCard(
-      margin: const EdgeInsets.only(bottom: 14),
-      leading: OverviewGlyph(AppIcons.today, tint: strictActive ? 1 : 0),
-      title: const Text('Today · 今日总揽'),
-      subtitle: Text(briefLine, maxLines: 2, overflow: TextOverflow.ellipsis),
-      trailing: StatusChip(
-        tone: strictActive ? StatusTone.error : (cur != null ? StatusTone.ok : StatusTone.idle),
-        label: strictActive ? '严格锁中' : (cur != null ? '专注中' : '自律 $autoLvl'),
-      ),
-      footer: OverviewFooter(
-        tone: autonomy['unlockedRelaxation'] == true ? StatusTone.ok : StatusTone.idle,
-        text: '专注 ${focusM}m · 娱乐 ${funM}m · $autoLvl $autoName${relaxHint.isNotEmpty ? ' · $relaxHint' : ''}',
+    Widget stat(String label, String value, String detail, Color accent) => Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary)),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: AppType.tabular(theme.textTheme.titleLarge!.copyWith(fontWeight: FontWeight.w700, color: accent)),
+              ),
+              Text(
+                detail,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary, fontSize: 10.5),
+              ),
+            ],
+          ),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: GlassSurface(
+        key: const ValueKey('today-usage-card'),
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        onTap: () => unawaited(UsageAnalyticsPage.open(context, channel: _channel)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const OverviewGlyph(AppIcons.chart, tint: 2),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('今日使用情况', style: theme.textTheme.titleMedium),
+                        const SizedBox(height: 2),
+                        Text(
+                          verdict != null ? '硬日判：${verdict.tag}' : '今天还没出日判',
+                          style: theme.textTheme.bodySmall?.copyWith(color: verdictColor, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (verdict != null) StatusChip(tone: verdictTone, label: '${verdict.scoreLabel} ${verdict.cappedScore}'),
+                ],
+              ),
+              if (ledger != null) ...[
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    stat(
+                      '娱乐剩余',
+                      ledger.funOut ? '用完' : '${ledger.funLeft}m',
+                      '已用 ${ledger.funUsed}/${ledger.funQuota}m',
+                      ledger.funOut ? colors.danger : scheme.primary,
+                    ),
+                    stat(
+                      '挣来池',
+                      '${ledger.earnedNet}m',
+                      ledger.penalty > 0 ? '挣+${ledger.earned} · 扣-${ledger.penalty}' : '局+${ledger.earnedBout} · 题+${ledger.earnedBank}',
+                      colors.success,
+                    ),
+                    stat(
+                      '游戏剩余',
+                      ledger.gameOut ? '用完' : '${ledger.gameLeft}m',
+                      ledger.converted > 0 ? '已兑 ${ledger.converted * 2}m→娱乐' : '已用 ${ledger.gameUsed}/${ledger.gameQuota}m',
+                      ledger.gameOut ? colors.warning : colors.info,
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 14),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(999),
+                child: SizedBox(
+                  height: 8,
+                  child: Row(
+                    children: [
+                      for (final (_, minutes, color) in segments)
+                        if (minutes > 0) Expanded(flex: minutes, child: ColoredBox(color: color)),
+                      if (total == 0)
+                        Expanded(child: ColoredBox(color: scheme.outlineVariant.withValues(alpha: 0.4))),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (total == 0)
+                Text('今天还没记到使用时长', style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary))
+              else
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 2,
+                  children: [
+                    for (final (label, minutes, color) in segments)
+                      if (minutes > 0)
+                        Text('● $label ${minutes}m', style: theme.textTheme.bodySmall?.copyWith(color: color)),
+                  ],
+                ),
+              if (footLine.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  footLine,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                ),
+              ],
+              if (autonomyLine.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  autonomyLine,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: autonomy['unlockedRelaxation'] == true ? colors.success : colors.textTertiary,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 6),
+              Divider(height: 12, thickness: 0.5, color: scheme.outlineVariant.withValues(alpha: 0.45)),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '查看完整使用情况',
+                      style: theme.textTheme.labelLarge?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text('时间账 · 24h · App 排行 · 晚报', style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary)),
+                  const SizedBox(width: 4),
+                  Icon(AppIcons.forward, size: 16, color: colors.textTertiary),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -784,8 +976,10 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       final progress = _runningProgress(cur);
 
       return GlassSurface(
+        key: const ValueKey('today-running-hero'),
         tier: GlassTier.card,
         borderRadius: AppShape.radiusLg,
+        onTap: _openBoutDetail,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -824,19 +1018,23 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                         Text(title, style: theme.textTheme.titleMedium, maxLines: 2, overflow: TextOverflow.ellipsis),
                         const SizedBox(height: 2),
                         Text(
-                          '剩余 ${_formatCountdown(endsAt)} · 放行 ${allow.isEmpty ? '仅紧急工具' : allow.map(_labelOf).join('、')}',
+                          '${_formatCountdown(endsAt)}到点 · ${allow.isEmpty ? '只放行紧急工具' : '放行 ${allow.map(_labelOf).join('、')}'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
                         ),
                       ],
                     ),
                   ),
+                  const SizedBox(width: 4),
+                  Icon(AppIcons.forward, size: 18, color: colors.textTertiary),
                 ],
               ),
               const SizedBox(height: 12),
               Divider(height: 0.5, thickness: 0.5, color: scheme.outlineVariant.withValues(alpha: 0.45)),
               const SizedBox(height: 10),
               Text(
-                '专注可用 App 直达舱（点击直达，无需回桌面）',
+                '放行的 App · 点一下直接打开（点卡片看局详情）',
                 style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
               ),
               const SizedBox(height: 6),
@@ -1090,78 +1288,75 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     );
   }
 
-  Widget _buildTodayTasksCard(DshColors colors) {
+  List<Widget> _buildTodayTaskRows(DshColors colors) {
     final tasks = _todayTasks;
     final totalCount = (_today['allQueueCount'] as num?)?.toInt() ?? _fullQueue.length;
-
-    return ListPageCard(
-      title: '今日主线清单（${tasks.length}/3）',
-      children: [
+    return [
+      if (tasks.isEmpty)
+        const ListPageRow(
+          icon: AppIcons.queued,
+          title: '主线清单空着',
+          subtitle: '点下面添加，或在「此刻焦距」填一句话直接开干',
+        )
+      else
+        for (var i = 0; i < tasks.length; i++)
+          Builder(builder: (_) {
+            final item = tasks[i];
+            final id = '${item['id'] ?? ''}';
+            final title = '${item['title'] ?? item['protocolId'] ?? '待推进'}';
+            final budget = item['budget'] ?? item['minutes'] ?? 45;
+            return ListPageRow(
+              icon: AppIcons.queued,
+              title: title,
+              subtitle: '$budget 分钟 · ${item['protocolId'] ?? 'execute'}',
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '立刻开干',
+                    icon: const Icon(AppIcons.play),
+                    onPressed: _busy
+                        ? null
+                        : () => unawaited(_sendBoutCommand({
+                              'action': 'open',
+                              if (id.isNotEmpty) 'id': id,
+                              'protocolId': item['protocolId'] ?? 'execute',
+                              'title': title,
+                              'strict': _strictMode,
+                            })),
+                  ),
+                  IconButton(
+                    tooltip: '移除',
+                    icon: const Icon(AppIcons.delete),
+                    onPressed: _busy
+                        ? null
+                        : () async {
+                            await _channel.todayTask(action: 'remove', id: id.isEmpty ? null : id, index: i, title: title);
+                            await _refresh(silent: true);
+                          },
+                  ),
+                ],
+              ),
+            );
+          }),
+      ListPageRow(
+        icon: AppIcons.add,
+        iconColor: colors.info,
+        title: '添加一条今日主线',
+        subtitle: '继承当前白名单与默认验收标准，也可让鱼丸/鲸澜代加',
+        onTap: _busy ? null : () => unawaited(_addQuickTask()),
+      ),
+      if (totalCount > 3)
         ListPageRow(
-          icon: AppIcons.add,
-          iconColor: colors.info,
-          title: '添加一条今日主线任务',
-          subtitle: '继承当前白名单与默认验收标准，也可让鱼丸/鲸澜在对话里代加',
-          onTap: _busy ? null : () => unawaited(_addQuickTask()),
+          icon: AppIcons.allFeatures,
+          title: '查看全部排队任务（共 $totalCount 项）',
+          onTap: () => unawaited(_openSystemDetails(initialTab: _DetailTab.queue)),
         ),
-        if (tasks.isEmpty)
-          const ListPageRow(
-            icon: AppIcons.queued,
-            title: '主线清单空着',
-            subtitle: '可直接点上方添加，或在「此刻焦距」填一句话直接开干',
-          )
-        else
-          for (var i = 0; i < tasks.length; i++)
-            Builder(builder: (_) {
-              final item = tasks[i];
-              final id = '${item['id'] ?? ''}';
-              final title = '${item['title'] ?? item['protocolId'] ?? '待推进'}';
-              final budget = item['budget'] ?? item['minutes'] ?? 45;
-              return ListPageRow(
-                icon: AppIcons.queued,
-                title: title,
-                subtitle: '$budget 分钟 · ${item['protocolId'] ?? 'execute'}',
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: '立刻开干',
-                      icon: const Icon(AppIcons.play),
-                      onPressed: _busy
-                          ? null
-                          : () => unawaited(_sendBoutCommand({
-                                'action': 'open',
-                                if (id.isNotEmpty) 'id': id,
-                                'protocolId': item['protocolId'] ?? 'execute',
-                                'title': title,
-                                'strict': _strictMode,
-                              })),
-                    ),
-                    IconButton(
-                      tooltip: '移除',
-                      icon: const Icon(AppIcons.delete),
-                      onPressed: _busy
-                          ? null
-                          : () async {
-                              await _channel.todayTask(action: 'remove', id: id.isEmpty ? null : id, index: i, title: title);
-                              await _refresh(silent: true);
-                            },
-                    ),
-                  ],
-                ),
-              );
-            }),
-        if (totalCount > 3)
-          ListPageRow(
-            icon: AppIcons.allFeatures,
-            title: '查看全部排队任务（共 $totalCount 项）',
-            onTap: () => unawaited(_openSystemDetails(initialTab: _DetailTab.queue)),
-          ),
-      ],
-    );
+    ];
   }
 
-  Widget _buildHorizonsAndChartsSection(DshColors colors) {
+  /// 主线：今日 / 中期 / 长期三层放在一张卡里，一个切换条；底部一行进完整的战略主线页。
+  Widget _buildMainlineCard(DshColors colors) {
     final theme = Theme.of(context);
     final horizons = _today['horizons'] is Map ? _today['horizons'] as Map : const {};
     final medList = horizons['medium'] is List
@@ -1170,338 +1365,341 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     final longList = horizons['long'] is List
         ? [for (final x in horizons['long'] as List) if (x is Map) Map<String, dynamic>.from(x)]
         : const <Map<String, dynamic>>[];
-
-    final charts = _today['charts'] is Map ? _today['charts'] as Map : const {};
-    final buckets = charts['buckets'] is Map ? charts['buckets'] as Map : const {};
-    final mainlineMin = (buckets['mainlineMin'] as num?)?.toInt() ?? 0;
-    final videoMin = (buckets['videoStudyMin'] as num?)?.toInt() ?? 0;
-    final geminiMin = (buckets['geminiMin'] as num?)?.toInt() ?? (_today['geminiMinutesToday'] as num?)?.toInt() ?? 0;
-    final tinkerMin = (buckets['toolTinkerMin'] as num?)?.toInt() ?? 0;
-    final funMin = (buckets['funMin'] as num?)?.toInt() ?? 0;
-    final tinkerWarn = buckets['tinkerWarning'] == true;
-    final sumMin = (mainlineMin + videoMin + geminiMin + tinkerMin + funMin).clamp(1, 100000);
-
-    final topApps = charts['topApps'] is List
-        ? [for (final x in charts['topApps'] as List) if (x is Map) Map<String, dynamic>.from(x)]
-        : const <Map<String, dynamic>>[];
-    final completed = charts['completedItems'] is List
-        ? [for (final x in charts['completedItems'] as List) if (x is Map) Map<String, dynamic>.from(x)]
-        : const <Map<String, dynamic>>[];
-    final trend = charts['sevenDayTrend'] is List
-        ? [for (final x in charts['sevenDayTrend'] as List) if (x is Map) Map<String, dynamic>.from(x)]
-        : const <Map<String, dynamic>>[];
-
     final activeList = _horizonTab == _HorizonTab.long ? longList : medList;
+    final horizonKey = _horizonTab == _HorizonTab.long ? 'long' : 'medium';
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ListPageCard(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       children: [
-        // 1. 自由三层主线切换（今日 / 中期阶段 / 长期主航道）
-        GlassSurface(
-          tier: GlassTier.card,
-          borderRadius: AppShape.radiusLg,
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(
+            children: [
+              const OverviewGlyph(AppIcons.planMode, tint: 4),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        '三层主线脉络（自由周期 · 一键拆入今日）',
-                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                      ),
+                    Text('主线', style: theme.textTheme.titleMedium),
+                    const SizedBox(height: 2),
+                    Text(
+                      '今日 ${_todayTasks.length}/3 · 中期 ${medList.length} · 长期 ${longList.length}',
+                      style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                GlassSurface(
-                  tier: GlassTier.pill,
-                  borderRadius: AppShape.radiusMd,
-                  onTap: () => unawaited(StrategyHorizonsPage.open(context, channel: _channel)),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                    child: Row(
-                      children: [
-                        Icon(AppIcons.planMode, size: 16, color: theme.colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '🧭 三层战略主线（长期北极星 · 中期战役）▸',
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: theme.colorScheme.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          '${longList.length}长 · ${medList.length}中',
-                          style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SegmentedPill<_HorizonTab>(
-                  segments: const [
-                    PillSegment(_HorizonTab.today, '今日作战'),
-                    PillSegment(_HorizonTab.medium, '中期战役'),
-                    PillSegment(_HorizonTab.long, '长期主航道'),
-                  ],
-                  selected: _horizonTab,
-                  onChanged: (next) => setState(() => _horizonTab = next),
-                ),
-                if (_horizonTab == _HorizonTab.today) ...[
-                  const SizedBox(height: 10),
-                  _buildTodayTasksCard(colors),
-                ] else ...[
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _horizonCtrl,
-                          decoration: InputDecoration(
-                            hintText: _horizonTab == _HorizonTab.long ? '新增长期方向（如：拿下省考上岸 / 目标就业岗）' : '新增阶段战役（如：资料分析 200 题通关）',
-                            border: const OutlineInputBorder(),
-                            isDense: true,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      FilledButton.tonal(
-                        onPressed: _busy
-                            ? null
-                            : () async {
-                                final t = _horizonCtrl.text.trim();
-                                if (t.isEmpty) return;
-                                _horizonCtrl.clear();
-                                await _channel.horizonsOp({
-                                  'action': 'upsert',
-                                  'horizon': _horizonTab == _HorizonTab.long ? 'long' : 'medium',
-                                  'title': t,
-                                });
-                                await _refresh(silent: true);
-                              },
-                        child: const Text('新增'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  if (activeList.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      child: Text(
-                        _horizonTab == _HorizonTab.long ? '暂无长期方向 · 一句话写下终局目标，防止在工具里空转。' : '暂无中期战役 · 建一个 3~14 天硬项目，再往下拆入今日。',
-                        style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
-                      ),
-                    )
-                  else
-                    for (final item in activeList)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: GlassSurface(
-                          tier: GlassTier.pill,
-                          borderRadius: AppShape.radiusMd,
-                          child: ListTile(
-                            dense: true,
-                            title: Text('${item['title']}', style: theme.textTheme.titleSmall),
-                            subtitle: Text('${item['spanHint'] ?? ''} · 进度 ${item['doneSteps'] ?? 0}/${item['targetSteps'] ?? 5}'),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  tooltip: '进度 +1',
-                                  icon: const Icon(AppIcons.success, size: 18),
-                                  onPressed: () async {
-                                    await _channel.horizonsOp({
-                                      'action': 'upsert',
-                                      'horizon': _horizonTab == _HorizonTab.long ? 'long' : 'medium',
-                                      'id': item['id'],
-                                      'bumpStep': true,
-                                    });
-                                    await _refresh(silent: true);
-                                  },
-                                ),
-                                TextButton(
-                                  onPressed: () async {
-                                    await _channel.horizonsOp({'action': 'push_to_today', 'id': item['id']});
-                                    await _refresh(silent: true);
-                                    if (mounted) setState(() => _banner = '已将「${item['title']}」推入今日主线队列');
-                                  },
-                                  child: const Text('推入今日'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                ],
-              ],
-            ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 14),
-
-        // 2. 今日时间投向图表 & 近 7 日主线趋势 & 实绩总览表
-        GlassSurface(
-          tier: GlassTier.card,
-          borderRadius: AppShape.radiusLg,
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: SegmentedPill<_HorizonTab>(
+            height: 34,
+            segments: const [
+              PillSegment(_HorizonTab.today, '今日'),
+              PillSegment(_HorizonTab.medium, '中期战役'),
+              PillSegment(_HorizonTab.long, '长期方向'),
+            ],
+            selected: _horizonTab,
+            onChanged: (next) => setState(() => _horizonTab = next),
+          ),
+        ),
+        if (_horizonTab == _HorizonTab.today)
+          ..._buildTodayTaskRows(colors)
+        else ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Expanded(child: Text('今日到底干了什么 · 投入与实绩总览', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700))),
-                    if (tinkerWarn) const StatusChip(tone: StatusTone.warn, label: '折腾工具偏高'),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                GlassSurface(
-                  tier: GlassTier.pill,
-                  borderRadius: AppShape.radiusMd,
-                  onTap: () => unawaited(UsageAnalyticsPage.open(context, channel: _channel)),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    child: Row(
-                      children: [
-                        Icon(AppIcons.chart, size: 16, color: theme.colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '📊 全屏统计与晚间报告 ▸',
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: theme.colorScheme.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          '90天 · 24h轴 · Gemini',
-                          style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
-                        ),
-                      ],
+                Expanded(
+                  child: TextField(
+                    controller: _horizonCtrl,
+                    decoration: InputDecoration(
+                      hintText: _horizonTab == _HorizonTab.long ? '新增长期方向（如：拿下省考上岸）' : '新增阶段战役（如：资料分析 200 题通关）',
+                      isDense: true,
                     ),
                   ),
                 ),
-                const SizedBox(height: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: SizedBox(
-                    height: 10,
-                    child: Row(
-                      children: [
-                        if (mainlineMin > 0) Expanded(flex: mainlineMin, child: Container(color: colors.success)),
-                        if (geminiMin > 0) Expanded(flex: geminiMin, child: Container(color: colors.info)),
-                        if (videoMin > 0) Expanded(flex: videoMin, child: Container(color: theme.colorScheme.primary)),
-                        if (tinkerMin > 0) Expanded(flex: tinkerMin, child: Container(color: colors.warning)),
-                        if (funMin > 0) Expanded(flex: funMin, child: Container(color: colors.danger)),
-                        if (mainlineMin + geminiMin + videoMin + tinkerMin + funMin == 0)
-                          Expanded(flex: 1, child: Container(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4))),
-                      ],
-                    ),
-                  ),
+                const SizedBox(width: 8),
+                FilledButton.tonal(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          final t = _horizonCtrl.text.trim();
+                          if (t.isEmpty) return;
+                          _horizonCtrl.clear();
+                          await _channel.horizonsOp({'action': 'upsert', 'horizon': horizonKey, 'title': t});
+                          await _refresh(silent: true);
+                        },
+                  child: const Text('新增'),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 4,
-                  children: [
-                    Text('● 主线攻坚 ${mainlineMin}m', style: theme.textTheme.bodySmall?.copyWith(color: colors.success)),
-                    Text('● Gemini 沟通 ${geminiMin}m', style: theme.textTheme.bodySmall?.copyWith(color: colors.info)),
-                    Text('● 视频学习 ${videoMin}m', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary)),
-                    Text('● 折腾工具 ${tinkerMin}m', style: theme.textTheme.bodySmall?.copyWith(color: colors.warning)),
-                    Text('● 纯娱乐 ${funMin}m（占比 ${((funMin * 100) / sumMin).round()}%）', style: theme.textTheme.bodySmall?.copyWith(color: colors.danger)),
-                  ],
-                ),
-                if (trend.isNotEmpty || completed.isNotEmpty || topApps.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                      onPressed: () => setState(() => _chartsExpanded = !_chartsExpanded),
-                      icon: Icon(_chartsExpanded ? AppIcons.collapse : AppIcons.expand, size: 16),
-                      label: Text(_chartsExpanded ? '收起详细图表与排行' : '展开明细（7日趋势 · 战果 ${completed.length} · App排行）'),
-                    ),
-                  ),
-                ],
-                if (_chartsExpanded && trend.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Text('近 7 日有效主线专注趋势', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
-                  const SizedBox(height: 6),
-                  SizedBox(
-                    height: 64,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        for (final dayItem in trend)
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 3),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  Container(
-                                    height: ((((dayItem['focusMinutes'] as num?)?.toDouble() ?? 0) / 180.0).clamp(0.1, 1.0)) * 38,
-                                    decoration: BoxDecoration(
-                                      color: ((dayItem['deviations'] as num?)?.toInt() ?? 0) > 1 ? colors.warning : theme.colorScheme.primary.withValues(alpha: 0.8),
-                                      borderRadius: BorderRadius.circular(5),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text('${dayItem['day'] ?? ''}', style: const TextStyle(fontSize: 10)),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-                if (_chartsExpanded && completed.isNotEmpty) ...[
-                  const Divider(height: 18),
-                  Text('今日已完结战果 (${completed.length})', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
-                  const SizedBox(height: 4),
-                  for (final row in completed.take(4))
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Row(
-                        children: [
-                          Icon(row['passed'] == true ? AppIcons.success : AppIcons.warning, size: 14, color: row['passed'] == true ? colors.success : colors.warning),
-                          const SizedBox(width: 6),
-                          Expanded(child: Text('${row['title']}', maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodySmall)),
-                          if (((row['minutes'] as num?)?.toInt() ?? 0) > 0)
-                            Text('${row['minutes']}m', style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary)),
-                        ],
-                      ),
-                    ),
-                ],
-                if (_chartsExpanded && topApps.isNotEmpty) ...[
-                  const Divider(height: 18),
-                  Text('今日 App 用时排行', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
-                  const SizedBox(height: 4),
-                  for (final app in topApps.take(4))
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Row(
-                        children: [
-                          Expanded(child: Text('${app['label'] ?? app['app']}', maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodySmall)),
-                          Text('${app['minutes']} 分钟', style: theme.textTheme.bodySmall?.copyWith(color: app['fun'] == true ? colors.danger : colors.textTertiary)),
-                        ],
-                      ),
-                    ),
-                ],
               ],
             ),
           ),
+          if (activeList.isEmpty)
+            ListPageRow(
+              icon: _horizonTab == _HorizonTab.long ? AppIcons.planMode : AppIcons.queued,
+              title: _horizonTab == _HorizonTab.long ? '还没有长期方向' : '还没有中期战役',
+              subtitle: _horizonTab == _HorizonTab.long ? '一句话写下终局目标，防止在工具里空转' : '建一个 3~14 天的硬项目，再拆进今日',
+              subtitleMaxLines: 2,
+            )
+          else
+            for (final item in activeList)
+              ListPageRow(
+                icon: AppIcons.planMode,
+                title: '${item['title']}',
+                subtitle: '${item['spanHint'] ?? ''} · 进度 ${item['doneSteps'] ?? 0}/${item['targetSteps'] ?? 5}',
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: '进度 +1',
+                      icon: const Icon(AppIcons.success, size: 18),
+                      onPressed: () async {
+                        await _channel.horizonsOp({'action': 'upsert', 'horizon': horizonKey, 'id': item['id'], 'bumpStep': true});
+                        await _refresh(silent: true);
+                      },
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        await _channel.horizonsOp({'action': 'push_to_today', 'id': item['id']});
+                        await _refresh(silent: true);
+                        if (mounted) setState(() => _banner = '已将「${item['title']}」推入今日主线队列');
+                      },
+                      child: const Text('推入今日'),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+        ListPageRow(
+          icon: AppIcons.planMode,
+          iconColor: theme.colorScheme.primary,
+          title: '三层战略主线',
+          subtitle: '长期北极星 · 中期战役 · 截止日',
+          value: '${longList.length} 长 · ${medList.length} 中',
+          chevron: true,
+          onTap: () => unawaited(StrategyHorizonsPage.open(context, channel: _channel)),
         ),
       ],
     );
+  }
+
+  /// 局详情：从「此刻焦距」点进来的完整页。和局页共用同一份状态（[_tick] 每次刷新都会重建它），
+  /// 所以这里的按钮和局页上的是同一套动作，不会两边不一致。
+  void _openBoutDetail() {
+    unawaited(Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ValueListenableBuilder<int>(
+          valueListenable: _tick,
+          builder: (ctx, _, _) => AppPage.list(
+            key: const ValueKey('bout-detail-page'),
+            title: '局详情',
+            subtitle: const Text('这一局的时间、放行、交付和操作'),
+            actions: [
+              GlassIconButton(
+                tooltip: '刷新状态',
+                icon: AppIcons.refresh,
+                onPressed: () => unawaited(_refresh(silent: true)),
+              ),
+            ],
+            children: _buildBoutDetailChildren(ctx),
+          ),
+        ),
+      ),
+    ));
+  }
+
+  String _clockOf(num? ms) {
+    if (ms == null || ms <= 0) return '--';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms.toInt());
+    return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  }
+
+  List<Widget> _buildBoutDetailChildren(BuildContext ctx) {
+    final theme = Theme.of(ctx);
+    final colors = DshColors.of(ctx);
+    final cur = _runningBout;
+    if (cur == null) {
+      return [
+        const OverviewCard(
+          leading: OverviewGlyph(AppIcons.done, tint: 1),
+          title: Text('这一局已经结束'),
+          subtitle: Text('回到「局」页可以开下一局；验收结果在「今日使用情况」里。'),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: FilledButton(
+            style: FilledButton.styleFrom(shape: AppShape.card, minimumSize: const Size.fromHeight(44)),
+            onPressed: () => Navigator.of(ctx).maybePop(),
+            child: const Text('返回局页'),
+          ),
+        ),
+      ];
+    }
+    final title = '${cur['title'] ?? cur['task'] ?? cur['protocol'] ?? '专注进行中'}';
+    final strict = cur['strict'] == true || cur['mode'] == 'strict';
+    final endsAt = cur['until'] as num? ?? cur['endsAt'] as num?;
+    final startedAt = cur['startedAt'] as num? ?? cur['at'] as num?;
+    final protocol = '${cur['protocolId'] ?? cur['protocol'] ?? ''}'.trim();
+    final deliverable = '${cur['deliverable'] ?? cur['goal'] ?? cur['accept'] ?? ''}'.trim();
+    final appsRaw = cur['allow'] ?? (cur['apps'] is Map ? (cur['apps'] as Map)['allow'] : null);
+    final allow = appsRaw is List ? [for (final a in appsRaw) '$a'] : const <String>[];
+    final ringColor = strict ? colors.danger : theme.colorScheme.primary;
+    final leftMin = endsAt == null
+        ? null
+        : ((endsAt.toInt() - DateTime.now().millisecondsSinceEpoch) / 60000).ceil().clamp(0, 24 * 60);
+    final bigText = leftMin == null ? '--' : (leftMin < 60 ? '$leftMin' : '${leftMin ~/ 60}:${(leftMin % 60).toString().padLeft(2, '0')}');
+    final bigUnit = leftMin == null ? '没有设到点时间' : (leftMin == 0 ? '到点了' : (leftMin < 60 ? '分钟后到点' : '小时后到点'));
+
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: GlassSurface(
+          key: const ValueKey('bout-detail-hero'),
+          tier: GlassTier.card,
+          borderRadius: AppShape.radiusLg,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 18),
+            child: Column(
+              children: [
+                ProgressHalo(
+                  value: _runningProgress(cur),
+                  size: 148,
+                  strokeWidth: 8,
+                  color: ringColor,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        bigText,
+                        style: AppType.tabular(theme.textTheme.displaySmall!.copyWith(fontWeight: FontWeight.w700, color: ringColor)),
+                      ),
+                      Text(bigUnit, style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(title, textAlign: TextAlign.center, style: theme.textTheme.titleLarge, maxLines: 2, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 8),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    StatusChip(tone: strict ? StatusTone.error : StatusTone.ok, label: strict ? '严格锁' : '温和局'),
+                    StatusChip(
+                      tone: StatusTone.idle,
+                      label: startedAt != null && startedAt > 0 ? '${_clockOf(startedAt)} → ${_clockOf(endsAt)}' : '到 ${_clockOf(endsAt)}',
+                    ),
+                    if (protocol.isNotEmpty) StatusChip(tone: StatusTone.idle, label: protocol),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      ListPageCard(
+        title: '这一局',
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          ListPageRow(
+            icon: AppIcons.done,
+            title: '要交付什么',
+            subtitle: deliverable.isNotEmpty ? deliverable : title,
+            subtitleMaxLines: 3,
+          ),
+          ListPageRow(
+            icon: strict ? AppIcons.lock : AppIcons.unlock,
+            iconColor: strict ? colors.danger : colors.success,
+            title: strict ? '严格锁' : '温和局',
+            subtitle: strict ? '不在放行名单里的 App 一打开就拦' : '只提醒，不拦',
+          ),
+          if (startedAt != null && startedAt > 0) ListPageRow(icon: AppIcons.time, title: '开始', value: _clockOf(startedAt)),
+          ListPageRow(icon: AppIcons.time, title: '到点', value: _clockOf(endsAt), subtitle: _formatCountdown(endsAt)),
+        ],
+      ),
+      ListPageCard(
+        title: '放行的 App（点一下直接打开）',
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          if (allow.isEmpty)
+            const ListPageRow(icon: AppIcons.lock, title: '只放行紧急工具')
+          else
+            for (final pkg in allow)
+              ListPageRow(
+                icon: AppIcons.play,
+                iconColor: theme.colorScheme.primary,
+                title: _labelOf(pkg),
+                chevron: true,
+                onTap: () => unawaited(_channel.launchApp(pkg)),
+              ),
+          ListPageRow(
+            key: const ValueKey('bout-detail-allow'),
+            icon: AppIcons.add,
+            iconColor: colors.info,
+            title: '调整白名单',
+            onTap: _busy ? null : () => unawaited(_pickRunningAllowApps(allow)),
+          ),
+        ],
+      ),
+      ListPageCard(
+        title: '操作',
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          ListPageRow(
+            icon: AppIcons.voice,
+            title: '语音 / Gemini',
+            subtitle: '连麦推进这一局',
+            chevron: true,
+            onTap: () => Navigator.of(ctx).push(MaterialPageRoute<void>(builder: (_) => const BoutVoicePage())),
+          ),
+          ListPageRow(
+            icon: strict ? AppIcons.unlock : AppIcons.lock,
+            title: strict ? '切成温和局' : '升级为严格锁',
+            onTap: _busy
+                ? null
+                : () => unawaited(_sendBoutCommand(
+                      {'action': strict ? 'relax' : 'strict'},
+                      toast: strict ? '已切为温和守护' : '已升级为严格锁模式',
+                    )),
+          ),
+          ListPageRow(
+            icon: AppIcons.warning,
+            iconColor: colors.warning,
+            title: '紧急暂停 10 分钟',
+            subtitle: '挂起严格锁，记一次紧急解除',
+            onTap: _busy
+                ? null
+                : () async {
+                    await _channel.emergencySuspendStrict(minutes: 10);
+                    await _refresh(silent: true);
+                    if (mounted) setState(() => _banner = '已紧急挂起严格锁 10 分钟，可安心调整设置或切换应用');
+                  },
+          ),
+          ListPageRow(
+            icon: AppIcons.allFeatures,
+            title: '时钟与队列',
+            chevron: true,
+            onTap: () => unawaited(_openSystemDetails()),
+          ),
+        ],
+      ),
+      ?_buildActiveContractCard(colors),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        child: FilledButton.icon(
+          key: const ValueKey('bout-detail-close'),
+          style: FilledButton.styleFrom(shape: AppShape.card, minimumSize: const Size.fromHeight(48)),
+          onPressed: _busy ? null : () => unawaited(_sendBoutCommand({'action': 'close'}, toast: '已发起收工验收')),
+          icon: const Icon(AppIcons.done, size: 18),
+          label: const Text('收工验收'),
+        ),
+      ),
+    ];
   }
 
   Widget? _buildActiveContractCard(DshColors colors) {
@@ -1524,7 +1722,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
         : (grace != null ? '缓冲剩 ${grace['remainSec']}s' : '契约护航中');
 
     return Padding(
-      padding: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       child: GlassSurface(
         tier: GlassTier.card,
         borderRadius: AppShape.radiusLg,
@@ -1582,7 +1780,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     return TileGrid(
       columns: 2,
       spacing: 12,
-      padding: EdgeInsets.zero,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       children: [
         FeatureCard(
           key: const ValueKey('today-capsule-plan-modality'),
@@ -1720,32 +1918,28 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       scoreLabelRaw: _today['scoreLabel'],
     );
 
+    Widget inset(Widget child, {double bottom = 0}) =>
+        Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, bottom), child: child);
+
     final sections = <Widget>[
-      ?bannerWidget,
-      TaskCardPanel(channel: _channel),
+      if (bannerWidget != null) inset(bannerWidget),
+      inset(TaskCardPanel(channel: _channel)),
       if (_loading)
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 40),
           child: Center(child: CircularProgressIndicator()),
         )
       else ...[
-        if (verdict != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: HardVerdictCard(verdict: verdict),
-          ),
-        _buildBriefCard(colors),
-        if (timeLedger != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: TimeLedgerSummaryCard(ledger: timeLedger),
-          ),
-        _buildFocusHeroCard(colors),
+        inset(_buildFocusHeroCard(colors), bottom: 16),
         ?_buildActiveContractCard(colors),
-        const SizedBox(height: 16),
-        _buildHorizonsAndChartsSection(colors),
-        const SizedBox(height: 16),
+        _buildUsageCard(colors, verdict, timeLedger),
+        _buildMainlineCard(colors),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 4, 24, 8),
+          child: Semantics(header: true, child: Text('工具与后台', style: groupTitleStyle(context))),
+        ),
         _buildActionCapsules(colors),
+        const SizedBox(height: 16),
       ],
     ];
 
@@ -1773,7 +1967,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                                 Text('Today · 今日总揽', style: theme.textTheme.headlineMedium),
                                 const SizedBox(height: 2),
                                 Text(
-                                  'Mist Glass 主控台 · 一句话聚焦、白名单与日常主线',
+                                  '一句话开局 · 使用情况 · 主线',
                                   style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
                                 ),
                               ],
@@ -1785,7 +1979,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     ),
                   ),
                   SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+                    padding: const EdgeInsets.fromLTRB(0, 4, 0, 28),
                     sliver: SliverList.list(children: sections),
                   ),
                 ],
@@ -1798,7 +1992,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
 
     return AppPage.list(
       title: 'Today · 今日总揽',
-      subtitle: const Text('一句开启严格专注，收拢主线、六骰干预与后台总控'),
+      subtitle: const Text('一句话开局 · 使用情况 · 主线'),
       actions: headerActions,
       children: sections,
     );

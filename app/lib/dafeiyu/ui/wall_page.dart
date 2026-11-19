@@ -77,8 +77,7 @@ class _WallPageState extends State<WallPage> {
         GlassIconButton(icon: AppIcons.refresh, tooltip: DafeiyuStrings.fromL10n(l).wallRefresh, onPressed: () => unawaited(_refresh())),
       ],
       children: [
-        _statusBar(l),
-        const SizedBox(height: 12),
+        _statusHero(l),
         if (_loading)
           const ListPageCard(children: [ListPageRow(icon: AppIcons.loading, title: '正在读墙的记录…')])
         else if (_failed)
@@ -93,56 +92,45 @@ class _WallPageState extends State<WallPage> {
           )
         else if (_thread == null || _thread!.isEmpty)
           ListPageCard(
+            title: '审查记录',
             children: [
               ListPageRow(icon: AppIcons.info, title: DafeiyuStrings.fromL10n(l).wallThreadEmpty, titleMaxLines: 3),
             ],
           )
         else
           ListPageCard(
-            title: DafeiyuStrings.fromL10n(l).wallTitle,
+            title: '审查记录 · ${_thread!.bubbles.length} 条（点判定可申诉）',
             children: [for (final b in _thread!.bubbles) _bubble(l, b)],
           ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 20),
         _actions(l),
-        const SizedBox(height: 12),
-        GlassSurface(
-          tier: GlassTier.card,
-          borderRadius: AppShape.radiusLg,
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                const Icon(AppIcons.planMode, size: 20),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('想交视频提炼 / 触发高强度问答验收？', style: TextStyle(fontWeight: FontWeight.w600)),
-                      SizedBox(height: 2),
-                      Text('在 AI 计划模态中可直接提交总结、触发防骗与主线检查点。', style: TextStyle(fontSize: 12)),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.tonal(
-                  onPressed: () => unawaited(PlanModalityPage.open(context, channel: _channel)),
-                  child: const Text('计划模态'),
-                ),
-              ],
+        const SizedBox(height: 20),
+        ListPageCard(
+          title: '验收',
+          children: [
+            ListPageRow(
+              icon: AppIcons.planMode,
+              title: '交视频提炼 / 高强度问答验收',
+              subtitle: '在 AI 计划模态里提交总结、触发主线检查点',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => unawaited(PlanModalityPage.open(context, channel: _channel)),
             ),
-          ),
+          ],
         ),
+        const SizedBox(height: 24),
       ],
     );
   }
 
-  /// 顶部状态条：此刻主状态、娱乐锁没锁、锁到几点、原因，以及信用/自律等级胶囊。
-  Widget _statusBar(L10n l) {
+  /// 顶部状态：锁没锁（大字）、锁到几点、原因；下面一排今天的判定数和申诉额度。
+  Widget _statusHero(L10n l) {
     final s = _status;
     final colors = DshColors.of(context);
+    final theme = Theme.of(context);
     if (s == null) {
       return ListPageCard(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
         children: [
           ListPageRow(icon: AppIcons.warning, title: DafeiyuStrings.fromL10n(l).wallStatusUnknown, titleMaxLines: 2),
         ],
@@ -153,94 +141,136 @@ class _WallPageState extends State<WallPage> {
     final why = s['why'] is String ? s['why'] as String : '';
     final missing = s['depositMissing'] is String ? s['depositMissing'] as String : '';
     final relaxRem = s['relaxRemaining'] is num ? (s['relaxRemaining'] as num).toInt() : null;
-    return GlassSurface(
-      tier: GlassTier.card,
-      borderRadius: AppShape.radiusLg,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ListPageRow(
-            icon: locked ? AppIcons.lock : AppIcons.unlock,
-            iconColor: locked ? colors.warning : colors.success,
-            title: locked ? DafeiyuStrings.fromL10n(l).wallStatusLocked : DafeiyuStrings.fromL10n(l).wallStatusOpen,
-            value: locked && until > 0 ? DafeiyuStrings.fromL10n(l).wallStatusUntil.replaceAll('{time}', _hhmm(until)) : null,
-            subtitle: why.isEmpty ? null : DafeiyuStrings.fromL10n(l).wallStatusWhy.replaceAll('{why}', why),
-            subtitleMaxLines: 3,
+    final tone = locked ? colors.warning : colors.success;
+    final t = _thread;
+    final verdicts = (t?.bubbles ?? const <WallBubble>[]).where((b) => !b.isSubmit && !b.isRule).toList();
+    final passN = verdicts.where((b) => b.pass == true).length;
+
+    Widget stat(String label, String value, Color color) => Expanded(
+          child: Column(
+            children: [
+              Text(value, style: AppType.tabular(theme.textTheme.titleLarge!.copyWith(fontWeight: FontWeight.w700, color: color))),
+              const SizedBox(height: 2),
+              Text(label, style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary)),
+            ],
           ),
-          if (missing.isNotEmpty || relaxRem != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 6,
+        );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      child: GlassSurface(
+        key: const ValueKey('wall-status-hero'),
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
                 children: [
+                  DecoratedBox(
+                    decoration: ShapeDecoration(color: tone.withValues(alpha: 0.14), shape: const CircleBorder()),
+                    child: SizedBox(
+                      width: 52,
+                      height: 52,
+                      child: Icon(locked ? AppIcons.lock : AppIcons.unlock, size: 26, color: tone),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          locked ? DafeiyuStrings.fromL10n(l).wallStatusLocked : DafeiyuStrings.fromL10n(l).wallStatusOpen,
+                          style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700, color: tone),
+                        ),
+                        if (locked && until > 0)
+                          Text(
+                            DafeiyuStrings.fromL10n(l).wallStatusUntil.replaceAll('{time}', _hhmm(until)),
+                            style: AppType.tabular(theme.textTheme.titleSmall!.copyWith(color: theme.colorScheme.onSurface)),
+                          ),
+                      ],
+                    ),
+                  ),
                   StatusChip(
                     tone: locked ? StatusTone.warn : StatusTone.ok,
                     label: locked ? '门禁拦截中' : '门禁已放行',
                   ),
-                  if (relaxRem != null)
-                    StatusChip(tone: StatusTone.idle, label: '本周余放松额度 $relaxRem 天'),
-                  if (missing.isNotEmpty)
-                    StatusChip(tone: StatusTone.warn, label: '待补：$missing'),
                 ],
               ),
-            ),
-        ],
+              if (why.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  DafeiyuStrings.fromL10n(l).wallStatusWhy.replaceAll('{why}', why),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ],
+              if (missing.isNotEmpty || relaxRem != null) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    if (missing.isNotEmpty) StatusChip(tone: StatusTone.warn, label: '待补：$missing'),
+                    if (relaxRem != null) StatusChip(tone: StatusTone.idle, label: '本周余放松额度 $relaxRem 天'),
+                  ],
+                ),
+              ],
+              if (t != null) ...[
+                const SizedBox(height: 14),
+                Divider(height: 1, thickness: 0.5, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.45)),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    stat('判定', '${verdicts.length}', theme.colorScheme.onSurface),
+                    stat('通过', '$passN', colors.success),
+                    stat('没过', '${verdicts.length - passN}', colors.warning),
+                    stat('余申诉', '${t.appealLeft}', colors.info),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  /// 一条气泡：保留完整文本不被 3-4 行硬截断，使用软边框拉开视觉层级。
+  /// 一条记录：一行一条，完整原话，不截断；判定按过/没过上色，点判定发起申诉。
   Widget _bubble(L10n l, WallBubble b) {
     final colors = DshColors.of(context);
     if (b.isSubmit) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: GlassSurface(
-          tier: GlassTier.pill,
-          borderRadius: AppShape.radiusMd,
-          child: ListPageRow(
-            icon: AppIcons.edit,
-            title: '${DafeiyuStrings.fromL10n(l).wallBubbleSubmit} · ${b.who}',
-            subtitle: b.text,
-            subtitleMaxLines: 20,
-            value: _hhmm(b.at),
-          ),
-        ),
+      return ListPageRow(
+        icon: AppIcons.edit,
+        iconColor: colors.info,
+        title: '${DafeiyuStrings.fromL10n(l).wallBubbleSubmit} · ${b.who}',
+        subtitle: b.text,
+        subtitleMaxLines: 20,
+        value: _hhmm(b.at),
       );
     }
     if (b.isRule) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: GlassSurface(
-          tier: GlassTier.pill,
-          borderRadius: AppShape.radiusMd,
-          child: ListPageRow(
-            icon: AppIcons.verified,
-            title: '${DafeiyuStrings.fromL10n(l).wallBubbleRule} · ${b.who}',
-            subtitle: b.text,
-            subtitleMaxLines: 20,
-            value: _hhmm(b.at),
-          ),
-        ),
+      return ListPageRow(
+        icon: AppIcons.verified,
+        iconColor: Theme.of(context).colorScheme.primary,
+        title: '${DafeiyuStrings.fromL10n(l).wallBubbleRule} · ${b.who}',
+        subtitle: b.text,
+        subtitleMaxLines: 20,
+        value: _hhmm(b.at),
       );
     }
-    // 判定：过给绿，不过给警告色，完整展示墙的原话与缺失项，点任意判定条即可发起申诉。
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      child: GlassSurface(
-        tier: GlassTier.pill,
-        borderRadius: AppShape.radiusMd,
-        child: ListPageRow(
-          icon: b.pass == true ? AppIcons.allowed : AppIcons.blocked,
-          iconColor: b.pass == true ? colors.success : colors.warning,
-          title: '${DafeiyuStrings.fromL10n(l).wallBubbleVerdict} · ${b.who}',
-          subtitle: b.text,
-          subtitleMaxLines: 24,
-          value: _hhmm(b.at),
-          onTap: b.at > 0 ? () => unawaited(_appeal(b)) : null,
-        ),
-      ),
+    return ListPageRow(
+      icon: b.pass == true ? AppIcons.allowed : AppIcons.blocked,
+      iconColor: b.pass == true ? colors.success : colors.warning,
+      title: '${DafeiyuStrings.fromL10n(l).wallBubbleVerdict} · ${b.who}',
+      subtitle: b.text,
+      subtitleMaxLines: 24,
+      value: _hhmm(b.at),
+      onTap: b.at > 0 ? () => unawaited(_appeal(b)) : null,
     );
   }
 
@@ -276,6 +306,7 @@ class _WallPageState extends State<WallPage> {
           icon: AppIcons.edit,
           title: DafeiyuStrings.fromL10n(l).wallAppealTarget,
           subtitle: target == null ? '当前还没有可申诉的判定记录。' : '点击立即对最近一条判定发起申诉。',
+          chevron: target != null,
           onTap: () {
             if (target == null) {
               ScaffoldMessenger.of(context).showSnackBar(
