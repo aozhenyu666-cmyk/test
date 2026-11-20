@@ -52,7 +52,7 @@ void main() {
   });
 
   test('分块：拼回去一字不差，不切断 emoji', () {
-    final text = '题' * 7000 + '😀' + 'x' * 10;
+    final text = '${'题' * 7000}😀${'x' * 10}';
     final parts = chunkText(text, maxChars: 3000);
     expect(parts.join(), text);
     for (final p in parts) {
