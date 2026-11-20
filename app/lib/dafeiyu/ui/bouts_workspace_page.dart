@@ -29,6 +29,7 @@ import 'records_page.dart';
 import 'usage_analytics_page.dart';
 import 'task_card.dart';
 import 'today_cards.dart';
+import '../../ui/common/dispose_after_route.dart';
 
 enum _DetailTab { queue, protocols, clock }
 enum _HorizonTab { today, medium, long }
@@ -455,7 +456,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       ),
     );
     final title = ctrl.text.trim();
-    ctrl.dispose();
+    disposeAfterRoute(ctrl);
     if (confirmed != true || title.isEmpty || !mounted) return;
     setState(() => _busy = true);
     final allow = _selectedAllow.isEmpty ? const ['md.obsidian', 'com.tencent.mm'] : _selectedAllow.toList();
@@ -716,10 +717,10 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     }
     labelCtrl.dispose();
     minCtrl.dispose();
-    breakCtrl.dispose();
-    cyclesCtrl.dispose();
-    cronCtrl.dispose();
-    intervalCtrl.dispose();
+    disposeAfterRoute(breakCtrl);
+    disposeAfterRoute(cyclesCtrl);
+    disposeAfterRoute(cronCtrl);
+    disposeAfterRoute(intervalCtrl);
     urgent.dispose();
   }
 

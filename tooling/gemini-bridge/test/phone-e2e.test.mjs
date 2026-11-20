@@ -124,9 +124,16 @@ test('手机配好桥 → 快照上去；Gemini 交回执、加验收点、提�
     const cov = await call('/covenant', { action: 'list' })
     assert.equal(cov.proposals.length, 1)
     assert.equal(cov.proposals[0].by, 'gemini')
-    // 同一条命令重放：不重复处理
+    // Gemini 交周验收：进「等他决定」，不改任何数字
+    const wrP = tool('dafeiyu_submit_week_review', { verdict: '这周在演', adjustments: ['题库类保底 10 → 15', '晚上 8 点后不排新点'], watch: '没过保底的个数' })
+    await new Promise((r) => setTimeout(r, 150))
+    await call('/gemini-bridge', { action: 'sync' })
+    assert.match((await wrP).content[0].text, /等他在手机上逐条决定/)
+    const sl = await call('/seals', { action: 'list' })
+    assert.equal(sl.weekReview.by, 'gemini')
+    assert.equal(sl.weekReview.adjustments.length, 2)
     const st = JSON.parse(readFileSync(join(dir, 'home', 'companion', 'gemini-bridge.json'), 'utf8'))
-    assert.equal(st.applied, 3)
+    assert.equal(st.applied, 4)
   } finally {
     server.close()
     if (old === undefined) delete process.env.DSH_HOME

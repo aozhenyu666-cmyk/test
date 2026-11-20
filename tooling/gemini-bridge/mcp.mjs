@@ -55,6 +55,23 @@ export function toolDefs({ vault = false } = {}) {
       annotations: ro,
     },
     {
+      name: 'dafeiyu_submit_week_review',
+      title: '交周验收',
+      description: '看完 dafeiyu_week 之后交一份周验收：一句判断、最多 3 条调整（只能是拉伸系数 / 某类验收点的保底 / 某个时段 / 砍掉哪条长线）、下周盯的一个数字。' +
+        '他在手机上逐条决定采不采纳；你改不了任何数字。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          verdict: { type: 'string', description: '一句话：这一周到底是做了还是在演' },
+          adjustments: { type: 'array', maxItems: 3, items: { type: 'string' }, description: '改什么 → 改成什么，理由一句' },
+          watch: { type: 'string', description: '下周盯的一个数字' },
+        },
+        required: ['verdict'],
+        additionalProperties: false,
+      },
+      annotations: add,
+    },
+    {
       name: 'dafeiyu_add_checkpoints',
       title: '加验收点',
       description: '把他说定的安排落成时间轴验收点：到开始时刻手机自动开局，到截止时刻代码判，没过保底就锁。只能加，不能改小、不能删。' +
@@ -288,6 +305,10 @@ export async function callTool(ctx, name, args = {}) {
         checkpointId: args.checkpoint_id || '', topic: args.topic, did: args.did, next: args.next, qa, verdict: args.verdict,
       }, '交回执')
     }
+    case 'dafeiyu_submit_week_review':
+      return writeTool(ctx, 'week_review', {
+        verdict: args.verdict, adjustments: Array.isArray(args.adjustments) ? args.adjustments.slice(0, 3) : [], watch: args.watch || '',
+      }, '交周验收')
     case 'dafeiyu_propose_rule':
       return writeTool(ctx, 'propose_rule', {
         chapter: args.chapter, title: args.title, do: args.do, who: args.who || '都', hardness: args.hardness, scenes: args.scenes || [], why: args.why,

@@ -139,7 +139,7 @@ test('MCP：initialize / tools/list / 通知回 202；没同步过时 today 说�
     assert.equal((await rpc(http, tk, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202)
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()
     const names = list.result.tools.map((t) => t.name)
-    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_week', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_propose_rule'])
+    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_propose_rule'])
     assert.ok(!names.some((n) => /unlock|quota|waive|lower|delete/.test(n)), '没有放松类工具')
     assert.equal(list.result.tools[0].annotations.readOnlyHint, true)
     const today = await (await rpc(http, tk, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dafeiyu_today', arguments: {} } })).json()
@@ -200,7 +200,7 @@ test('笔记库只读：能搜能读；日记 / 越界不读', async () => {
     const { access_token: tk } = await connect(http, store)
     const call = async (name, args) => (await (await rpc(http, tk, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } })).json()).result
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()
-    assert.equal(list.result.tools.length, 9)
+    assert.equal(list.result.tools.length, 10)
     assert.match((await call('dafeiyu_search_notes', { query: '增长率' })).content[0].text, /学习\/行测\.md/)
     assert.doesNotMatch((await call('dafeiyu_search_notes', { query: '不该被读到' })).content[0].text, /私事/)
     assert.match((await call('dafeiyu_read_note', { path: '学习/行测.md' })).content[0].text, /现期\/基期/)

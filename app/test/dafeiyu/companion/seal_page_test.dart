@@ -34,6 +34,10 @@ class _Seals extends ProactiveChannel {
     calls.add(body);
     if (body['action'] == 'open') items.first['openedAt'] = 1;
     if (body['action'] == 'week') return {'ok': true, 'text': '# 大肥鱼 · 周冷数据\n【周验收】'};
+    if (body['action'] == 'week-review') {
+      return {..._view(), 'review': {'id': 'wr-1', 'by': 'paste', 'verdict': '在演', 'watch': '没过保底', 'adjustments': [{'text': '保底 10 → 15'}, {'text': '晚上不排'}]}};
+    }
+    if (body['action'] == 'week-decide') return _view();
     if (body['action'] == 'add') {
       final s = Map<String, dynamic>.from(body['seal'] as Map);
       items.add({...s, 'id': 's3', 'day': '2026-11-21', 'actual': 0, 'status': 'open', 'paidMinutes': 0, 'floor': s['floor'] ?? 10});
@@ -127,5 +131,24 @@ void main() {
     await settlePhone(tester);
     expect(ch.calls.last, {'action': 'week'});
     expect(copied, contains('【周验收】'));
+  });
+
+  testWidgets('粘贴【周验收】→ 解析 → 勾第一条 → 发 week-decide 带下标', (tester) async {
+    final ch = _Seals();
+    await pumpPhone(tester, SealPage(channel: ch));
+    await settlePhone(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('seal-paste-review')));
+    await tester.tap(find.byKey(const ValueKey('seal-paste-review')));
+    await settlePhone(tester);
+    await tester.enterText(find.byKey(const ValueKey('week-review-text')), '【周验收】\n判断：在演\n调整1：保底 10 → 15');
+    await tester.tap(find.byKey(const ValueKey('week-review-submit')));
+    await settlePhone(tester);
+    expect(find.text('保底 10 → 15'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('week-adj-0')));
+    await settlePhone(tester);
+    expect(find.text('采纳 1 条'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('week-decide')));
+    await settlePhone(tester);
+    expect(ch.calls.last, {'action': 'week-decide', 'id': 'wr-1', 'accepted': [0]});
   });
 }

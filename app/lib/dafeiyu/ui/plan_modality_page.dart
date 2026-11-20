@@ -14,6 +14,7 @@ import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
 import 'app_picker_dialog.dart';
 import 'plan_page.dart';
+import '../../ui/common/dispose_after_route.dart';
 
 enum _PlanTab { contract, schedule, audit }
 
@@ -320,7 +321,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         ],
       ),
     );
-    sumCtrl.dispose();
+    disposeAfterRoute(sumCtrl);
     if (!mounted || res == null) return;
     await _refresh();
     if (!mounted) return;

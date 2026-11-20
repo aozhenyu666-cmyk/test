@@ -162,6 +162,7 @@ import {
   replaceRuleInText, syncCovenant,
 } from './covenant.js'
 import { weekPack } from './week_pack.js'
+import { addReview, cleanReview, decideReview, parseWeekReview, reviewMarkdown, reviewPromptLines } from './week_review.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
@@ -2816,7 +2817,7 @@ export function apply(ctx) {
     getSealSession: (now) => sealSessionView(now),
     getSealLines: (now) => {
       const tz = zoneOr(config.timeZone)
-      return sealPromptLines(loadSeals(now, tz), { today: dayString(now, tz), hm: sealHm })
+      return [...sealPromptLines(loadSeals(now, tz), { today: dayString(now, tz), hm: sealHm }), ...reviewPromptLines(loadWeekReviews(), now)]
     },
     upsertWorkItemNow: (item, { now = Date.now(), mirror = true } = {}) => {
       const tz = zoneOr(config.timeZone)
@@ -8433,6 +8434,11 @@ export function apply(ctx) {
       const skipped = (r.skipped || []).map((x) => '「' + x.title + '」' + (x.text || x.error))
       return { ok: added.length > 0, text: (added.length ? '加上了：' + added.join('、') + '。到开始时刻手机自动开局。' : '一条都没加上。') + (skipped.length ? ' 没加的：' + skipped.join('；') : '') }
     }
+    if (cmd?.type === 'week_review') {
+      const adjustments = (Array.isArray(p.adjustments) ? p.adjustments : []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 3)
+      const r = receiveWeekReview('', { by: 'gemini', now, parsed: { ok: true, verdict: String(p.verdict || ''), adjustments, watch: String(p.watch || '') } })
+      return r.ok ? { ok: true, text: '周验收收到了（' + r.review.adjustments.length + ' 条调整），等他在手机上逐条决定采不采纳。' } : { ok: false, text: r.text || '没收成' }
+    }
     if (cmd?.type === 'propose_rule') {
       const st = syncCovenantNow(now)
       const r = addProposal(st.proposals, { ...p, by: 'gemini' }, now)
@@ -8666,6 +8672,27 @@ export function apply(ctx) {
     weekCache = { at: now, day: today, pack }
     return pack
   }
+  // ---- 【周验收】回收
+  const loadWeekReviews = () => {
+    const raw = readState(stateFile('week-review.json'), null)
+    return { v: 1, items: (Array.isArray(raw?.items) ? raw.items : []).map(cleanReview).filter(Boolean) }
+  }
+  function saveWeekReviews(state, review, now) {
+    writeJson(stateFile('week-review.json'), state)
+    try {
+      const kb = vaultKb()
+      if (kb && review) writeVaultText(join(kb, '周验收', dayString(review.at || now, zoneOr(config.timeZone)) + '.md'), reviewMarkdown(review, (t) => dayString(t, zoneOr(config.timeZone))))
+    } catch {}
+  }
+  function receiveWeekReview(text, { by = 'paste', now = Date.now(), parsed = null } = {}) {
+    const p = parsed || parseWeekReview(text)
+    if (!p.ok) return p
+    const r = addReview(loadWeekReviews(), p, { by, now })
+    saveWeekReviews(r.state, r.review, now)
+    record({ state: 'week-review', at: now, by, n: r.review.adjustments.length })
+    return { ok: true, review: r.review }
+  }
+  const pendingWeekReview = () => loadWeekReviews().items.find((r) => r.status === 'pending') || null
   /** 今天开过局没有（开工了没有）：时间轴的冷热线要用。 */
   function workStartedToday(now, tz) {
     if (runningBoutNow()) return true
@@ -8785,7 +8812,7 @@ export function apply(ctx) {
     const view = (st, extra = {}) => ({
       v: 1, ok: true, today, tomorrow: nextYmd(today), minuteOfDay: min, cutoffMinute: SEAL_CUTOFF_MINUTE, cutoffPassed: min >= SEAL_CUTOFF_MINUTE,
       kinds: SEAL_KINDS, items: st.items.filter((x) => x.day === today || x.day === nextYmd(today)),
-      coldCutoffMinute: COLD_CUTOFF_MINUTE, workStarted: workStartedToday(now, tz),
+      coldCutoffMinute: COLD_CUTOFF_MINUTE, workStarted: workStartedToday(now, tz), weekReview: pendingWeekReview(),
       locking: lockingSeal(st, { now, today }), ...extra,
     })
     if (action === 'list' || action === 'check') {
@@ -8804,6 +8831,18 @@ export function apply(ctx) {
       const pack = weekPackNow(now, { fresh: true })
       record({ state: 'week-pack', at: now, checkpoints: pack.totals.checkpoints })
       return { v: 1, ok: true, ...pack }
+    }
+    if (action === 'week-review') {
+      const r = receiveWeekReview(String(b.text || ''), { by: 'paste', now })
+      if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text }
+      return { ...view(state), review: r.review }
+    }
+    if (action === 'week-decide') {
+      const r = decideReview(loadWeekReviews(), String(b.id || ''), b.accepted, { now })
+      if (!r.ok) return { v: 1, ok: false, error: r.error }
+      saveWeekReviews(r.state, r.review, now)
+      record({ state: 'week-decide', at: now, id: r.review.id, accepted: r.review.adjustments.filter((a) => a.accepted).length })
+      return { ...view(state), review: r.review }
     }
     if (action === 'plan-day') {
       // 一次定一串（时间轴）：合格的加，不合格的说明原因。

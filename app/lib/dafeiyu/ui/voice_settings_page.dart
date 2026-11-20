@@ -12,6 +12,7 @@ import '../../ui/theme/theme.dart';
 import '../voice/companion_voice_source.dart';
 import '../voice/voice_roles.dart';
 import 'bout_voice_page.dart';
+import '../../ui/common/dispose_after_route.dart';
 
 /// 姐妹与局官统一语音控制台：配置音源、API Key、并分别为鱼丸 / 鲸澜 / 局官分配独立音色与在线试听。
 class VoiceSettingsPage extends ConsumerStatefulWidget {
@@ -155,7 +156,7 @@ class _VoiceSettingsPageState extends ConsumerState<VoiceSettingsPage> {
         ],
       ),
     );
-    ctrl.dispose();
+    disposeAfterRoute(ctrl);
     if (chosen == null || chosen.isEmpty) return;
     await ref.read(voiceRoleProvider.notifier).set(role, chosen);
     if (mounted) setState(() => _statusMsg = '${_roleTitle(role)}音色已切至 $chosen');

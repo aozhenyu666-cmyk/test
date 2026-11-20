@@ -10,6 +10,7 @@ import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../channels/proactive_state.dart';
+import '../../ui/common/dispose_after_route.dart';
 
 const Map<String, (String, StatusTone)> _kNodeStatus = {
   'planned': ('预留', StatusTone.idle),
@@ -145,7 +146,7 @@ class _HorizonDossierPageState extends State<HorizonDossierPage> {
         ],
       ),
     );
-    ctrl.dispose();
+    disposeAfterRoute(ctrl);
     if (text == null) return;
     await _op({'action': 'node_breakpoint', 'nodeId': node['id'], 'breakpoint': text}, ok: '断点记下了，下一局开局就带上');
   }

@@ -121,53 +121,30 @@ class _SealPageState extends State<SealPage> {
   }
 
   Future<int?> _askNumber(String title, String hint, int initial) async {
-    final c = TextEditingController(text: '$initial');
-    final v = await showDialog<int>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          key: const ValueKey('seal-number'),
-          controller: c,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          decoration: InputDecoration(helperText: hint),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(int.tryParse(c.text.trim())), child: const Text('确定')),
-        ],
-      ),
-    );
-    c.dispose();
-    return v;
-  }
-
-  Future<String?> _askReason() async {
-    final c = TextEditingController();
     final v = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('豁免这一条'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('要写一句理由，占今天一次紧急解除；原来的数字留着，周验收看得见。'),
-            const SizedBox(height: 12),
-            TextField(key: const ValueKey('seal-reason'), controller: c, autofocus: true, maxLength: 120),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(c.text.trim()), child: const Text('豁免')),
-        ],
+      builder: (_) => _PromptDialog(
+        title: title,
+        initial: '$initial',
+        helper: hint,
+        number: true,
+        fieldKey: const ValueKey('seal-number'),
+        confirm: '确定',
       ),
     );
-    c.dispose();
-    return v;
+    return v == null ? null : int.tryParse(v);
   }
+
+  Future<String?> _askReason() => showDialog<String>(
+        context: context,
+        builder: (_) => const _PromptDialog(
+          title: '豁免这一条',
+          body: '要写一句理由，占今天一次紧急解除；原来的数字留着，周验收看得见。',
+          maxLength: 120,
+          fieldKey: ValueKey('seal-reason'),
+          confirm: '豁免',
+        ),
+      );
 
   Future<void> _actions(Map<String, dynamic> s) async {
     final kind = '${s['kind']}';
@@ -270,6 +247,77 @@ class _SealPageState extends State<SealPage> {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('复制好了：粘贴给 Claude / GPT，让它只回一个【周验收】块')));
+  }
+
+  /// 粘贴【周验收】回来：解析出最多 3 条调整，再逐条决定采不采纳。
+  Future<void> _pasteReview() async {
+    final text = await showDialog<String>(
+      context: context,
+      builder: (_) => const _PromptDialog(
+        title: '粘贴【周验收】',
+        hint: '把对方回的整段粘进来（前后的废话不用删）',
+        minLines: 4,
+        maxLines: 10,
+        fieldKey: ValueKey('week-review-text'),
+        confirmKey: ValueKey('week-review-submit'),
+        confirm: '解析',
+      ),
+    );
+    if (text == null || text.trim().isEmpty || !mounted) return;
+    final r = await _channel.sealsOp({'action': 'week-review', 'text': text});
+    if (!mounted) return;
+    if (r == null || r['ok'] != true) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${r?['text'] ?? '没解析出来'}')));
+      return;
+    }
+    setState(() => _data = r);
+    await _decideReview(Map<String, dynamic>.from(r['review'] as Map));
+  }
+
+  Future<void> _decideReview(Map<String, dynamic> review) async {
+    final adj = review['adjustments'] is List ? [for (final a in review['adjustments'] as List) if (a is Map) '${a['text']}'] : <String>[];
+    final picked = <int>{};
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('周验收${review['by'] == 'gemini' ? '（Gemini 交来的）' : ''}', style: Theme.of(ctx).textTheme.titleMedium),
+                const SizedBox(height: 6),
+                Text('判断：${review['verdict'] ?? '—'}'),
+                if ('${review['watch'] ?? ''}'.isNotEmpty) Text('下周盯：${review['watch']}'),
+                const SizedBox(height: 10),
+                Text('勾上要采纳的（采纳的写进笔记库，鲸澜这一周排验收点照着办；不自动改任何数字）：',
+                    style: TextStyle(color: DshColors.of(ctx).textTertiary)),
+                for (var i = 0; i < adj.length; i++)
+                  CheckboxListTile(
+                    key: ValueKey('week-adj-$i'),
+                    value: picked.contains(i),
+                    onChanged: (v) => set(() => v == true ? picked.add(i) : picked.remove(i)),
+                    title: Text(adj[i]),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                const SizedBox(height: 8),
+                FilledButton(key: const ValueKey('week-decide'), onPressed: () => Navigator.of(ctx).pop(true), child: Text(picked.isEmpty ? '一条都不采纳' : '采纳 ${picked.length} 条')),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final r = await _channel.sealsOp({'action': 'week-decide', 'id': review['id'], 'accepted': picked.toList()..sort()});
+    if (!mounted) return;
+    if (r != null && r['ok'] == true) setState(() => _data = r);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r?['ok'] == true ? '记下了' : '没存上')));
   }
 
   // ------------------------------------------------------------------ 页面
@@ -383,6 +431,18 @@ class _SealPageState extends State<SealPage> {
           title: '周验收',
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
           children: [
+            if (_data['weekReview'] is Map)
+              ListPageRow(
+                key: const ValueKey('seal-week-pending'),
+                icon: AppIcons.attention,
+                iconColor: colors.warning,
+                title: '${(_data['weekReview'] as Map)['by'] == 'gemini' ? 'Gemini' : '粘贴回来'}的周验收在等你定',
+                subtitle: '${(_data['weekReview'] as Map)['verdict'] ?? ''}',
+                subtitleMaxLines: 2,
+                badge: const StatusChip(tone: StatusTone.warn, label: '待定'),
+                chevron: true,
+                onTap: () => unawaited(_decideReview(Map<String, dynamic>.from(_data['weekReview'] as Map))),
+              ),
             ListPageRow(
               key: const ValueKey('seal-copy-week'),
               icon: AppIcons.copy,
@@ -391,6 +451,14 @@ class _SealPageState extends State<SealPage> {
               subtitleMaxLines: 3,
               chevron: true,
               onTap: () => unawaited(_copyWeek()),
+            ),
+            ListPageRow(
+              key: const ValueKey('seal-paste-review'),
+              icon: AppIcons.paste,
+              title: '粘贴【周验收】回来',
+              subtitle: '最多 3 条调整，你逐条决定采不采纳',
+              chevron: true,
+              onTap: () => unawaited(_pasteReview()),
             ),
           ],
         ),
@@ -637,3 +705,78 @@ class _SealEditorState extends State<_SealEditor> {
     );
   }
 }
+
+/// 一个输入框的对话框：控制器归它自己管（对话框关闭动画结束、真正卸载时才 dispose）。
+/// 以前在 showDialog 返回后立刻 dispose，关闭动画还在用它，会报「used after being disposed」。
+class _PromptDialog extends StatefulWidget {
+  const _PromptDialog({
+    required this.title,
+    required this.confirm,
+    this.initial = '',
+    this.body,
+    this.hint,
+    this.helper,
+    this.number = false,
+    this.maxLength,
+    this.minLines,
+    this.maxLines = 1,
+    this.fieldKey,
+    this.confirmKey,
+  });
+
+  final String title;
+  final String confirm;
+  final String initial;
+  final String? body;
+  final String? hint;
+  final String? helper;
+  final bool number;
+  final int? maxLength;
+  final int? minLines;
+  final int maxLines;
+  final Key? fieldKey;
+  final Key? confirmKey;
+
+  @override
+  State<_PromptDialog> createState() => _PromptDialogState();
+}
+
+class _PromptDialogState extends State<_PromptDialog> {
+  late final TextEditingController _c = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final field = TextField(
+      key: widget.fieldKey,
+      controller: _c,
+      autofocus: true,
+      keyboardType: widget.number ? TextInputType.number : TextInputType.multiline,
+      inputFormatters: widget.number ? [FilteringTextInputFormatter.digitsOnly] : null,
+      maxLength: widget.maxLength,
+      minLines: widget.minLines,
+      maxLines: widget.maxLines,
+      decoration: InputDecoration(hintText: widget.hint, helperText: widget.helper),
+    );
+    return AlertDialog(
+      title: Text(widget.title),
+      content: widget.body == null
+          ? field
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [Text(widget.body!), const SizedBox(height: 12), field],
+            ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
+        FilledButton(key: widget.confirmKey, onPressed: () => Navigator.of(context).pop(_c.text.trim()), child: Text(widget.confirm)),
+      ],
+    );
+  }
+}
+
