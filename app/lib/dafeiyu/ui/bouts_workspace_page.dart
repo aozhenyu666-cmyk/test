@@ -30,6 +30,7 @@ import 'usage_analytics_page.dart';
 import 'task_card.dart';
 import 'today_cards.dart';
 import '../../ui/common/dispose_after_route.dart';
+import 'seal_page.dart';
 
 enum _DetailTab { queue, protocols, clock }
 enum _HorizonTab { today, medium, long }
@@ -66,6 +67,8 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
   String? _banner;
 
   Map<String, dynamic> _today = const {};
+  /// 今天的时间轴验收点（单独在后台读，慢了不挡局页）。
+  Map<String, dynamic>? _seals;
   Map<String, dynamic> _bouts = const {};
   List<Map<String, dynamic>> _clocks = const [];
   Timer? _poller;
@@ -211,6 +214,9 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
 
   Future<void> _refresh({bool silent = false}) async {
     if (!silent && mounted) setState(() => _loading = true);
+    unawaited(_channel.sealsOp({'action': 'list'}).then((r) {
+      if (mounted && r != null && r['ok'] == true) setState(() => _seals = r);
+    }).catchError((_) {}));
     final results = await Future.wait([
       _channel.todayStatus().catchError((_) => null),
       _channel.boutsStatus().catchError((_) => null),
@@ -1296,6 +1302,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                 ),
               ),
         ],
+        _timelineRow(colors),
         ListPageRow(
           icon: AppIcons.planMode,
           iconColor: theme.colorScheme.primary,
@@ -1306,6 +1313,38 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           onTap: () => unawaited(PlanHubPage.open(context, channel: _channel, loopChannel: _loop)),
         ),
       ],
+    );
+  }
+
+  /// 主线卡里的一行：今天时间轴上下一个没交的验收点（没有就提示 10:00 前定不打折）。
+  Widget _timelineRow(DshColors colors) {
+    final s = _seals;
+    final today = '${s?['today'] ?? ''}';
+    final items = s?['items'] is List
+        ? [for (final x in s!['items'] as List) if (x is Map && x['day'] == today) Map<String, dynamic>.from(x)]
+        : <Map<String, dynamic>>[];
+    items.sort((a, b) => (a['dueMinute'] as num).compareTo(b['dueMinute'] as num));
+    final passed = items.where((x) => x['status'] == 'floor' || x['status'] == 'stretch').length;
+    final next = items.where((x) => x['status'] == 'open' || x['status'] == 'below').firstOrNull;
+    final locking = s?['locking'] is Map;
+    final unit = next == null ? '' : (kSealKinds['${next['kind']}']?.$2 ?? '');
+    return ListPageRow(
+      key: const ValueKey('today-timeline'),
+      icon: locking ? AppIcons.lockActive : AppIcons.time,
+      iconColor: locking ? colors.danger : colors.info,
+      title: next == null
+          ? (items.isEmpty ? '今天的时间轴还空着' : '今天的验收点都交了')
+          : '下一个：${sealSpan(next)}「${next['title']}」',
+      subtitle: next == null
+          ? (items.isEmpty ? '10:00 前、开工前定的不打折；到开始时刻自动开局' : '$passed/${items.length} 过了')
+          : '${next['actual']}/${next['stretch']}$unit · 保底 ${next['floor']} · 今天 $passed/${items.length} 过了',
+      subtitleMaxLines: 2,
+      badge: locking ? const StatusChip(tone: StatusTone.error, label: '锁着') : null,
+      chevron: true,
+      onTap: () async {
+        await SealPage.open(context, channel: _channel);
+        if (mounted) unawaited(_refresh(silent: true));
+      },
     );
   }
 

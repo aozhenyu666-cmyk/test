@@ -306,4 +306,28 @@ void main() {
     expect(ch.todayStarts.single['goal'], '考公行测/申论专项刷题与错题复盘');
     expect(ch.todayStarts.single['minutes'], 60);
   });
+
+  testWidgets('局页主线卡：时间轴上下一个没交的验收点（开始–截止、进度、今天过了几个）', (tester) async {
+    final ch = _TimelineChannel();
+    await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: _FakeLoopChannel()));
+    await settlePhone(tester);
+    final row = find.byKey(const ValueKey('today-timeline'), skipOffstage: false);
+    expect(row, findsOneWidget);
+    expect(find.text('下一个：14:00–15:30「资料分析 30 题」', skipOffstage: false), findsOneWidget);
+    expect(find.textContaining('4/30题 · 保底 15 · 今天 1/2 过了', skipOffstage: false), findsOneWidget);
+  });
+}
+
+class _TimelineChannel extends _FakeV4Channel {
+  @override
+  Future<Map<String, dynamic>?> sealsOp(Map<String, Object?> body) async => {
+        'ok': true,
+        'today': '2026-11-21',
+        'locking': null,
+        'items': [
+          {'id': 'a', 'day': '2026-11-21', 'title': '早上的', 'kind': 'quiz', 'stretch': 10, 'floor': 5, 'dueMinute': 600, 'actual': 10, 'status': 'stretch'},
+          {'id': 'b', 'day': '2026-11-21', 'title': '资料分析 30 题', 'kind': 'quiz', 'stretch': 30, 'floor': 15, 'startMinute': 840, 'dueMinute': 930, 'actual': 4, 'status': 'open'},
+          {'id': 'c', 'day': '2026-11-22', 'title': '明天的', 'kind': 'quiz', 'stretch': 10, 'floor': 5, 'dueMinute': 600, 'actual': 0, 'status': 'open'},
+        ],
+      };
 }
