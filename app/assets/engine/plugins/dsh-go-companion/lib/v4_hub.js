@@ -8,7 +8,8 @@
 // - dept_skills.js (四部门防骗红旗 / 反沉没成本 / 三段因果链可执行 Skill)
 
 import { join } from 'node:path'
-import { cleanBankUnlockState, judgeQuizAnswer, parseBankSmart, pickNextQuizQuestion } from './bank_unlock.js'
+import { cleanBankUnlockState, judgeQuizAnswer, pickNextQuizQuestion } from './bank_unlock.js'
+import { parseBankAny } from './bank_import.js'
 import { evaluateAutonomy14d, evaluateAutonomyLevel } from './autonomy.js'
 import {
   archivePathInKb,
@@ -65,7 +66,7 @@ import {
 } from './unified_arbiter.js'
 import { geminiBrief, geminiMode } from './gemini.js'
 import { deadlineLines, isSaturday, upcoming as upcomingDeadlinesOf, weekEndingSaturday, weeklyMarkdown } from './verdict.js'
-import { mkdirSync as mkdirSyncV, writeFileSync as writeFileSyncV } from 'node:fs'
+import { mkdirSync as mkdirSyncV, writeFileSync as writeFileSyncV, readdirSync as readdirSyncV, readFileSync as readFileSyncV, rmSync as rmSyncV, statSync as statSyncV } from 'node:fs'
 import { isEmergencyPassActive } from './external_agents.js'
 
 export function createV4Hub(deps) {
@@ -392,34 +393,81 @@ export function createV4Hub(deps) {
       return { v: 1, ok: true, config: next.config }
     }
 
-    if (action === 'import') {
-      const parsed = parseBankSmart(body?.raw ?? body?.text ?? body?.bank, {
-        name: body?.name || '备考题库',
-        id: body?.id || `bank-${now.toString(36).slice(-4)}`,
-      })
-      if (!parsed.ok) return { v: 1, ok: false, error: parsed.error }
-      const merge = Boolean(body?.append && rawBank && Array.isArray(rawBank.题目))
-      const mergedBank = merge
-        ? {
-            ...parsed.rawBank,
-            名称: body?.name || rawBank.名称 || parsed.rawBank.名称,
-            题目: [
-              ...rawBank.题目,
-              ...parsed.rawBank.题目.map((q, idx) => ({ ...q, id: `${q.id || 'q'}-m${rawBank.题目.length + idx + 1}` })),
-            ],
-          }
-        : parsed.rawBank
+    // 2026-11-21：引擎收请求的上限是 16 KB，一份题库动辄几百 KB——手机分块传（import-begin / import-chunk / import-finish），
+    // 收齐了拼起来再解析。小的照旧一次 import。
+    const uploadDir = () => stateFile('bank-upload')
+    const cleanUploads = () => {
+      try {
+        for (const f of readdirSyncV(uploadDir())) {
+          const p = join(uploadDir(), f)
+          if (now - statSyncV(p).mtimeMs > 3_600_000) rmSyncV(p, { recursive: true, force: true })
+        }
+      } catch {}
+    }
+    const safeId = (v) => String(v || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40)
+    if (action === 'import-begin') {
+      cleanUploads()
+      const id = safeId(body?.uploadId) || 'u' + now.toString(36)
+      mkdirSyncV(join(uploadDir(), id), { recursive: true })
+      return { v: 1, ok: true, uploadId: id }
+    }
+    if (action === 'import-chunk') {
+      const id = safeId(body?.uploadId)
+      const idx = Math.max(0, Math.min(9999, Number(body?.index) || 0))
+      if (!id) return { v: 1, ok: false, error: '缺 uploadId' }
+      try {
+        mkdirSyncV(join(uploadDir(), id), { recursive: true })
+        writeFileSyncV(join(uploadDir(), id, String(idx).padStart(5, '0') + '.part'), String(body?.text ?? ''), 'utf8')
+      } catch (e) {
+        return { v: 1, ok: false, error: '写临时文件失败：' + String(e?.message || e).slice(0, 80) }
+      }
+      return { v: 1, ok: true, index: idx }
+    }
+    const importText = (raw, opts) => {
+      const merge = Boolean(opts.append && rawBank && Array.isArray(rawBank.题目))
+      const offset = merge ? rawBank.题目.length : 0
+      const parsed = parseBankAny(raw, { offset })
+      if (!parsed.ok) return { v: 1, ok: false, error: parsed.error, skipped: parsed.skipped.slice(0, 30), skippedCount: parsed.skipped.length, format: parsed.format }
+      const name = String(opts.name || (merge ? rawBank.名称 : '') || '备考题库').slice(0, 60)
+      const mergedBank = {
+        题库版本: 1,
+        id: merge ? (rawBank.id || 'custom-bank') : (opts.id || `bank-${now.toString(36).slice(-4)}`),
+        名称: name,
+        题目: merge ? [...rawBank.题目, ...parsed.questions] : parsed.questions,
+      }
       saveRawBank(mergedBank)
       saveBankUnlock({ ...st, session: { solved: 0, seenIds: [], currentId: '' }, wrongIds: merge ? st.wrongIds : [] })
-      record({ state: 'bank-imported', at: now, name: mergedBank.名称, total: mergedBank.题目.length })
+      record({ state: 'bank-imported', at: now, name: mergedBank.名称, total: mergedBank.题目.length, added: parsed.questions.length, skipped: parsed.skipped.length, format: parsed.format })
       return {
         v: 1,
         ok: true,
-        importedCount: parsed.count,
+        importedCount: parsed.questions.length,
         bankTotal: mergedBank.题目.length,
         bankName: mergedBank.名称,
-        warnings: parsed.warnings,
+        format: parsed.format,
+        skipped: parsed.skipped.slice(0, 30),
+        skippedCount: parsed.skipped.length,
+        warnings: parsed.skipped.length ? ['有 ' + parsed.skipped.length + ' 道没进：' + parsed.skipped.slice(0, 5).map((x) => '第 ' + x.n + ' 题' + x.why).join('、')] : [],
       }
+    }
+    if (action === 'import-finish') {
+      const id = safeId(body?.uploadId)
+      const dir = join(uploadDir(), id)
+      let raw = ''
+      try {
+        raw = readdirSyncV(dir).filter((f) => f.endsWith('.part')).sort().map((f) => readFileSyncV(join(dir, f), 'utf8')).join('')
+      } catch {
+        return { v: 1, ok: false, error: '没找到上传的内容（超过一小时被清掉了？重新导一次）' }
+      } finally {
+        try {
+          rmSyncV(dir, { recursive: true, force: true })
+        } catch {}
+      }
+      return importText(raw, { append: body?.append, name: body?.name, id: body?.id })
+    }
+    if (action === 'import') {
+      const raw = body?.raw ?? body?.text ?? body?.bank
+      return importText(raw, { append: body?.append, name: body?.name, id: body?.id })
     }
 
     if (action === 'quiz_answer') {

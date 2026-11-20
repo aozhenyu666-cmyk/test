@@ -11,6 +11,7 @@ import '../../ui/common/status_chip.dart';
 import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
+import '../bank/bank_text_extract.dart';
 import '../channels/proactive_state.dart';
 
 /// 备考题库与锁屏刷题解锁中心（默认：答对 10 题解锁 5 分钟）。
@@ -75,32 +76,86 @@ class _BankManagerPageState extends State<BankManagerPage> {
     });
   }
 
+  /// 选文件导入：可以一次选多个；Word / Excel 先在手机上抽成文字；每个文件分块传给引擎（引擎收请求上限 16 KB）。
   Future<void> _pickFileImport() async {
+    List<PlatformFile> picked;
     try {
-      final picked = await FilePicker.pickFile(
+      picked = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: const ['json', 'txt', 'md'],
+        allowedExtensions: const ['json', 'txt', 'md', 'csv', 'tsv', 'docx', 'xlsx', 'doc', 'pdf'],
       );
-      if (picked == null) return;
-      final bytes = BytesBuilder(copy: false);
-      await for (final chunk in picked.readAsByteStream()) {
-        bytes.add(chunk);
-        if (bytes.length > 4 * 1024 * 1024) {
-          throw const FormatException('题库文件过大（超过 4MB）');
-        }
-      }
-      final content = utf8.decode(bytes.takeBytes(), allowMalformed: true);
-      if (!mounted) return;
-      final baseName = picked.name.replaceAll(RegExp(r'\.[^.]+$'), '');
-      setState(() {
-        _rawCtrl.text = content;
-        if (baseName.isNotEmpty) _nameCtrl.text = baseName;
-        _banner = '已载入文件（${content.length} 字符），点击下方「立即清洗入库」即可完成导入';
-      });
     } on Exception catch (e) {
-      if (!mounted) return;
-      setState(() => _banner = '读取文件失败：$e');
+      if (mounted) setState(() => _banner = '打不开文件选择器：$e');
+      return;
     }
+    if (picked.isEmpty || !mounted) return;
+    setState(() {
+      _busy = true;
+      _banner = '读取 ${picked.length} 个文件…';
+    });
+    final lines = <String>[];
+    var first = true;
+    for (final f in picked) {
+      try {
+        final bytes = BytesBuilder(copy: false);
+        await for (final chunk in f.readAsByteStream()) {
+          bytes.add(chunk);
+          if (bytes.length > 20 * 1024 * 1024) throw const FormatException('文件超过 20MB');
+        }
+        final ext = extractBankText(f.name, bytes.takeBytes());
+        if (ext.text.trim().isEmpty) {
+          lines.add('「${f.name}」：${ext.problem ?? '是空的'}');
+          continue;
+        }
+        final res = await _uploadText(
+          ext.text,
+          name: picked.length == 1 ? f.name.replaceAll(RegExp(r'\.[^.]+$'), '') : _nameCtrl.text.trim(),
+          append: first ? _appendMode : true,
+          label: f.name,
+        );
+        first = false;
+        lines.add(_reportLine(f.name, res) + (ext.problem != null ? '（${ext.problem}）' : ''));
+      } on Exception catch (e) {
+        lines.add('「${f.name}」读取失败：$e');
+      }
+    }
+    await _refresh();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _banner = lines.join('\n');
+    });
+  }
+
+  /// 一份文字导进引擎：小的一次传，大的分块传（begin → chunk… → finish）。
+  Future<Map<String, dynamic>?> _uploadText(String text, {required String name, required bool append, String label = ''}) async {
+    final bankName = name.isEmpty ? '备考真题库' : name;
+    if (utf8.encode(text).length < 10 * 1024) {
+      return _channel.bankOp({'action': 'import', 'name': bankName, 'raw': text, 'append': append});
+    }
+    final id = 'u${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}';
+    final begin = await _channel.bankOp({'action': 'import-begin', 'uploadId': id});
+    if (begin?['ok'] != true) return {'ok': false, 'error': '引擎没应答（开始上传失败）'};
+    final parts = chunkText(text);
+    for (var i = 0; i < parts.length; i++) {
+      if (mounted) setState(() => _banner = '上传${label.isEmpty ? '' : '「$label」'} ${i + 1}/${parts.length}…');
+      final r = await _channel.bankOp({'action': 'import-chunk', 'uploadId': id, 'index': i, 'text': parts[i]});
+      if (r?['ok'] != true) return {'ok': false, 'error': '第 ${i + 1} 块没传上：${r?['error'] ?? '引擎没应答'}'};
+    }
+    if (mounted) setState(() => _banner = '解析${label.isEmpty ? '' : '「$label」'}…');
+    return _channel.bankOp({'action': 'import-finish', 'uploadId': id, 'name': bankName, 'append': append});
+  }
+
+  String _reportLine(String label, Map<String, dynamic>? res) {
+    final who = label.isEmpty ? '' : '「$label」';
+    if (res == null) return '$who导入失败：引擎没应答';
+    if (res['ok'] != true) return '$who导入失败：${res['error'] ?? '格式暂未识别'}';
+    final skipped = (res['skippedCount'] as num?)?.toInt() ?? 0;
+    final why = res['skipped'] is List
+        ? [for (final x in (res['skipped'] as List).take(3)) if (x is Map) '第 ${x['n']} 题${x['why']}'].join('、')
+        : '';
+    return '✓ $who进了 ${res['importedCount'] ?? 0} 道，现在共 ${res['bankTotal'] ?? 0} 题'
+        '${skipped > 0 ? '；$skipped 道没进（$why${skipped > 3 ? '…' : ''}）' : ''}';
   }
 
   void _fillSampleTemplate() {
@@ -125,29 +180,20 @@ D. 个人主观情绪
   Future<void> _submitImport() async {
     final raw = _rawCtrl.text.trim();
     if (raw.isEmpty) {
-      setState(() => _banner = '请先粘贴题目文本或从手机选择 JSON/TXT 题库');
+      setState(() => _banner = '请先粘贴题目文本，或选文件（txt / docx / xlsx / csv / json，可多选）');
       return;
     }
     setState(() {
       _busy = true;
       _banner = null;
     });
-    final res = await _channel.bankOp({
-      'action': 'import',
-      'name': _nameCtrl.text.trim().isEmpty ? '备考真题库' : _nameCtrl.text.trim(),
-      'raw': raw,
-      'append': _appendMode,
-    });
+    final res = await _uploadText(raw, name: _nameCtrl.text.trim(), append: _appendMode);
     await _refresh();
     if (!mounted) return;
     setState(() {
       _busy = false;
-      if (res?['ok'] == true) {
-        _rawCtrl.clear();
-        _banner = '✓ 成功导入 ${res?['importedCount'] ?? 0} 道题，当前库共 ${res?['bankTotal'] ?? 0} 题！';
-      } else {
-        _banner = '导入失败：${res?['error'] ?? '格式暂未识别'}';
-      }
+      if (res?['ok'] == true) _rawCtrl.clear();
+      _banner = _reportLine('', res);
     });
   }
 
@@ -248,7 +294,7 @@ D. 个人主观情绪
                 Row(
                   children: [
                     Expanded(
-                      child: Text('导入题目（JSON / 纯文本 / 文件）', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                      child: Text('导入题目（文本 / Word / Excel / CSV / JSON，可多选）', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
                     ),
                     TextButton.icon(
                       onPressed: _busy ? null : _fillSampleTemplate,
@@ -272,7 +318,7 @@ D. 个人主观情绪
                   minLines: 6,
                   maxLines: 12,
                   decoration: const InputDecoration(
-                    labelText: '粘贴题目内容（支持 1. 题干 / A.B.C.D. / 答案： / 解析： 或 JSON）',
+                    labelText: '粘贴题目（1. 题干 / A.B.C.D. / 答案：；答案也可以统一放在最后「参考答案 1.A 2.B」或「1-5 ABCDA」）',
                     alignLabelWithHint: true,
                     border: OutlineInputBorder(),
                   ),
@@ -292,7 +338,7 @@ D. 个人主观情绪
                       child: OutlinedButton.icon(
                         onPressed: _busy ? null : _pickFileImport,
                         icon: const Icon(AppIcons.files, size: 18),
-                        label: const Text('选文件导入'),
+                        label: const Text('选文件（可多选）'),
                       ),
                     ),
                     const SizedBox(width: 10),
