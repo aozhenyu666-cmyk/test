@@ -10,6 +10,7 @@ import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../channels/proactive_state.dart';
+import 'horizon_dossier_page.dart';
 import 'usage_analytics_page.dart';
 
 /// DSH Go V5 · 醒目独立全屏「三层战略主线作战室」：
@@ -516,11 +517,15 @@ class _StrategyHorizonsPageState extends State<StrategyHorizonsPage> {
     final isDone = item['status'] == 'done' || done >= target;
     final barColor = isDone ? colors.success : (isNorthStar ? theme.colorScheme.primary : colors.info);
 
+    final nodeCount = item['nodes'] is List ? (item['nodes'] as List).length : 0;
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: GlassSurface(
+        key: ValueKey('horizon-card-${item['id']}'),
         tier: GlassTier.pill,
         borderRadius: AppShape.radiusMd,
+        // 点卡片进战役档案：预留节点、每个节点干过哪几局、断点、从节点开局。
+        onTap: () => unawaited(HorizonDossierPage.open(context, horizonId: '${item['id']}', channel: _channel)),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -541,7 +546,7 @@ class _StrategyHorizonsPageState extends State<StrategyHorizonsPage> {
                     ),
                   ),
                   Text(
-                    '$done/$target 阶',
+                    nodeCount > 0 ? '$done/$target 节点 ›' : '$done/$target 阶 ›',
                     style: AppType.tabular(theme.textTheme.labelMedium!.copyWith(color: barColor, fontWeight: FontWeight.w700)),
                   ),
                 ],

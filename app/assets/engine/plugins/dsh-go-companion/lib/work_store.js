@@ -84,6 +84,17 @@ export function normalizeWorkItem(raw, now = Date.now()) {
   const linksRaw = raw.links && typeof raw.links === 'object' ? raw.links : {}
   const horizonId = cleanStr(linksRaw.horizonId || raw.parentHorizonId, 64)
   const contractCpId = cleanStr(linksRaw.contractCpId || raw.contractCpId, 64)
+  const nodeId = cleanStr(linksRaw.nodeId || raw.nodeId, 40)
+  const cb = raw.contextBrief && typeof raw.contextBrief === 'object' ? raw.contextBrief : null
+  const contextBrief = cb
+    ? {
+        horizonTitle: cleanStr(cb.horizonTitle, 100),
+        nodeTitle: cleanStr(cb.nodeTitle, 80),
+        targetDate: cleanStr(cb.targetDate, 10),
+        deliverable: cleanStr(cb.deliverable, 200),
+        lastBreakpoint: cleanStr(cb.lastBreakpoint, 200),
+      }
+    : null
   const minute = Number.isFinite(Number(raw.minute)) ? Math.max(0, Math.min(1439, Math.round(Number(raw.minute)))) : undefined
   const due = raw.due !== undefined && raw.due !== null && raw.due !== '' ? raw.due : (Number(raw.dueAt) > 0 ? Number(raw.dueAt) : undefined)
   const apps = normalizeWorkApps(raw.apps, raw.need, raw.allow)
@@ -101,7 +112,9 @@ export function normalizeWorkItem(raw, now = Date.now()) {
     links: {
       horizonId,
       contractCpId,
+      ...(nodeId ? { nodeId } : {}),
     },
+    ...(contextBrief ? { contextBrief } : {}),
     protocolId: cleanStr(raw.protocolId || 'execute', 40),
     minutes: Math.max(5, Math.min(480, Math.round(n(raw.minutes ?? raw.budget, 45)))),
     dept: cleanStr(raw.dept || raw.department, 16),
@@ -153,6 +166,7 @@ function mergeWorkItems(prev, next, now = Date.now()) {
   const links = {
     horizonId: next.links?.horizonId || prev.links?.horizonId || '',
     contractCpId: next.links?.contractCpId || prev.links?.contractCpId || '',
+    ...((next.links?.nodeId || prev.links?.nodeId) ? { nodeId: next.links?.nodeId || prev.links?.nodeId } : {}),
   }
   return {
     ...prev,
@@ -166,6 +180,7 @@ function mergeWorkItems(prev, next, now = Date.now()) {
     apps,
     links,
     packet: next.packet || prev.packet || null,
+    ...((next.contextBrief || prev.contextBrief) ? { contextBrief: next.contextBrief || prev.contextBrief } : {}),
     dept: next.dept || prev.dept || '',
     evidence: next.evidence || prev.evidence || '',
     openedAt: next.openedAt || prev.openedAt,

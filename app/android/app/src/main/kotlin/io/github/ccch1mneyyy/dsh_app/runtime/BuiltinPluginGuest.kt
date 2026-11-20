@@ -240,6 +240,7 @@ object BuiltinPluginGuest {
                 "lib/bank_unlock.js",
                 "lib/dept_skills.js",
                 "lib/horizons.js",
+                "lib/plan_compiler.js",
                 "lib/plan_modality.js",
                 "lib/telemetry_charts.js",
                 "lib/v4_hub.js",

@@ -2745,6 +2745,7 @@ export function apply(ctx) {
     getTimeLedger: (now = Date.now()) => timeLedgerNow(now, zoneOr(config.timeZone), lastPhone),
     getEmergencyPassActive: (now = Date.now()) => activeEmergencyInfo(now, zoneOr(config.timeZone)),
     getWorkStore: (now = Date.now()) => workStoreNow(now, zoneOr(config.timeZone)),
+    tierOf: (pkg) => tierFnNow()(pkg),
     upsertWorkItemNow: (item, { now = Date.now(), mirror = true } = {}) => {
       const tz = zoneOr(config.timeZone)
       const cur = workStoreNow(now, tz).store
@@ -7321,6 +7322,7 @@ export function apply(ctx) {
         console.error('[companion] 超时记阶梯失败：' + String((error && error.message) || error))
       }
       brainRt.noteBout({ protocolId: live.protocol?.id, outcome: 'bad' }, now)
+      commitLiveNode('overdue_locked')
       dropLive()
       return t
     }
@@ -9907,7 +9909,33 @@ export function apply(ctx) {
     return r
   }
 
+  /**
+   * 2026-11-20 P0：从节点派出来的局，结束就写回节点执行记录（按 workId 幂等，写过一次就不再写）。
+   * 收局的几条路（答完验收、手动收工、超时）都会走到 dropLive，所以兜底放在那里，哪条路都漏不掉。
+   */
+  function commitLiveNode(outcome) {
+    if (!live?.nodeLink || live.nodeCommitted) return false
+    live.nodeCommitted = true
+    const now = Date.now()
+    try {
+      v4Hub?.horizonsRoute?.({
+        action: 'node_commit',
+        horizonId: live.nodeLink.horizonId,
+        nodeId: live.nodeLink.nodeId,
+        workId: live.workId || 'bout-' + live.openedAt,
+        outcome,
+        minutes: Math.max(0, Math.round((now - live.openedAt) / 60_000)),
+        summary: String(live.goal || live.packet?.goal || '').slice(0, 160),
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   function dropLive() {
+    // 没走到验收那一步就收了（手动收工 / 别的路）：按「部分完成」记一笔。
+    commitLiveNode('partial')
     try {
       live?.db?.close?.()
     } catch {
@@ -9974,6 +10002,9 @@ export function apply(ctx) {
       const wsCur = workStoreNow(now, tzW).store
       const mk = markWorkStatus(wsCur, { id: workId, title: goal || pkt?.goal || '', status: 'running', day: dayString(now, tzW), now })
       if (mk.ok) mirrorWorkStoreToFiles(mk.state, now, tzW)
+      // 从节点派出来的局：记住是哪个节点（结束时写回）和节点上下文（局详情页显示断点 / 交付物）。
+      if (mk.item?.links?.nodeId) live.nodeLink = { horizonId: mk.item.links.horizonId || parentHorizonId, nodeId: mk.item.links.nodeId }
+      if (mk.item?.contextBrief) live.contextBrief = mk.item.contextBrief
     } catch {}
     record({ state: 'bout-open', at: now, protocolId: protocol.id, department: dept, via: 'panel' })
     try {
@@ -10016,6 +10047,7 @@ export function apply(ctx) {
     }
     if (r.state === 'closed' || r.state === 'escalated') {
       const passed = r.state === 'closed' && r.accepted !== false
+      const commitNode = (outcome) => commitLiveNode(outcome)
       brainRt.noteBout({ protocolId: live.protocol?.id, outcome: r.state === 'closed' ? 'done' : 'bad', accepted: passed }, now)
       try {
         v4Hub?.recordStoryline?.({
@@ -10037,7 +10069,8 @@ export function apply(ctx) {
           const mk = markWorkStatus(wsCur, { id: live.workId || '', title: live.goal || live.packet?.goal || '', status: 'done', day: dayString(now, tz), now })
           if (mk.ok) mirrorWorkStoreToFiles(mk.state, now, tz)
           const hId = live.parentHorizonId || mk.item?.links?.horizonId || ''
-          if (hId) v4Hub?.horizonsRoute?.({ action: 'upsert', id: hId, bumpStep: true })
+          // 有节点的局写回节点（目标进度由节点推导）；老的没节点的照旧 +1。
+          if (!commitNode('passed') && hId) v4Hub?.horizonsRoute?.({ action: 'upsert', id: hId, bumpStep: true })
         } catch {}
         const before = todayEarned(now, tz)
         // 挣来制：这一局挣多少按实际做了多久（≤ 计划分钟）的 1/3 算，10–40 分钟。
@@ -10062,6 +10095,9 @@ export function apply(ctx) {
         }
       } else if (r.state === 'escalated') {
         recordBreachPenalty('moderate', now, zoneOr(config.timeZone))
+        commitNode('escalated')
+      } else {
+        commitNode('partial')
       }
       dropLive()
       return {
@@ -10138,6 +10174,11 @@ export function apply(ctx) {
           strict: Boolean(strictInfo),
           until: Number(strictInfo?.until) || (live.openedAt + (live.budgetMin || Number(live.protocol?.budget?.minutes) || 45) * 60_000),
           allow: [...new Set(allow)],
+          startedAt: live.openedAt,
+          minutes: live.budgetMin || Number(live.protocol?.budget?.minutes) || 45,
+          ...(live.packet?.deliverable ? { deliverable: String(live.packet.deliverable) } : {}),
+          ...(live.contextBrief ? { nodeContext: live.contextBrief } : {}),
+          ...(live.nodeLink ? { nodeLink: live.nodeLink } : {}),
         }
       : null
     const protocols = builtinProtocols()

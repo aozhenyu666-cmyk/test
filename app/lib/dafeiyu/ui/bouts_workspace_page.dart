@@ -22,6 +22,7 @@ import 'app_picker_dialog.dart';
 import 'bank_manager_page.dart';
 import 'bout_voice_page.dart';
 import 'companion_hub_page.dart';
+import 'horizon_dossier_page.dart';
 import 'plan_hub_page.dart';
 import 'plan_modality_page.dart';
 import 'records_page.dart';
@@ -1266,9 +1267,11 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           else
             for (final item in activeList)
               ListPageRow(
+                key: ValueKey('mainline-horizon-${item['id']}'),
                 icon: AppIcons.planMode,
                 title: '${item['title']}',
-                subtitle: '${item['spanHint'] ?? ''} · 进度 ${item['doneSteps'] ?? 0}/${item['targetSteps'] ?? 5}',
+                subtitle: '${item['spanHint'] ?? ''} · 进度 ${item['doneSteps'] ?? 0}/${item['targetSteps'] ?? 5} · 点开看档案',
+                onTap: () => unawaited(HorizonDossierPage.open(context, horizonId: '${item['id']}', channel: _channel)),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -1328,6 +1331,36 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
         ),
       ),
     ));
+  }
+
+  /// 节点上下文：这一局从哪个节点派出来、要交什么、上次断在哪。点进去是战役档案。
+  Widget _nodeContextCard(BuildContext ctx, Map<String, dynamic> nc, Object? link) {
+    final colors = DshColors.of(ctx);
+    final horizonId = link is Map ? '${link['horizonId'] ?? ''}' : '';
+    final bp = '${nc['lastBreakpoint'] ?? ''}'.trim();
+    final deliverable = '${nc['deliverable'] ?? ''}'.trim();
+    return ListPageCard(
+      key: const ValueKey('bout-detail-node'),
+      title: '节点上下文',
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      children: [
+        ListPageRow(
+          icon: AppIcons.planMode,
+          iconColor: Theme.of(ctx).colorScheme.primary,
+          title: '${nc['nodeTitle'] ?? ''}',
+          subtitle: [
+            '${nc['horizonTitle'] ?? ''}',
+            if ('${nc['targetDate'] ?? ''}'.isNotEmpty) '预留到 ${nc['targetDate']}',
+          ].where((x) => x.isNotEmpty).join(' · '),
+          chevron: horizonId.isNotEmpty,
+          onTap: horizonId.isEmpty ? null : () => unawaited(HorizonDossierPage.open(ctx, horizonId: horizonId, channel: _channel)),
+        ),
+        if (bp.isNotEmpty)
+          ListPageRow(icon: AppIcons.history, iconColor: colors.info, title: '上次断在', subtitle: bp, subtitleMaxLines: 3),
+        if (deliverable.isNotEmpty)
+          ListPageRow(icon: AppIcons.done, iconColor: colors.success, title: '节点交付', subtitle: deliverable, subtitleMaxLines: 3),
+      ],
+    );
   }
 
   String _clockOf(num? ms) {
@@ -1420,6 +1453,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           ),
         ),
       ),
+      if (cur['nodeContext'] is Map) _nodeContextCard(ctx, Map<String, dynamic>.from(cur['nodeContext'] as Map), cur['nodeLink']),
       ListPageCard(
         title: '这一局',
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),

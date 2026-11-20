@@ -14,6 +14,64 @@ export function cleanDue(v) {
   return YMD_RE.test(s) ? s : ''
 }
 
+// ---------------------------------------------------------------- 预留时间节点（2026-11-20 · P0）
+//
+// 一条长期 / 中期目标下面挂若干节点：到哪天、交什么、预计几局几分钟。
+// 节点的执行记录（哪一局、几分钟、结果）由局结束时自动写回，不靠手填；work.json 每天清空，这里是唯一的历史。
+// 有节点的目标，进度 = 达成的节点数 / 节点总数（自动算，不再手动 +1）。
+
+export const NODE_STATUSES = ['planned', 'active', 'passed', 'slipped']
+export const NODE_OUTCOMES = ['passed', 'done', 'partial', 'escalated', 'overdue_locked']
+export const MAX_NODES = 16
+export const MAX_NODE_LOG = 30
+
+const clampInt = (v, lo, hi, d) => {
+  const n = Math.round(Number(v))
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d
+}
+
+export function cleanNode(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const id = String(raw.id || '').trim().slice(0, 40)
+  const title = String(raw.title || '').trim().slice(0, 80)
+  if (!id || !title) return null
+  const budgetBouts = clampInt(raw.budgetBouts, 1, 30, 3)
+  const log = (Array.isArray(raw.executionLog) ? raw.executionLog : [])
+    .filter((e) => e && typeof e === 'object' && String(e.workId || '').trim())
+    .map((e) => ({
+      workId: String(e.workId).trim().slice(0, 64),
+      day: String(e.day || '').slice(0, 10),
+      minutes: clampInt(e.minutes, 0, 600, 0),
+      outcome: NODE_OUTCOMES.includes(e.outcome) ? e.outcome : 'done',
+      summary: String(e.summary || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+      at: Number(e.at) || 0,
+    }))
+    .slice(-MAX_NODE_LOG)
+  return {
+    id,
+    title,
+    targetDate: cleanDue(raw.targetDate),
+    deliverable: String(raw.deliverable || '').trim().slice(0, 200),
+    budgetBouts,
+    budgetMinutes: clampInt(raw.budgetMinutes, 0, 6000, budgetBouts * 45),
+    spentMinutes: clampInt(raw.spentMinutes, 0, 100000, 0),
+    defaultApps: (Array.isArray(raw.defaultApps) ? raw.defaultApps : []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12),
+    status: NODE_STATUSES.includes(raw.status) ? raw.status : 'planned',
+    lastBreakpoint: String(raw.lastBreakpoint || '').trim().slice(0, 200),
+    executionLog: log,
+    reviewNote: String(raw.reviewNote || '').trim().slice(0, 240),
+    createdAt: Number(raw.createdAt) || Date.now(),
+  }
+}
+
+/** 有节点时进度由节点推导：达成几个 / 一共几个。 */
+export function withDerivedProgress(item) {
+  const nodes = Array.isArray(item.nodes) ? item.nodes : []
+  if (!nodes.length) return item
+  const passed = nodes.filter((n) => n.status === 'passed').length
+  return { ...item, targetSteps: nodes.length, doneSteps: passed, status: item.status === 'archived' ? 'archived' : (passed >= nodes.length ? 'done' : 'active') }
+}
+
 export function cleanHorizons(raw) {
   const s = raw && typeof raw === 'object' ? raw : {}
   const normItem = (it, defaultHorizon) => {
@@ -34,12 +92,27 @@ export function cleanHorizons(raw) {
       due: cleanDue(it.due),
       createdAt: Number(it.createdAt) || Date.now(),
       updatedAt: Number(it.updatedAt) || Date.now(),
+      nodes: (Array.isArray(it.nodes) ? it.nodes : []).map(cleanNode).filter(Boolean).slice(0, MAX_NODES),
     }
   }
   return {
-    long: (Array.isArray(s.long) ? s.long : []).map((x) => normItem(x, 'long')).filter(Boolean),
-    medium: (Array.isArray(s.medium) ? s.medium : []).map((x) => normItem(x, 'medium')).filter(Boolean),
+    long: (Array.isArray(s.long) ? s.long : []).map((x) => normItem(x, 'long')).filter(Boolean).map(withDerivedProgress),
+    medium: (Array.isArray(s.medium) ? s.medium : []).map((x) => normItem(x, 'medium')).filter(Boolean).map(withDerivedProgress),
   }
+}
+
+/** 找一条目标（长期 / 中期都找）。 */
+export function findHorizon(state, id) {
+  const t = String(id || '')
+  return [...(state?.long || []), ...(state?.medium || [])].find((x) => x.id === t) || null
+}
+
+/** 把一条目标换成 next（next = fn(旧的)），返回新的整张表。 */
+export function mapHorizon(stateRaw, id, fn) {
+  const s = cleanHorizons(stateRaw)
+  const t = String(id || '')
+  const map = (list) => list.map((x) => (x.id === t ? withDerivedProgress(fn(x)) : x))
+  return { long: map(s.long), medium: map(s.medium) }
 }
 
 export function syncLongGoalsFromMarkdown(horizonsRaw, mdPath) {
@@ -112,6 +185,10 @@ export function upsertHorizonItem(stateRaw, payload = {}, now = Date.now()) {
   const idx = payload.id ? list.findIndex((x) => x.id === String(payload.id)) : -1
   if (idx >= 0) {
     const prev = list[idx]
+    // 有节点的目标：进度由节点推导，老的「+1」不再动它。
+    if (payload.bumpStep && Array.isArray(prev.nodes) && prev.nodes.length) {
+      return { ok: true, item: prev, state: s }
+    }
     const nextDone = payload.bumpStep
       ? Math.min(prev.targetSteps, prev.doneSteps + 1)
       : (payload.doneSteps !== undefined ? Math.max(0, Number(payload.doneSteps) || 0) : prev.doneSteps)
@@ -146,6 +223,7 @@ export function upsertHorizonItem(stateRaw, payload = {}, now = Date.now()) {
     due: cleanDue(payload.due),
     createdAt: now,
     updatedAt: now,
+    nodes: [],
   }
   list.unshift(item)
   return { ok: true, item, state: { ...s, [bucket]: list.slice(0, 40) } }

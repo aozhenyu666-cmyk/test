@@ -17,7 +17,12 @@ import {
   mirrorHorizonsToMarkdown,
   syncLongGoalsFromMarkdown,
   upsertHorizonItem,
+  cleanNode,
+  findHorizon,
+  mapHorizon,
+  MAX_NODES,
 } from './horizons.js'
+import { commitBoutOutcomeToNode, compileBoutFromNode, dossierSummary } from './plan_compiler.js'
 import {
   AI_PROMPT_SCRIPTS,
   cleanPlanContract,
@@ -111,6 +116,7 @@ export function createV4Hub(deps) {
     getEmergencyPassActive = null,
     getWorkStore = null,
     upsertWorkItemNow = null,
+    tierOf = () => 'other',
     markWorkStatusNow = null,
     getArbiterEnforce = () => false,
     getLockRequests = () => [],
@@ -201,6 +207,99 @@ export function createV4Hub(deps) {
     })
   }
 
+  // ---- 预留时间节点（2026-11-20 · P0）----
+  // dossier       一条目标的战役档案：目标 + 节点 + 总账 + 预警
+  // node_upsert   新建 / 改一个节点（不传 id = 新建）
+  // node_delete   删一个节点
+  // node_status   改节点状态（passed 达成 / active / planned / slipped），可带一句复盘
+  // node_extend   预留日子往后挪几天（调盘选项之一，默认 3 天）
+  // node_breakpoint 写一句断点（下一局从哪接）
+  // node_start    从节点编译一局放进今天（返回那一条，手机拿它开局）
+  // node_commit   局结束写回节点（插件自己调；按 workId 幂等）
+  function nodeRoute(action, body, cur, now) {
+    const hId = String(body?.horizonId || body?.id || '')
+    const h = findHorizon(cur, hId)
+    if (!h) return { ok: false, error: 'no-horizon', text: '没找到这条目标' }
+    const today = dayString(now, tz())
+    if (action === 'dossier') {
+      return { ok: true, horizon: h, summary: dossierSummary(h, today), today }
+    }
+    const nodeId = String(body?.nodeId || body?.node?.id || '')
+    const node = nodeId ? h.nodes.find((n) => n.id === nodeId) : null
+    const save = (state, extra = {}) => {
+      const next = saveHorizonsSynced(state)
+      const hz = findHorizon(next, hId)
+      return { ok: true, horizon: hz, summary: dossierSummary(hz, today), ...extra }
+    }
+    if (action === 'node_upsert') {
+      const p = body?.node && typeof body.node === 'object' ? body.node : {}
+      if (!node && h.nodes.length >= MAX_NODES) return { ok: false, error: 'too-many', text: `一条目标最多 ${MAX_NODES} 个节点` }
+      const id = node ? node.id : `N-${now.toString(36).slice(-5)}${Math.floor(Math.random() * 90 + 10)}`
+      const merged = cleanNode({ ...(node || {}), ...p, id, createdAt: node?.createdAt || now,
+        // 下面三项只能由局写回，不接受直接改。
+        spentMinutes: node?.spentMinutes || 0, executionLog: node?.executionLog || [] })
+      if (!merged) return { ok: false, error: 'bad-node', text: '节点要有标题' }
+      const state = mapHorizon(cur, hId, (hz) => ({
+        ...hz,
+        updatedAt: now,
+        nodes: node ? hz.nodes.map((n) => (n.id === id ? merged : n)) : [...hz.nodes, merged],
+      }))
+      record({ state: node ? 'horizon-node-edit' : 'horizon-node-add', at: now, horizonId: hId, nodeId: id, title: merged.title })
+      return save(state, { node: merged })
+    }
+    if (!node) return { ok: false, error: 'no-node', text: '没找到这个节点' }
+    if (action === 'node_delete') {
+      const state = mapHorizon(cur, hId, (hz) => ({ ...hz, updatedAt: now, nodes: hz.nodes.filter((n) => n.id !== nodeId) }))
+      record({ state: 'horizon-node-delete', at: now, horizonId: hId, nodeId })
+      return save(state)
+    }
+    const patchNode = (fn, rec) => {
+      const state = mapHorizon(cur, hId, (hz) => ({ ...hz, updatedAt: now, nodes: hz.nodes.map((n) => (n.id === nodeId ? cleanNode(fn(n)) : n)) }))
+      if (rec) record({ at: now, horizonId: hId, nodeId, ...rec })
+      return save(state)
+    }
+    if (action === 'node_status') {
+      const st = String(body?.status || '')
+      if (!['planned', 'active', 'passed', 'slipped'].includes(st)) return { ok: false, error: 'bad-status' }
+      return patchNode((n) => ({ ...n, status: st, ...(body?.reviewNote !== undefined ? { reviewNote: body.reviewNote } : {}) }),
+        { state: 'horizon-node-status', status: st })
+    }
+    if (action === 'node_extend') {
+      const days = Math.max(1, Math.min(30, Math.round(Number(body?.days) || 3)))
+      const base = node.targetDate || today
+      const t = Date.parse(base + 'T00:00:00Z') + days * 86_400_000
+      const nextDate = new Date(t).toISOString().slice(0, 10)
+      return patchNode((n) => ({ ...n, targetDate: nextDate, status: n.status === 'slipped' ? 'active' : n.status,
+        reviewNote: String(body?.reviewNote || n.reviewNote || '').trim() }), { state: 'horizon-node-extend', from: base, to: nextDate })
+    }
+    if (action === 'node_breakpoint') {
+      return patchNode((n) => ({ ...n, lastBreakpoint: String(body?.breakpoint || '') }), null)
+    }
+    if (action === 'node_start') {
+      const cfg = getConfig() || {}
+      const fallbackApps = Array.isArray(cfg.defaultAllow) && cfg.defaultAllow.length ? cfg.defaultAllow : ['md.obsidian']
+      const c = compileBoutFromNode({ horizon: h, node, tierOf, fallbackApps, minutes: body?.minutes, now })
+      if (!c.ok) return { ok: false, error: 'compile', text: c.error }
+      if (typeof upsertWorkItemNow === 'function') upsertWorkItemNow(c.item, { now, mirror: true })
+      const state = node.status === 'planned'
+        ? mapHorizon(cur, hId, (hz) => ({ ...hz, nodes: hz.nodes.map((n) => (n.id === nodeId ? { ...n, status: 'active' } : n)) }))
+        : cur
+      record({ state: 'horizon-node-start', at: now, horizonId: hId, nodeId, workId: c.item.id, dropped: c.droppedApps })
+      return save(state, { item: c.item, droppedApps: c.droppedApps })
+    }
+    if (action === 'node_commit') {
+      const r = commitBoutOutcomeToNode(cur, {
+        horizonId: hId, nodeId, workId: body?.workId, outcome: body?.outcome, minutes: body?.minutes,
+        summary: body?.summary, breakpoint: body?.breakpoint, day: today, now,
+      })
+      if (!r.ok) return { ok: false, error: r.error }
+      if (!r.changed) return { ok: true, changed: false, alert: r.alert }
+      record({ state: 'horizon-node-log', at: now, horizonId: hId, nodeId, workId: String(body?.workId || ''), outcome: body?.outcome, minutes: body?.minutes })
+      return save(r.state, { changed: true, alert: r.alert })
+    }
+    return { ok: false, error: 'bad-action' }
+  }
+
   // ---- HTTP 路由分发 ----
   function horizonsRoute(body = {}) {
     const now = Date.now()
@@ -212,6 +311,10 @@ export function createV4Hub(deps) {
     if (action === 'delete') {
       const next = saveHorizonsSynced(deleteHorizonItem(cur, body?.id))
       return { v: 1, ok: true, horizons: next }
+    }
+    if (action.startsWith('node_') || action === 'dossier') {
+      const r = nodeRoute(action, body, cur, now)
+      return { v: 1, ...r }
     }
     if (action === 'push_to_today') {
       const all = [...cur.medium, ...cur.long]
