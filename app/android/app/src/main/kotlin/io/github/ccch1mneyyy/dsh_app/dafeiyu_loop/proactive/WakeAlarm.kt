@@ -102,6 +102,12 @@ class ProactiveWakeReceiver : BroadcastReceiver() {
             }
         } catch (t: Throwable) {
             Log.w("DshProactive", "wake", t)
+        }
+        // 开机 / 更新 / 时钟闹钟醒：引擎不在跑、他也没点停止，就拉回来（开机和精确闹钟允许后台起前台服务）。
+        try {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.ensureIfWanted(context, action.substringAfterLast('.'))
+        } catch (t: Throwable) {
+            Log.w("DshProactive", "engine keep", t)
         } finally {
             runCatching { if (wl?.isHeld == true) wl.release() }
         }

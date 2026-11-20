@@ -81,6 +81,8 @@ class A11yWatchdogService : Service() {
 
     private fun runCheck() {
         worker.execute {
+            // 引擎也看一眼：主进程被厂商整个杀掉时，这个显式广播会把它拉起来，再由保活决定拉不拉引擎。
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.pokeMain(this, "watchdog")
             try {
                 val switched = PhoneControl.switchedOn(this)
                 if (!switched) {
@@ -183,6 +185,7 @@ class A11yWatchdogService : Service() {
 
         /** Run one check without starting the service (alarm/boot receivers use this). */
         fun checkNow(context: Context) {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.pokeMain(context, "watchdog-alarm")
             try {
                 if (!PhoneControl.switchedOn(context)) return
                 val listed = PhoneA11yService.isEnabled(context)

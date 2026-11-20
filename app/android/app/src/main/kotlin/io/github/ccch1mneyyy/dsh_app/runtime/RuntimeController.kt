@@ -1101,6 +1101,8 @@ class RuntimeController private constructor(private val app: Context) : DshProce
                 recentRestarts = autoRestarts.count { now - it < 600_000L }, tail = tail)
             if (policyDelay != null && delay == null && !outcome.restartSafe) {
                 EngineExitLog.note(app, "restartSkipped", "service not running")
+                // 前台服务先没了、引擎再被杀：原来到这里就停在 ERROR 没人管。交给保活隔一会儿拉回来。
+                io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.ensureLater(app, "restartSkipped", policyDelay)
             }
             if (delay != null) {
                 // Killed from outside after a good run (memory pressure, a phantom-process sweep): try again.

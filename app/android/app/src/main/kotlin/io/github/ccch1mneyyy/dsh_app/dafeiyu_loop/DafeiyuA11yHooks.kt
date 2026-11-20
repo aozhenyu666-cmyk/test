@@ -42,12 +42,10 @@ object DafeiyuA11yHooks {
     private fun tryHealEngine(context: Context) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastEngineHealAttemptAt < ENGINE_HEAL_COOLDOWN_MS) return
-        val ctrl = runCatching {
-            io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController.get(context.applicationContext)
-        }.getOrNull() ?: return
-        if (ctrl.phase == io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController.Phase.INSTALLED) {
-            lastEngineHealAttemptAt = now
-            runCatching { io.github.ccch1mneyyy.dsh_app.runtime.DshService.ensureEngine(context.applicationContext) }
+        lastEngineHealAttemptAt = now
+        // 2026-11-20：原来只在 INSTALLED 时拉；ERROR 也交给保活（有频率上限），他点了停止就不拉。
+        runCatching {
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.ensureIfWanted(context.applicationContext, "a11y")
         }
     }
 

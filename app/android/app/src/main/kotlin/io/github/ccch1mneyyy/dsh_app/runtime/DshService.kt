@@ -83,6 +83,10 @@ class DshService : Service() {
                 if (controller.phase != RuntimeController.Phase.INSTALLING) {
                     val expected = if (intent.hasExtra(EXTRA_STOP_GENERATION))
                         intent.getIntExtra(EXTRA_STOP_GENERATION, -1) else null
+                    // 没带代号的停止 = 他自己点的（通知栏「停止」/ 设置里停止）：保活不再拉，直到他再启动。
+                    if (expected == null) {
+                        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.markWanted(this, false, "userStop")
+                    }
                     if (controller.stopProcess(expected)) {
                         running = false
                         stopForegroundCompat()
@@ -95,6 +99,9 @@ class DshService : Service() {
                 return if (running) START_STICKY else START_NOT_STICKY
             }
             else -> {
+                if (intent?.action == ACTION_START) {
+                    io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.markWanted(this, true, "start")
+                }
                 if (intent == null) EngineExitLog.note(this, "stickyRestart", "phase=${controller.phase}")
                 else if (intent.action == ACTION_ENSURE_ENGINE) {
                     EngineExitLog.note(this, "ensureEngine", "phase=${controller.phase}")

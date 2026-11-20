@@ -442,6 +442,8 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+        <!-- 2026-11-20 引擎保活：看门狗进程发来的「引擎还在不在」，在主进程里处理（不导出）。 -->
+        <receiver android:name=".dafeiyu_loop.guardian.EngineKeeperReceiver" android:exported="false" />
         <receiver
             android:name=".dafeiyu_loop.proactive.ProactiveWakeReceiver"
             android:exported="true">
