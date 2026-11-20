@@ -132,8 +132,15 @@ test('手机配好桥 → 快照上去；Gemini 交回执、加验收点、提�
     const sl = await call('/seals', { action: 'list' })
     assert.equal(sl.weekReview.by, 'gemini')
     assert.equal(sl.weekReview.adjustments.length, 2)
+    // Gemini：他说「开始了」→ 手机进默认验收（时段外也算）
+    const swP = tool('dafeiyu_start_work', { hours: 1 })
+    await new Promise((r) => setTimeout(r, 150))
+    await call('/gemini-bridge', { action: 'sync' })
+    assert.match((await swP).content[0].text, /开工：默认验收到/)
+    const v = (await call('/seals', { action: 'list' })).verify
+    assert.ok(v.startUntil > Date.now(), '开工计时')
     const st = JSON.parse(readFileSync(join(dir, 'home', 'companion', 'gemini-bridge.json'), 'utf8'))
-    assert.equal(st.applied, 4)
+    assert.equal(st.applied, 5)
   } finally {
     server.close()
     if (old === undefined) delete process.env.DSH_HOME

@@ -113,14 +113,17 @@ export function computeUnifiedLockArbiter({
   const dayWallLocked = Boolean((wall?.locked === true && wall?.kind !== 'night' && wall?.night !== true) || wallReq)
   if (presetActive || dayWallLocked) {
     const pSrc = presetStrict || presetReq
+    const byVerify = presetActive && presetStrict?.by === 'verify'
     return {
       active: true,
       priority: 'P3',
       source: 'BOUT_STRICT',
-      label: presetActive ? '专注严格局护栏' : '时段防分心护栏',
+      label: byVerify ? '默认验收（工作时段）' : presetActive ? '专注严格局护栏' : '时段防分心护栏',
       why: String(pSrc?.why || wall?.why || wallReq?.why || '当前处于严格专注锁定，仅放行声明白名单与急事底线'),
       allow: Array.isArray(pSrc?.allow) ? pSrc.allow : (Array.isArray(wallReq?.allow) ? wallReq.allow : []),
-      unlockHow: presetActive
+      unlockHow: byVerify
+        ? '时段结束 / 吃饭时段自动松；要玩就跟鱼说一句理由，花挣来的余额'
+        : presetActive
         ? '完成本局收工验收，或在锁屏答对 10 道真题换取 5 分钟通行'
         : '开启契约护航局或进入约定放风时段后自动解锁',
     }

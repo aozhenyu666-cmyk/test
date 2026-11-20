@@ -12,6 +12,11 @@ class _Seals extends ProactiveChannel {
 
   final bool locked;
   final List<Map<String, Object?>> calls = [];
+  Map<String, dynamic> verify = {
+    'active': true, 'reason': 'window', 'untilMinute': 720, 'enabled': true, 'offFrom': '', 'recovery': false,
+    'spend': null, 'appliedDay': '2026-11-20', 'appliedTemplate': '工作日', 'inVault': true,
+    'evening': {'active': false, 'cap': 90, 'used': 0, 'hit': false, 'lockUntil': 0, 'next': null},
+  };
   final List<Map<String, dynamic>> items = [
     {'id': 's1', 'day': '2026-11-20', 'title': '资料分析', 'kind': 'quiz', 'stretch': 40, 'floor': 20, 'startMinute': 1140, 'dueMinute': 1200, 'actual': 12, 'status': 'open', 'paidMinutes': 0, 'openedAt': 0},
     {'id': 's2', 'day': '2026-11-20', 'title': '行测笔记', 'kind': 'file', 'stretch': 600, 'floor': 300, 'dueMinute': 900, 'actual': 650, 'status': 'stretch', 'paidMinutes': 25},
@@ -25,6 +30,7 @@ class _Seals extends ProactiveChannel {
         'cutoffPassed': false,
         'coldCutoffMinute': 600,
         'workStarted': false,
+        'verify': verify,
         'items': items,
         'locking': locked ? items.first : null,
       };
@@ -38,6 +44,11 @@ class _Seals extends ProactiveChannel {
       return {..._view(), 'review': {'id': 'wr-1', 'by': 'paste', 'verdict': '在演', 'watch': '没过保底', 'adjustments': [{'text': '保底 10 → 15'}, {'text': '晚上不排'}]}};
     }
     if (body['action'] == 'week-decide') return _view();
+    if (body['action'] == 'verify-off') {
+      verify = {...verify, 'offFrom': '2026-11-21'};
+      return {..._view(), 'text': '明天起不再默认验收；今天照旧。'};
+    }
+    if (body['action'] == 'evening-cap' || body['action'] == 'spend') return {..._view(), 'text': '好了'};
     if (body['action'] == 'add') {
       final s = Map<String, dynamic>.from(body['seal'] as Map);
       items.add({...s, 'id': 's3', 'day': '2026-11-21', 'actual': 0, 'status': 'open', 'paidMinutes': 0, 'floor': s['floor'] ?? 10});
@@ -150,5 +161,39 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('week-decide')));
     await settlePhone(tester);
     expect(ch.calls.last, {'action': 'week-decide', 'id': 'wr-1', 'accepted': [0]});
+  });
+
+  testWidgets('今天的模式：默认验收开着（到 12:00）、今天套了模板；关 → 先确认、明天起', (tester) async {
+    final ch = _Seals();
+    await pumpPhone(tester, SealPage(channel: ch));
+    await settlePhone(tester);
+    expect(find.text('开着：只放常用 App（到 12:00）'), findsOneWidget);
+    expect(find.textContaining('今天套了「工作日」'), findsOneWidget);
+    expect(find.text('晚上娱乐上限 90 分钟'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('mode-verify-switch')));
+    await settlePhone(tester);
+    expect(find.textContaining('明天起才生效'), findsOneWidget);
+    await tester.tap(find.text('明天起关'));
+    await settlePhone(tester);
+    expect(ch.calls.last, {'action': 'verify-off'});
+    expect(find.textContaining('明天（2026-11-21）起关'), findsOneWidget);
+  });
+
+  testWidgets('改晚间上限、花余额：带上分钟和理由', (tester) async {
+    final ch = _Seals();
+    await pumpPhone(tester, SealPage(channel: ch));
+    await settlePhone(tester);
+    await tester.tap(find.byKey(const ValueKey('mode-evening')));
+    await settlePhone(tester);
+    await tester.enterText(find.byKey(const ValueKey('evening-cap-field')), '120');
+    await tester.tap(find.text('设定'));
+    await settlePhone(tester);
+    expect(ch.calls.last, {'action': 'evening-cap', 'minutes': 120});
+    await tester.tap(find.byKey(const ValueKey('mode-spend')));
+    await settlePhone(tester);
+    await tester.enterText(find.byKey(const ValueKey('spend-reason')), '看一集纪录片');
+    await tester.tap(find.byKey(const ValueKey('spend-submit')));
+    await settlePhone(tester);
+    expect(ch.calls.last, {'action': 'spend', 'minutes': 20, 'reason': '看一集纪录片'});
   });
 }

@@ -320,6 +320,164 @@ class _SealPageState extends State<SealPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r?['ok'] == true ? '记下了' : '没存上')));
   }
 
+  // ------------------------------------------------------------------ 今天的模式（超级验收者的底层设定）
+
+  Map<String, dynamic> get _verify => _data['verify'] is Map ? Map<String, dynamic>.from(_data['verify'] as Map) : const {};
+
+  String _clock(Object? ms) {
+    final t = (ms as num?)?.toInt() ?? 0;
+    if (t <= 0) return '';
+    final d = DateTime.fromMillisecondsSinceEpoch(t);
+    return '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _verifyLine(Map<String, dynamic> v) {
+    if (v['active'] == true) {
+      final until = (v['untilMinute'] as num?)?.toInt();
+      return '开着：只放常用 App${until != null ? '（到 ${sealHm(until)}）' : ''}${v['reason'] == 'start' ? ' · 你说开工了' : ''}';
+    }
+    if (v['enabled'] != true) return '关着';
+    final spend = v['spend'] is Map ? v['spend'] as Map : null;
+    return switch ('${v['why']}') {
+      'spend' => '你在花余额（到 ${_clock(spend?['until'])}），花完回来',
+      'meal' => '吃饭时段，让路',
+      'break' => '放风中，让路',
+      'relax' => '申请到的放风段，让路',
+      'emergency' => '紧急解除中，让路',
+      'night' => '深夜：交给深夜锁',
+      _ => '时段外（工作时段里自动开）',
+    };
+  }
+
+  Future<void> _toggleVerify(bool on) async {
+    if (!on) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('关掉默认验收？'),
+          content: const Text('这是放松：明天起才生效，今天照旧。想反悔随时打开。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('不关了')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('明天起关')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    await _opText({'action': on ? 'verify-on' : 'verify-off'});
+  }
+
+  /// 和 _op 一样，但成功时把插件回的那句话显示出来。
+  Future<void> _opText(Map<String, Object?> body) async {
+    final r = await _channel.sealsOp(body);
+    if (!mounted) return;
+    final ok = r?['ok'] == true;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${r?['text'] ?? (r == null ? '连不上引擎' : ok ? '好了' : '没成（${r['error']}）')}')));
+    if (ok) setState(() => _data = r!);
+  }
+
+  Future<void> _spend() async {
+    final out = await showDialog<(int, String)>(context: context, builder: (_) => const _SpendDialog());
+    if (out == null || !mounted) return;
+    await _opText({'action': 'spend', 'minutes': out.$1, 'reason': out.$2});
+  }
+
+  Future<void> _setEveningCap(int current) async {
+    final v = await showDialog<String>(
+      context: context,
+      builder: (_) => _PromptDialog(
+        title: '晚上的娱乐上限（分钟）',
+        initial: '$current',
+        helper: '30–180。调低立即生效；调高明天起（今晚不变）',
+        number: true,
+        fieldKey: const ValueKey('evening-cap-field'),
+        confirm: '设定',
+      ),
+    );
+    final n = int.tryParse(v ?? '');
+    if (n == null || !mounted) return;
+    await _opText({'action': 'evening-cap', 'minutes': n});
+  }
+
+  Widget _modeCard(DshColors colors) {
+    final v = _verify;
+    if (v.isEmpty) return const SizedBox.shrink();
+    final ev = v['evening'] is Map ? Map<String, dynamic>.from(v['evening'] as Map) : const <String, dynamic>{};
+    final cap = (ev['cap'] as num?)?.toInt() ?? 90;
+    final next = ev['next'] is Map ? ev['next'] as Map : null;
+    final pendingOff = '${v['offFrom'] ?? ''}'.isNotEmpty;
+    return ListPageCard(
+      key: const ValueKey('seal-mode'),
+      title: '今天的模式',
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      children: [
+        ListPageRow(
+          key: const ValueKey('mode-verify'),
+          icon: v['active'] == true ? AppIcons.lockActive : AppIcons.lock,
+          iconColor: v['active'] == true ? colors.info : null,
+          title: '默认验收',
+          subtitle: pendingOff ? '${_verifyLine(v)} · 明天（${v['offFrom']}）起关' : _verifyLine(v),
+          subtitleMaxLines: 2,
+          trailing: Switch.adaptive(
+            key: const ValueKey('mode-verify-switch'),
+            value: !pendingOff,
+            onChanged: (on) => unawaited(_toggleVerify(on)),
+          ),
+        ),
+        if (v['recovery'] == true)
+          ListPageRow(
+            key: const ValueKey('mode-recovery'),
+            icon: AppIcons.attention,
+            iconColor: colors.warning,
+            title: '恢复日',
+            subtitle: '连续两天没过保底：今天只要一套 10 题，不加码；连续两天交上自动退出',
+            subtitleMaxLines: 2,
+            badge: const StatusChip(tone: StatusTone.warn, label: '恢复日'),
+          ),
+        ListPageRow(
+          key: const ValueKey('mode-evening'),
+          icon: AppIcons.time,
+          iconColor: ev['hit'] == true ? colors.danger : null,
+          title: '晚上娱乐上限 $cap 分钟',
+          subtitle: ev['hit'] == true
+              ? '今晚用完了：锁到明早 7 点（余额留着明天用）'
+              : ev['active'] == true
+                  ? '今晚已用 ${ev['used'] ?? 0}/$cap 分钟（18:00 起算）'
+                  : '18:00 到深夜锁之间，娱乐 + 游戏最多这么多${next != null ? ' · ${next['from']} 起 ${next['minutes']} 分钟' : ''}',
+          subtitleMaxLines: 2,
+          badge: ev['hit'] == true ? const StatusChip(tone: StatusTone.error, label: '用完了') : null,
+          chevron: true,
+          onTap: () => unawaited(_setEveningCap(cap)),
+        ),
+        ListPageRow(
+          key: const ValueKey('mode-spend'),
+          icon: AppIcons.play,
+          title: '要玩：说一句理由，花挣来的余额',
+          subtitle: '5–60 分钟，不超过余额；也可以直接跟鱼说',
+          subtitleMaxLines: 2,
+          chevron: true,
+          onTap: () => unawaited(_spend()),
+        ),
+        ListPageRow(
+          key: const ValueKey('mode-start'),
+          icon: AppIcons.planMode,
+          title: '开工',
+          subtitle: '时段外也进默认验收（2 小时）；跟鱼说「开始了 / 冲刺」一样',
+          subtitleMaxLines: 2,
+          chevron: true,
+          onTap: () => unawaited(_opText({'action': 'start', 'hours': 2})),
+        ),
+        ListPageRow(
+          icon: AppIcons.document,
+          title: '模板',
+          subtitle: '${v['inVault'] == true ? '笔记库 大肥鱼/模板.md' : '手机里的 模板.md'}：没定今天时到点自动套；改了第二天生效'
+              '${'${v['appliedTemplate'] ?? ''}'.isNotEmpty && v['appliedDay'] == _data['today'] ? ' · 今天套了「${v['appliedTemplate']}」' : ''}',
+          subtitleMaxLines: 3,
+        ),
+      ],
+    );
+  }
+
   // ------------------------------------------------------------------ 页面
 
   ListPageRow _row(Map<String, dynamic> s, {required bool locking}) {
@@ -391,6 +549,7 @@ class _SealPageState extends State<SealPage> {
               ),
             ],
           ),
+        _modeCard(colors),
         ListPageCard(
           key: const ValueKey('seal-today'),
           title: '今天 · 时间轴',
@@ -775,6 +934,60 @@ class _PromptDialogState extends State<_PromptDialog> {
       actions: [
         TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
         FilledButton(key: widget.confirmKey, onPressed: () => Navigator.of(context).pop(_c.text.trim()), child: Text(widget.confirm)),
+      ],
+    );
+  }
+}
+
+/// 花余额：几分钟 + 一句理由。两个输入框的控制器归它自己管。
+class _SpendDialog extends StatefulWidget {
+  const _SpendDialog();
+
+  @override
+  State<_SpendDialog> createState() => _SpendDialogState();
+}
+
+class _SpendDialogState extends State<_SpendDialog> {
+  final _min = TextEditingController(text: '20');
+  final _why = TextEditingController();
+
+  @override
+  void dispose() {
+    _min.dispose();
+    _why.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('花挣来的余额'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            key: const ValueKey('spend-minutes'),
+            controller: _min,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(labelText: '几分钟（5–60）'),
+          ),
+          TextField(
+            key: const ValueKey('spend-reason'),
+            controller: _why,
+            autofocus: true,
+            maxLength: 120,
+            decoration: const InputDecoration(labelText: '理由（花在什么上、为什么现在）'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('算了')),
+        FilledButton(
+          key: const ValueKey('spend-submit'),
+          onPressed: () => Navigator.of(context).pop((int.tryParse(_min.text.trim()) ?? 0, _why.text.trim())),
+          child: const Text('花'),
+        ),
       ],
     );
   }

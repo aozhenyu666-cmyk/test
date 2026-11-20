@@ -55,7 +55,7 @@ export const STATE_TABLE = [
     tools: ['daily_review', 'propose_covenant', 'add_checkpoints', 'submit_to_wall', 'submit_verdict', 'request_relax', 'submit_prediction', 'notes_vault', 'fish_index', 'kb_write'] },
   { id: 'morning', priority: 80, enter: ['morning-lock'], lock: 'followup', back: null,
     agenda: '晨间立项：定今天 1–3 件事，每件带完成物；裁决满意且任务校验通过才放。',
-    tools: ['daily_plan', 'add_checkpoints', 'plan_bouts', 'open_bout', 'take_stance', 'notes_vault', 'vault_search', 'fish_index', 'sister_note', 'kb_write', 'dafeiyu_control', 'gemini_live'] },
+    tools: ['start_work', 'daily_plan', 'add_checkpoints', 'plan_bouts', 'open_bout', 'take_stance', 'notes_vault', 'vault_search', 'fish_index', 'sister_note', 'kb_write', 'dafeiyu_control', 'gemini_live'] },
   { id: 'review', priority: 80, enter: ['review-lock'], lock: 'followup', back: null,
     agenda: '验收：对照完成物和笔记库追问，满意才放风。',
     tools: ['submit_verdict', 'end_task_mode', 'submit_to_wall', 'notes_vault', 'fish_index', 'vault_recent_notes', 'kb_write', 'dafeiyu_control', 'open_bout', 'start_task_mode'] },
@@ -74,7 +74,7 @@ export const STATE_TABLE = [
     tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'tighten_today', 'workflow_propose', 'open_bout', 'plan_bouts'] },
   { id: 'break', priority: 60, enter: ['break'], lock: 'open', back: null,
     agenda: '放风：纯陪聊，到点回待命。',
-    tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control', 'open_bout', 'plan_bouts', 'gemini_live'] },
+    tools: ['spend_balance', 'set_evening_cap', 'notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control', 'open_bout', 'plan_bouts', 'gemini_live'] },
   { id: 'standby', priority: 50, enter: ['always'], lock: 'standby', back: null,
     agenda: '待命：帮他挑下一件事、拆出第一步；10 分钟没动就开追问锁。',
     // C1：挂载卡的三件套在待命里齐（挑下一件事靠的就是「他手上推到哪」）。

@@ -119,6 +119,7 @@ export function createV4Hub(deps) {
     upsertWorkItemNow = null,
     tierOf = () => 'other',
     getSealSession = () => null,
+    getVerifySession = () => null,
     getSealLines = () => [],
     markWorkStatusNow = null,
     getArbiterEnforce = () => false,
@@ -720,7 +721,8 @@ export function createV4Hub(deps) {
     // 封印到点没过保底的锁和契约逾期是同一类（同一档、同一条通道）。
     const contractSession = overrides.contractSession !== undefined ? overrides.contractSession : (contractSessionView(now) || getSealSession(now))
     const taskLease = overrides.taskLease !== undefined ? overrides.taskLease : getTaskLease?.(now)
-    const presetStrict = overrides.presetStrict !== undefined ? overrides.presetStrict : presetRt?.sessionView?.(now)
+    // 默认验收（工作时段里什么都没开时）和专注严格局同一档，排在它后面。
+    const presetStrict = overrides.presetStrict !== undefined ? overrides.presetStrict : (presetRt?.sessionView?.(now) || getVerifySession(now))
     const wall = overrides.wall !== undefined ? overrides.wall : getWallDecision?.(now)
     const autonomy = overrides.autonomy || computeAutonomy(now)
     const lockRequests = overrides.lockRequests !== undefined ? overrides.lockRequests : (getLockRequests?.(now) || [])

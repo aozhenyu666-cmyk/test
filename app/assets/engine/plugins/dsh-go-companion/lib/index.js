@@ -98,7 +98,7 @@ import * as clueRt from './clue.js'
 // 第八轮 W2：墙的面板。数据层自己不含措辞，只读 machine/wall_voice/settings 的现成结论。
 import { buildWallSnapshot } from './wall_panel.js'
 import { wallAuditView, wallView } from './wall_view.js'
-import { settingsOf, applySettings, dayKindOf, inWorkWindow } from './settings.js'
+import { settingsOf, applySettings, dayKindOf, inWorkWindow, windowsOf } from './settings.js'
 // 第八轮 W4：设定页。解析、渲染、预填都在 settings_panel.js，这里只接线。
 import { buildSettingsSnapshot, parseDay, parseLimits, settingsMarkdown } from './settings_panel.js'
 import { settingsDayView, settingsLimitsView } from './settings_view.js'
@@ -163,6 +163,10 @@ import {
 } from './covenant.js'
 import { weekPack } from './week_pack.js'
 import { addReview, cleanReview, decideReview, parseWeekReview, reviewMarkdown, reviewPromptLines } from './week_review.js'
+import {
+  DEFAULT_TEMPLATES, checkSpend, checkStart, dayOutcomes, defaultVerify, parseTemplates, recoveryStep, renderTemplates,
+  shouldApplyTemplate, templateSeals, verifyPromptLines, eveningOf, eveningStep, eveningCapFor, setEveningCap, EVENING_END,
+} from './verifier_mode.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
@@ -2186,7 +2190,8 @@ export function apply(ctx) {
     taskLeaseView(now) ||
     leaseSessionView(now) ||
     presetRt.sessionView(now) ||
-    v4Hub?.contractSessionView(now, { escalatedOnly: false })
+    v4Hub?.contractSessionView(now, { escalatedOnly: false }) ||
+    verifySessionView(now)
   // 行为大脑：片段与日摘要、模式卡。只看见、只记住；不自动立规则（K4 以后再接）。
   const brainRt = createBrainRuntime({
     loadEpisodes: () => readState(stateFile('episodes.json'), null),
@@ -2538,6 +2543,11 @@ export function apply(ctx) {
     if (wd.locked && wd.kind === WALL_KIND_DEFAULT && !earnedOpen(now, tz)) {
       push(WALL_KIND_DEFAULT, wd.until, wd.why)
     }
+    // 2026-11-21 晚间娱乐上限用完：娱乐 / 游戏锁到明早 7:00（余额再多也不开；Gemini 常驻不锁）。
+    try {
+      const evUntil = eveningLockUntil(now, tz)
+      if (evUntil) push(WALL_KIND_DEFAULT, evUntil, '今晚的娱乐 ' + eveningNow(now, tz).cap + ' 分钟用完了：锁到明早 7 点。想说话就开 Gemini 聊聊今天、把明天封了。')
+    } catch {}
     // 追问锁：门开着就不放——回复敷衍时窗口不消失，到点由插件自己结束。
     if (lockActive(config.followup, now)) push('followup', Number(config.followup.until), '追问锁：把这一个问题说清楚')
     const rh = lastRhythm
@@ -2815,9 +2825,23 @@ export function apply(ctx) {
     getWorkStore: (now = Date.now()) => workStoreNow(now, zoneOr(config.timeZone)),
     tierOf: (pkg) => tierFnNow()(pkg),
     getSealSession: (now) => sealSessionView(now),
+    getVerifySession: (now) => verifySessionView(now),
     getSealLines: (now) => {
       const tz = zoneOr(config.timeZone)
-      return [...sealPromptLines(loadSeals(now, tz), { today: dayString(now, tz), hm: sealHm }), ...reviewPromptLines(loadWeekReviews(), now)]
+      let vLines = []
+      try {
+        const vv = verifyView(now, tz)
+        vLines = verifyPromptLines({
+          verify: { active: vv.active }, recovery: { active: vv.recovery },
+          spend: vv.spend ? zoneHm(vv.spend.until, tz) : '', untilHm: vv.untilMinute != null ? sealHm(vv.untilMinute) : '',
+        })
+        if (vv.evening?.active) {
+          vLines.push(vv.evening.hit
+            ? '今晚的娱乐 ' + vv.evening.cap + ' 分钟用完了（锁到明早 7 点）：他求情不松，余额再多也不开；陪他聊、复盘今天、封明天，或者叫他开 Gemini。'
+            : '今晚娱乐已用 ' + vv.evening.used + '/' + vv.evening.cap + ' 分钟（18:00 起算，用完锁到明早 7 点）。')
+        }
+      } catch {}
+      return [...vLines, ...sealPromptLines(loadSeals(now, tz), { today: dayString(now, tz), hm: sealHm }), ...reviewPromptLines(loadWeekReviews(), now)]
     },
     upsertWorkItemNow: (item, { now = Date.now(), mirror = true } = {}) => {
       const tz = zoneOr(config.timeZone)
@@ -6996,7 +7020,7 @@ export function apply(ctx) {
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
-        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role), addCheckpointsTool(role),
+        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role), addCheckpointsTool(role), startWorkTool(role), spendBalanceTool(role), eveningCapTool(role),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
         fishIndexTool(), presetTool(role), brainTool(role), composeBoutTool(role),
         openBoutTool(role), planBoutsTool(role),
@@ -8091,6 +8115,274 @@ export function apply(ctx) {
       // 写不进去就算了：生效的是 config
     }
   }
+  // ---------------------------------------------------------------- 2026-11-21 超级验收者的底层设定
+  // 规则在 verifier_mode.js。他不下任何指令也成立：工作时段默认验收（只放常用 App）、到点自动套模板、
+  // 连续两天没过保底进恢复日；花挣来的余额要先说一句理由；跟鱼说「开始了」时段外也进。
+  const loadVerify = () => readState(stateFile('verify.json'), null) || {}
+  const saveVerify = (s) => writeJson(stateFile('verify.json'), s)
+  const templatesPath = () => {
+    const kb = vaultKb()
+    return kb ? join(kb, '模板.md') : stateFile('模板.md')
+  }
+  /** 今天用的模板：每天第一次用时读一遍 大肥鱼/模板.md，当天不再变（他改了第二天生效）。 */
+  function templatesToday(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const today = dayString(now, tz)
+    const v = loadVerify()
+    if (v.templatesDay === today && v.templates && typeof v.templates === 'object') return v.templates
+    let text = null
+    try {
+      text = readVaultText(templatesPath())
+    } catch {}
+    if (text === null) {
+      text = renderTemplates(DEFAULT_TEMPLATES)
+      try {
+        writeVaultText(templatesPath(), text)
+      } catch {}
+    }
+    const t = parseTemplates(text)
+    saveVerify({ ...loadVerify(), templates: t, templatesDay: today })
+    return t
+  }
+  /** 关默认验收是放松：明天才生效（今天的照旧）。开是收紧：立即。 */
+  function verifyEnabled(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const vm = config.verifyMode && typeof config.verifyMode === 'object' ? config.verifyMode : {}
+    return !(vm.offFrom && dayString(now, tz) >= vm.offFrom)
+  }
+  function verifyStateNow(now = Date.now(), tz = zoneOr(config.timeZone), phone = lastPhone) {
+    const kind = dayKindOf(now, tz, config)
+    const min = zoneMinuteOfDay(now, tz)
+    let relaxOpen = false
+    try {
+      const relax = activeRelax(config, now, tz)
+      relaxOpen = Boolean(relax?.segments?.some((s) => min >= s.from && min < s.to))
+    } catch {}
+    return defaultVerify({
+      now, enabled: verifyEnabled(now, tz),
+      windows: windowsOf(settingsOf(config), kind).map((w) => [w.from, w.to]),
+      minuteOfDay: min,
+      night: Boolean(lastRhythm?.night),
+      emergency: isEmergencyPassOrDisarmActive(now, tz),
+      onBreak: onBreak(now),
+      meal: Boolean(mealNow(wallConfig(config).meals, localMinute(phone, min))),
+      relaxOpen,
+      spendUntil: Number(config.spendPass?.until) || 0,
+      startUntil: Number(config.verifyStartUntil) || 0,
+    })
+  }
+  /** 默认验收放行的：局的默认白名单 + 分类表里的「工作」+ 正在跑的那一局要的 + 常驻（Gemini / NekoBox）+ 急事底线。 */
+  function verifyAllow() {
+    const tf = tierFnNow()
+    const work = []
+    try {
+      for (const a of appsOf()) {
+        const pkg = String(a?.package || a?.pkg || a || '')
+        if (pkg && tf(pkg) === 'work') work.push(pkg)
+      }
+    } catch {}
+    const boutApps = live?.apps ? [...(live.apps.need || []), ...(live.apps.allow || [])] : []
+    return [...new Set([...defaultAllowApps(), ...work, ...boutApps, ...RESIDENT_PACKAGES, ...emergencyPackages(appsOf())])].filter(Boolean)
+  }
+  function verifySessionView(now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const v = verifyStateNow(now, tz)
+    if (!v.active) return null
+    return {
+      allow: verifyAllow(),
+      until: startOfDay(now, config.timeZone) + v.untilMinute * 60_000,
+      topic: '默认验收',
+      why: (v.reason === 'start' ? '你说开工了' : '工作时段') + '：默认验收，只放行常用 App。要玩先跟鱼说一句理由，花挣来的余额。',
+      strict: false,
+      graceMs: 30_000,
+      mode: 'ai-work',
+      by: 'verify',
+    }
+  }
+  /** 每拍：一天一次判恢复日；到点没定今天就套模板（恢复日套「恢复日」）。 */
+  function verifyTick(now = Date.now(), tz = zoneOr(config.timeZone), phone = lastPhone) {
+    try {
+      eveningTick(now, tz, phone)
+    } catch (error) {
+      console.error('[companion] 晚间上限失败：' + String((error && error.message) || error))
+    }
+    const today = dayString(now, tz)
+    const min = zoneMinuteOfDay(now, tz)
+    let v = loadVerify()
+    const past = Array.from({ length: 7 }, (_, i) => dayString(now - (i + 1) * 86_400_000, tz))
+    const seals = loadSeals(now, tz)
+    const rs = recoveryStep(v.recovery, dayOutcomes(seals, past), past, today)
+    if (rs.state.checkedDay !== v.recovery?.checkedDay) {
+      v = { ...v, recovery: rs.state }
+      saveVerify(v)
+      if (rs.entered) {
+        record({ state: 'recovery-enter', at: now, day: today })
+        try {
+          const kb = vaultKb()
+          if (kb) writeVaultText(join(kb, '恢复日', today + '.md'), '# ' + today + ' · 恢复日\n\n连续两天没过保底。今天只要一套 10 题（题库代码判），不加码；连续两天交上自动退出。\n')
+        } catch {}
+      }
+      if (rs.exited) record({ state: 'recovery-exit', at: now, day: today })
+    }
+    if (!verifyEnabled(now, tz)) return
+    const kind = dayKindOf(now, tz, config)
+    const t = templatesToday(now, tz)
+    const tp = v.recovery?.active ? t.recovery : kind === 'workday' ? t.workday : kind === 'restday' ? t.restday : null
+    const hasSealsToday = seals.items.some((x) => x.day === today)
+    if (!tp || !shouldApplyTemplate({ today, minuteOfDay: min, hasSealsToday, appliedDay: v.appliedDay, applyAt: tp.applyAt })) return
+    const items = templateSeals(tp, { minuteOfDay: min })
+    const r = items.length ? sealsRoute({ action: 'plan-day', target: 'today', seals: items, by: 'template' }) : { added: [] }
+    saveVerify({ ...loadVerify(), appliedDay: today, appliedTemplate: tp.name })
+    record({ state: 'template-applied', at: now, template: tp.name, added: (r.added || []).length, recovery: Boolean(v.recovery?.active) })
+  }
+  /** 今晚的娱乐用量（手机报的今天 fun / game 分钟；过了零点手机清零，eveningStep 接着加）。 */
+  function eveningNow(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const today = dayString(now, tz)
+    const ev = eveningOf(today, dayString(now - 86_400_000, tz), zoneMinuteOfDay(now, tz))
+    const st = loadVerify().evening || null
+    const cap = eveningCapFor(config.eveningCap, ev.key || today)
+    const mine = ev.evening && st && st.key === ev.key ? st : null
+    return { ...ev, cap, used: mine ? mine.used : 0, capHitAt: mine ? Number(mine.capHitAt) || 0 : 0 }
+  }
+  /** 今晚的上限用完了：锁到明早 7:00（返回到点时刻，没锁就 0）。 */
+  function eveningLockUntil(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const e = eveningNow(now, tz)
+    if (!e.evening || !e.capHitAt) return 0
+    const day0 = startOfDay(now, config.timeZone)
+    return (e.beforeMidnight ? day0 + 86_400_000 : day0) + EVENING_END * 60_000
+  }
+  function eveningTick(now, tz, phone) {
+    const ev = eveningOf(dayString(now, tz), dayString(now - 86_400_000, tz), zoneMinuteOfDay(now, tz))
+    if (!ev.evening) return
+    const rows = Array.isArray(phone?.today) ? phone.today : (lastPhone?.today || [])
+    const tf = tierFnNow()
+    let fun = 0
+    for (const r of rows) {
+      if (!r?.app) continue
+      const t = tf(String(r.app), String(r.label || ''))
+      if (t === 'fun' || t === 'game') fun += Number(r.minutes) || 0
+    }
+    const v = loadVerify()
+    const cap = eveningCapFor(config.eveningCap, ev.key)
+    const r = eveningStep(v.evening, { key: ev.key, beforeMidnight: ev.beforeMidnight, funToday: fun, cap, now })
+    if (JSON.stringify(r.state) !== JSON.stringify(v.evening)) saveVerify({ ...loadVerify(), evening: r.state })
+    if (r.hit) {
+      record({ state: 'evening-cap-hit', at: now, used: r.state.used, cap })
+      recordHardNow({ kind: 'evening_cap', source: 'verify', why: '今晚娱乐 ' + cap + ' 分钟用完', now, tz, dedupeKey: 'evening:' + ev.key })
+      // 他说过「那还不如直接和 Gemini 互动」：用完那一刻约一次 Gemini（走闸门：深夜 / 安静 / 紧急 / 当天上限都会挡）。
+      try {
+        const s = loadGeminiSchedule()
+        if (!(Number(s.at) > now && s.fired !== true)) {
+          saveGeminiSchedule({ at: now, topic: '今晚的娱乐用完了：聊聊今天做成了什么、卡在哪，把明天要交的封了', minutes: 15, mode: 'think', by: 'evening-cap', fired: false })
+        }
+      } catch {}
+    }
+  }
+  function verifyView(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const v = verifyStateNow(now, tz)
+    const st = loadVerify()
+    const vm = config.verifyMode && typeof config.verifyMode === 'object' ? config.verifyMode : {}
+    const sp = config.spendPass && Number(config.spendPass.until) > now ? config.spendPass : null
+    return {
+      active: v.active === true, why: v.why || '', reason: v.reason || '', untilMinute: v.untilMinute ?? null,
+      enabled: verifyEnabled(now, tz), offFrom: vm.offFrom || '',
+      recovery: Boolean(st.recovery?.active), recoverySince: st.recovery?.since || '',
+      spend: sp ? { until: Number(sp.until), minutes: sp.minutes, reason: sp.reason } : null,
+      startUntil: Number(config.verifyStartUntil) > now ? Number(config.verifyStartUntil) : 0,
+      appliedDay: st.appliedDay || '', appliedTemplate: st.appliedTemplate || '',
+      templatesPath: templatesPath(), inVault: Boolean(vaultKb()),
+      evening: (() => {
+        const e = eveningNow(now, tz)
+        return { active: e.evening, cap: e.cap, used: e.used, hit: Boolean(e.capHitAt), lockUntil: eveningLockUntil(now, tz), next: config.eveningCap?.next || null }
+      })(),
+    }
+  }
+  function spendBalance({ minutes, reason, by = 'panel' }, now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    let balance = 0
+    try {
+      balance = Number(timeLedgerNow(now, tz, lastPhone).funLeft) || 0
+    } catch {}
+    if (eveningLockUntil(now, tz)) return { ok: false, error: 'evening-cap', text: '今晚的娱乐上限已经用完了，锁到明早 7 点。余额留着明天用。' }
+    const c = checkSpend({ minutes, reason, balance })
+    if (!c.ok) return c
+    commit({ spendPass: { until: now + c.minutes * 60_000, minutes: c.minutes, reason: c.reason, at: now, by } })
+    record({ state: 'balance-spend', at: now, minutes: c.minutes, reason: c.reason, by })
+    return { ok: true, minutes: c.minutes, until: now + c.minutes * 60_000, text: '好，' + c.minutes + ' 分钟（到 ' + zoneHm(now + c.minutes * 60_000, tz) + '）。理由记下了：' + c.reason + '。花完自动回到默认验收。' }
+  }
+  function startWork({ hours, sprint = false, by = 'panel' }, now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const c = checkStart({ hours })
+    commit({ verifyStartUntil: now + c.ms, spendPass: null })
+    record({ state: 'work-start', at: now, hours: Math.round(c.ms / 360_000) / 10, sprint: Boolean(sprint), by })
+    let added = []
+    if (sprint) {
+      const t = templatesToday(now, tz)
+      const r = sealsRoute({ action: 'plan-day', target: 'today', seals: templateSeals(t.sprint, { minuteOfDay: zoneMinuteOfDay(now, tz) }), by: by === 'gemini' ? 'gemini' : '' })
+      added = r.added || []
+    }
+    return {
+      ok: true,
+      text: '开工：默认验收到 ' + zoneHm(now + c.ms, tz) + '（只放常用 App）。' +
+        (added.length ? '冲刺验收点：' + added.map((x) => '「' + x.title + '」' + sealHm(x.dueMinute) + ' 前').join('、') + '，下一拍自动开局。' : ''),
+    }
+  }
+  function startWorkTool(role) {
+    return {
+      name: 'start_work',
+      description: '他说「开始了 / 开工 / 进入状态 / 冲刺」时用：立刻进默认验收（只放常用 App，时段外也算），可选冲刺——按模板加一条从现在起算的验收点（默认 90 分钟内题库 30 题）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          hours: { type: 'number', description: '默认验收多久（小时，默认 2，最多 6）' },
+          sprint: { type: 'boolean', description: '他说「冲刺」时为 true' },
+        },
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => startWork({ hours: args.hours, sprint: args.sprint === true, by: role }),
+    }
+  }
+  function eveningCapTool(role) {
+    return {
+      name: 'set_evening_cap',
+      description: '他说要调晚上的娱乐上限时用（「以后晚上给 2 小时」「这周累，晚上多给点」「晚上只给 1 小时」）。' +
+        '调低立即生效；调高从明天起（今晚不变）——晚上临时求加不算数。范围 30–180 分钟。',
+      parameters: {
+        type: 'object',
+        properties: { minutes: { type: 'integer', description: '每晚娱乐上限（分钟）' }, reason: { type: 'string', description: '他的原话' } },
+        required: ['minutes'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const tz = zoneOr(config.timeZone)
+        const today = dayString(now, tz)
+        const r = setEveningCap(config.eveningCap, args.minutes, { today, tomorrow: nextYmd(today) })
+        if (!r.ok) return { ok: false, text: r.text }
+        commit({ eveningCap: r.value })
+        record({ state: 'evening-cap-set', at: now, by: role, minutes: Number(args.minutes), immediate: r.immediate, reason: String(args.reason || '').slice(0, 80) })
+        return { ok: true, text: r.text }
+      },
+    }
+  }
+  function spendBalanceTool(role) {
+    return {
+      name: 'spend_balance',
+      description: '他要玩（刷视频、打游戏）时用：先让他说一句理由，再花他挣来的娱乐余额（5–60 分钟，不超过余额）。没理由、没余额就花不了——这不是放松，是他自己挣的。',
+      parameters: {
+        type: 'object',
+        properties: {
+          minutes: { type: 'integer', description: '花几分钟' },
+          reason: { type: 'string', description: '他的原话理由' },
+        },
+        required: ['minutes', 'reason'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => spendBalance({ minutes: args.minutes, reason: args.reason, by: role }),
+    }
+  }
+
   // ---------------------------------------------------------------- 2026-11-20 公约
   // 真源：笔记库 大肥鱼/公约.md（没有笔记库时放 companion/公约.md）。生效版在 covenant.json：
   // 改严立即进生效版；改松等 3 天（公约-待生效.md）；两条鱼的提议在 公约-提议.md，他批了才写进 公约.md。
@@ -8404,6 +8696,16 @@ export function apply(ctx) {
       balance: funLeft === null ? null : { funLeft },
       deadlines,
       receiptsToday: loadGeminiReceipts().items.filter((r) => r.day === today).length,
+      verify: (() => {
+        try {
+          const vv = verifyView(now, tz)
+          return { active: vv.active, until: vv.untilMinute != null ? sealHm(vv.untilMinute) : null, recovery: vv.recovery,
+            spend: vv.spend ? { until: zoneHm(vv.spend.until, tz), minutes: vv.spend.minutes } : null,
+            evening: vv.evening?.active ? { used: vv.evening.used, cap: vv.evening.cap, hit: vv.evening.hit } : null }
+        } catch {
+          return null
+        }
+      })(),
       weekText: (() => {
         try {
           return weekPackNow(now).text
@@ -8440,6 +8742,13 @@ export function apply(ctx) {
       const added = (r.added || []).map((x) => '「' + x.title + '」' + (x.startMinute >= 0 ? sealHm(x.startMinute) + '–' : '') + sealHm(x.dueMinute) + (x.sameDay ? '（现加，七折）' : ''))
       const skipped = (r.skipped || []).map((x) => '「' + x.title + '」' + (x.text || x.error))
       return { ok: added.length > 0, text: (added.length ? '加上了：' + added.join('、') + '。到开始时刻手机自动开局。' : '一条都没加上。') + (skipped.length ? ' 没加的：' + skipped.join('；') : '') }
+    }
+    if (cmd?.type === 'start_work') {
+      return startWork({ hours: p.hours, sprint: p.sprint === true, by: 'gemini' }, now)
+    }
+    if (cmd?.type === 'spend_balance') {
+      const r = spendBalance({ minutes: p.minutes, reason: p.reason, by: 'gemini' }, now)
+      return { ok: r.ok === true, text: r.text }
     }
     if (cmd?.type === 'week_review') {
       const adjustments = (Array.isArray(p.adjustments) ? p.adjustments : []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 3)
@@ -8847,6 +9156,13 @@ export function apply(ctx) {
       v: 1, ok: true, today, tomorrow: nextYmd(today), minuteOfDay: min, cutoffMinute: SEAL_CUTOFF_MINUTE, cutoffPassed: min >= SEAL_CUTOFF_MINUTE,
       kinds: SEAL_KINDS, items: st.items.filter((x) => x.day === today || x.day === nextYmd(today)),
       coldCutoffMinute: COLD_CUTOFF_MINUTE, workStarted: workStartedToday(now, tz), weekReview: pendingWeekReview(),
+      verify: (() => {
+        try {
+          return verifyView(now, tz)
+        } catch {
+          return null
+        }
+      })(),
       locking: lockingSeal(st, { now, today }), ...extra,
     })
     if (action === 'list' || action === 'check') {
@@ -8866,6 +9182,33 @@ export function apply(ctx) {
       record({ state: 'week-pack', at: now, checkpoints: pack.totals.checkpoints })
       return { v: 1, ok: true, ...pack }
     }
+    if (action === 'spend') {
+      const r = spendBalance({ minutes: b.minutes, reason: b.reason, by: 'panel' }, now)
+      if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text }
+      return { ...view(state), text: r.text }
+    }
+    if (action === 'start') {
+      const r = startWork({ hours: b.hours, sprint: b.sprint === true, by: 'panel' }, now)
+      return { ...view(loadSeals(now, tz)), text: r.text }
+    }
+    if (action === 'evening-cap') {
+      const r = setEveningCap(config.eveningCap, b.minutes, { today, tomorrow: nextYmd(today) })
+      if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text }
+      commit({ eveningCap: r.value })
+      record({ state: 'evening-cap-set', at: now, by: 'panel', minutes: Number(b.minutes), immediate: r.immediate })
+      return { ...view(state), text: r.text }
+    }
+    if (action === 'verify-off') {
+      // 关默认验收是放松：明天起才不默认验收（今天照旧）。
+      commit({ verifyMode: { ...(config.verifyMode || {}), offFrom: nextYmd(today) } })
+      record({ state: 'verify-off', at: now, from: nextYmd(today) })
+      return { ...view(state), text: '明天起不再默认验收；今天照旧。想反悔随时打开。' }
+    }
+    if (action === 'verify-on') {
+      commit({ verifyMode: { ...(config.verifyMode || {}), offFrom: '' } })
+      record({ state: 'verify-on', at: now })
+      return { ...view(state), text: '默认验收开着。' }
+    }
     if (action === 'week-review') {
       const r = receiveWeekReview(String(b.text || ''), { by: 'paste', now })
       if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text }
@@ -8881,7 +9224,7 @@ export function apply(ctx) {
     if (action === 'plan-day') {
       // 一次定一串（时间轴）：合格的加，不合格的说明原因。
       const r = addSeals(state, Array.isArray(b.seals) ? b.seals.map((x) => ({ ...x, target: b.target === 'tomorrow' ? 'tomorrow' : 'today' })) : [],
-        { now, today, minuteOfDay: min, workStarted: workStartedToday(now, tz), by: b.by === 'gemini' ? 'gemini' : b.by === 'ai' ? 'ai' : '' })
+        { now, today, minuteOfDay: min, workStarted: workStartedToday(now, tz), by: ['gemini', 'ai', 'template'].includes(b.by) ? b.by : '' })
       if (r.added.length) {
         saveSeals(r.state, now, tz, { type: 'plan-day', ids: r.added.map((x) => x.id), by: String(b.by || 'user') })
         record({ state: 'seal-plan-day', at: now, n: r.added.length, by: String(b.by || 'user') })
@@ -9947,6 +10290,12 @@ export function apply(ctx) {
       sealTick(now, tz, phone)
     } catch (error) {
       console.error('[companion] 封印结算失败：' + String((error && error.message) || error))
+    }
+    // 超级验收者：恢复日判定、到点自动套模板。
+    try {
+      verifyTick(now, tz, phone)
+    } catch (error) {
+      console.error('[companion] 默认验收失败：' + String((error && error.message) || error))
     }
     // 待命 10 分钟计时器：只有换出待命才重置——聊天不算动。已经欠着一笔就不再追问，只留着账。
     if (stateView(now, tz, phone).state !== 'standby') {

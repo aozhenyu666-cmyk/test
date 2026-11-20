@@ -25,7 +25,7 @@ export const SEAL_KINDS = Object.freeze({
   bout_minutes: { label: '通过验收的局', unit: '分钟' },
   gemini_receipt: { label: 'Gemini 回执', unit: '条' },
 })
-export const SEAL_SOURCES = Object.freeze(['night', 'morning', 'live', 'ai', 'gemini'])
+export const SEAL_SOURCES = Object.freeze(['night', 'morning', 'live', 'ai', 'gemini', 'template'])
 /** 当天开工前的冷静线：这之前（且还没开过局）定的时间轴不打折。 */
 export const COLD_CUTOFF_MINUTE = 10 * 60
 /** 局已经按时长给过一份放风，这一类验收点的奖励减半，免得一份活拿两份全额。 */
@@ -108,8 +108,9 @@ export function addSeal(stateRaw, input = {}, { now = Date.now(), today, minuteO
   const target = input.target === 'today' ? 'today' : 'tomorrow'
   const day = target === 'today' ? today : nextYmd(today)
   // 冷热：明天的——23:00 前封的算冷；今天的——10:00 前且还没开过局算冷（开工前定的时间轴），否则是现加的。
-  const sameDay = target === 'today' ? (workStarted || minuteOfDay >= coldCutoff) : minuteOfDay >= SEAL_CUTOFF_MINUTE
-  const source = by === 'gemini' ? 'gemini' : by === 'ai' ? 'ai' : target === 'tomorrow' && !sameDay ? 'night' : sameDay ? 'live' : 'morning'
+  // 模板是他事先写好的（冷静时定的），自动套上来的不打折。
+  const sameDay = by === 'template' ? false : target === 'today' ? (workStarted || minuteOfDay >= coldCutoff) : minuteOfDay >= SEAL_CUTOFF_MINUTE
+  const source = by === 'template' ? 'template' : by === 'gemini' ? 'gemini' : by === 'ai' ? 'ai' : target === 'tomorrow' && !sameDay ? 'night' : sameDay ? 'live' : 'morning'
   if (s.items.filter((x) => x.day === day).length >= MAX_SEALS_PER_DAY) {
     return { ok: false, error: 'too-many', text: '一天最多封 ' + MAX_SEALS_PER_DAY + ' 条：少而硬。', state: s }
   }

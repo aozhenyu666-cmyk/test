@@ -23,6 +23,7 @@ export const INSTRUCTIONS = [
   '聊完用 dafeiyu_submit_receipt 交一条回执：做了什么、下一步、你问的问题和他的回答、过没过。没问过 2 个问题不要判「过」。',
   '他说今天要做什么、几点前交，用 dafeiyu_add_checkpoints 落成验收点（每条要能被代码验）。你只能加，不能改小、不能删。',
   '你没有解锁、加娱乐额度、豁免、改小验收点的工具，也不要答应他这些；他要放松，告诉他去手机上走正规出口（豁免要写理由、占一次紧急解除）。',
+  '他说「开始了」就 dafeiyu_start_work；他要玩，先要一句理由再 dafeiyu_spend_balance（花的是他自己挣的余额，晚上有上限）。',
   '觉得缺一条规矩（比如他反复用同一个借口），用 dafeiyu_propose_rule 提议，他在手机上批了才生效。',
 ].join('\n')
 
@@ -67,6 +68,25 @@ export function toolDefs({ vault = false } = {}) {
           watch: { type: 'string', description: '下周盯的一个数字' },
         },
         required: ['verdict'],
+        additionalProperties: false,
+      },
+      annotations: add,
+    },
+    {
+      name: 'dafeiyu_start_work',
+      title: '开工',
+      description: '他说「开始了 / 开工 / 冲刺」时用：手机立刻进默认验收（只放常用 App，时段外也算），sprint=true 时加一条从现在起 90 分钟内题库 30 题的验收点。',
+      inputSchema: { type: 'object', properties: { hours: { type: 'number', minimum: 0.5, maximum: 6 }, sprint: { type: 'boolean' } }, additionalProperties: false },
+      annotations: add,
+    },
+    {
+      name: 'dafeiyu_spend_balance',
+      title: '花挣来的余额',
+      description: '他要玩时：先让他说一句理由，再花他自己挣来的娱乐余额（5–60 分钟，不超过余额；今晚的上限用完了就花不了）。这不是放松，是他挣的。',
+      inputSchema: {
+        type: 'object',
+        properties: { minutes: { type: 'integer', minimum: 5, maximum: 60 }, reason: { type: 'string', description: '他的原话理由' } },
+        required: ['minutes', 'reason'],
         additionalProperties: false,
       },
       annotations: add,
@@ -196,6 +216,10 @@ export function todayText(snap, now) {
   lines.push('现在 ' + (local ? local.slice(11, 16) : (snap.hm || '')) + '（' + (local ? local.slice(0, 10) : (snap.day || '')) + '）。')
   if (snap.locking) lines.push('🔒 锁着：验收点「' + snap.locking.title + '」到点没过保底（' + snap.locking.actual + '/' + snap.locking.floor + '），交够保底就解，最晚 ' + snap.locking.until + '。')
   if (snap.bout) lines.push('▶ 局在跑：「' + snap.bout.title + '」已 ' + snap.bout.minutes + ' 分钟。')
+  if (snap.verify?.recovery) lines.push('今天是恢复日（连续两天没过保底）：只要一套 10 题，别加码，先问清楚卡在哪。')
+  if (snap.verify?.active) lines.push('默认验收中（到 ' + snap.verify.until + '）：只放常用 App；他要玩，先要一句理由再 dafeiyu_spend_balance。')
+  if (snap.verify?.spend) lines.push('他正在花余额（' + snap.verify.spend.minutes + ' 分钟，到 ' + snap.verify.spend.until + '）。')
+  if (snap.verify?.evening) lines.push(snap.verify.evening.hit ? '今晚的娱乐 ' + snap.verify.evening.cap + ' 分钟用完了（锁到明早 7 点）：陪他复盘今天、封明天，别帮他求情。' : '今晚娱乐已用 ' + snap.verify.evening.used + '/' + snap.verify.evening.cap + ' 分钟。')
   const tl = Array.isArray(snap.timeline) ? snap.timeline : []
   if (!tl.length) lines.push('今天的时间轴是空的——还没定验收点。' + (snap.cold ? '现在定不打折（' + snap.coldCutoff + ' 前、开工前）。' : '现在定的算现加（奖励七折）。'))
   else {
@@ -309,6 +333,10 @@ export async function callTool(ctx, name, args = {}) {
         checkpointId: args.checkpoint_id || '', topic: args.topic, did: args.did, next: args.next, qa, verdict: args.verdict,
       }, '交回执')
     }
+    case 'dafeiyu_start_work':
+      return writeTool(ctx, 'start_work', { hours: args.hours, sprint: args.sprint === true }, '开工')
+    case 'dafeiyu_spend_balance':
+      return writeTool(ctx, 'spend_balance', { minutes: args.minutes, reason: args.reason }, '花余额')
     case 'dafeiyu_submit_week_review':
       return writeTool(ctx, 'week_review', {
         verdict: args.verdict, adjustments: Array.isArray(args.adjustments) ? args.adjustments.slice(0, 3) : [], watch: args.watch || '',
