@@ -258,6 +258,20 @@ class _SealPageState extends State<SealPage> {
     }
   }
 
+  /// 周冷数据包：复制给体系外的模型看（只有数字；末尾带固定提问）。
+  Future<void> _copyWeek() async {
+    final r = await _channel.sealsOp({'action': 'week'});
+    if (!mounted) return;
+    final text = '${r?['text'] ?? ''}';
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('引擎没应答，没拿到数据')));
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('复制好了：粘贴给 Claude / GPT，让它只回一个【周验收】块')));
+  }
+
   // ------------------------------------------------------------------ 页面
 
   ListPageRow _row(Map<String, dynamic> s, {required bool locking}) {
@@ -361,6 +375,22 @@ class _SealPageState extends State<SealPage> {
               subtitleMaxLines: 2,
               chevron: true,
               onTap: () => unawaited(_add(today: false)),
+            ),
+          ],
+        ),
+        ListPageCard(
+          key: const ValueKey('seal-week'),
+          title: '周验收',
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            ListPageRow(
+              key: const ValueKey('seal-copy-week'),
+              icon: AppIcons.copy,
+              title: '复制这一周的冷数据',
+              subtitle: '只有数字（过了几个、没过几个、豁免原话、紧急几次），末尾带固定提问；粘贴给体系外的模型。连着 Gemini 桥的话 Gemini 自己读得到',
+              subtitleMaxLines: 3,
+              chevron: true,
+              onTap: () => unawaited(_copyWeek()),
             ),
           ],
         ),

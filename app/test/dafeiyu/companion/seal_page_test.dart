@@ -1,6 +1,7 @@
 import 'package:dsh_app/dafeiyu/channels/proactive_state.dart';
 import 'package:dsh_app/dafeiyu/ui/seal_page.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../phone/harness.dart';
@@ -32,6 +33,7 @@ class _Seals extends ProactiveChannel {
   Future<Map<String, dynamic>?> sealsOp(Map<String, Object?> body) async {
     calls.add(body);
     if (body['action'] == 'open') items.first['openedAt'] = 1;
+    if (body['action'] == 'week') return {'ok': true, 'text': '# 大肥鱼 · 周冷数据\n【周验收】'};
     if (body['action'] == 'add') {
       final s = Map<String, dynamic>.from(body['seal'] as Map);
       items.add({...s, 'id': 's3', 'day': '2026-11-21', 'actual': 0, 'status': 'open', 'paidMinutes': 0, 'floor': s['floor'] ?? 10});
@@ -109,5 +111,21 @@ void main() {
     await settlePhone(tester);
     expect(find.textContaining('开工前定的不打折'), findsWidgets);
     expect(find.byKey(const ValueKey('seal-start')), findsOneWidget);
+  });
+
+  testWidgets('周验收：复制这一周的冷数据 → 发 week、进剪贴板', (tester) async {
+    final ch = _Seals();
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') copied = (call.arguments as Map)['text'] as String?;
+      return null;
+    });
+    await pumpPhone(tester, SealPage(channel: ch));
+    await settlePhone(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('seal-copy-week')));
+    await tester.tap(find.byKey(const ValueKey('seal-copy-week')));
+    await settlePhone(tester);
+    expect(ch.calls.last, {'action': 'week'});
+    expect(copied, contains('【周验收】'));
   });
 }

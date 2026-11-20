@@ -161,6 +161,7 @@ import {
   cleanRule, covenantBlock, insertRuleInText, nextIdIn, parseCovenant, renderCovenant, renderPendingCovenant, renderProposals,
   replaceRuleInText, syncCovenant,
 } from './covenant.js'
+import { weekPack } from './week_pack.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
@@ -8395,6 +8396,13 @@ export function apply(ctx) {
       balance: funLeft === null ? null : { funLeft },
       deadlines,
       receiptsToday: loadGeminiReceipts().items.filter((r) => r.day === today).length,
+      weekText: (() => {
+        try {
+          return weekPackNow(now).text
+        } catch {
+          return ''
+        }
+      })(),
       covenant: {
         iron: cov.rules.filter((r) => r.hardness === '铁律').map((r) => ({ id: r.id, title: r.title })),
         rules: cov.rules.map((r) => ({ id: r.id, title: r.title, do: r.do, hardness: r.hardness, who: r.who })),
@@ -8648,6 +8656,16 @@ export function apply(ctx) {
     } catch {}
     return { ok: true, receipt: item }
   }
+  /** 周冷数据包（10 分钟缓存：要扫账本）。 */
+  let weekCache = { at: 0, day: '', pack: null }
+  function weekPackNow(now = Date.now(), { fresh = false } = {}) {
+    const tz = zoneOr(config.timeZone)
+    const today = dayString(now, tz)
+    if (!fresh && weekCache.pack && weekCache.day === today && now - weekCache.at < 10 * 60_000) return weekCache.pack
+    const pack = weekPack({ entries: readLedger(home(), 6000), seals: loadSeals(now, tz), today, dayOf: (at) => dayString(at, tz), days: 7 })
+    weekCache = { at: now, day: today, pack }
+    return pack
+  }
   /** 今天开过局没有（开工了没有）：时间轴的冷热线要用。 */
   function workStartedToday(now, tz) {
     if (runningBoutNow()) return true
@@ -8781,6 +8799,11 @@ export function apply(ctx) {
       saveSeals(r.state, now, tz, { type: 'add', seal: r.seal })
       record({ state: 'seal-add', at: now, id: r.seal.id, day: r.seal.day, sameDay: r.seal.sameDay, title: r.seal.title })
       return view(r.state, { seal: r.seal })
+    }
+    if (action === 'week') {
+      const pack = weekPackNow(now, { fresh: true })
+      record({ state: 'week-pack', at: now, checkpoints: pack.totals.checkpoints })
+      return { v: 1, ok: true, ...pack }
     }
     if (action === 'plan-day') {
       // 一次定一串（时间轴）：合格的加，不合格的说明原因。
@@ -9180,6 +9203,13 @@ export function apply(ctx) {
           intensity: intInfo.effectiveIntensity || intInfo.intensity,
           planItems,
         })
+        // 时间轴上已经有今天没交的点：他定过了，不再拉 Gemini 来「定第一局」（到点会自动开局）。
+        if (ignited?.action === 'gemini') {
+          try {
+            const sd = loadSeals(now, tz).items
+            if (sd.some((x) => x.day === day && (x.status === 'open' || x.status === 'below'))) ignited = null
+          } catch {}
+        }
         if (ignited) {
           memo.ignite = now
           record({ state: 'ignite', at: now, action: ignited.action, reason: ignited.reason, itemId: ignited.itemId || '', front: phone?.app || '', frontMinutes })
@@ -9217,7 +9247,17 @@ export function apply(ctx) {
    */
   function timelineDrive({ now, tz, min, run, memo, phone, frontTier, blocked, intensity }) {
     const today = dayString(now, tz)
-    const due = timelineDue(loadSeals(now, tz), { today, minuteOfDay: min, boutRunning: Boolean(run) })
+    const all = loadSeals(now, tz)
+    // 晚上 22:30–23:00：明天还一条没封，提醒一次（23:00 前封的不打折）。
+    if (min >= 22 * 60 + 30 && min < SEAL_CUTOFF_MINUTE && !blocked && !all.items.some((x) => x.day === nextYmd(today))) {
+      const key = 'seal-remind:' + today
+      if (!(Number(memo[key]) > 0)) {
+        memo[key] = now
+        return { kind: 'seal-remind', key, role: 'strategist',
+          text: '明天还一条没封。23:00 前封的不打折，过了算现加：问他明天最要紧的一两件、几点开始、几点前交、保底多少，他说定了就用 add_checkpoints（target=tomorrow）写进去。别长篇。' }
+      }
+    }
+    const due = timelineDue(all, { today, minuteOfDay: min, boutRunning: Boolean(run) })
     if (!due) return null
     const s = due.seal
     const unit = SEAL_KINDS[s.kind]?.unit || ''

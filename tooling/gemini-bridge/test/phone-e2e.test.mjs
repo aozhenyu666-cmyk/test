@@ -86,6 +86,9 @@ test('手机配好桥 → 快照上去；Gemini 交回执、加验收点、提�
     const today = await tool('dafeiyu_today', {})
     assert.match(today.content[0].text, /Gemini 抽背资料分析/)
     assert.match(today.content[0].text, /公约铁律/)
+    const week = await tool('dafeiyu_week', {})
+    assert.match(week.content[0].text, /周冷数据/)
+    assert.match(week.content[0].text, /【周验收】/)
 
     // Gemini 交回执：工具在等，手机这边同步一次就把它处理了
     const pending = tool('dafeiyu_submit_receipt', { checkpoint_id: sealId, topic: '资料分析抽背', did: '讲清了增长率和基期', next: '下午开刷 30 题', verdict: 'pass',

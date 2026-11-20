@@ -47,6 +47,14 @@ export function toolDefs({ vault = false } = {}) {
       annotations: ro,
     },
     {
+      name: 'dafeiyu_week',
+      title: '这一周的冷数据',
+      description: '最近 7 天只有数字的一包：每天几个验收点、过了几个、没过几个、豁免（带他写的理由）、现加几个、挣了多少分钟、开局、回执、紧急解除、被接管。' +
+        '做周验收时用：只看数字下结论，最多给 3 条调整（他在手机上确认才生效）。',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: ro,
+    },
+    {
       name: 'dafeiyu_add_checkpoints',
       title: '加验收点',
       description: '把他说定的安排落成时间轴验收点：到开始时刻手机自动开局，到截止时刻代码判，没过保底就锁。只能加，不能改小、不能删。' +
@@ -261,9 +269,11 @@ export async function callTool(ctx, name, args = {}) {
   const snap = store.state.snapshot
   switch (name) {
     case 'dafeiyu_today':
-      return text(todayText(snap, store.now()), snap ? { structuredContent: { snapshot: { ...snap, covenant: undefined } } } : {})
+      return text(todayText(snap, store.now()), snap ? { structuredContent: { snapshot: { ...snap, covenant: undefined, weekText: undefined } } } : {})
     case 'dafeiyu_rules':
       return text(rulesText(snap))
+    case 'dafeiyu_week':
+      return text(snap?.weekText ? snap.weekText : '手机还没传这一周的数据（同步过一次之后就有）。')
     case 'dafeiyu_add_checkpoints': {
       const items = Array.isArray(args.items) ? args.items.slice(0, 8) : []
       if (!items.length) return fail('items 是空的。')
