@@ -15,7 +15,7 @@
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { DEFAULT_LIMITS, Desk, SOURCE_KIND } from './core.js'
 import { BACKGROUND_LIMIT, backgroundFacts, loadCandidates, loadLorebookFacts, openMemoryDb } from './topics.js'
 import { buildPrompt } from './prompt.js'
@@ -8332,8 +8332,14 @@ export function apply(ctx) {
   // Tailscale 不能同时开，所以是手机主动去同步：每 ~20 秒 POST 一次 /bridge/sync，
   // 上行「今天」的快照，下行 Gemini 写的命令（回执 / 加验收点 / 提议规矩），按手机上的规矩再验一遍，结果回传。
   // 没有任何放松类命令——桥那边也没有这种工具。
+  // 节奏：他在 Gemini 里 10 秒（Gemini 的工具调用在等手机）；亮屏 / 刚有命令 20 秒；熄屏 2 分钟。
+  const BRIDGE_TICK_MS = 10_000
+  const BRIDGE_GEMINI_INTERVAL_MS = 10_000
   const BRIDGE_INTERVAL_MS = 20_000
-  const BRIDGE_IDLE_INTERVAL_MS = 60_000
+  const BRIDGE_IDLE_INTERVAL_MS = 120_000
+  // 快照分三段，只传变了的（服务端合并）；每 10 分钟全量一次兜底。
+  const BRIDGE_FULL_EVERY_MS = 10 * 60_000
+  let bridgeSent = { core: '', covenant: '', week: '', fullAt: 0 }
   const BRIDGE_TIMEOUT_MS = 10_000
   const bridgeConf = () => {
     const b = config.bridge && typeof config.bridge === 'object' ? config.bridge : {}
@@ -8387,8 +8393,9 @@ export function apply(ctx) {
       deadlines = (v4Hub?.upcomingDeadlines ? v4Hub.upcomingDeadlines(now) : []).slice(0, 5).map((d) => ({ title: String(d.title || ''), daysLeft: Number(d.daysLeft) }))
     } catch {}
     const workStarted = workStartedToday(now, tz)
+    const utcMin = Math.floor((now % 86_400_000) / 60_000)
     return {
-      v: 1, at: now, day: today, hm: sealHm(min),
+      v: 1, at: now, day: today, hm: sealHm(min), tzOffsetMin: ((min - utcMin + 1440 + 720) % 1440) - 720,
       cold: !workStarted && min < COLD_CUTOFF_MINUTE, coldCutoff: sealHm(COLD_CUTOFF_MINUTE), workStarted, cutoffPassed: min >= SEAL_CUTOFF_MINUTE,
       timeline: seals.items.filter((x) => x.day === today).sort((a, b) => a.dueMinute - b.dueMinute).map(mapSeal),
       tomorrow: seals.items.filter((x) => x.day === nextYmd(today)).sort((a, b) => a.dueMinute - b.dueMinute).map(mapSeal),
@@ -8458,7 +8465,15 @@ export function apply(ctx) {
     if (!conf.enabled || typeof fetchFn !== 'function') return { ok: false, error: 'not-configured' }
     if (bridgeInflight) return bridgeInflight
     const st0 = loadBridgeState()
-    const gap = now - st0.lastCommandAt < 5 * 60_000 || lastPhone?.screenOn ? BRIDGE_INTERVAL_MS : BRIDGE_IDLE_INTERVAL_MS
+    const inGem = (() => {
+      try {
+        return inGemini(lastPhone, geminiPackages())
+      } catch {
+        return false
+      }
+    })()
+    const gap = inGem ? BRIDGE_GEMINI_INTERVAL_MS
+      : now - st0.lastCommandAt < 5 * 60_000 || lastPhone?.screenOn ? BRIDGE_INTERVAL_MS : BRIDGE_IDLE_INTERVAL_MS
     if (!force && now - st0.lastTryAt < gap - 1000) return { ok: true, skipped: true }
     bridgeInflight = (async () => {
       let st = { ...st0, lastTryAt: now }
@@ -8476,8 +8491,26 @@ export function apply(ctx) {
           clearTimeout(timer)
         }
       }
+      /** 只带变了的段（时间戳、钟点不算变化：服务端按 tzOffsetMin 自己算现在几点）。 */
+      const delta = (snap, full) => {
+        const h = (v) => createHash('sha256').update(JSON.stringify(v ?? null)).digest('hex').slice(0, 16)
+        const { covenant, weekText, at, hm, ...core } = snap
+        const hashes = { core: h(core), covenant: h(covenant), week: h(weekText) }
+        const all = full || Date.now() - bridgeSent.fullAt >= BRIDGE_FULL_EVERY_MS
+        const out = { v: snap.v, at: snap.at, hm: snap.hm, day: snap.day, tzOffsetMin: snap.tzOffsetMin }
+        if (all || hashes.core !== bridgeSent.core) Object.assign(out, core)
+        if (all || hashes.covenant !== bridgeSent.covenant) out.covenant = covenant
+        if (all || hashes.week !== bridgeSent.week) out.weekText = weekText
+        return { out, hashes, all }
+      }
+      const sendSnap = async (results, full = false) => {
+        const d = delta(bridgeSnapshot(Date.now()), full)
+        const r = await post({ snapshot: d.out, results })
+        bridgeSent = { ...d.hashes, fullAt: d.all ? Date.now() : bridgeSent.fullAt }
+        return r
+      }
       try {
-        const first = await post({ snapshot: bridgeSnapshot(now), results: st.pendingResults })
+        const first = await sendSnap(st.pendingResults, force)
         st = { ...st, pendingResults: [], lastOkAt: Date.now(), lastError: '' }
         const results = []
         for (const cmd of Array.isArray(first?.commands) ? first.commands : []) {
@@ -8501,7 +8534,7 @@ export function apply(ctx) {
         if (results.length) {
           // 处理完马上回一次（带上新快照），Gemini 那边的工具调用正在等这个结果。
           try {
-            await post({ snapshot: bridgeSnapshot(Date.now()), results })
+            await sendSnap(results)
           } catch (error) {
             st.pendingResults = [...st.pendingResults, ...results].slice(-50)
             st.lastError = '回结果失败：' + String((error && error.message) || error).slice(0, 120)
@@ -8529,7 +8562,7 @@ export function apply(ctx) {
         return
       }
       bridgeSync().catch(() => {})
-    }, BRIDGE_INTERVAL_MS)
+    }, BRIDGE_TICK_MS)
     bridgeTimer.unref?.()
   }
   /** POST /gemini-bridge：status / config（url、key、enabled）/ sync（立即同步）/ forget（清掉配置）。 */
@@ -8553,6 +8586,7 @@ export function apply(ctx) {
       }
       const key = b.key === undefined ? String(config.bridge?.key || '') : String(b.key).trim()
       commit({ bridge: { url, key, enabled: b.enabled === undefined ? true : b.enabled !== false } })
+      bridgeSent = { core: '', covenant: '', week: '', fullAt: 0 }
       ensureBridgeTimer()
       const r = url && key ? await bridgeSync({ force: true }) : { ok: false }
       return view({ synced: r.ok === true, error: r.error || '' })

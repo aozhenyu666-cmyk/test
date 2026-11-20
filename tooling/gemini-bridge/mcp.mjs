@@ -190,7 +190,10 @@ export function todayText(snap, now) {
   const age = Math.max(0, now - Number(snap.receivedAt || snap.at || 0))
   const lines = []
   if (age > PHONE_STALE_MS) lines.push('⚠ 手机 ' + Math.round(age / 60_000) + ' 分钟没同步了（可能关机 / 断网 / 引擎没跑），下面是那时候的样子。')
-  lines.push('现在 ' + (snap.hm || '') + '（' + (snap.day || '') + '）。')
+  // 钟点按手机的时区偏移自己算（手机钟点没变不重传）。
+  const off = Number.isFinite(Number(snap.tzOffsetMin)) ? Number(snap.tzOffsetMin) : null
+  const local = off === null ? null : new Date(now + off * 60_000).toISOString()
+  lines.push('现在 ' + (local ? local.slice(11, 16) : (snap.hm || '')) + '（' + (local ? local.slice(0, 10) : (snap.day || '')) + '）。')
   if (snap.locking) lines.push('🔒 锁着：验收点「' + snap.locking.title + '」到点没过保底（' + snap.locking.actual + '/' + snap.locking.floor + '），交够保底就解，最晚 ' + snap.locking.until + '。')
   if (snap.bout) lines.push('▶ 局在跑：「' + snap.bout.title + '」已 ' + snap.bout.minutes + ' 分钟。')
   const tl = Array.isArray(snap.timeline) ? snap.timeline : []
@@ -233,7 +236,8 @@ export function phoneSync(store, body, events) {
   const st = store.state
   const now = store.now()
   if (body?.snapshot && typeof body.snapshot === 'object') {
-    st.snapshot = { ...body.snapshot, receivedAt: now }
+    // 手机只传变了的段：合并，不覆盖。
+    st.snapshot = { ...(st.snapshot || {}), ...body.snapshot, receivedAt: now }
     st.snapshotAt = now
   }
   const acks = new Set(Array.isArray(body?.acks) ? body.acks.map(String) : [])
