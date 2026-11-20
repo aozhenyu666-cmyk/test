@@ -11,6 +11,7 @@ export const TIME_ENTRY_KINDS = Object.freeze([
   'game_base',
   'earned_bout',
   'earned_bank',
+  'earned_seal',
   'break',
   'penalty',
   'used_fun',
@@ -97,6 +98,7 @@ export function computeTimeLedger({
   let sumBout = posInt(earnedBout)
   let sumBank = posInt(earnedBank)
   let sumBreak = posInt(earnedBreak)
+  let sumSeal = 0
   let sumPenalty = posInt(penalty)
   let extraFunUsed = 0
   let extraGameUsed = 0
@@ -106,6 +108,7 @@ export function computeTimeLedger({
     const m = posInt(e.minutes)
     if (e.kind === 'earned_bout') sumBout += m
     else if (e.kind === 'earned_bank') sumBank += m
+    else if (e.kind === 'earned_seal') sumSeal += m
     else if (e.kind === 'break') sumBreak += m
     else if (e.kind === 'penalty') sumPenalty += m
     else if (e.kind === 'used_fun') extraFunUsed += m
@@ -132,7 +135,7 @@ export function computeTimeLedger({
   const funUsed = phoneFun + extraFunUsed + dualCounted
   const gameUsed = phoneGame + extraGameUsed
 
-  const earned = sumBout + sumBank + sumBreak
+  const earned = sumBout + sumBank + sumBreak + sumSeal
   // 扣罚先扣今天挣来的，再扣结转；保底不扣。
   const penaltyApplied = Math.min(earned + carryIn, sumPenalty)
   const earnedNet = Math.max(0, earned - sumPenalty)
@@ -165,6 +168,7 @@ export function computeTimeLedger({
     earnedBout: sumBout,
     earnedBank: sumBank,
     earnedBreak: sumBreak,
+    earnedSeal: sumSeal,
     earned,
     penalty: sumPenalty,
     penaltyApplied,

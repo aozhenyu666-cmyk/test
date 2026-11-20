@@ -329,6 +329,12 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/tiers", body)
             }
+            "sealsOp" -> {
+                // 2026-11-20 封印：list / add / raise / claim / waive / check，规矩在插件（只能加码、代码判、到点锁）。
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/seals", body)
+            }
             "horizonsOp" -> {
                 val body = linkedMapOf<String, Any?>()
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }

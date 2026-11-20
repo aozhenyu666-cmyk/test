@@ -75,14 +75,18 @@ export function computeUnifiedLockArbiter({
   const contractReq = reqOf('contract')
   if (contractStrictActive || aiWorkStrictActive || contractReq?.kind === 'allowlist') {
     const src = contractStrictActive ? contractSession : (aiWorkStrictActive ? aiWorkSession : contractReq)
+    // 封印到点没过保底走同一档（P2），只是说法不同：解法是把保底交上。
+    const bySeal = contractStrictActive && contractSession?.by === 'seal'
     return {
       active: true,
       priority: 'P2',
       source: 'CONTRACT_OVERDUE_STRICT',
-      label: contractStrictActive ? '契约逾期严格锁定' : '专时严格锁定',
+      label: bySeal ? '封印没过保底' : (contractStrictActive ? '契约逾期严格锁定' : '专时严格锁定'),
       why: String(src?.why || '计划验收点已超 1 分钟缓冲未交付，已自动剥离娱乐/视频仅保留工作工具'),
       allow: Array.isArray(src?.allow) ? src.allow : [],
-      unlockHow: String(contractReq?.unlockHow || '提交结构化因果提炼并通过高强度验收即可立即解封'),
+      unlockHow: bySeal
+        ? '把保底交上就解（最长 60 分钟）；真有事可以写理由豁免，占一次紧急解除'
+        : String(contractReq?.unlockHow || '提交结构化因果提炼并通过高强度验收即可立即解封'),
     }
   }
 

@@ -117,6 +117,8 @@ export function createV4Hub(deps) {
     getWorkStore = null,
     upsertWorkItemNow = null,
     tierOf = () => 'other',
+    getSealSession = () => null,
+    getSealLines = () => [],
     markWorkStatusNow = null,
     getArbiterEnforce = () => false,
     getLockRequests = () => [],
@@ -667,7 +669,8 @@ export function createV4Hub(deps) {
     const emergencyPass = customEm || (isEmergencyPassActive(ext, now) ? ext.emergencyPass : null)
     const geminiSession = overrides.geminiSession !== undefined ? overrides.geminiSession : getGeminiSession?.(now)
     const aiWorkSession = overrides.aiWorkSession !== undefined ? overrides.aiWorkSession : getAiWorkSession?.(now)
-    const contractSession = overrides.contractSession !== undefined ? overrides.contractSession : contractSessionView(now)
+    // 封印到点没过保底的锁和契约逾期是同一类（同一档、同一条通道）。
+    const contractSession = overrides.contractSession !== undefined ? overrides.contractSession : (contractSessionView(now) || getSealSession(now))
     const taskLease = overrides.taskLease !== undefined ? overrides.taskLease : getTaskLease?.(now)
     const presetStrict = overrides.presetStrict !== undefined ? overrides.presetStrict : presetRt?.sessionView?.(now)
     const wall = overrides.wall !== undefined ? overrides.wall : getWallDecision?.(now)
@@ -789,6 +792,9 @@ export function createV4Hub(deps) {
     const tzName = tz()
     const today = dayString(now, tzName)
     const lines = deadlineLines(loadHorizonsSynced(), today)
+    try {
+      lines.push(...getSealLines(now))
+    } catch {}
     const y = loadReportsStore()?.reports?.[shiftYmdLocal(today, -1)]
     if (y?.verdict?.line) lines.push('昨天的判决（代码按账本算的，不许替他找补）：' + y.verdict.line.replace(/^今天：/, ''))
     const tlLine = getTimeLedger?.(now)?.line

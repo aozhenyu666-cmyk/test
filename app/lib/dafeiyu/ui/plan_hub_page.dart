@@ -12,6 +12,7 @@ import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
 import 'plan_modality_page.dart';
 import 'plan_page.dart';
+import 'seal_page.dart';
 import 'strategy_horizons_page.dart';
 
 /// 计划：原来散在三处的「今日计划（时间块）」「计划模态 / 契约台」「三层战略」收成一个入口。
@@ -36,6 +37,7 @@ class PlanHubPage extends StatefulWidget {
 class _PlanHubPageState extends State<PlanHubPage> {
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
   Map<String, dynamic> _today = const {};
+  Map<String, dynamic>? _seals;
   bool _loading = true;
 
   @override
@@ -45,6 +47,9 @@ class _PlanHubPageState extends State<PlanHubPage> {
   }
 
   Future<void> _refresh() async {
+    unawaited(_channel.sealsOp({'action': 'list'}).then((r) {
+      if (mounted && r != null && r['ok'] == true) setState(() => _seals = r);
+    }).catchError((_) {}));
     final t = await _channel.todayStatus();
     if (!mounted) return;
     setState(() {
@@ -59,6 +64,16 @@ class _PlanHubPageState extends State<PlanHubPage> {
   Future<void> _go(Widget page) async {
     await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
     if (mounted) unawaited(_refresh());
+  }
+
+  String _sealLine() {
+    final s = _seals;
+    if (s == null) return '前一晚 23:00 前立约：只能加码、代码判、到点没过保底就锁';
+    final items = _list(s['items']);
+    final today = items.where((x) => x['day'] == s['today']).length;
+    final tomorrow = items.where((x) => x['day'] == s['tomorrow']).length;
+    if (today == 0 && tomorrow == 0) return '还没封。23:00 前封明天要交的，只能加码';
+    return '今天 $today 条 · 明天已封 $tomorrow 条${s['cutoffPassed'] == true ? ' · 已过 23:00' : ''}';
   }
 
   @override
@@ -99,6 +114,16 @@ class _PlanHubPageState extends State<PlanHubPage> {
           title: '从近到远',
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
           children: [
+            ListPageRow(
+              key: const ValueKey('plan-hub-seal'),
+              icon: AppIcons.lock,
+              iconColor: colors.warning,
+              title: '封印：明天要交什么',
+              subtitle: _sealLine(),
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => unawaited(_go(SealPage(channel: _channel))),
+            ),
             ListPageRow(
               key: const ValueKey('plan-hub-day'),
               icon: AppIcons.calendar,

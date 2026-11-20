@@ -152,6 +152,10 @@ import { AGREE_RE, BASE_EXTRA, TIER_FILE, TIER_LABEL, TIER_RANK, classifyTierCha
 import { computeQuota } from './quota.js'
 import { buildLockDecision } from './lock_decision.js'
 import { driveMode, ignite, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
+import {
+  SEAL_CUTOFF_MINUTE, SEAL_KINDS, addSeal, captureBaselines, claimSeal, cleanSeals, lockingSeal, nextYmd, raiseSeal,
+  sealPromptLines, tickSeals, waiveSeal,
+} from './seal.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
@@ -2167,6 +2171,7 @@ export function apply(ctx) {
     geminiSessionView(now) ||
     aiWorkSessionView(now) ||
     v4Hub?.contractSessionView(now, { escalatedOnly: true }) ||
+    sealSessionView(now) ||
     taskLeaseView(now) ||
     leaseSessionView(now) ||
     presetRt.sessionView(now) ||
@@ -2798,6 +2803,11 @@ export function apply(ctx) {
     getEmergencyPassActive: (now = Date.now()) => activeEmergencyInfo(now, zoneOr(config.timeZone)),
     getWorkStore: (now = Date.now()) => workStoreNow(now, zoneOr(config.timeZone)),
     tierOf: (pkg) => tierFnNow()(pkg),
+    getSealSession: (now) => sealSessionView(now),
+    getSealLines: (now) => {
+      const tz = zoneOr(config.timeZone)
+      return sealPromptLines(loadSeals(now, tz), { today: dayString(now, tz), hm: sealHm })
+    },
     upsertWorkItemNow: (item, { now = Date.now(), mirror = true } = {}) => {
       const tz = zoneOr(config.timeZone)
       const cur = workStoreNow(now, tz).store
@@ -7508,7 +7518,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7590,6 +7600,7 @@ export function apply(ctx) {
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/tiers') return send(res, 200, tiersRoute(body.value))
+        if (path === '/seals') return send(res, 200, sealsRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
         if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
@@ -8063,6 +8074,171 @@ export function apply(ctx) {
       // 写不进去就算了：生效的是 config
     }
   }
+  // ---------------------------------------------------------------- 2026-11-20 封印（验收第一批）
+  // 规则全在 seal.js（纯函数）；这里只有读写、量证据、发奖励、锁的接线。
+  // 真账：companion/seals.json（当前）+ seals.jsonl（只追加的流水）；笔记库镜像：大肥鱼/封印/日期.md。
+  const loadSeals = (now = Date.now(), tz = zoneOr(config.timeZone)) =>
+    cleanSeals(readState(stateFile('seals.json'), null), dayString(now, tz))
+  function saveSeals(state, now, tz, event) {
+    writeJson(stateFile('seals.json'), state)
+    if (event) {
+      try {
+        appendFileSync(stateFile('seals.jsonl'), JSON.stringify({ at: now, ...event }) + '\n', 'utf8')
+      } catch {}
+    }
+    mirrorSealsToVault(state, now, tz)
+  }
+  const sealHm = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')
+  function mirrorSealsToVault(state, now, tz) {
+    const kb = vaultKb()
+    if (!kb) return
+    const today = dayString(now, tz)
+    for (const day of [today, nextYmd(today)]) {
+      const items = state.items.filter((x) => x.day === day)
+      if (!items.length) continue
+      const st = { open: '进行中', floor: '过保底', stretch: '过拉伸', below: '没过保底', waived: '豁免' }
+      const lines = ['# ' + day + ' · 封印', '', '> 前一晚冷静时立的约：只能加码，不能调低。打分只看代码验得了的证据。', '',
+        '| 验收点 | 证据 | 拉伸 / 保底 | 截止 | 做到 | 状态 | 奖励 |', '|---|---|---|---|---|---|---|']
+      for (const x of items) {
+        lines.push('| ' + x.title + (x.sameDay ? '（当天现定）' : '') + ' | ' + SEAL_KINDS[x.kind].label + ' | ' + x.stretch + ' / ' + x.floor + SEAL_KINDS[x.kind].unit +
+          ' | ' + sealHm(x.dueMinute) + ' | ' + x.actual + ' | ' + st[x.status] + (x.waivedReason ? '：' + x.waivedReason : '') + ' | ' + x.paidMinutes + ' 分钟 |')
+      }
+      try {
+        writeVaultText(join(kb, '封印', day + '.md'), lines.join('\n') + '\n')
+      } catch {}
+    }
+  }
+  function sealFacts(now, tz, phone, state) {
+    const today = dayString(now, tz)
+    const todays = state.items.filter((x) => x.day === today && x.status !== 'waived')
+    if (!todays.length) return null
+    const bank = readState(stateFile('bank-unlock.json'), null)
+    const fileBytes = {}
+    for (const s of todays) {
+      if (s.kind !== 'file') continue
+      const dir = notesDir()
+      const p = s.path.startsWith('/') ? s.path : (dir ? join(dir, s.path) : '')
+      const st = p ? statOf(p) : null
+      fileBytes[s.path] = st ? st.size : -1
+    }
+    let screenshotsSince = 0
+    if (todays.some((s) => s.kind === 'screenshots' || s.kind === 'external_quiz')) {
+      try {
+        screenshotsSince = listScreenshots(SCREENSHOT_DIRS, startOfDay(now, config.timeZone)).length
+      } catch {
+        screenshotsSince = 0
+      }
+    }
+    const appMinutes = {}
+    for (const r of (Array.isArray(phone?.today) ? phone.today : (lastPhone?.today || []))) {
+      if (r?.app) appMinutes[r.app] = Number(r.minutes) || 0
+    }
+    return { bankCorrect: Number(bank?.stats?.correct) || 0, fileBytes, screenshotsSince, appMinutes }
+  }
+  /** 每拍一次：记基线 → 量证据 → 过档就发奖励 → 到点没过保底就进锁。 */
+  function sealTick(now, tz, phone) {
+    const today = dayString(now, tz)
+    const before = loadSeals(now, tz)
+    if (!before.items.some((x) => x.day === today)) return
+    const facts = sealFacts(now, tz, phone, before)
+    if (!facts) return
+    const cap = captureBaselines(before, facts, { now, today })
+    const dayStart = startOfDay(now, config.timeZone)
+    const r = tickSeals(cap.state, facts, { now, today, dueAtOf: (s) => dayStart + s.dueMinute * 60_000 })
+    for (const p of r.pays) {
+      recordTimeEntryNow({ kind: 'earned_seal', minutes: p.minutes, reason: '封印「' + p.title + '」' + (p.tier === 'stretch' ? '过拉伸' : '过保底') + (p.late ? '（晚交）' : ''), at: now, tz })
+      record({ state: 'seal-pay', at: now, id: p.id, tier: p.tier, minutes: p.minutes, late: p.late })
+    }
+    const locked = r.state.items.filter((x) => x.status === 'below' && !cap.state.items.some((y) => y.id === x.id && y.status === 'below'))
+    for (const s of locked) {
+      record({ state: 'seal-below', at: now, id: s.id, actual: s.actual, floor: s.floor, until: s.lockUntil })
+      recordHardNow({ kind: 'seal_lock', source: 'seal', why: '封印「' + s.title + '」到点没过保底', now, tz, dedupeKey: 'seal:' + s.id })
+    }
+    if (cap.changed || r.changed) {
+      saveSeals(r.state, now, tz, (r.pays.length || locked.length) ? { type: 'tick', pays: r.pays, locked: locked.map((x) => x.id) } : null)
+    }
+  }
+  /** 锁：到点没过保底的那一条，走和契约逾期同一条严格锁通道（不新增判锁路径）。 */
+  function sealSessionView(now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const s = lockingSeal(loadSeals(now, tz), { now, today: dayString(now, tz) })
+    if (!s) return null
+    const tier = s.app ? tierFnNow()(s.app) : ''
+    const allow = [...new Set(['md.obsidian', ...(s.app && tier !== 'fun' && tier !== 'game' ? [s.app] : []), ...emergencyPackages(appsOf())])]
+    return {
+      allow,
+      until: s.lockUntil,
+      topic: s.title,
+      why: '封印「' + s.title + '」到点没过保底（' + s.actual + '/' + s.floor + SEAL_KINDS[s.kind].unit + '）：交够保底就解，最长到 ' + sealHm(Math.round((s.lockUntil - startOfDay(now, config.timeZone)) / 60_000)),
+      strict: true,
+      graceMs: 0,
+      mode: 'ai-work',
+      by: 'seal',
+    }
+  }
+  /**
+   * POST /seals：list / add（封明天或当天现定）/ raise（只能加码）/ claim（外部刷题报数）/ waive（写理由、扣一次紧急解除）/ check。
+   * 没有「改小」「删除」这两个动作——这是故意的。
+   */
+  function sealsRoute(body) {
+    const b = body && typeof body === 'object' ? body : {}
+    const action = String(b.action || 'list')
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const today = dayString(now, tz)
+    const min = zoneMinuteOfDay(now, tz)
+    const view = (st, extra = {}) => ({
+      v: 1, ok: true, today, tomorrow: nextYmd(today), minuteOfDay: min, cutoffMinute: SEAL_CUTOFF_MINUTE, cutoffPassed: min >= SEAL_CUTOFF_MINUTE,
+      kinds: SEAL_KINDS, items: st.items.filter((x) => x.day === today || x.day === nextYmd(today)),
+      locking: lockingSeal(st, { now, today }), ...extra,
+    })
+    if (action === 'list' || action === 'check') {
+      sealTick(now, tz, lastPhone)
+      return view(loadSeals(now, tz))
+    }
+    const state = loadSeals(now, tz)
+    if (action === 'add') {
+      const r = addSeal(state, b.seal || {}, { now, today, minuteOfDay: min })
+      if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text }
+      saveSeals(r.state, now, tz, { type: 'add', seal: r.seal })
+      record({ state: 'seal-add', at: now, id: r.seal.id, day: r.seal.day, sameDay: r.seal.sameDay, title: r.seal.title })
+      return view(r.state, { seal: r.seal })
+    }
+    if (action === 'raise') {
+      const r = raiseSeal(state, String(b.id || ''), { stretch: b.stretch, floor: b.floor }, { now })
+      if (!r.ok) {
+        if (r.error === 'cannot-lower') record({ state: 'seal-lower-refused', at: now, id: String(b.id || '') })
+        return { v: 1, ok: false, error: r.error, text: r.text }
+      }
+      saveSeals(r.state, now, tz, { type: 'raise', id: r.seal.id, stretch: r.seal.stretch, floor: r.seal.floor })
+      return view(r.state, { seal: r.seal })
+    }
+    if (action === 'claim') {
+      const r = claimSeal(state, String(b.id || ''), b.count)
+      if (!r.ok) return { v: 1, ok: false, error: r.error }
+      saveSeals(r.state, now, tz, { type: 'claim', id: r.seal.id, count: r.seal.claimed })
+      sealTick(now, tz, lastPhone)
+      return view(loadSeals(now, tz), { seal: r.seal })
+    }
+    if (action === 'waive') {
+      const reason = String(b.reason || '').trim()
+      const pre = waiveSeal(state, String(b.id || ''), reason)
+      if (!pre.ok) return { v: 1, ok: false, error: pre.error, text: pre.text }
+      // 豁免占当天一次紧急解除（和紧急解除 / 破窗 / 长按回 DSH 同一个次数），但不开放行窗口。
+      const info = intensityStateNow(now, tz)
+      const ledgerBefore = loadPassLedger(now, tz)
+      const prevUntil = Number(ledgerBefore?.emergency?.until) || 0
+      const pl = requestPass(ledgerBefore, 'emergency', { source: 'seal-waive', reason: '豁免封印：' + reason, cap: info.emergencyDisarmDailyCap, now, day: today })
+      if (!pl.ok) return { v: 1, ok: false, error: 'no-emergency-left', text: pl.why || '今天的紧急解除次数用完了，不能豁免。' }
+      // 不开新的放行窗口：已经开着的紧急窗口保持原样，否则 until 停在此刻。
+      savePassLedger({ ...pl.state, emergency: { ...pl.state.emergency, until: prevUntil > now ? prevUntil : now } })
+      saveSeals(pre.state, now, tz, { type: 'waive', id: pre.seal.id, reason })
+      record({ state: 'seal-waive', at: now, id: pre.seal.id, reason: reason.slice(0, 80) })
+      return view(pre.state, { seal: pre.seal })
+    }
+    return { v: 1, ok: false, error: 'bad-action' }
+  }
+
   /**
    * 2026-11-19 App 分类表（手机上的那一页）：和 App分层.md 是同一张表（config.appTiers），规矩也一样——
    * 改严立即生效；改松先挂起，24 小时后生效（期间可以撤回）。系统底座不能分层。
@@ -9001,6 +9177,12 @@ export function apply(ctx) {
     expireFollowup(now)
     // 追问改道 Gemini 的那一次：有回执就结，10 分钟没回执落锁。
     tickFollowupGemini(now)
+    // 封印：量证据、过档发奖励、到点没过保底进锁。
+    try {
+      sealTick(now, tz, phone)
+    } catch (error) {
+      console.error('[companion] 封印结算失败：' + String((error && error.message) || error))
+    }
     // 待命 10 分钟计时器：只有换出待命才重置——聊天不算动。已经欠着一笔就不再追问，只留着账。
     if (stateView(now, tz, phone).state !== 'standby') {
       if (Number(config.standbySince)) commit({ standbySince: 0 })

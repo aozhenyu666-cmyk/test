@@ -930,6 +930,17 @@ class ProactiveChannel {
     }
   }
 
+  /// 封印（验收第一批）：前一晚立约、只能加码、代码判、到点没过保底进锁。
+  Future<Map<String, dynamic>?> sealsOp(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('sealsOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   Future<Map<String, dynamic>?> horizonsOp([Map<String, Object?>? body]) async {
     try {
       final raw = body == null

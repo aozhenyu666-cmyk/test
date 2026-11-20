@@ -10,6 +10,7 @@ import 'companion_hub_page.dart';
 import 'bank_manager_page.dart';
 import 'deposit_page.dart';
 import 'plan_modality_page.dart';
+import 'seal_page.dart';
 import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
@@ -40,6 +41,7 @@ class _WallPageState extends State<WallPage> {
   WallThread? _thread;
   Map<String, Object?>? _status;
   Map<String, dynamic>? _today;
+  Map<String, dynamic>? _seals;
   bool _loading = true;
   bool _failed = false;
   String _failedWhy = '';
@@ -55,6 +57,10 @@ class _WallPageState extends State<WallPage> {
     // 出口次数、题库设定从 /today 来；慢了也不挡墙本身的状态和记录，单独读。
     unawaited(_channel.todayStatus().then((t) {
       if (mounted && t != null) setState(() => _today = t);
+    }).catchError((_) {}));
+    // 封印同理：单独读，读不到就只显示入口。
+    unawaited(_channel.sealsOp({'action': 'list'}).then((r) {
+      if (mounted && r != null && r['ok'] == true) setState(() => _seals = r);
     }).catchError((_) {}));
     final thread = await _channel.wallThread();
     final status = await _channel.wallStatus();
@@ -271,8 +277,55 @@ class _WallPageState extends State<WallPage> {
             if (mounted) unawaited(_refresh());
           },
         ),
+        ..._sealRows(),
       ],
     );
+  }
+
+  /// 封印：今天的每一条带进度；没有就留一个入口（晚上封明天的）。
+  List<Widget> _sealRows() {
+    final colors = DshColors.of(context);
+    final today = '${_seals?['today'] ?? ''}';
+    final items = _seals?['items'] is List
+        ? [for (final x in _seals!['items'] as List) if (x is Map && x['day'] == today) Map<String, dynamic>.from(x)]
+        : <Map<String, dynamic>>[];
+    items.sort((a, b) => (a['dueMinute'] as num).compareTo(b['dueMinute'] as num));
+    final lockingId = _seals?['locking'] is Map ? (_seals!['locking'] as Map)['id'] : null;
+    Future<void> open() async {
+      await SealPage.open(context, channel: _channel);
+      if (mounted) unawaited(_refresh());
+    }
+
+    if (items.isEmpty) {
+      return [
+        ListPageRow(
+          key: const ValueKey('wall-seal-entry'),
+          icon: AppIcons.lock,
+          title: '封印',
+          subtitle: '今天没有。晚上 23:00 前封明天要交的，只能加码',
+          subtitleMaxLines: 2,
+          chevron: true,
+          onTap: () => unawaited(open()),
+        ),
+      ];
+    }
+    return [
+      for (final x in items)
+        () {
+          final (tone, label) = sealStatus(x, locking: lockingId == x['id']);
+          final unit = kSealKinds['${x['kind']}']?.$2 ?? '';
+          return ListPageRow(
+            key: ValueKey('wall-seal-${x['id']}'),
+            icon: kSealKinds['${x['kind']}']?.$3 ?? AppIcons.lock,
+            iconColor: tone == StatusTone.ok ? colors.success : (tone == StatusTone.error ? colors.danger : null),
+            title: '封印 · ${x['title']}',
+            subtitle: '${x['actual']}/${x['stretch']}$unit · 保底 ${x['floor']} · ${sealHm((x['dueMinute'] as num).toInt())} 前',
+            badge: StatusChip(tone: tone, label: label),
+            chevron: true,
+            onTap: () => unawaited(open()),
+          );
+        }(),
+    ];
   }
 
   /// 出不去怎么办：所有解锁出口列在一处，今天还剩几次也在这里说清。
