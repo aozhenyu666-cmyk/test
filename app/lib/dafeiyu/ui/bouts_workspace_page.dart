@@ -1363,6 +1363,26 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     );
   }
 
+  /// 局详情「叫 Gemini 来判」：插件拼好这一局的背景（think 口吻），手机拉起 Gemini。
+  Future<void> _askGeminiForBout() async {
+    setState(() => _busy = true);
+    final r = await _channel.boutsCommand({'action': 'ask-gemini'});
+    var ok = false;
+    if (r?['ok'] == true) {
+      ok = await _channel.launchGeminiProactive(
+        topic: '${r!['topic'] ?? '判一下这一局'}',
+        brief: '${r['brief'] ?? ''}',
+        mode: 'countdown_3s',
+        preferVoice: true,
+      );
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+      content: Text(ok ? '已拉起 Gemini（背景已带上）' : '${r?['toast'] ?? '没拉起 Gemini：检查悬浮窗与无障碍权限'}'),
+    ));
+  }
+
   String _clockOf(num? ms) {
     if (ms == null || ms <= 0) return '--';
     final t = DateTime.fromMillisecondsSinceEpoch(ms.toInt());
@@ -1502,6 +1522,15 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
         title: '操作',
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         children: [
+          ListPageRow(
+            key: const ValueKey('bout-detail-ask-gemini'),
+            icon: AppIcons.askAi,
+            iconColor: Theme.of(ctx).colorScheme.primary,
+            title: '叫 Gemini 来判',
+            subtitle: '卡住了，或想让它判一下这局做得对不对（带上目标、交付、断点）',
+            subtitleMaxLines: 2,
+            onTap: _busy ? null : () => unawaited(_askGeminiForBout()),
+          ),
           ListPageRow(
             icon: AppIcons.voice,
             title: '语音 / Gemini',

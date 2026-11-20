@@ -146,12 +146,12 @@ import {
   issueAppLease, revokeAppLease,
 } from './external_agents.js'
 import { createV4Hub } from './v4_hub.js'
-import { EMERGENCY_PACKAGES, PROXY_PACKAGES, SELF_PACKAGES, SYSTEM_PACKAGES, isNeverLockPkg } from './never_lock.js'
+import { EMERGENCY_PACKAGES, PROXY_PACKAGES, RESIDENT_PACKAGES, SELF_PACKAGES, SYSTEM_PACKAGES, isNeverLockPkg } from './never_lock.js'
 import { contextLines, loadGeminiSetting, parseReceipt } from './trigger.js'
 import { AGREE_RE, BASE_EXTRA, TIER_FILE, TIER_LABEL, TIER_RANK, classifyTierChanges, parseTierFile, renderTierFile, tierOf } from './app_tiers.js'
 import { computeQuota } from './quota.js'
 import { buildLockDecision } from './lock_decision.js'
-import { driveMode, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
+import { driveMode, ignite, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
@@ -2344,6 +2344,58 @@ export function apply(ctx) {
     return lock
   }
 
+  // ---------------------------------------------------------------- 2026-11-20 追问改道 Gemini
+  //
+  // Gemini 是常驻的高互动大脑：沟通比追问锁好，约束也不弱（要回执）。约束弱、问得模糊的那几处追问
+  // （局里用了没声明的 App、半天没动、违抗、打开被锁的 App 再问）先拉 Gemini 带同一个问题；
+  // 10 分钟内拿到完整回执就算答了；拉不起来（闸门不让 / 深夜 / 紧急 / 当天用满）或 10 分钟没回执，才落原来的追问锁。
+  // 他自己点「申请验收」、冲刺到点验收不走这里——那是验收流程本身，锁照旧。
+
+  /** 追问改道排着的那一次拉起（/plan 的拉起段取走）。 */
+  let pendingFollowupPull = null
+  const FOLLOWUP_GEMINI_MS = 10 * 60_000
+  const FOLLOWUP_GEMINI_MODE = { defiance: 'interrogate', standby: 'interrogate', 'locked-app': 'interrogate', capability: 'think', gemini: 'receipt' }
+
+  function askViaGemini(reason, question, now = Date.now()) {
+    if (config.followupGemini) return { via: 'pending', lock: null }
+    if (config.followup && Number(config.followup.until) > now) return { via: 'lock', lock: config.followup }
+    const tz = zoneOr(config.timeZone)
+    const mode = FOLLOWUP_GEMINI_MODE[reason] || 'interrogate'
+    let gate = { allowed: false }
+    let brief = ''
+    try {
+      brief = v4Hub.buildProactiveGeminiBrief({ topic: question, mode, minutes: 10, now })
+      gate = requestGeminiViaGate({ source: 'followup', mode: 'auto', topic: question, minutes: 10, geminiMode: mode, brief, now, tz })
+    } catch {
+      gate = { allowed: false }
+    }
+    if (!gate.allowed) return { via: 'lock', lock: openFollowup(reason, question, now) }
+    commit({ followupGemini: { reason, question, since: now, until: now + FOLLOWUP_GEMINI_MS } })
+    pendingFollowupPull = {
+      triggered: true, at: now, topic: question, mode: v4Hub.getPullMode(now), reason: 'followup-' + reason,
+      preferVoice: true, brief: gate.brief || brief,
+    }
+    record({ state: 'followup-gemini', at: now, reason, question })
+    return { via: 'gemini', lock: null }
+  }
+
+  /** Gemini 追问的结局（每次 /plan 兜一次）：拿到完整回执 → 结；10 分钟没回执 → 落原来的追问锁。 */
+  function tickFollowupGemini(now) {
+    const fg = config.followupGemini
+    if (!fg) return
+    const answered = readLedger(home(), 200).some((e) => e?.state === 'gemini-recap' && e.receipt === true && Number(e.at) >= Number(fg.since))
+    if (answered) {
+      commit({ followupGemini: null })
+      record({ state: 'followup-gemini-answered', at: now, reason: fg.reason })
+      return
+    }
+    if (now >= Number(fg.until)) {
+      commit({ followupGemini: null })
+      record({ state: 'followup-gemini-fallback', at: now, reason: fg.reason })
+      openFollowup(fg.reason, fg.question, now)
+    }
+  }
+
   /**
    * 追问锁到点还没裁决：结束拦截、记账扣分、把没过关的事挂成义务（义务只由用户的动作触发再问）。
    * 手机报 followup-timeout 和每次 /plan 都会兜一次，谁先到都算；第二次是空的。
@@ -3309,6 +3361,14 @@ export function apply(ctx) {
   }
   /** 他点「开始」或立了任务：挂着的待命 / 违抗追问由墙当场关掉——动手了就是交代。 */
   function wallCloseOnStart(now) {
+    // 2026-11-20：改道 Gemini 的那一次（还在等回执）也一样——动手了就是交代，不再 10 分钟后落锁。
+    const fg = config.followupGemini
+    if (fg && ['standby', 'defiance'].includes(fg.reason)) {
+      commit({ followupGemini: null, obligations: clearObligation(config.obligations, fg.reason) })
+      record({ state: 'wall-audit', at: now, kind: fg.reason, pass: true, by: 'start' })
+      record({ state: 'verdict', at: now, by: 'wall', kind: fg.reason, satisfied: true, summary: '开始干活了', nextStep: String(config.taskGoal || '冲刺') })
+      return { ok: true }
+    }
     const l = config.followup
     if (!lockActive(l, now) || !['standby', 'defiance'].includes(l.reason)) return null
     record({ state: 'wall-audit', at: now, kind: l.reason, pass: true, by: 'start' })
@@ -5996,7 +6056,7 @@ export function apply(ctx) {
       // 违抗打开追问锁（原因：违抗）。挂着没问过的义务趁这次一并问掉（下次违抗时再问）。
       const re = takeReask(config.obligations, 'defiance', now)
       if (re.ask) commit({ obligations: re.obligations })
-      openFollowup(re.ask ? re.ask.kind : 'defiance', re.ask ? re.ask.text : '刚关掉提醒又打开了' + label + '，为什么？接下来怎么办？', now)
+      askViaGemini(re.ask ? re.ask.kind : 'defiance', re.ask ? re.ask.text : '刚关掉提醒又打开了' + label + '，为什么？接下来怎么办？', now)
       // 收尾的话由墙说（代码模板），不经模型、不由姐姐出面。
       return { v: 1, ok: true, refuse: { until }, force: { level: 4, app, why: wallDefianceText(label, until) } }
     }
@@ -6127,8 +6187,15 @@ export function apply(ctx) {
       saveGeminiGate(markGeminiSessionEnded(loadGeminiGate(now, tz), { now, day: dayString(now, tz) }))
       record({ state: 'gemini-end', at: now, minutes, by: String(body?.by || 'phone').slice(0, 20) })
       if (minutes >= min) {
-        const lock = openFollowup('gemini', '刚才连麦说到哪、结论是什么？', now)
-        return { v: 1, ok: true, counted: true, followup: followupView(lock, now) }
+        // 2026-11-20：连麦本身就该出回执（姐姐会读回【复盘】）。先等回执 10 分钟，不立刻落追问锁；
+        // 等不到才落锁（tickFollowupGemini）。连麦里已经出过回执的，直接不追问。
+        const since = now - minutes * 60_000
+        const already = readLedger(home(), 200).some((e) => e?.state === 'gemini-recap' && e.receipt === true && Number(e.at) >= since)
+        if (!already && !config.followupGemini) {
+          commit({ followupGemini: { reason: 'gemini', question: '刚才连麦说到哪、结论是什么？', since, until: now + FOLLOWUP_GEMINI_MS } })
+          record({ state: 'followup-gemini', at: now, reason: 'gemini', wait: 'receipt' })
+        }
+        return { v: 1, ok: true, counted: true, followup: followupView(config.followup, now), awaitingReceipt: !already }
       }
       return { v: 1, ok: true, counted: false, followup: followupView(config.followup, now) }
     }
@@ -6149,7 +6216,7 @@ export function apply(ctx) {
       const r = takeReask(config.obligations, 'locked-app', now)
       if (!r.ask) return { v: 1, ok: true, ask: false }
       commit({ obligations: r.obligations })
-      const lock = openFollowup(r.ask.kind, r.ask.text, now)
+      const lock = askViaGemini(r.ask.kind, r.ask.text, now).lock
       record({ state: 'obligation-reask', at: now, kind: r.ask.kind, app: String(body?.app || '').slice(0, 120) })
       return { v: 1, ok: true, ask: true, followup: followupView(lock, now) }
     }
@@ -6436,6 +6503,26 @@ export function apply(ctx) {
         saveGemini({ ...g, recaps, session: null, recappedFor: Number(g.inSince) || g.recappedFor })
         // 回执是否完整进账本：日判按它算「这场连麦有没有产出」。
         record({ state: 'gemini-recap', at: now, by: role, file: wrote || undefined, minutes, receipt: r.receipt })
+        // 2026-11-20 聊完别散场：回执里的「下一步」放进今日主线（不定时间）。没在局里时，
+        // 推进器的「局之间空着 → 先问再开」和冷启动点火会把它开起来——同一条路，不另起计时器。
+        if (r.receipt && String(r.next || '').trim() && !runningBoutNow()) {
+          try {
+            const tzL = zoneOr(config.timeZone)
+            const next = String(r.next).trim()
+            const cur = workStoreNow(now, tzL).store
+            const up = upsertWorkItem(cur, {
+              id: 'land-' + now.toString(36).slice(-6),
+              source: 'sister',
+              title: ('落地：' + next).slice(0, 80),
+              minutes: 25,
+              packet: { goal: next.slice(0, 120), first: next.slice(0, 120), ...(r.by ? { deliverable: ('几点前：' + r.by).slice(0, 160) } : {}) },
+            }, { day: dayString(now, tzL), now })
+            if (up.ok) {
+              mirrorWorkStoreToFiles(up.state, now, tzL)
+              record({ state: 'gemini-landing', at: now, next: next.slice(0, 80) })
+            }
+          } catch {}
+        }
         try {
           v4Hub?.recordStoryline?.({
             kind: 'gemini_recap',
@@ -7184,7 +7271,7 @@ export function apply(ctx) {
     if (l.ask) {
       // L2 核对：先问一句。2 分钟不答由下一拍自己升级成「锁那个包」，这里不预判。
       // 不说包名：代码认不出「抖音」这种中文名，硬拼一个英文包名给他看比不说更糟。
-      openFollowup('standby', '你在局里用的是没声明的应用。回去，还是收局？', now)
+      askViaGemini('standby', '你在局里用的是没声明的应用。回去，还是收局？', now)
     }
     saveLadderDoc(next)
     return [l.cell, l.tighten ? '墙收紧' : '', l.plan ? '计划模态' : '', l.block ? '锁 ' + l.block : '', l.ask ? '核对' : '']
@@ -8220,6 +8307,12 @@ export function apply(ctx) {
     // 局刚结束：上一刻有局、这一刻没了。
     let lastBoutEndAt = Number(st.lastBoutEndAt) || 0
     if (st.runId && !run) lastBoutEndAt = now
+    // 2026-11-20 主动点火要的三件事：今天开过局没有、今天第一次亮屏是几点、上次点火是几点。
+    const dayStartMs = startOfDay(now, config.timeZone)
+    const boutDay = run ? day : String(st.boutDay || '')
+    const openedToday = Boolean(run) || boutDay === day || lastBoutEndAt >= dayStartMs
+    const firstScreenAt = String(st.screenDay || '') === day ? Number(st.firstScreenAt) || 0 : (phone?.screenOn !== false && phone?.app ? now : 0)
+    const screenDay = firstScreenAt ? day : String(st.screenDay || '')
     const runId = run ? String(run.id || run.protocolId || 'live') : ''
     let contractOverdue = false
     let checkpoints = []
@@ -8272,6 +8365,7 @@ export function apply(ctx) {
     }
     const memo = { ...(st.memo || {}) }
     let drive = null
+    let ignited = null
     if (tk.state.active) {
       const nextItem = planItems.filter((i) => !i.openedAt && !i.missed).sort((a, b) => Number(a.minute) - Number(b.minute))[0] || null
       const lastSpoke = Number(memo.takeoverSpoke) || 0
@@ -8294,7 +8388,38 @@ export function apply(ctx) {
         now, minuteOfDay: min, mode: m.mode, boutRunning: Boolean(run), lastBoutEndAt, planItems, checkpoints, deadlines, memo,
         boutGapPushMs: th.boutGapPushMin * 60_000,
         boutGapAutoMs: th.boutGapAutoOpenMin * 60_000,
+        dayStartMs,
       })
+      // 2026-11-20 冷启动点火：推进器这一拍没别的事、今天还没开过局时，才轮到它。
+      if (!drive) {
+        const followupOpen = Boolean(config.followup && Number(config.followup.until) > now) || Boolean(config.followupGemini)
+        const mealIn = mealNow(wallConfig(config).meals, localMinute(phone, min))
+        ignited = ignite({
+          now, minuteOfDay: min, boutRunning: Boolean(run), openedToday,
+          blocked: blocked || followupOpen || Boolean(mealIn) || onBreak(now) || isEmergencyPassOrDisarmActive(now, tz),
+          firstScreenAt, lastIgniteAt: Number(memo.ignite) || 0,
+          frontApp: phone?.app || '', frontTier, frontMinutes,
+          idleMin: th.boutGapAutoOpenMin,
+          intensity: intInfo.effectiveIntensity || intInfo.intensity,
+          planItems,
+        })
+        if (ignited) {
+          memo.ignite = now
+          record({ state: 'ignite', at: now, action: ignited.action, reason: ignited.reason, itemId: ignited.itemId || '', front: phone?.app || '', frontMinutes })
+          if (ignited.action === 'open-bout') {
+            recordHardNow({ kind: 'cold_start', source: 'driver', why: '冷启动开第一局', now, tz, dedupeKey: 'ignite:' + day })
+            Promise.resolve(boutsRoute({ action: 'start', id: ignited.itemId, by: 'ignite' }))
+              .then((r) => record({ state: 'ignite-open', at: Date.now(), itemId: ignited.itemId, ok: r?.ok === true, toast: String(r?.toast || '').slice(0, 80) }))
+              .catch(() => {})
+            drive = { kind: 'cold-start', key: 'ignite', role: 'strategist',
+              text: '今天第一局「' + ignited.title + '」已经开了（他在' + (phone?.label || '手机上') + '空转了 ' + Math.round(frontMinutes) + ' 分钟）：一句话告诉他第一步' +
+                (ignited.first ? '：' + String(ignited.first).slice(0, 40) : '') + '。不想做可以在局详情收工。' }
+          } else if (ignited.action === 'hint') {
+            drive = { kind: 'cold-start-hint', key: 'ignite', role: 'strategist', text: ignited.text }
+          }
+          // action === 'gemini'：这一拍的动作是拉起 Gemini（/plan 的拉起段处理），不再开口。
+        }
+      }
       if (drive?.kind === 'auto-open') {
         memo[drive.key] = now
         Promise.resolve(boutsRoute({ action: 'start', id: drive.itemId, by: 'driver' }))
@@ -8302,10 +8427,10 @@ export function apply(ctx) {
           .catch(() => {})
       }
     }
-    saveDrive({ ...st, takeover: tk.state, memo, lastBoutEndAt, runId, mode: m.mode, why: m.why, at: now })
+    saveDrive({ ...st, takeover: tk.state, memo, lastBoutEndAt, runId, mode: m.mode, why: m.why, at: now, boutDay, screenDay, firstScreenAt })
     lastDriveMode = tk.state.active ? 'takeover' : m.mode
     lastTakeover = tk.state.active ? tk.state : null
-    return { mode: lastDriveMode, why: m.why, drive, takeover: tk.state }
+    return { mode: lastDriveMode, why: m.why, drive, takeover: tk.state, ignite: ignited }
   }
 
   // ---------------------------------------------------------------- 2026-11-18 会话换班
@@ -8874,13 +8999,15 @@ export function apply(ctx) {
     }
     // 追问锁到点没裁决：结束拦截、记账扣分、挂义务（手机也会报 followup-timeout，谁先到都算）。
     expireFollowup(now)
+    // 追问改道 Gemini 的那一次：有回执就结，10 分钟没回执落锁。
+    tickFollowupGemini(now)
     // 待命 10 分钟计时器：只有换出待命才重置——聊天不算动。已经欠着一笔就不再追问，只留着账。
     if (stateView(now, tz, phone).state !== 'standby') {
       if (Number(config.standbySince)) commit({ standbySince: 0 })
     } else if (standbyDue(config.standbySince, now)) {
       const owed = (config.obligations || []).some((o) => o.kind === 'standby')
       commit({ standbySince: 0 })
-      if (!owed) openFollowup('standby', '这半天什么也没干。现在做哪一件？说一件，动手。', now)
+      if (!owed) askViaGemini('standby', '这半天什么也没干。现在做哪一件？说一件，动手。', now)
     } else if (!Number(config.standbySince)) {
       commit({ standbySince: now })
     }
@@ -9265,13 +9392,23 @@ export function apply(ctx) {
     }
     const geminiMinutesToday = v4Hub.getGeminiStats(dayString(now, tz), now).minutesToday
     let geminiAutoPull = v4Hub.consumePendingAutoPull()
-    if (!geminiAutoPull) {
+    // 2026-11-20 每一拍只做一件事：推进器这一拍已经开了局（自动开 / 冷启动），就不再拉 Gemini。
+    const openedThisTick = ['auto-open', 'cold-start'].includes(driveRes?.drive?.kind)
+    // 追问改道 Gemini 排着的那一次（geminiFirst 已经过了闸门）。
+    if (!geminiAutoPull && pendingFollowupPull && !openedThisTick) {
+      geminiAutoPull = pendingFollowupPull
+      pendingFollowupPull = null
+    }
+    if (!geminiAutoPull && !openedThisTick) {
       const pullMode = v4Hub.getPullMode(now)
       const mealNowVal = mealNow(wallConfig(config).meals, localMinute(phone, zoneMinuteOfDay(now, tz)))
-      const inActiveWork = effectiveGear(config, now) === 'busy' || Boolean(v4ContractTick.contract) || Boolean(runningBoutNow())
+      const boutNow = Boolean(runningBoutNow())
+      const inActiveWork = effectiveGear(config, now) === 'busy' || Boolean(v4ContractTick.contract) || boutNow
       const dwellMin = Math.max(0, Number(phone?.minutes) || 0)
       const switchPull = radar.triggered && radar.pullGemini === true
       const dwellPull = phone?.fun && dwellMin >= 8 && inActiveWork
+      // 冷启动：今天还没开局、也没排局，空转够了——拉 Gemini 帮他定第一局（plan 口吻）。
+      const ignitePull = driveRes?.ignite?.action === 'gemini' ? driveRes.ignite : null
       const canAttemptAutoPull =
         config.control !== false &&
         canTalk &&
@@ -9279,11 +9416,13 @@ export function apply(ctx) {
         !mealNowVal &&
         !onBreak(now) &&
         phone?.screenOn !== false
-      if (canAttemptAutoPull && (drift || switchPull || dwellPull)) {
-        const pullSource = drift ? 'drift' : (switchPull ? 'switch-limit' : 'fun-dwell-8m')
-        const pullTopic = drift?.topic || (switchPull ? `你在干正事时 ${radar.reason}，用骰子把注意力拉回这一局` : `你在${phone?.label || phone?.app || '娱乐应用'}已停留 ${dwellMin} 分钟，立刻对齐下一步主线`)
-        let pullBrief = drift?.brief || ''
-        if (switchPull && !pullBrief) {
+      if (canAttemptAutoPull && (drift || switchPull || dwellPull || ignitePull)) {
+        // 口吻按来源：冷启动 → plan；局里来回切 → think（卡住了，帮他拆）；摸鱼被抓 → interrogate。
+        const pullSource = ignitePull ? 'cold-start' : (drift ? 'drift' : (switchPull ? (boutNow ? 'bout-switch' : 'switch-limit') : 'fun-dwell-8m'))
+        const pullGeminiMode = ignitePull ? 'plan' : (switchPull && boutNow ? 'think' : 'interrogate')
+        const pullTopic = ignitePull ? ignitePull.topic : (drift?.topic || (switchPull ? `你在干正事时 ${radar.reason}，用骰子把注意力拉回这一局` : `你在${phone?.label || phone?.app || '娱乐应用'}已停留 ${dwellMin} 分钟，立刻对齐下一步主线`))
+        let pullBrief = ignitePull ? '' : (drift?.brief || '')
+        if (switchPull && !pullBrief && !ignitePull) {
           try {
             pullBrief = String(diceRollRoute({ manual: false, topic: '' })?.geminiPrompt || '')
           } catch {
@@ -9293,19 +9432,18 @@ export function apply(ctx) {
         if (!pullBrief) {
           pullBrief = v4Hub.buildProactiveGeminiBrief({
             topic: pullTopic,
-            mode: 'interrogate',
+            mode: pullGeminiMode,
             minutes: 15,
             now,
           })
         }
-        const gateRes = drift
-          ? { allowed: true, brief: pullBrief }
-          : requestGeminiViaGate({
+        // 2026-11-20 单一路径：drift 也走闸门（以前直接放行，不吃统一的冷却和每日上限）。
+        const gateRes = requestGeminiViaGate({
               source: pullSource,
               mode: 'auto',
               topic: pullTopic,
               minutes: 15,
-              geminiMode: 'interrogate',
+              geminiMode: pullGeminiMode,
               brief: pullBrief,
               now,
               tz,
@@ -9329,6 +9467,11 @@ export function apply(ctx) {
           }
         }
       }
+    }
+    // 2026-11-20 每一拍只做一件事：拉起了 Gemini 就不再开口（Gemini 就是这一拍的那件事）。
+    if (geminiAutoPull?.triggered && out.speak) {
+      nextSpeaker = null
+      Object.assign(out, { speak: false, reason: 'gemini-pull' })
     }
     const intensityFinal = intensityStateNow(now, tz, v4ContractTick.autonomy)
     const passLedger = passLedgerSummary(loadPassLedger(now, tz), {
@@ -9354,7 +9497,7 @@ export function apply(ctx) {
       shadow: config.lockShadow !== false,
       // 2026-11-19 永不锁只有一份：插件这份（自己 / 急事 / 系统 / 代理 + iQOO 相册文件选图分享相机），
       // 手机存下来、落锁前对照；手机本地的桌面 / DSH / 系统界面硬兜底照旧。
-      neverLock: [...new Set([...SELF_PACKAGES, ...EMERGENCY_PACKAGES, ...SYSTEM_PACKAGES, ...PROXY_PACKAGES, ...BASE_EXTRA])],
+      neverLock: [...new Set([...SELF_PACKAGES, ...EMERGENCY_PACKAGES, ...SYSTEM_PACKAGES, ...PROXY_PACKAGES, ...RESIDENT_PACKAGES, ...BASE_EXTRA])],
       autonomy: v4ContractTick.autonomy,
       planContract: v4ContractTick.contract,
       contractGraceWarning: v4ContractTick.graceWarning,
@@ -10273,6 +10416,27 @@ export function apply(ctx) {
     }
     if (action === 'close' || action === 'finish') {
       return { v: 1, ...closeBoutNow() }
+    }
+    if (action === 'ask-gemini') {
+      // 2026-11-20 局详情「叫 Gemini 来判」：他自己觉得卡住了 / 想让它判一下这局对不对。
+      // 他点的，算手动（不吃自动拉起的每日上限）；口吻 think，带上这一局的目标、交付、节点断点、已过几分钟。
+      if (!live) return { v: 1, ok: false, toast: '现在没有局。' }
+      const now = Date.now()
+      const tzA = zoneOr(config.timeZone)
+      const nc = live.contextBrief || null
+      const goal = String(live.goal || live.packet?.goal || '这一局')
+      const lines = [
+        '这一局：' + goal,
+        live.packet?.deliverable ? '要交：' + live.packet.deliverable : '',
+        nc?.nodeTitle ? '属于：' + (nc.horizonTitle ? nc.horizonTitle + ' · ' : '') + nc.nodeTitle : '',
+        nc?.lastBreakpoint ? '上次断在：' + nc.lastBreakpoint : '',
+        '已经过了 ' + Math.max(0, Math.round((now - live.openedAt) / 60_000)) + ' 分钟（计划 ' + (live.budgetMin || 45) + ' 分钟）',
+      ].filter(Boolean)
+      const topic = ('判一下这一局：' + goal).slice(0, 80)
+      const brief = v4Hub.buildProactiveGeminiBrief({ topic: topic + '\n' + lines.join('\n'), mode: 'think', minutes: 10, now })
+      const gate = requestGeminiViaGate({ source: 'bout-judge', mode: 'manual', topic, minutes: 10, geminiMode: 'think', brief, now, tz: tzA })
+      record({ state: 'bout-ask-gemini', at: now, goal: goal.slice(0, 60) })
+      return { v: 1, ok: true, topic, brief: gate.brief || brief }
     }
     if (!['ask', 'spoken', 'answer', 'fallback'].includes(action)) {
       return { v: 1, ok: false, code: 'bad-action' }

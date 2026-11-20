@@ -210,7 +210,8 @@ test('违抗追问：他点「开始」就由墙当场关掉，不用聊；没�
     // 关窗后又打开游戏：插件开一把违抗追问锁。
     await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'defied', app: 'com.game', label: '王者' })
     const snap = await t.plan({ app: 'com.tencent.mm', label: '微信', minutes: 1, screenOn: true, local: '15:01' })
-    assert.equal(snap.body.followup?.reason, 'defiance', JSON.stringify(snap.body.followup))
+    // 2026-11-20 追问改道 Gemini：违抗先拉 Gemini（没回执才落锁）；点「开始」照样由墙当场关掉。
+    assert.equal(snap.body.geminiAutoPull?.reason, 'followup-defiance', JSON.stringify(snap.body.geminiAutoPull))
     // 没开始之前交：墙不收。
     assert.equal(t.big.tools.submit_to_wall.execute({ kind: 'defiance' }).pass, false)
     await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/event', { type: 'start', task: '写周报', minutes: 25 })

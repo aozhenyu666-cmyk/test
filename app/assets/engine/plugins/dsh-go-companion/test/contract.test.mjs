@@ -148,7 +148,9 @@ test('C1 事件 defiance：开拒绝模式并开追问锁，拿回收尾的话',
     assert.equal(r.body.force.level, 4)
     assert.match(r.body.force.why, /王者/)
     const b = (await t.plan(game)).body
-    assert.equal(b.followup.reason, 'defiance')
+    // 2026-11-20 追问改道 Gemini：先拉 Gemini 带同一个问题（10 分钟没回执才落锁），拒绝模式照旧。
+    assert.equal(b.geminiAutoPull?.reason, 'followup-defiance', JSON.stringify(b.geminiAutoPull))
+    assert.equal(b.followup.active, false)
     assert.ok(b.refuse && b.refuse.until > Date.now())
   })
 })
@@ -165,7 +167,9 @@ test('C1 事件 gemini-end：满 3 分钟才算完成并出追问，不足回待
     await call(t.h.handler(), 'POST', '/dsh-go-companion/v1/session', { action: 'start', topic: '线代', minutes: 30 })
     const long = await t.event({ type: 'gemini-end', minutes: 25 })
     assert.equal(long.body.counted, true)
-    assert.equal(long.body.followup.reason, 'gemini')
+    // 2026-11-20：连麦本身该出回执，先等 10 分钟回执，等不到才落追问锁（见 ignite.test.mjs）。
+    assert.equal(long.body.awaitingReceipt, true)
+    assert.equal(long.body.followup.active, false)
   })
 })
 
@@ -218,7 +222,8 @@ test('C1 事件 blocked-open：只在他打开被拦的 App 时再问，一条�
     })
     const first = await t.event({ type: 'blocked-open', app: 'com.game' })
     assert.equal(first.body.ask, true, JSON.stringify(first.body))
-    assert.equal(first.body.followup.reason, 'morning')
+    // 2026-11-20 追问改道 Gemini：这一问先交给 Gemini（没回执才落锁）。
+    assert.ok(t.ledger().some((e) => e.state === 'followup-gemini' && e.reason === 'morning'))
     // 第二次打开不再问（问过就记 askedAt，不每次开 App 都堵他）。
     const second = await t.event({ type: 'blocked-open', app: 'com.game' })
     assert.equal(second.body.ask, false)
@@ -242,10 +247,10 @@ test('待命 10 分钟计时器：一直待命到点就开追问锁', async () =
     // 15:00 不在任何吃饭/对账/深夜段里，主状态是待命。
     const t = setup(home, { standbySince: Date.now() - 11 * 60_000 })
     const r = await t.plan(game)
-    assert.equal(r.body.followup.active, true, JSON.stringify(r.body.followup))
-    assert.equal(r.body.followup.reason, 'standby')
-    assert.equal(r.body.state.state, 'followup')
-    assert.equal(r.body.state.backTo, 'standby')
+    // 2026-11-20 追问改道 Gemini：待命到点先拉 Gemini（同一个问题），10 分钟没回执才落追问锁。
+    assert.equal(r.body.geminiAutoPull?.reason, 'followup-standby', JSON.stringify(r.body.geminiAutoPull))
+    assert.equal(r.body.followup.active, false)
+    assert.ok(t.ledger().some((e) => e.state === 'followup-gemini' && e.reason === 'standby'))
   })
 })
 

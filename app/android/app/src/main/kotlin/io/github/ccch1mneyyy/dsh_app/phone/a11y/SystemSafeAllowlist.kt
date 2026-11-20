@@ -102,7 +102,10 @@ object SystemSafeAllowlist {
         "com.android.intentresolver",
     )
 
-    val SAFE_BASE = EMERGENCY_PACKAGES + SYSTEM_UI_AND_LAUNCHERS + FILE_AND_ESSENTIAL_TOOLS + PROXY_PACKAGES
+    /** 2026-11-20 常驻 App：Gemini 本体（不含 Google App），和 DSH 自己同级，任何锁都不锁。和插件 never_lock.js 的 RESIDENT_PACKAGES 同一份。 */
+    val RESIDENT_PACKAGES = setOf("com.google.android.apps.bard")
+
+    val SAFE_BASE = EMERGENCY_PACKAGES + SYSTEM_UI_AND_LAUNCHERS + FILE_AND_ESSENTIAL_TOOLS + PROXY_PACKAGES + RESIDENT_PACKAGES
 
     fun isSelfPackage(pkg: String, ownPackage: String): Boolean {
         if (pkg.isBlank() || ownPackage.isBlank()) return false

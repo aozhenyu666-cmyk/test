@@ -17,7 +17,7 @@ export const GEMINI_AUTO_COOLDOWN_MS = 20 * 60_000
 export const GEMINI_POST_SESSION_COOLDOWN_MS = 10 * 60_000
 export const DEFAULT_GEMINI_AUTO_CAP = 6
 
-const AUTO_SOURCES = new Set(['drift', 'preset', 'ladder', 'fun-dwell-8m', 'switch-limit'])
+const AUTO_SOURCES = new Set(['drift', 'preset', 'ladder', 'fun-dwell-8m', 'switch-limit', 'cold-start', 'followup', 'bout-switch'])
 const n = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d)
 
 export function emptyGeminiGate(day = '') {

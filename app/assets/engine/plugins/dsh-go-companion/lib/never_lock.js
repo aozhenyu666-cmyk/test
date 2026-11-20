@@ -38,7 +38,16 @@ export const PROXY_PACKAGES = Object.freeze([
   'com.github.metacubex.clash.meta',
 ])
 
-const ALL = new Set([...SELF_PACKAGES, ...EMERGENCY_PACKAGES, ...SYSTEM_PACKAGES, ...PROXY_PACKAGES])
+/**
+ * 2026-11-20 常驻 App：和 DSH 自己同级，任何局 / 接管 / 深夜都能打开。
+ * Gemini 是他的「高互动大脑」，随时要能叫出来（NekoBox 在上面的代理名单里，已经是常驻）。
+ * 只放 Gemini 本体；Google App（googlequicksearchbox）带资讯流，不放进来，照 App 分类表管。
+ */
+export const RESIDENT_PACKAGES = Object.freeze([
+  'com.google.android.apps.bard',
+])
+
+const ALL = new Set([...SELF_PACKAGES, ...EMERGENCY_PACKAGES, ...SYSTEM_PACKAGES, ...PROXY_PACKAGES, ...RESIDENT_PACKAGES])
 
 export function isNeverLockPkg(pkg, extra = []) {
   const s = String(pkg || '').trim()

@@ -113,6 +113,19 @@ void main() {
     expect((up['node'] as Map)['budgetMinutes'], 135, reason: '默认 3 局 × 45 分');
   });
 
+  testWidgets('局详情「叫 Gemini 来判」：插件拼背景（ask-gemini），手机拉起 Gemini', (tester) async {
+    final ch = _RunningFromNode();
+    await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: LoopChannel()));
+    await settlePhone(tester);
+    await tester.tap(find.text('速算 50 题'));
+    await settlePhone(tester);
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('bout-detail-ask-gemini')), 200, scrollable: find.byType(Scrollable).last);
+    await tester.tap(find.byKey(const ValueKey('bout-detail-ask-gemini')));
+    await settlePhone(tester);
+    expect(ch.commands.single['action'], 'ask-gemini');
+    expect(ch.launched.single, '判一下这一局：速算 50 题');
+  });
+
   testWidgets('局详情：从节点派出来的局显示节点上下文', (tester) async {
     final ch = _RunningFromNode();
     await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: LoopChannel()));
@@ -126,6 +139,21 @@ void main() {
 }
 
 class _RunningFromNode extends ProactiveChannel {
+  final List<Map<String, Object?>> commands = [];
+  final List<String> launched = [];
+
+  @override
+  Future<Map<String, dynamic>?> boutsCommand(Map<String, Object?> body) async {
+    commands.add(body);
+    return {'ok': true, 'topic': '判一下这一局：速算 50 题', 'brief': '背景'};
+  }
+
+  @override
+  Future<bool> launchGeminiProactive({String topic = '', String brief = '', String mode = 'countdown_3s', bool preferVoice = true}) async {
+    launched.add(topic);
+    return true;
+  }
+
   @override
   Future<Map<String, dynamic>?> boutsStatus() async => {
         'running': {

@@ -122,10 +122,13 @@ export function nextDrive(s = {}) {
     const pushMs = n(s.boutGapPushMs) > 0 ? n(s.boutGapPushMs) : BOUT_GAP_PUSH_MS
     const autoMs = n(s.boutGapAutoMs) > 0 ? n(s.boutGapAutoMs) : BOUT_GAP_AUTO_MS
     const items = Array.isArray(s.planItems) ? s.planItems : []
-    const next = items.filter((i) => i && !i.openedAt && !i.missed && n(i.minute) >= min - 5).sort((a, b) => n(a.minute) - n(b.minute))[0]
-    const endAt = n(s.lastBoutEndAt)
+    const next = nextPlanItem(items, min)
+    // 2026-11-20：只认今天收的局。昨天最后一局的收局时间不算——早上「上一局收了 900 分钟」是假话；
+    // 今天还没开过局的冷启动交给 ignite。
+    const rawEnd = n(s.lastBoutEndAt)
+    const endAt = n(s.dayStartMs) > 0 && rawEnd < n(s.dayStartMs) ? 0 : rawEnd
     const gapKey = 'gap:' + (endAt || 'none') + ':' + (next?.id || 'none')
-    const soon = next && n(next.minute) - min <= 10
+    const soon = next && hasMinute(next) && n(next.minute) - min <= 10
     if (!soon && endAt && now - endAt >= pushMs) {
       if (next && now - endAt >= autoMs && !seen('auto:' + next.id, 3 * 3_600_000)) {
         // 推过了还没开：代码直接把今天计划里的下一局提前开掉。
@@ -147,6 +150,66 @@ export function nextDrive(s = {}) {
       text: '他在滑、手上没局：随机挑一种把他拉一下——一道思维题、摇一骰子（roll_six_dice）连 Gemini、或者只是损他两句；别催进度。' }
   }
   return null
+}
+
+const hasMinute = (i) => i && i.minute !== undefined && i.minute !== null && i.minute !== ''
+
+/**
+ * 今天的下一局：定了时间的（还没过点超过 5 分钟）按时间排在前，没定时间的（今日主线、从节点派出的）排在后。
+ * 以前没定时间的整个被过滤掉，所以「添加一条今日主线」永远不会被自动开。
+ */
+export function nextPlanItem(items, minuteOfDay) {
+  const open = (Array.isArray(items) ? items : []).filter((i) => i && !i.openedAt && !i.missed)
+  const timed = open.filter((i) => hasMinute(i) && n(i.minute) >= minuteOfDay - 5).sort((a, b) => n(a.minute) - n(b.minute))
+  const untimed = open.filter((i) => !hasMinute(i))
+  return timed[0] || untimed[0] || null
+}
+
+// ---------------------------------------------------------------- 主动点火（2026-11-20）
+
+/** 聊天类 App：在里面就不自动开局（开局 1 分钟后会锁住它，回消息回一半被锁最伤人）。 */
+export const CHAT_PACKAGES = Object.freeze([
+  'com.tencent.mm', 'com.tencent.mobileqq', 'com.tencent.tim', 'org.telegram.messenger', 'com.whatsapp',
+  'com.alibaba.android.rimet', 'com.ss.android.lark', 'com.tencent.wework',
+])
+export const IGNITE_MORNING_GUARD_MS = 15 * 60_000
+export const IGNITE_COOLDOWN_MS = 60 * 60_000
+
+/**
+ * 冷启动点火：今天还没开过局时，把第一局点起来。纯函数，每一项都是规则，不让模型猜。
+ *
+ * 只在这些都成立时点：工作时段；没有局在跑；今天还没开过局；没被别的事挡着（深夜 / 安静 / 吃饭 / 放风 /
+ * 紧急 / 连麦中 / 追问中 / 硬干预用满）；第一次亮屏已过 15 分钟；不在聊天 App；**不在娱乐 / 游戏 App**
+ * （花自己挣来的余额，额度优先）；在当前 App 里待够了强度档的阈值（boutGapAutoOpenMin）；一小时内没点过。
+ *
+ * 点什么：
+ *   温和档                    → hint（只提示，不抢屏）
+ *   有该开的局（到点 / 没定时间）→ open-bout
+ *   一条局都没排                → gemini（plan 口吻：帮他定第一局）
+ *   排了但都在后面              → 不点（他自己定过时间）
+ */
+export function ignite(p = {}) {
+  const now = n(p.now)
+  const min = n(p.minuteOfDay)
+  if (min < WORK_FROM_MIN || min >= WORK_TO_MIN) return null
+  if (p.boutRunning || p.openedToday || p.blocked) return null
+  if (n(p.firstScreenAt) > 0 && now - n(p.firstScreenAt) < IGNITE_MORNING_GUARD_MS) return null
+  if (n(p.lastIgniteAt) > 0 && now - n(p.lastIgniteAt) < IGNITE_COOLDOWN_MS) return null
+  const app = String(p.frontApp || '')
+  if (CHAT_PACKAGES.includes(app)) return null
+  if (p.frontTier === 'fun' || p.frontTier === 'game') return null
+  const idleNeed = Math.max(3, n(p.idleMin) || 10)
+  if (n(p.frontMinutes) < idleNeed) return null
+  const items = Array.isArray(p.planItems) ? p.planItems : []
+  const next = nextPlanItem(items, min)
+  const dueNow = next && (!hasMinute(next) || n(next.minute) <= min + 10)
+  if (p.intensity === 'gentle') {
+    return { action: 'hint', reason: 'cold-start', itemId: dueNow ? next.id : '',
+      text: dueNow ? '今天还没开局。「' + next.title + '」可以开了，要现在开吗？' : '今天还没开局：先定一件，说一件就动手。' }
+  }
+  if (dueNow) return { action: 'open-bout', reason: 'cold-start', itemId: next.id, title: next.title, first: next.first || '' }
+  if (items.some((i) => i && !i.openedAt && !i.missed)) return null
+  return { action: 'gemini', mode: 'plan', reason: 'cold-start-noplan', topic: '今天还没开局，也没排局：两分钟定下第一局做什么、交什么、几点前' }
 }
 
 function hmOf(min) {
