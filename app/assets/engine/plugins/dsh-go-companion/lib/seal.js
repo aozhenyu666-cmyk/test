@@ -8,6 +8,13 @@
 //   · 奖励进挣来制：拉伸 ×1.25、保底 ×1.0、未达 0；当天现定 ×0.7；过了点才交够 ×0.5。
 //   · 豁免要写理由、占当天一次紧急解除（调用方扣），原始数字永远留着。
 // 纯函数：时间、证据事实（题库 / 文件 / 截图 / App 分钟）都由调用方给。
+//
+// 2026-11-20 第二版：验收点上时间轴。
+//   · 每个点可以带开始时刻：到点推进器把这一局开起来（不用他自己点）；截止前 10 分钟提醒；到点代码判。
+//   · 来源：前一晚封的（night）、开工前定的时间轴（morning）、开工后现加的（live）、AI / Gemini 加的（ai / gemini）。
+//     打折只看冷热：前一晚封的、当天 10:00 前且还没开过局时定的——不打折；开工后现加的 ×0.7。
+//   · 新证据：通过验收的局的分钟数（bout_minutes，局本身已经给过一份，所以这一类奖励减半）、
+//     Gemini 回执（gemini_receipt，经 Gemini 桥写进来的、判过「过」的回执条数）。
 
 export const SEAL_KINDS = Object.freeze({
   quiz: { label: 'DSH 题库', unit: '题' },
@@ -15,7 +22,14 @@ export const SEAL_KINDS = Object.freeze({
   file: { label: '笔记 / 文件', unit: '字' },
   screenshots: { label: '截图', unit: '张' },
   app_minutes: { label: 'App 用时', unit: '分钟' },
+  bout_minutes: { label: '通过验收的局', unit: '分钟' },
+  gemini_receipt: { label: 'Gemini 回执', unit: '条' },
 })
+export const SEAL_SOURCES = Object.freeze(['night', 'morning', 'live', 'ai', 'gemini'])
+/** 当天开工前的冷静线：这之前（且还没开过局）定的时间轴不打折。 */
+export const COLD_CUTOFF_MINUTE = 10 * 60
+/** 局已经按时长给过一份放风，这一类验收点的奖励减半，免得一份活拿两份全额。 */
+export const KIND_REWARD_FACTOR = Object.freeze({ bout_minutes: 0.5 })
 
 export const SEAL_CUTOFF_MINUTE = 23 * 60
 export const SEAL_GRACE_MS = 60_000
@@ -23,7 +37,7 @@ export const SEAL_LOCK_MAX_MS = 60 * 60_000
 export const SAME_DAY_FACTOR = 0.7
 export const LATE_FACTOR = 0.5
 export const TIER_FACTOR = { stretch: 1.25, floor: 1.0, below: 0 }
-export const MAX_SEALS_PER_DAY = 5
+export const MAX_SEALS_PER_DAY = 8
 export const EXTERNAL_MIN_PER_ITEM = 0.5
 const KEEP_DAYS = 60
 
@@ -46,6 +60,10 @@ export function cleanSeal(raw) {
     stretch,
     floor: Math.max(1, Math.min(stretch, int(raw.floor, Math.ceil(stretch / 2)))),
     dueMinute: Math.max(0, Math.min(1439, int(raw.dueMinute, 18 * 60))),
+    startMinute: raw.startMinute === null || raw.startMinute === undefined || raw.startMinute === '' ? -1 : Math.max(-1, Math.min(1438, int(raw.startMinute, -1))),
+    source: SEAL_SOURCES.includes(raw.source) ? raw.source : (raw.sameDay === true ? 'live' : 'night'),
+    boutId: str(raw.boutId, 40),
+    openedAt: int(raw.openedAt, 0),
     estMinutes: Math.max(10, Math.min(240, int(raw.estMinutes, 45))),
     sealedAt: int(raw.sealedAt, 0),
     sameDay: raw.sameDay === true,
@@ -85,11 +103,13 @@ export function nextYmd(ymd) {
  * 封一条。target: 'tomorrow'（默认，前一晚立约）| 'today'（当天现定，×0.7）。
  * 过了 23:00 再封明天的，也算当天现定（冷静期已过）。一天最多 5 条。
  */
-export function addSeal(stateRaw, input = {}, { now = Date.now(), today, minuteOfDay = 0 } = {}) {
+export function addSeal(stateRaw, input = {}, { now = Date.now(), today, minuteOfDay = 0, workStarted = false, coldCutoff = COLD_CUTOFF_MINUTE, by = '' } = {}) {
   const s = cleanSeals(stateRaw, today)
   const target = input.target === 'today' ? 'today' : 'tomorrow'
   const day = target === 'today' ? today : nextYmd(today)
-  const sameDay = target === 'today' || minuteOfDay >= SEAL_CUTOFF_MINUTE
+  // 冷热：明天的——23:00 前封的算冷；今天的——10:00 前且还没开过局算冷（开工前定的时间轴），否则是现加的。
+  const sameDay = target === 'today' ? (workStarted || minuteOfDay >= coldCutoff) : minuteOfDay >= SEAL_CUTOFF_MINUTE
+  const source = by === 'gemini' ? 'gemini' : by === 'ai' ? 'ai' : target === 'tomorrow' && !sameDay ? 'night' : sameDay ? 'live' : 'morning'
   if (s.items.filter((x) => x.day === day).length >= MAX_SEALS_PER_DAY) {
     return { ok: false, error: 'too-many', text: '一天最多封 ' + MAX_SEALS_PER_DAY + ' 条：少而硬。', state: s }
   }
@@ -99,11 +119,12 @@ export function addSeal(stateRaw, input = {}, { now = Date.now(), today, minuteO
   if ((kind === 'app_minutes' || kind === 'external_quiz') && !str(input.app, 120)) return { ok: false, error: 'no-app', text: '要选是哪个 App。', state: s }
   const seal = cleanSeal({
     ...input,
-    id: 'seal-' + day.replace(/-/g, '') + '-' + Number(now).toString(36).slice(-5),
+    id: 'seal-' + day.replace(/-/g, '') + '-' + Number(now).toString(36).slice(-5) + (s.items.length % 36).toString(36),
     day,
     kind,
     sealedAt: now,
     sameDay,
+    source,
     status: 'open',
     paidMinutes: 0,
     actual: 0,
@@ -113,7 +134,58 @@ export function addSeal(stateRaw, input = {}, { now = Date.now(), today, minuteO
   })
   if (!seal) return { ok: false, error: 'bad-seal', text: '要有标题和拉伸目标。', state: s }
   if (target === 'today' && seal.dueMinute <= minuteOfDay) return { ok: false, error: 'past-due', text: '截止时间已经过了。', state: s }
+  if (seal.startMinute >= 0 && seal.startMinute >= seal.dueMinute) return { ok: false, error: 'bad-start', text: '开始时刻要在截止之前。', state: s }
+  const clash = s.items.find((x) => x.day === day && x.id !== seal.id && x.status !== 'waived' && x.title === seal.title && x.dueMinute === seal.dueMinute)
+  if (clash) return { ok: false, error: 'duplicate', text: '这一条已经有了（同名同截止）。', state: s }
   return { ok: true, seal, state: { ...s, items: [...s.items, seal] } }
+}
+
+/** 一次定一串（早上定时间轴、Gemini 帮他排）：逐条加，某条不合格就跳过并说明，合格的照加。 */
+export function addSeals(stateRaw, inputs = [], opts = {}) {
+  let state = cleanSeals(stateRaw, opts.today)
+  const added = []
+  const skipped = []
+  for (const input of (Array.isArray(inputs) ? inputs : []).slice(0, MAX_SEALS_PER_DAY)) {
+    const r = addSeal(state, input, opts)
+    if (r.ok) {
+      state = r.state
+      added.push(r.seal)
+    } else skipped.push({ title: str(input?.title, 80), error: r.error, text: r.text })
+  }
+  return { ok: added.length > 0, state, added, skipped }
+}
+
+/** 推进器开了这一点的局：记下局号（之后局通过验收的分钟数记到这一点上）。 */
+export function markOpened(stateRaw, id, { boutId = '', now = Date.now() } = {}) {
+  const s = cleanSeals(stateRaw)
+  const cur = s.items.find((x) => x.id === id)
+  if (!cur) return { ok: false, state: s }
+  const next = { ...cur, boutId: str(boutId, 40) || cur.boutId, openedAt: cur.openedAt || now }
+  return { ok: true, seal: next, state: { ...s, items: s.items.map((x) => (x.id === id ? next : x)) } }
+}
+
+/**
+ * 时间轴上该推的那一点（纯规则）：
+ *   start  —— 到了开始时刻（或截止前 est 分钟）还没开局、还没过档：该开局了；
+ *   warn   —— 截止前 10 分钟还没过保底：提醒一次；
+ *   null   —— 没事。
+ * 只看今天、没豁免、没过档的点。已经开过（openedAt）的不再推 start。
+ */
+export function timelineDue(stateRaw, { today, minuteOfDay, boutRunning = false } = {}) {
+  const s = cleanSeals(stateRaw, today)
+  const open = s.items.filter((x) => x.day === today && (x.status === 'open' || x.status === 'below') && x.dueMinute > minuteOfDay)
+    .sort((a, b) => a.dueMinute - b.dueMinute)
+  for (const x of open) {
+    const left = x.dueMinute - minuteOfDay
+    if (left <= 10 && x.actual < x.floor) return { kind: 'warn', seal: x, left }
+  }
+  if (boutRunning) return null
+  for (const x of open) {
+    if (x.openedAt) continue
+    const start = x.startMinute >= 0 ? x.startMinute : x.dueMinute - x.estMinutes
+    if (minuteOfDay >= start && x.actual < x.floor) return { kind: 'start', seal: x, late: Math.max(0, minuteOfDay - start) }
+  }
+  return null
 }
 
 /** 加码：只能往上（I15）。往下的请求一律拒绝，原值不动。 */
@@ -164,6 +236,10 @@ export function measure(seal, facts = {}) {
       return Math.max(0, int(facts.screenshotsSince, 0))
     case 'app_minutes':
       return appMin(seal.app)
+    case 'bout_minutes':
+      return Math.max(0, int(facts.boutMinutes?.[seal.id], 0))
+    case 'gemini_receipt':
+      return Math.max(0, int(facts.receipts?.[seal.id], 0))
     default:
       return 0
   }
@@ -178,7 +254,7 @@ export function tierFor(seal, actual) {
 /** 这一条该给多少娱乐分钟（未打折的底数按预计时长 1/3，夹在 10–40）。 */
 export function rewardMinutes(seal, tier, { late = false } = {}) {
   const base = Math.max(10, Math.min(40, Math.round(seal.estMinutes / 3)))
-  let m = base * (TIER_FACTOR[tier] || 0)
+  let m = base * (TIER_FACTOR[tier] || 0) * (KIND_REWARD_FACTOR[seal.kind] || 1)
   if (seal.sameDay) m *= SAME_DAY_FACTOR
   if (late) m *= LATE_FACTOR
   return Math.round(m)

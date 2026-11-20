@@ -91,3 +91,57 @@ test('姐妹上下文：列出今天的封印，并明说封印改不了、别�
   assert.match(lines[0], /资料分析.*12\/30题.*保底 15.*12:00/)
   assert.match(lines.at(-1), /只能加码/)
 })
+
+// ---------------------------------------------------------------- 第二版：时间轴
+import { addSeals, markOpened, timelineDue, rewardMinutes as rewardOf2 } from '../lib/seal.js'
+
+test('时间轴：开工前定的不打折，开工后现加的七折；同名同截止不重复', () => {
+  const morning = addSeals(null, [
+    { title: '资料分析 30 题', kind: 'quiz', stretch: 30, startMinute: 9 * 60, dueMinute: 10 * 60 + 30, target: 'today' },
+    { title: '行测笔记', kind: 'file', path: '学习/行测.md', stretch: 600, startMinute: 14 * 60, dueMinute: 15 * 60 + 30, target: 'today' },
+    { title: '资料分析 30 题', kind: 'quiz', stretch: 30, dueMinute: 10 * 60 + 30, target: 'today' },
+  ], { now: 1, today: TODAY, minuteOfDay: 8 * 60 + 40 })
+  assert.equal(morning.added.length, 2)
+  assert.equal(morning.skipped[0].error, 'duplicate')
+  assert.ok(morning.added.every((x) => x.sameDay === false && x.source === 'morning'))
+  assert.notEqual(morning.added[0].id, morning.added[1].id, '同一毫秒加的也不撞号')
+  // 开过局了：就算还没到 10 点，也是现加
+  const live = addSeal(morning.state, { title: '投递', kind: 'screenshots', stretch: 3, dueMinute: 18 * 60, target: 'today' }, { now: 2, today: TODAY, minuteOfDay: 9 * 60, workStarted: true })
+  assert.equal(live.seal.sameDay, true)
+  assert.equal(live.seal.source, 'live')
+  const ai = addSeal(null, { title: 'Gemini 排的', kind: 'gemini_receipt', stretch: 1, dueMinute: 20 * 60, target: 'today' }, { now: 3, today: TODAY, minuteOfDay: 8 * 60, by: 'gemini' })
+  assert.equal(ai.seal.source, 'gemini')
+  assert.equal(addSeal(null, { title: 'x', kind: 'quiz', stretch: 5, startMinute: 900, dueMinute: 800, target: 'today' }, { today: TODAY, minuteOfDay: 60 }).error, 'bad-start')
+})
+
+test('时间轴推进：到开始时刻 → start；截止前 10 分钟没过保底 → warn；开过的不再推 start', () => {
+  const st = addSeals(null, [
+    { title: 'A', kind: 'quiz', stretch: 20, startMinute: 9 * 60, dueMinute: 10 * 60, target: 'today' },
+    { title: 'B', kind: 'quiz', stretch: 20, dueMinute: 15 * 60, estMinutes: 60, target: 'today' },
+  ], { now: 1, today: TODAY, minuteOfDay: 8 * 60 }).state
+  assert.equal(timelineDue(st, { today: TODAY, minuteOfDay: 8 * 60 + 59 }), null)
+  const s1 = timelineDue(st, { today: TODAY, minuteOfDay: 9 * 60 + 3 })
+  assert.equal(s1.kind, 'start')
+  assert.equal(s1.seal.title, 'A')
+  assert.equal(s1.late, 3)
+  assert.equal(timelineDue(st, { today: TODAY, minuteOfDay: 9 * 60 + 3, boutRunning: true }), null, '有局在跑不再开')
+  const opened = markOpened(st, s1.seal.id, { boutId: 'b1', now: 5 }).state
+  assert.equal(timelineDue(opened, { today: TODAY, minuteOfDay: 9 * 60 + 10 }), null)
+  assert.equal(timelineDue(opened, { today: TODAY, minuteOfDay: 9 * 60 + 52, boutRunning: true }).kind, 'warn', '截止前 10 分钟有局在跑也提醒')
+  // B 没写开始：按截止前 est 分钟算（15:00 - 60 = 14:00）
+  assert.equal(timelineDue(opened, { today: TODAY, minuteOfDay: 13 * 60 + 59 }), null)
+  assert.equal(timelineDue(opened, { today: TODAY, minuteOfDay: 14 * 60 }).seal.title, 'B')
+})
+
+test('新证据：通过验收的局分钟数、Gemini 回执；局类奖励减半', () => {
+  const st = addSeals(null, [
+    { title: '写申论', kind: 'bout_minutes', stretch: 90, dueMinute: 12 * 60, estMinutes: 90, target: 'today' },
+    { title: 'Gemini 抽背', kind: 'gemini_receipt', stretch: 2, dueMinute: 21 * 60, target: 'today' },
+  ], { now: 1, today: TODAY, minuteOfDay: 8 * 60 }).state
+  const [bout, rec] = st.items
+  const facts = { boutMinutes: { [bout.id]: 50 }, receipts: { [rec.id]: 2 } }
+  assert.equal(measure(bout, facts), 50)
+  assert.equal(measure(rec, facts), 2)
+  assert.equal(rewardOf2(bout, 'floor'), 15) // round(90/3)=30 × 1 × 0.5
+  assert.equal(rewardOf2(rec, 'stretch'), 19) // 默认预计 45 分钟 → 15 × 1.25
+})

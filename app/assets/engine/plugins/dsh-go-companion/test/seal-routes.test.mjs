@@ -149,3 +149,31 @@ test('豁免：要理由、扣一次紧急解除、不开放行窗口', async ()
     assert.ok(Number(pl.emergency.until) <= Date.now(), '豁免不开放行窗口')
   })
 })
+
+test('时间轴：到开始时刻 /plan 自动开这一局（被挡着就只提醒）；plan-day 一次加一串', async () => {
+  const min = minuteOfDay(Date.now(), TZ)
+  if (min < 3 || min > 1300) return // 零点附近 / 太晚没有可造的时段
+  await withHome(async ({ home, seals, h }) => {
+    const r0 = await seals({ action: 'list' })
+    const pd = await seals({ action: 'plan-day', seals: [
+      { title: '时间轴第一点', kind: 'quiz', stretch: 20, startMinute: min - 1, dueMinute: min + 60 },
+      { title: '时间轴第二点', kind: 'bout_minutes', stretch: 60, dueMinute: Math.min(1439, min + 120) },
+      { title: '坏的', kind: 'file', stretch: 5, dueMinute: min + 30 },
+    ] })
+    assert.equal(pd.added.length, 2)
+    assert.equal(pd.skipped[0].error, 'no-path')
+    const id = pd.added[0].id
+    await call(h(), 'POST', '/plan', { roll: 0, timeZone: TZ, phone: { app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 12, screenOn: true } })
+    const st = json(home, 'seals.json')
+    const s = st.items.find((x) => x.id === id)
+    const drive = json(home, 'drive.json')
+    assert.ok(s.openedAt > 0 || Number(drive.memo?.['tls:' + id]) > 0, '到点要么开了局，要么提醒过')
+    if (s.openedAt > 0) {
+      const ledger = readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8')
+      assert.match(ledger, /"state":"timeline-open"/)
+      assert.match(ledger, /"state":"bout-open"/)
+    }
+    assert.equal(r0.ok, true)
+  })
+})
+

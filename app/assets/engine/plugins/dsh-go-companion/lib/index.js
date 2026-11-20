@@ -151,10 +151,10 @@ import { contextLines, loadGeminiSetting, parseReceipt } from './trigger.js'
 import { AGREE_RE, BASE_EXTRA, TIER_FILE, TIER_LABEL, TIER_RANK, classifyTierChanges, parseTierFile, renderTierFile, tierOf } from './app_tiers.js'
 import { computeQuota } from './quota.js'
 import { buildLockDecision } from './lock_decision.js'
-import { driveMode, ignite, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
+import { CHAT_PACKAGES, driveMode, ignite, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
 import {
-  SEAL_CUTOFF_MINUTE, SEAL_KINDS, addSeal, captureBaselines, claimSeal, cleanSeals, lockingSeal, nextYmd, raiseSeal,
-  sealPromptLines, tickSeals, waiveSeal,
+  SEAL_CUTOFF_MINUTE, SEAL_KINDS, COLD_CUTOFF_MINUTE, addSeal, addSeals, captureBaselines, claimSeal, cleanSeals, lockingSeal,
+  markOpened, nextYmd, raiseSeal, sealPromptLines, tickSeals, timelineDue, waiveSeal,
 } from './seal.js'
 import {
   COVENANT_FILE, COVENANT_PENDING_FILE, COVENANT_PROPOSALS_FILE, COVENANT_COOLDOWN_MS, DRAFT_RULES, addProposal, cleanProposal,
@@ -6991,7 +6991,7 @@ export function apply(ctx) {
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
-        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role),
+        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role), addCheckpointsTool(role),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
         fishIndexTool(), presetTool(role), brainTool(role), composeBoutTool(role),
         openBoutTool(role), planBoutsTool(role),
@@ -8181,6 +8181,63 @@ export function apply(ctx) {
       return ''
     }
   }
+  /**
+   * 两条鱼：把他说的今天（或明天）的安排落成时间轴上的验收点。只能加，不能改小、不能删——
+   * 和他自己在手机上加走同一条规矩（开工前定的不打折，开工后现加的七折）。
+   */
+  function addCheckpointsTool(role) {
+    return {
+      name: 'add_checkpoints',
+      description: '把他定下的安排写成时间轴验收点（到开始时刻自动开局、到截止时刻代码判、没过保底就锁）。' +
+        '只在他明确说了要做什么、几点前交的时候用；每条要能被代码验：quiz（DSH 题库答对数）/ external_quiz（外部 App 刷题，要 app 包名）/ ' +
+        'file（笔记库里某个文件的字数增量，要 path）/ screenshots（截图张数）/ app_minutes（某 App 用时，要 app）/ ' +
+        'bout_minutes（通过验收的局的分钟数）/ gemini_receipt（Gemini 回执条数）。你只能加，不能改小、不能删。',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'today（今天的时间轴）/ tomorrow（明天的封印）' },
+          items: {
+            type: 'array',
+            maxItems: 8,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: '交什么，一句话' },
+                kind: { type: 'string', description: 'quiz / external_quiz / file / screenshots / app_minutes / bout_minutes / gemini_receipt' },
+                stretch: { type: 'integer', description: '拉伸目标（按 kind 的单位）' },
+                floor: { type: 'integer', description: '保底（不填就是拉伸的一半）' },
+                start: { type: 'string', description: '开始时刻 HH:MM（可不填，按截止前预计分钟算）' },
+                due: { type: 'string', description: '截止时刻 HH:MM' },
+                estMinutes: { type: 'integer', description: '预计分钟' },
+                path: { type: 'string', description: 'file 类：笔记库里的路径' },
+                app: { type: 'string', description: 'external_quiz / app_minutes 类：App 包名' },
+              },
+              required: ['title', 'kind', 'stretch', 'due'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['items'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const hm = (v) => {
+          const m = /^(\d{1,2})[:：](\d{2})$/.exec(String(v || '').trim())
+          return m ? Number(m[1]) * 60 + Number(m[2]) : null
+        }
+        const seals = (Array.isArray(args.items) ? args.items : []).map((x) => ({
+          title: x.title, kind: x.kind, stretch: x.stretch, floor: x.floor, path: x.path, app: x.app, estMinutes: x.estMinutes,
+          dueMinute: hm(x.due), startMinute: hm(x.start),
+        }))
+        const r = sealsRoute({ action: 'plan-day', target: args.target === 'tomorrow' ? 'tomorrow' : 'today', seals, by: 'ai' })
+        record({ state: 'checkpoints-by-ai', at: Date.now(), by: role, added: (r.added || []).length, skipped: (r.skipped || []).length })
+        const added = (r.added || []).map((x) => '「' + x.title + '」' + sealHm(x.dueMinute) + ' 前' + (x.sameDay ? '（现加，七折）' : '')).join('、')
+        const skipped = (r.skipped || []).map((x) => '「' + x.title + '」：' + (x.text || x.error)).join('；')
+        return { ok: Boolean(r.ok), text: (added ? '加上了：' + added + '。' : '一条都没加上。') + (skipped ? ' 没加的：' + skipped : '') }
+      },
+    }
+  }
   /** 两条鱼：提一条新规矩（只能加；放松没有通道）。 */
   function proposeCovenantTool(role) {
     return {
@@ -8298,6 +8355,96 @@ export function apply(ctx) {
       } catch {}
     }
   }
+  // ---- 时间轴的两份小账：局分钟（按验收点）、Gemini 回执
+  const loadSealBouts = (day) => {
+    const raw = readState(stateFile('seal-bouts.json'), null)
+    return raw && raw.day === day && raw.bySeal && typeof raw.bySeal === 'object' ? raw : { day, bySeal: {}, bouts: [] }
+  }
+  function addSealBoutMinutes(sealId, boutId, minutes, now, tz) {
+    const day = dayString(now, tz)
+    const cur = loadSealBouts(day)
+    const bouts = Array.isArray(cur.bouts) ? cur.bouts : []
+    if (bouts.some((b) => b.boutId && b.boutId === boutId)) return
+    const add = Math.max(0, Math.round(Number(minutes) || 0))
+    const next = { day, bySeal: { ...cur.bySeal, [sealId]: (Number(cur.bySeal[sealId]) || 0) + add }, bouts: [...bouts, { sealId, boutId, minutes: add, at: now }].slice(-40) }
+    writeJson(stateFile('seal-bouts.json'), next)
+    record({ state: 'seal-bout', at: now, sealId, boutId, minutes: add })
+  }
+  const loadGeminiReceipts = () => {
+    const raw = readState(stateFile('gemini-receipts.json'), null)
+    return { v: 1, items: Array.isArray(raw?.items) ? raw.items : [] }
+  }
+  /**
+   * 一条 Gemini 回执进账（Gemini 桥 / 以后的「分享到 DSH」都走这里）。
+   * 同时记一条 gemini-recap（晚上对账、接管解除都认它），并追加到笔记库 大肥鱼/Gemini/回执/日期.md。
+   */
+  function recordGeminiReceipt(input, { via = 'bridge', now = Date.now() } = {}) {
+    const tz = zoneOr(config.timeZone)
+    const day = dayString(now, tz)
+    const clip = (v, m) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, m)
+    const qa = (Array.isArray(input?.qa) ? input.qa : []).slice(0, 8).map((x) => ({ q: clip(x?.q, 200), a: clip(x?.a, 400) })).filter((x) => x.q)
+    const verdict = input?.verdict === 'pass' ? 'pass' : input?.verdict === 'fail' ? 'fail' : 'partial'
+    let sealId = clip(input?.sealId || input?.checkpointId, 40)
+    const seals = loadSeals(now, tz)
+    if (sealId && !seals.items.some((x) => x.id === sealId && x.day === day)) sealId = ''
+    const item = {
+      id: clip(input?.id, 40) || 'gr-' + now.toString(36) + Math.random().toString(36).slice(2, 5),
+      at: now, day, via, sealId,
+      topic: clip(input?.topic, 120), did: clip(input?.did, 600), next: clip(input?.next, 200), qa, verdict,
+      // 过不过由 Gemini 判，但只有带了至少 2 问 2 答的「过」才算数——空口的「过」不进验收点。
+      counted: verdict === 'pass' && qa.filter((x) => x.a.length >= 4).length >= 2,
+    }
+    if (item.verdict === 'pass' && !item.counted) item.verdict = 'partial'
+    const cur = loadGeminiReceipts()
+    if (cur.items.some((x) => x.id === item.id)) return { ok: true, duplicate: true, receipt: item }
+    writeJson(stateFile('gemini-receipts.json'), { v: 1, items: [...cur.items, item].slice(-300) })
+    record({ state: 'gemini-recap', at: now, receipt: true, via, topic: item.topic, summary: (item.did + ' ' + item.next).slice(0, 200), sealId, verdict: item.verdict })
+    try {
+      const kb = vaultKb()
+      if (kb) {
+        const path = join(kb, 'Gemini', '回执', day + '.md')
+        const prev = readVaultText(path) || '# ' + day + ' · Gemini 回执\n'
+        const block = ['', '## ' + zoneHm(now, tz) + ' ' + (item.topic || '回执') + '（' + ({ pass: '过', fail: '没过', partial: '半过' })[item.verdict] + '）',
+          item.did ? '- 做了：' + item.did : '', item.next ? '- 下一步：' + item.next : '', sealId ? '- 验收点：' + sealId : '',
+          ...qa.map((x) => '- 问：' + x.q + '\n  答：' + x.a)].filter(Boolean).join('\n')
+        writeVaultText(path, prev.replace(/\s+$/, '') + '\n' + block + '\n')
+      }
+    } catch {}
+    try {
+      sealTick(now, tz, lastPhone)
+    } catch {}
+    return { ok: true, receipt: item }
+  }
+  /** 今天开过局没有（开工了没有）：时间轴的冷热线要用。 */
+  function workStartedToday(now, tz) {
+    if (runningBoutNow()) return true
+    const st = loadDrive()
+    return String(st.boutDay || '') === dayString(now, tz)
+  }
+  function sealProtocolOf(kind) {
+    if (kind === 'gemini_receipt') return 'thinking'
+    if (kind === 'quiz' || kind === 'external_quiz' || kind === 'file') return 'study'
+    return 'execute'
+  }
+  /** 时间轴上一点到了开始时刻：把这一局开起来（工作包写清：交什么、几点前、保底多少）。 */
+  function openSealBout(seal, now, tz, by = 'timeline') {
+    const due = sealHm(seal.dueMinute)
+    const unit = SEAL_KINDS[seal.kind]?.unit || ''
+    const tier = seal.app ? tierFnNow()(seal.app) : ''
+    const allow = [...new Set(['md.obsidian', ...(seal.app && tier !== 'fun' && tier !== 'game' ? [seal.app] : [])])]
+    const minutes = Math.max(10, Math.min(240, seal.dueMinute - zoneMinuteOfDay(now, tz)))
+    const r = startBout(sealProtocolOf(seal.kind), {
+      goal: seal.title, minutes, by, sealId: seal.id, apps: { need: allow, allow },
+      packet: { goal: seal.title, done: '交 ' + seal.stretch + unit + '（保底 ' + seal.floor + unit + '），' + due + ' 前', first: seal.kind === 'file' ? '打开 ' + seal.path : '' },
+    })
+    if (r.ok) {
+      const run = runningBoutNow()
+      const m = markOpened(loadSeals(now, tz), seal.id, { boutId: run?.id || '', now })
+      if (m.ok) saveSeals(m.state, now, tz, { type: 'opened', id: seal.id, boutId: run?.id || '' })
+    }
+    return r
+  }
+
   function sealFacts(now, tz, phone, state) {
     const today = dayString(now, tz)
     const todays = state.items.filter((x) => x.day === today && x.status !== 'waived')
@@ -8323,7 +8470,14 @@ export function apply(ctx) {
     for (const r of (Array.isArray(phone?.today) ? phone.today : (lastPhone?.today || []))) {
       if (r?.app) appMinutes[r.app] = Number(r.minutes) || 0
     }
-    return { bankCorrect: Number(bank?.stats?.correct) || 0, fileBytes, screenshotsSince, appMinutes }
+    // 2026-11-20 时间轴：通过验收的局记到哪一点上；Gemini 桥写进来的回执（判过「过」的才算）。
+    const today2 = dayString(now, tz)
+    const boutMinutes = { ...(loadSealBouts(today2).bySeal || {}) }
+    const receipts = {}
+    for (const r of loadGeminiReceipts().items) {
+      if (r.day === today2 && r.sealId && r.verdict === 'pass') receipts[r.sealId] = (receipts[r.sealId] || 0) + 1
+    }
+    return { bankCorrect: Number(bank?.stats?.correct) || 0, fileBytes, screenshotsSince, appMinutes, boutMinutes, receipts }
   }
   /** 每拍一次：记基线 → 量证据 → 过档就发奖励 → 到点没过保底就进锁。 */
   function sealTick(now, tz, phone) {
@@ -8380,6 +8534,7 @@ export function apply(ctx) {
     const view = (st, extra = {}) => ({
       v: 1, ok: true, today, tomorrow: nextYmd(today), minuteOfDay: min, cutoffMinute: SEAL_CUTOFF_MINUTE, cutoffPassed: min >= SEAL_CUTOFF_MINUTE,
       kinds: SEAL_KINDS, items: st.items.filter((x) => x.day === today || x.day === nextYmd(today)),
+      coldCutoffMinute: COLD_CUTOFF_MINUTE, workStarted: workStartedToday(now, tz),
       locking: lockingSeal(st, { now, today }), ...extra,
     })
     if (action === 'list' || action === 'check') {
@@ -8388,11 +8543,28 @@ export function apply(ctx) {
     }
     const state = loadSeals(now, tz)
     if (action === 'add') {
-      const r = addSeal(state, b.seal || {}, { now, today, minuteOfDay: min })
+      const r = addSeal(state, b.seal || {}, { now, today, minuteOfDay: min, workStarted: workStartedToday(now, tz), by: b.by === 'gemini' ? 'gemini' : '' })
       if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text }
       saveSeals(r.state, now, tz, { type: 'add', seal: r.seal })
       record({ state: 'seal-add', at: now, id: r.seal.id, day: r.seal.day, sameDay: r.seal.sameDay, title: r.seal.title })
       return view(r.state, { seal: r.seal })
+    }
+    if (action === 'plan-day') {
+      // 一次定一串（时间轴）：合格的加，不合格的说明原因。
+      const r = addSeals(state, Array.isArray(b.seals) ? b.seals.map((x) => ({ ...x, target: b.target === 'tomorrow' ? 'tomorrow' : 'today' })) : [],
+        { now, today, minuteOfDay: min, workStarted: workStartedToday(now, tz), by: b.by === 'gemini' ? 'gemini' : b.by === 'ai' ? 'ai' : '' })
+      if (r.added.length) {
+        saveSeals(r.state, now, tz, { type: 'plan-day', ids: r.added.map((x) => x.id), by: String(b.by || 'user') })
+        record({ state: 'seal-plan-day', at: now, n: r.added.length, by: String(b.by || 'user') })
+      }
+      return { ...view(r.added.length ? r.state : state), ok: r.ok, added: r.added, skipped: r.skipped }
+    }
+    if (action === 'open') {
+      // 他在手机上点「现在开这一局」。
+      const seal = state.items.find((x) => x.id === String(b.id || '') && x.day === today)
+      if (!seal) return { v: 1, ok: false, error: 'no-seal' }
+      const r = openSealBout(seal, now, tz, 'panel')
+      return { ...view(loadSeals(now, tz)), ok: r.ok, toast: r.toast }
     }
     if (action === 'raise') {
       const r = raiseSeal(state, String(b.id || ''), { stretch: b.stretch, floor: b.floor }, { now })
@@ -8750,7 +8922,13 @@ export function apply(ctx) {
       } catch {
         deadlines = []
       }
-      drive = nextDrive({
+      // 2026-11-20 时间轴：验收点到了开始时刻就开局；截止前 10 分钟没过保底就提醒。排在别的推进前面。
+      try {
+        drive = timelineDrive({ now, tz, min, run, memo, phone, frontTier, blocked, intensity: intInfo.effectiveIntensity || intInfo.intensity })
+      } catch (error) {
+        console.error('[companion] 时间轴推进失败：' + String((error && error.message) || error))
+      }
+      if (!drive) drive = nextDrive({
         now, minuteOfDay: min, mode: m.mode, boutRunning: Boolean(run), lastBoutEndAt, planItems, checkpoints, deadlines, memo,
         boutGapPushMs: th.boutGapPushMin * 60_000,
         boutGapAutoMs: th.boutGapAutoOpenMin * 60_000,
@@ -8797,6 +8975,47 @@ export function apply(ctx) {
     lastDriveMode = tk.state.active ? 'takeover' : m.mode
     lastTakeover = tk.state.active ? tk.state : null
     return { mode: lastDriveMode, why: m.why, drive, takeover: tk.state, ignite: ignited }
+  }
+
+  /**
+   * 时间轴推进（纯规则在 seal.js 的 timelineDue）：
+   *   start：到开始时刻 → 能开就直接开局（被挡着——聊天 / 吃饭 / 紧急 / 深夜 / 温和档——就只提醒一句，15 分钟一次）；
+   *   warn ：截止前 10 分钟还没过保底 → 提醒一次。
+   */
+  function timelineDrive({ now, tz, min, run, memo, phone, frontTier, blocked, intensity }) {
+    const today = dayString(now, tz)
+    const due = timelineDue(loadSeals(now, tz), { today, minuteOfDay: min, boutRunning: Boolean(run) })
+    if (!due) return null
+    const s = due.seal
+    const unit = SEAL_KINDS[s.kind]?.unit || ''
+    const seen = (key, ms) => Number(memo[key]) && now - Number(memo[key]) < ms
+    if (due.kind === 'warn') {
+      const key = 'tlw:' + s.id
+      if (seen(key, 3 * 3_600_000)) return null
+      memo[key] = now
+      return { kind: 'timeline-warn', key, role: 'strategist',
+        text: '验收点「' + s.title + '」还有 ' + due.left + ' 分钟到点，现在 ' + s.actual + '/' + s.floor + unit + '（保底）。到点没过保底会锁：叫他先把保底交上，别解释。' }
+    }
+    const key = 'tls:' + s.id
+    const inChat = CHAT_PACKAGES.includes(String(phone?.app || ''))
+    const mealIn = mealNow(wallConfig(config).meals, localMinute(phone, min))
+    const held = blocked || inChat || Boolean(mealIn) || onBreak(now) || isEmergencyPassOrDisarmActive(now, tz) || intensity === 'gentle' ||
+      frontTier === 'fun' || frontTier === 'game'
+    if (held) {
+      if (seen(key, 15 * 60_000)) return null
+      memo[key] = now
+      return { kind: 'timeline-hint', key, role: 'strategist',
+        text: '时间轴上「' + s.title + '」该开始了（' + sealHm(s.dueMinute) + ' 前交 ' + s.stretch + unit + '，保底 ' + s.floor + '）。' +
+          (inChat ? '他在聊天，等他回完再说一句。' : frontTier === 'fun' || frontTier === 'game' ? '他在花自己挣的余额，提醒一句就行，余额用完自然会锁。' : '一句话提醒他开局。') }
+    }
+    if (seen(key, 10 * 60_000)) return null
+    memo[key] = now
+    const r = openSealBout(s, now, tz, 'timeline')
+    record({ state: 'timeline-open', at: now, id: s.id, ok: r.ok === true, toast: String(r.toast || '').slice(0, 80) })
+    if (!r.ok) return null
+    recordHardNow({ kind: 'timeline_start', source: 'driver', why: '时间轴开局：' + s.title, now, tz, dedupeKey: 'tls:' + s.id })
+    return { kind: 'timeline-start', key, role: 'strategist',
+      text: '时间轴上「' + s.title + '」到点了，局已经开好（' + sealHm(s.dueMinute) + ' 前交 ' + s.stretch + unit + '，保底 ' + s.floor + unit + '）。一句话告诉他第一步。不想做也得先交保底，真有事走豁免。' }
   }
 
   // ---------------------------------------------------------------- 2026-11-18 会话换班
@@ -10517,7 +10736,8 @@ export function apply(ctx) {
     const budgetMin = Number(opts.minutes) > 0 ? Math.max(5, Math.min(240, Math.round(Number(opts.minutes)))) : 0
     const workId = String(opts.workId || '').trim()
     const parentHorizonId = String(opts.parentHorizonId || '').trim()
-    live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, goal, budgetMin, openedAt: now, workId, parentHorizonId }
+    live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, goal, budgetMin, openedAt: now, workId, parentHorizonId,
+      sealId: String(opts.sealId || '') }
     try {
       const tzW = zoneOr(config.timeZone)
       const wsCur = workStoreNow(now, tzW).store
@@ -10593,6 +10813,14 @@ export function apply(ctx) {
           // 有节点的局写回节点（目标进度由节点推导）；老的没节点的照旧 +1。
           if (!commitNode('passed') && hId) v4Hub?.horizonsRoute?.({ action: 'upsert', id: hId, bumpStep: true })
         } catch {}
+        // 时间轴：这一局是为哪个验收点开的，通过的分钟数记到那一点上。
+        if (live.sealId) {
+          try {
+            const done = Math.round((now - Number(live.openedAt || now)) / 60_000)
+            addSealBoutMinutes(live.sealId, String(live.official.view().boutId || ''), live.budgetMin ? Math.min(done, live.budgetMin) : done, now, tz)
+            sealTick(now, tz, lastPhone)
+          } catch {}
+        }
         const before = todayEarned(now, tz)
         // 挣来制：这一局挣多少按实际做了多久（≤ 计划分钟）的 1/3 算，10–40 分钟。
         const reward = earnedRt.rewardFor({ budgetMin: live.budgetMin, openedAt: live.openedAt, now, config })
@@ -10759,7 +10987,7 @@ export function apply(ctx) {
           if (!parentHorizonId && queued.parentHorizonId) parentHorizonId = String(queued.parentHorizonId)
         }
       }
-      const r = startBout(protocolId, { apps, packet, department: body?.department, goal, minutes: body?.minutes, by: body?.by || 'panel', workId, parentHorizonId })
+      const r = startBout(protocolId, { apps, packet, department: body?.department, goal, minutes: body?.minutes, by: body?.by || 'panel', workId, parentHorizonId, sealId: body?.sealId })
       if (r.ok && body?.strict === true && apps && ([...(apps.need || []), ...(apps.allow || [])].length > 0)) {
         presetRt.strictNow(Date.now(), String(goal || '面板严格局'), 'panel')
       }

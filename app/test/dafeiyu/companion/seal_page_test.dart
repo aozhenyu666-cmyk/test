@@ -12,7 +12,7 @@ class _Seals extends ProactiveChannel {
   final bool locked;
   final List<Map<String, Object?>> calls = [];
   final List<Map<String, dynamic>> items = [
-    {'id': 's1', 'day': '2026-11-20', 'title': '资料分析', 'kind': 'quiz', 'stretch': 40, 'floor': 20, 'dueMinute': 1200, 'actual': 12, 'status': 'open', 'paidMinutes': 0},
+    {'id': 's1', 'day': '2026-11-20', 'title': '资料分析', 'kind': 'quiz', 'stretch': 40, 'floor': 20, 'startMinute': 1140, 'dueMinute': 1200, 'actual': 12, 'status': 'open', 'paidMinutes': 0, 'openedAt': 0},
     {'id': 's2', 'day': '2026-11-20', 'title': '行测笔记', 'kind': 'file', 'stretch': 600, 'floor': 300, 'dueMinute': 900, 'actual': 650, 'status': 'stretch', 'paidMinutes': 25},
   ];
 
@@ -20,8 +20,10 @@ class _Seals extends ProactiveChannel {
         'ok': true,
         'today': '2026-11-20',
         'tomorrow': '2026-11-21',
-        'minuteOfDay': 600,
+        'minuteOfDay': 540,
         'cutoffPassed': false,
+        'coldCutoffMinute': 600,
+        'workStarted': false,
         'items': items,
         'locking': locked ? items.first : null,
       };
@@ -29,6 +31,7 @@ class _Seals extends ProactiveChannel {
   @override
   Future<Map<String, dynamic>?> sealsOp(Map<String, Object?> body) async {
     calls.add(body);
+    if (body['action'] == 'open') items.first['openedAt'] = 1;
     if (body['action'] == 'add') {
       final s = Map<String, dynamic>.from(body['seal'] as Map);
       items.add({...s, 'id': 's3', 'day': '2026-11-21', 'actual': 0, 'status': 'open', 'paidMinutes': 0, 'floor': s['floor'] ?? 10});
@@ -43,7 +46,7 @@ void main() {
     await pumpPhone(tester, SealPage(channel: ch));
     await settlePhone(tester);
     expect(find.text('资料分析'), findsOneWidget);
-    expect(find.textContaining('12/40题'), findsOneWidget);
+    expect(find.textContaining('19:00–20:00 · 12/40题'), findsOneWidget, reason: '时间轴：开始–截止');
     expect(find.text('进行中'), findsOneWidget);
     expect(find.text('过拉伸'), findsOneWidget);
     expect(find.text('+25 分钟'), findsOneWidget);
@@ -80,5 +83,31 @@ void main() {
     expect(seal['dueMinute'], 1080);
     expect(ch.calls.any((c) => c['action'] == 'delete' || c['action'] == 'lower'), isFalse);
     expect(find.text('言语 30 题'), findsOneWidget);
+  });
+
+  testWidgets('点一个今天的点 →「现在开这一局」：发 open；开过的不再显示这一项', (tester) async {
+    final ch = _Seals();
+    await pumpPhone(tester, SealPage(channel: ch));
+    await settlePhone(tester);
+    await tester.tap(find.text('资料分析'));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('seal-act-open')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('seal-act-open')));
+    await settlePhone(tester);
+    expect(ch.calls.last, {'action': 'open', 'id': 's1'});
+    await tester.tap(find.text('资料分析'));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('seal-act-open')), findsNothing);
+  });
+
+  testWidgets('10:00 前没开工：加一个验收点写「不打折」，可选开始时刻', (tester) async {
+    final ch = _Seals();
+    await pumpPhone(tester, SealPage(channel: ch));
+    await settlePhone(tester);
+    expect(find.textContaining('10:00 前、开工前定的不打折'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('seal-add-today')));
+    await settlePhone(tester);
+    expect(find.textContaining('开工前定的不打折'), findsWidgets);
+    expect(find.byKey(const ValueKey('seal-start')), findsOneWidget);
   });
 }

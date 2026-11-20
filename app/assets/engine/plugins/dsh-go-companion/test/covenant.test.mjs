@@ -63,7 +63,7 @@ test('在原文里替换 / 删除 / 插入一条，其余内容不动', () => {
   assert.ok(!parseCovenant(del).some((x) => x.id === '2.30'))
   const rep = replaceRuleInText(text, '2.7', { ...draft.find((x) => x.id === '2.7'), do: '一句话' })
   assert.equal(parseCovenant(rep).find((x) => x.id === '2.7').do, '一句话')
-  assert.equal(nextIdIn(draft, 2), '2.15')
+  assert.equal(nextIdIn(draft, 2), '2.16')
 })
 
 test('鱼只能提议：要理由、每条鱼最多 3 条在等批', () => {

@@ -20,7 +20,16 @@ const Map<String, (String, String, IconData)> kSealKinds = {
   'file': ('笔记文件', '字', AppIcons.document),
   'screenshots': ('截图', '张', AppIcons.gallery),
   'app_minutes': ('App 用时', '分钟', AppIcons.time),
+  'bout_minutes': ('通过验收的局', '分钟', AppIcons.workflow),
+  'gemini_receipt': ('Gemini 回执', '条', AppIcons.chat),
 };
+
+/// 时间轴上的一段：「09:00–10:30」或「10:30 前」。
+String sealSpan(Map<String, dynamic> s) {
+  final due = (s['dueMinute'] as num?)?.toInt() ?? 0;
+  final start = (s['startMinute'] as num?)?.toInt() ?? -1;
+  return start >= 0 ? '${sealHm(start)}–${sealHm(due)}' : '${sealHm(due)} 前';
+}
 
 String sealHm(int m) => '${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
 
@@ -32,9 +41,8 @@ String sealHm(int m) => '${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toSt
       _ => (StatusTone.busy, '进行中'),
     };
 
-/// 封印：前一晚冷静时立的约。只能加码、代码判、到点没过保底进严格锁、按档发娱乐分钟。
-///
-/// 23:00 前封明天的算数；过了 23:00 或当天现定的，奖励打七折。
+/// 验收点：今天按时间轴验（到开始时刻自动开局、到截止时刻代码判、没过保底进严格锁），明天的前一晚封。
+/// 只能加码、按档发娱乐分钟。前一晚 23:00 前封的、当天 10:00 前且开工前定的不打折；开工后现加的七折。
 class SealPage extends StatefulWidget {
   const SealPage({super.key, this.channel, this.loop});
 
@@ -88,6 +96,13 @@ class _SealPageState extends State<SealPage> {
 
   // ------------------------------------------------------------------ 编辑器
 
+  /// 今天这一条算不算「开工前定的」（不打折）。
+  bool get _todayCold {
+    final cut = (_data['coldCutoffMinute'] as num?)?.toInt() ?? 600;
+    final min = (_data['minuteOfDay'] as num?)?.toInt() ?? 0;
+    return _data['workStarted'] != true && min < cut;
+  }
+
   Future<void> _add({required bool today}) async {
     final input = await showModalBottomSheet<Map<String, Object?>>(
       context: context,
@@ -95,13 +110,14 @@ class _SealPageState extends State<SealPage> {
       showDragHandle: true,
       builder: (ctx) => _SealEditor(
         today: today,
-        cutoffPassed: _data['cutoffPassed'] == true,
+        cutoffPassed: today ? !_todayCold : _data['cutoffPassed'] == true,
         minuteOfDay: (_data['minuteOfDay'] as num?)?.toInt() ?? 0,
         loop: _loop,
       ),
     );
     if (input == null || !mounted) return;
-    await _op({'action': 'add', 'seal': input}, done: today ? '封好了（当天现定，奖励七折）' : '封好了：明天只能加码，不能改小');
+    await _op({'action': 'add', 'seal': input},
+        done: today ? (_todayCold ? '加上了：到开始时刻自动开局' : '加上了（开工后现加，奖励七折）') : '封好了：明天只能加码，不能改小');
   }
 
   Future<int?> _askNumber(String title, String hint, int initial) async {
@@ -172,14 +188,22 @@ class _SealPageState extends State<SealPage> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-              child: Text('拉伸 ${s['stretch']}$unit · 保底 ${s['floor']}$unit · ${sealHm((s['dueMinute'] as num).toInt())} 前；只能加码。'),
+              child: Text('拉伸 ${s['stretch']}$unit · 保底 ${s['floor']}$unit · ${sealSpan(s)}；只能加码。'),
             ),
+            if (isToday && !done && ((s['openedAt'] as num?)?.toInt() ?? 0) == 0)
+              ListTile(
+                key: const ValueKey('seal-act-open'),
+                leading: const Icon(AppIcons.play),
+                title: const Text('现在开这一局'),
+                subtitle: const Text('不等开始时刻；局通过验收的分钟数也记到这一点上'),
+                onTap: () => Navigator.of(ctx).pop('open'),
+              ),
             if (isToday)
               ListTile(
                 key: const ValueKey('seal-act-check'),
                 leading: const Icon(AppIcons.refresh),
                 title: const Text('现在判一次'),
-                subtitle: const Text('读题库 / 文件 / 截图 / App 用时，过档就发分钟'),
+                subtitle: const Text('读题库 / 文件 / 截图 / App 用时 / 局 / 回执，过档就发分钟'),
                 onTap: () => Navigator.of(ctx).pop('check'),
               ),
             if (isToday && kind == 'external_quiz' && !done)
@@ -216,6 +240,8 @@ class _SealPageState extends State<SealPage> {
     switch (picked) {
       case 'check':
         await _op({'action': 'check'}, done: '判过了');
+      case 'open':
+        await _op({'action': 'open', 'id': id}, done: '开局了');
       case 'claim':
         final n = await _askNumber('今天做了几题', '只能往上报；没截图不算', (s['claimed'] as num?)?.toInt() ?? 0);
         if (n != null) await _op({'action': 'claim', 'id': id, 'count': n}, done: '记下了');
@@ -247,8 +273,8 @@ class _SealPageState extends State<SealPage> {
       iconColor: tone == StatusTone.ok ? colors.success : (tone == StatusTone.error ? colors.danger : null),
       title: '${s['title']}${s['sameDay'] == true ? '（现定）' : ''}',
       subtitle: isToday
-          ? '${s['actual']}/${s['stretch']}$unit · 保底 ${s['floor']} · ${sealHm((s['dueMinute'] as num).toInt())} 前'
-          : '拉伸 ${s['stretch']}$unit · 保底 ${s['floor']} · ${sealHm((s['dueMinute'] as num).toInt())} 前 · ${k?.$1 ?? ''}',
+          ? '${sealSpan(s)} · ${s['actual']}/${s['stretch']}$unit · 保底 ${s['floor']}'
+          : '${sealSpan(s)} · 拉伸 ${s['stretch']}$unit · 保底 ${s['floor']} · ${k?.$1 ?? ''}',
       value: paid > 0 ? '+$paid 分钟' : null,
       badge: isToday ? StatusChip(tone: tone, label: label) : null,
       chevron: true,
@@ -269,8 +295,8 @@ class _SealPageState extends State<SealPage> {
     final cutoffPassed = _data['cutoffPassed'] == true;
 
     return AppPage.list(
-      title: '封印',
-      subtitle: const Text('前一晚冷静时立约，第二天只执行'),
+      title: '验收点',
+      subtitle: const Text('今天按时间轴验，明天的前一晚封'),
       actions: [GlassIconButton(tooltip: '现在判一次', icon: AppIcons.refresh, onPressed: () => unawaited(_load(action: 'check')))],
       children: [
         OverviewCard(
@@ -305,15 +331,16 @@ class _SealPageState extends State<SealPage> {
           ),
         ListPageCard(
           key: const ValueKey('seal-today'),
-          title: '今天',
+          title: '今天 · 时间轴',
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
           children: [
             for (final s in todays) _row(s, locking: locking?['id'] == s['id']),
             ListPageRow(
               key: const ValueKey('seal-add-today'),
               icon: AppIcons.add,
-              title: '今天现定一条',
-              subtitle: '没提前封的也能补，但奖励打七折',
+              title: '加一个验收点',
+              subtitle: _todayCold ? '10:00 前、开工前定的不打折；到开始时刻自动开局' : '开工后现加的奖励打七折',
+              subtitleMaxLines: 2,
               chevron: true,
               onTap: () => unawaited(_add(today: true)),
             ),
@@ -373,6 +400,8 @@ class _SealEditorState extends State<_SealEditor> {
   final _path = TextEditingController();
   String _kind = 'quiz';
   late int _due = widget.today ? ((widget.minuteOfDay ~/ 60) + 2).clamp(0, 23) * 60 : 18 * 60;
+  /// 开始时刻（可不填：按截止前「大概要几分钟」算）。到这个点推进器自动开局。
+  int? _start;
   LoopApp? _app;
   String? _error;
 
@@ -388,6 +417,13 @@ class _SealEditorState extends State<_SealEditor> {
     final picked = await showInstalledAppsPicker(context, title: '选一个 App', loop: widget.loop, confirmLabel: '就它');
     if (picked == null || picked.isEmpty || !mounted) return;
     setState(() => _app = picked.first);
+  }
+
+  Future<void> _pickStart() async {
+    final init = _start ?? (_due - 60).clamp(0, 1439);
+    final t = await showTimePicker(context: context, initialTime: TimeOfDay(hour: init ~/ 60, minute: init % 60));
+    if (t == null || !mounted) return;
+    setState(() => _start = t.hour * 60 + t.minute);
   }
 
   Future<void> _pickDue() async {
@@ -412,7 +448,9 @@ class _SealEditorState extends State<_SealEditor> {
                         ? '选一个 App'
                         : (widget.today && _due <= widget.minuteOfDay)
                             ? '截止时间已经过了'
-                            : null;
+                            : (_start != null && _start! >= _due)
+                                ? '开始要在截止之前'
+                                : null;
     if (err != null) {
       setState(() => _error = err);
       return;
@@ -423,6 +461,7 @@ class _SealEditorState extends State<_SealEditor> {
       'stretch': stretch,
       'floor': ?floor,
       'dueMinute': _due,
+      'startMinute': ?_start,
       'estMinutes': int.tryParse(_est.text.trim()) ?? 60,
       if (_kind == 'file') 'path': _path.text.trim(),
       if (needApp) 'app': _app!.package,
@@ -436,7 +475,7 @@ class _SealEditorState extends State<_SealEditor> {
     final colors = DshColors.of(context);
     final unit = kSealKinds[_kind]!.$2;
     final stretch = int.tryParse(_stretch.text.trim()) ?? 0;
-    final discount = widget.today || widget.cutoffPassed;
+    final discount = widget.cutoffPassed;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SafeArea(
@@ -446,10 +485,12 @@ class _SealEditorState extends State<_SealEditor> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(widget.today ? '今天现定一条' : '封明天一条', style: Theme.of(context).textTheme.titleMedium),
+              Text(widget.today ? '加一个验收点（今天）' : '封明天一条', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 4),
               Text(
-                discount ? '封了只能加码。这一条奖励打七折（当天现定 / 过了 23:00）。' : '封了只能加码，明天的你改不了它。',
+                discount
+                    ? (widget.today ? '已经开工了：这一条奖励打七折。加了只能加码。' : '过了 23:00：这一条奖励打七折。封了只能加码。')
+                    : (widget.today ? '开工前定的不打折。到开始时刻自动开局，到截止时刻代码判。' : '封了只能加码，明天的你改不了它。'),
                 style: TextStyle(color: discount ? colors.warning : colors.textTertiary),
               ),
               const SizedBox(height: 12),
@@ -505,13 +546,26 @@ class _SealEditorState extends State<_SealEditor> {
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
+                      key: const ValueKey('seal-start'),
+                      icon: const Icon(AppIcons.play),
+                      label: Text(_start == null ? '几点开始' : '${sealHm(_start!)} 开始'),
+                      onPressed: () => unawaited(_pickStart()),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
                       key: const ValueKey('seal-due'),
                       icon: const Icon(AppIcons.time),
                       label: Text('${sealHm(_due)} 前'),
                       onPressed: () => unawaited(_pickDue()),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
                   Expanded(
                     child: TextField(
                       key: const ValueKey('seal-est'),

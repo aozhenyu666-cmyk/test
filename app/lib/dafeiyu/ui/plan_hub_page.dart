@@ -68,11 +68,11 @@ class _PlanHubPageState extends State<PlanHubPage> {
 
   String _sealLine() {
     final s = _seals;
-    if (s == null) return '前一晚 23:00 前立约：只能加码、代码判、到点没过保底就锁';
+    if (s == null) return '到开始时刻自动开局、到截止时刻代码判、没过保底就锁；只能加码';
     final items = _list(s['items']);
     final today = items.where((x) => x['day'] == s['today']).length;
     final tomorrow = items.where((x) => x['day'] == s['tomorrow']).length;
-    if (today == 0 && tomorrow == 0) return '还没封。23:00 前封明天要交的，只能加码';
+    if (today == 0 && tomorrow == 0) return '今天还没定。10:00 前、开工前定的不打折';
     return '今天 $today 条 · 明天已封 $tomorrow 条${s['cutoffPassed'] == true ? ' · 已过 23:00' : ''}';
   }
 
@@ -118,7 +118,7 @@ class _PlanHubPageState extends State<PlanHubPage> {
               key: const ValueKey('plan-hub-seal'),
               icon: AppIcons.lock,
               iconColor: colors.warning,
-              title: '封印：明天要交什么',
+              title: '验收点：今天的时间轴 · 明天的封印',
               subtitle: _sealLine(),
               subtitleMaxLines: 2,
               chevron: true,
