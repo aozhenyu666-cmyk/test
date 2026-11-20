@@ -15,6 +15,7 @@ import '../../ui/common/segmented_pill.dart';
 import '../../ui/common/status_chip.dart';
 import '../../ui/pets/pet_settings_page.dart';
 import 'app_tiers_page.dart';
+import 'covenant_page.dart';
 import 'records_page.dart';
 import 'today_cards.dart';
 import 'proactive_page.dart';
@@ -607,6 +608,15 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
             value: appealLeft != null ? '今日完成 $appealLeft' : null,
             chevron: true,
             onTap: () => _openPage(const SistersPage()),
+          ),
+          ListPageRow(
+            key: const ValueKey('hub-covenant'),
+            icon: AppIcons.instructions,
+            title: '公约',
+            subtitle: '你和两条鱼的成文规矩：遇到什么情况、她们怎么处理；她们只能提议，你批',
+            subtitleMaxLines: 2,
+            chevron: true,
+            onTap: () => _openPage(const CovenantPage()),
           ),
           if (_rotate != null) ...[
             _rotateRow('companion', '鱼丸'),

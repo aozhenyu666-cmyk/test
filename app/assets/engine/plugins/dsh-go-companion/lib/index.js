@@ -156,6 +156,11 @@ import {
   SEAL_CUTOFF_MINUTE, SEAL_KINDS, addSeal, captureBaselines, claimSeal, cleanSeals, lockingSeal, nextYmd, raiseSeal,
   sealPromptLines, tickSeals, waiveSeal,
 } from './seal.js'
+import {
+  COVENANT_FILE, COVENANT_PENDING_FILE, COVENANT_PROPOSALS_FILE, COVENANT_COOLDOWN_MS, DRAFT_RULES, addProposal, cleanProposal,
+  cleanRule, covenantBlock, insertRuleInText, nextIdIn, parseCovenant, renderCovenant, renderPendingCovenant, renderProposals,
+  replaceRuleInText, syncCovenant,
+} from './covenant.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
@@ -1780,6 +1785,8 @@ export function apply(ctx) {
   }
   /** 最近一次 /plan 算出的作息（早上门 / 晚上门 / 深夜阶段 / 深夜锁到几点）。 */
   let lastRhythm = null
+  // 2026-11-20 公约挑场景用：上一拍裁决器是不是在锁。
+  let lastLockActive = false
   let lastApplyWindow = null
   /** A4：块结束时该问的那句「这一块记到哪个部」——内容层，30 分钟内有效。 */
   let slotAskNext = null
@@ -6865,6 +6872,9 @@ export function apply(ctx) {
       { id: 'capability', layer: 'constraint', priority: 90, text: capabilityLines(role, { notesDir: notesDir() }) },
       { id: 'agenda', layer: 'constraint', priority: 85, text: agendaLines(mainState).join('\n') },
       { id: 'stance', layer: 'constraint', priority: 87, text: stanceText() },
+      // 2026-11-20 公约：铁律每轮都带，默认 / 建议对上场景才带。约束层预算已满（1800 字、超了整轮降级），
+      // 所以放状态层最高优先级、自己封顶 850 字（budget.js 另有单块上限兜底）。
+      { id: 'covenant', layer: 'state', priority: 80, text: covenantText(role) },
       // 2026-11-18 会话换班：新对话头 3 天 / 30 轮带上上一个对话的交接。
       { id: 'handoff', layer: 'content', priority: 80, text: (() => { try { return handoffBlockText(role, nowMs) } catch { return '' } })() },
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
@@ -6981,7 +6991,7 @@ export function apply(ctx) {
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
-        takeStanceTool(role), reviseStanceTool(role),
+        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
         fishIndexTool(), presetTool(role), brainTool(role), composeBoutTool(role),
         openBoutTool(role), planBoutsTool(role),
@@ -7518,7 +7528,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7601,6 +7611,7 @@ export function apply(ctx) {
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/tiers') return send(res, 200, tiersRoute(body.value))
         if (path === '/seals') return send(res, 200, sealsRoute(body.value))
+        if (path === '/covenant') return send(res, 200, covenantRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
         if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
@@ -8074,6 +8085,185 @@ export function apply(ctx) {
       // 写不进去就算了：生效的是 config
     }
   }
+  // ---------------------------------------------------------------- 2026-11-20 公约
+  // 真源：笔记库 大肥鱼/公约.md（没有笔记库时放 companion/公约.md）。生效版在 covenant.json：
+  // 改严立即进生效版；改松等 3 天（公约-待生效.md）；两条鱼的提议在 公约-提议.md，他批了才写进 公约.md。
+  const loadCovenant = () => {
+    const raw = readState(stateFile('covenant.json'), null)
+    return {
+      v: 1,
+      seeded: raw?.seeded === true,
+      rules: Array.isArray(raw?.rules) ? raw.rules.map(cleanRule).filter(Boolean) : [],
+      pending: raw?.pending && typeof raw.pending === 'object' ? raw.pending : {},
+      proposals: Array.isArray(raw?.proposals) ? raw.proposals.map(cleanProposal).filter(Boolean) : [],
+    }
+  }
+  const saveCovenant = (s) => writeJson(stateFile('covenant.json'), s)
+  const covenantDir = () => {
+    const kb = vaultKb()
+    return kb || ''
+  }
+  const covenantPath = () => {
+    const kb = covenantDir()
+    return kb ? join(kb, COVENANT_FILE) : stateFile(COVENANT_FILE)
+  }
+  let covenantSeen = { key: '', at: 0 }
+  function writeCovenantSide(state, now) {
+    const kb = covenantDir()
+    if (!kb) return
+    const fmtDay = (at) => dayString(at, zoneOr(config.timeZone))
+    try {
+      writeVaultText(join(kb, COVENANT_PENDING_FILE), renderPendingCovenant(state.pending, state.rules, fmtDay, COVENANT_COOLDOWN_MS))
+      writeVaultText(join(kb, COVENANT_PROPOSALS_FILE), renderProposals(state.proposals, sisterNames(), fmtDay))
+    } catch {}
+  }
+  const sisterNames = () => ({ companion: '鱼丸', strategist: '鲸澜', ...(config.names && typeof config.names === 'object' ? config.names : {}) })
+  /** 文件 → 生效版。force：手机上刚改过，不等 mtime 节流。 */
+  function syncCovenantNow(now = Date.now(), { force = false } = {}) {
+    const path = covenantPath()
+    const st = statOf(path)
+    const key = path + ':' + (st ? st.mtimeMs + ':' + st.size : 'none')
+    if (!force && key === covenantSeen.key && now - covenantSeen.at < 60_000) return loadCovenant()
+    covenantSeen = { key, at: now }
+    let state = loadCovenant()
+    const text = readVaultText(path)
+    if (text === null) {
+      // 第一次：没有文件就写草稿（已经有生效版就照生效版写回）。
+      const rules = state.rules.length ? state.rules : [...DRAFT_RULES]
+      writeVaultText(path, renderCovenant(rules))
+      state = { ...state, seeded: true, rules, pending: {} }
+      saveCovenant(state)
+      writeCovenantSide(state, now)
+      record({ state: 'covenant-seed', at: now, count: rules.length })
+      return state
+    }
+    const fileRules = parseCovenant(text)
+    if (!state.seeded) {
+      // 他先自己写了文件（或从电脑同步过来）：第一次照单全收。
+      state = { ...state, seeded: true, rules: fileRules, pending: {} }
+      saveCovenant(state)
+      writeCovenantSide(state, now)
+      return state
+    }
+    const r = syncCovenant(state, fileRules, now, COVENANT_COOLDOWN_MS)
+    if (r.changed) {
+      state = { ...state, rules: r.rules, pending: r.pending }
+      saveCovenant(state)
+      writeCovenantSide(state, now)
+      if (r.applied.tighten.length || r.applied.loosen.length) {
+        record({ state: 'covenant-change', at: now, tighten: r.applied.tighten, loosen: r.applied.loosen })
+      }
+    }
+    return state
+  }
+  /** 这一轮的场景：给公约挑「默认 / 建议」用。 */
+  function covenantScenes(now = Date.now()) {
+    const out = []
+    const id = mainStateNow()?.id || 'standby'
+    const map = { morning: '早上', review: '对账', followup: '追问', sprint: '干活', brain: '干活', meal: '休息', break: '休息', standby: '待命' }
+    if (map[id]) out.push(map[id])
+    if (runningBoutNow()) out.push('干活')
+    if (lastRhythm?.night) out.push('深夜')
+    if (lastLockActive) out.push('锁着')
+    try {
+      const tz = zoneOr(config.timeZone)
+      const today = dayString(now, tz)
+      if (loadSeals(now, tz).items.some((x) => x.day === today && (x.status === 'open' || x.status === 'below'))) out.push('有封印')
+    } catch {}
+    return [...new Set(out)]
+  }
+  function covenantText(role) {
+    try {
+      const now = Date.now()
+      const st = syncCovenantNow(now)
+      return covenantBlock(st.rules, { role, scenes: covenantScenes(now), maxChars: 760 })
+    } catch {
+      return ''
+    }
+  }
+  /** 两条鱼：提一条新规矩（只能加；放松没有通道）。 */
+  function proposeCovenantTool(role) {
+    return {
+      name: 'propose_covenant',
+      description: '向他提议公约里加一条新规矩（你看到他反复出现某种情况、现有公约没管到时用）。' +
+        '只能加新规矩，不能改、不能删、不能放松任何一条；他在手机「公约」页批了才生效。每条鱼同时最多 3 条在等批。',
+      parameters: {
+        type: 'object',
+        properties: {
+          chapter: { type: 'integer', description: '放进第几章：1 铁律 / 2 处置 / 3 分工 / 4 边界 / 5 他对你们的要求' },
+          title: { type: 'string', description: '什么情况（≤60 字），如「他找同一个借口」' },
+          do: { type: 'string', description: '怎么处理（≤400 字）' },
+          who: { type: 'string', description: '都 / 鲸澜 / 鱼丸' },
+          hardness: { type: 'string', description: '铁律 / 默认 / 建议' },
+          scenes: { type: 'array', items: { type: 'string' }, description: '场景：任何时候、早上、干活、待命、休息、追问、锁着、有封印、对账、深夜' },
+          why: { type: 'string', description: '为什么提（看到了什么，≤200 字）' },
+        },
+        required: ['chapter', 'title', 'do', 'hardness', 'why'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const st = syncCovenantNow(now)
+        const r = addProposal(st.proposals, { ...args, by: role, who: args.who || '都' }, now)
+        if (!r.ok) return { ok: false, text: r.text }
+        const next = { ...st, proposals: r.proposals }
+        saveCovenant(next)
+        writeCovenantSide(next, now)
+        record({ state: 'covenant-propose', at: now, by: role, id: r.proposal.id, title: r.proposal.rule.title })
+        return { ok: true, text: '提上去了（' + r.proposal.id + '），等他在「公约」页批。批之前它不算数。' }
+      },
+    }
+  }
+  /**
+   * POST /covenant：list / approve / reject（提议）/ save（他改或加一条）/ remove（他删一条）。
+   * 他在手机上改，和在 Obsidian 里改走同一条路：写进 公约.md，再按改严 / 改松分类。
+   */
+  function covenantRoute(body) {
+    const b = body && typeof body === 'object' ? body : {}
+    const action = String(b.action || 'list')
+    const now = Date.now()
+    const view = (st, extra = {}) => ({
+      v: 1, ok: true, rules: st.rules, pending: st.pending, proposals: st.proposals.filter((p) => p.status === 'open'),
+      cooldownDays: Math.round(COVENANT_COOLDOWN_MS / 86_400_000), inVault: Boolean(covenantDir()), path: covenantPath(), names: sisterNames(), ...extra,
+    })
+    let st = syncCovenantNow(now, { force: action === 'list' })
+    if (action === 'list') return view(st)
+    const path = covenantPath()
+    const text = readVaultText(path) ?? renderCovenant(st.rules)
+    if (action === 'approve' || action === 'reject') {
+      const p = st.proposals.find((x) => x.id === String(b.id || ''))
+      if (!p || p.status !== 'open') return { v: 1, ok: false, error: 'no-proposal' }
+      let ruleId = ''
+      if (action === 'approve') {
+        ruleId = nextIdIn(parseCovenant(text), p.chapter)
+        writeVaultText(path, insertRuleInText(text, { id: ruleId, ...p.rule }))
+      }
+      const proposals = st.proposals.map((x) => (x.id === p.id ? { ...x, status: action === 'approve' ? 'approved' : 'rejected', decidedAt: now, ruleId } : x))
+      saveCovenant({ ...st, proposals })
+      record({ state: 'covenant-' + action, at: now, id: p.id, ruleId })
+      st = syncCovenantNow(now, { force: true })
+      writeCovenantSide(st, now)
+      return view(st, { ruleId })
+    }
+    if (action === 'save') {
+      const raw = b.rule && typeof b.rule === 'object' ? b.rule : {}
+      const id = raw.id ? String(raw.id) : nextIdIn(parseCovenant(text), raw.chapter)
+      const rule = cleanRule({ ...raw, id })
+      if (!rule) return { v: 1, ok: false, error: 'bad-rule', text: '要有标题（什么情况）和做法。' }
+      writeVaultText(path, replaceRuleInText(text, id, rule))
+      st = syncCovenantNow(now, { force: true })
+      return view(st, { ruleId: id, waiting: Boolean(st.pending[id]) })
+    }
+    if (action === 'remove') {
+      const id = String(b.id || '')
+      writeVaultText(path, replaceRuleInText(text, id, null))
+      st = syncCovenantNow(now, { force: true })
+      return view(st, { ruleId: id, waiting: Boolean(st.pending[id]) })
+    }
+    return { v: 1, ok: false, error: 'bad-action' }
+  }
+
   // ---------------------------------------------------------------- 2026-11-20 封印（验收第一批）
   // 规则全在 seal.js（纯函数）；这里只有读写、量证据、发奖励、锁的接线。
   // 真账：companion/seals.json（当前）+ seals.jsonl（只追加的流水）；笔记库镜像：大肥鱼/封印/日期.md。
@@ -8861,6 +9051,11 @@ export function apply(ctx) {
       console.error('[companion] App分层.md 同步失败：' + String((error && error.message) || error))
     }
     try {
+      syncCovenantNow(now)
+    } catch (error) {
+      console.error('[companion] 公约.md 同步失败：' + String((error && error.message) || error))
+    }
+    try {
       syncVaultRules(now)
     } catch (error) {
       // 规则.md 读坏了不影响执法：照当前规则走
@@ -9557,6 +9752,7 @@ export function apply(ctx) {
         unlockHow: '明日零点自动重置',
       }
     }
+    lastLockActive = Boolean(lockArbiter?.active)
     const activeSisterSkin = resolveActiveSisterSkin({ speaker: speakerOut, lockArbiter })
     const timeLedger = timeLedgerNow(now, tz, phone)
     // 2026-11-18：裁决器的唯一输出（手机先影子对比，确认没问题再切成唯一执法依据）。

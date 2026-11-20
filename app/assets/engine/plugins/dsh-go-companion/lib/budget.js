@@ -26,6 +26,7 @@ export const DEFAULT_BUDGET = {
  */
 export const BLOCK_CAPS = Object.freeze({
   handoff: 1000,
+  covenant: 900,
   reflect: 520,
   verifier: 420,
   'v4-skills': 320,

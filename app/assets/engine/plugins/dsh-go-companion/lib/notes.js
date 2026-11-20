@@ -268,6 +268,9 @@ function isSystemVaultFile(rel) {
     rel === KB_DIR + '/' + JUDGE_FILE ||
     rel === KB_DIR + '/思维碎记.md' ||
     rel === KB_DIR + '/AI交接快照.md' ||
+    // 2026-11-20：公约（规矩本身，已经单独进上下文）和封印的镜像表不是「他写的笔记」，别被随手翻出来。
+    (rel.startsWith(KB_DIR + '/') && base.startsWith('公约')) ||
+    rel.startsWith(KB_DIR + '/封印/') ||
     base.startsWith('_')
 }
 

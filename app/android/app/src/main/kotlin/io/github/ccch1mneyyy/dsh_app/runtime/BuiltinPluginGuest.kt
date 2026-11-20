@@ -242,6 +242,7 @@ object BuiltinPluginGuest {
                 "lib/horizons.js",
                 "lib/plan_compiler.js",
                 "lib/seal.js",
+                "lib/covenant.js",
                 "lib/plan_modality.js",
                 "lib/telemetry_charts.js",
                 "lib/v4_hub.js",

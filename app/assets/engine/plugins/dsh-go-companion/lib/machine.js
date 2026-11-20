@@ -52,7 +52,7 @@ export const STATE_TABLE = [
     tools: ['daily_plan', 'plan_bouts', 'dafeiyu_control', 'notes_vault', 'vault_search', 'fish_index', 'kb_write', 'preset', 'brain', 'compose_bout_protocol', 'sister_note'] },
   { id: 'evening', priority: 90, enter: ['evening-followup', 'evening-gate'], lock: 'evening', back: null,
     agenda: '晚间对账：逐项核对今天的完成物，满意才收；满意后今晚的申请窗口才可能开。',
-    tools: ['daily_review', 'submit_to_wall', 'submit_verdict', 'request_relax', 'submit_prediction', 'notes_vault', 'fish_index', 'kb_write'] },
+    tools: ['daily_review', 'propose_covenant', 'submit_to_wall', 'submit_verdict', 'request_relax', 'submit_prediction', 'notes_vault', 'fish_index', 'kb_write'] },
   { id: 'morning', priority: 80, enter: ['morning-lock'], lock: 'followup', back: null,
     agenda: '晨间立项：定今天 1–3 件事，每件带完成物；裁决满意且任务校验通过才放。',
     tools: ['daily_plan', 'plan_bouts', 'open_bout', 'take_stance', 'notes_vault', 'vault_search', 'fish_index', 'sister_note', 'kb_write', 'dafeiyu_control', 'gemini_live'] },
