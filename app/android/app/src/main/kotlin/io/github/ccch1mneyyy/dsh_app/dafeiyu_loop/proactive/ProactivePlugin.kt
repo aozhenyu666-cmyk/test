@@ -329,6 +329,12 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/tiers", body)
             }
+            "bridgeOp" -> {
+                // 2026-11-20 Gemini 桥：status / config（url、key）/ sync / forget。同步本身在插件里（手机主动去连电脑上的桥）。
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/gemini-bridge", body)
+            }
             "covenantOp" -> {
                 // 2026-11-20 公约：list / save / remove / approve / reject，规矩在插件（改严立即、改松等 3 天、鱼只能提议）。
                 val body = linkedMapOf<String, Any?>()

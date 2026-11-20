@@ -18,7 +18,7 @@ export const GEMINI_MODES = {
   think: '共脑：帮他把这件事想清楚——反问、摆出两三个选项、逼他给出判断和理由。',
   interrogate: '审讯：他刚才在摸鱼被抓了。先问他刚才在干嘛、为什么，再逼他说现在要做什么、几点前做完；语气硬，不接受"等会儿""差不多"。',
   // 2026-11-20 主动点火：正向口吻。
-  plan: '定第一局：他今天还没开局。两分钟内帮他把「接下来这一局做什么、交什么、几点前」定死——只要一件，越具体越好；定完让他马上动手，别展开聊。',
+  plan: '定今天的时间轴：他今天还没开局。两分钟内帮他把接下来要做的定死——每件写清交什么、几点开始、几点前交、保底多少；先定第一件，定完让他马上动手，别展开聊。',
   receipt: '要回执：刚才这件事说到哪了？逼他按格式说清结论、下一步、几点前；说不清就追问到说清为止，不聊别的。',
 }
 
@@ -27,7 +27,7 @@ export function geminiMode(raw) {
 }
 
 /** 给 Gemini 的背景（写给 Gemini 看，他会粘贴进 Gemini 再开 Live）。 */
-export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 'think', about = [], commitments = [], recap = null, gear = null, setting = '', context = [] } = {}) {
+export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 'think', about = [], commitments = [], recap = null, gear = null, setting = '', context = [], bridge = false } = {}) {
   const m = geminiMode(mode)
   const lines = [
     '【给 Gemini 的背景，读完只回一句"收到，开始吧"】',
@@ -57,6 +57,15 @@ export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 't
   }
   if (gear) lines.push('他现在在忙：' + gear + '。')
   if (recap?.summary) lines.push('上次跟你连麦的复盘：' + String(recap.summary).slice(0, 200) + (recap.next ? '；说好的下一步：' + String(recap.next).slice(0, 120) : ''))
+  // 2026-11-20 Gemini 桥：他在 Gemini 里装了「大肥鱼」自定义应用，手机最近同步过——工具能用，就别靠口头回执。
+  if (bridge) {
+    lines.push(
+      '你连着「大肥鱼」应用（手机刚同步过）：',
+      '- 开聊先调 dafeiyu_today，看他今天的时间轴验收点和进度再说话。',
+      '- 他说定了要做什么、几点前交，用 dafeiyu_add_checkpoints 写进去（只能加，不能改小）。',
+      '- 结束时用 dafeiyu_submit_receipt 交回执：至少问 2 个问题、带上他的原话回答再判「过」；用了工具就不用再口头念回执格式。',
+    )
+  }
   lines.push(
     '规则：',
     '- 每次只说一两句，口语，像连麦，不要长篇大论、不要列清单。',
@@ -65,7 +74,7 @@ export function geminiBrief({ owner = '他', topic = '', minutes = 30, mode = 't
     '- 每过 10 分钟用一句"到现在为止：……"小结一次。',
     '- 时间到、他说结束或说「出回执」时，按这个格式说一段（一项都别省，几点前要写具体钟点）：' + RECEIPT_FORMAT,
   )
-  return lines.join('\n').slice(0, 2600)
+  return lines.join('\n').slice(0, bridge ? 3000 : 2600)
 }
 
 /** 走神：同一个娱乐 App 坐够这么久，才值得把他从里面拉出来。 */

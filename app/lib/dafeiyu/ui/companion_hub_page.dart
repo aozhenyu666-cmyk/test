@@ -16,6 +16,7 @@ import '../../ui/common/status_chip.dart';
 import '../../ui/pets/pet_settings_page.dart';
 import 'app_tiers_page.dart';
 import 'covenant_page.dart';
+import 'gemini_bridge_page.dart';
 import 'records_page.dart';
 import 'today_cards.dart';
 import 'proactive_page.dart';
@@ -645,6 +646,15 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
             value: geminiMinToday > 0 ? '今日 ${geminiMinToday}m' : null,
             chevron: true,
             onTap: () => _openPage(UsageAnalyticsPage(channel: _channel, initialTab: AnalyticsTab.gemini)),
+          ),
+          ListPageRow(
+            key: const ValueKey('hub-gemini-bridge'),
+            icon: AppIcons.link,
+            title: 'Gemini 桥（自定义应用 / MCP）',
+            subtitle: 'Gemini 能看你今天的验收点、交回执、加验收点；不能解锁、不能加额度',
+            subtitleMaxLines: 2,
+            chevron: true,
+            onTap: () => _openPage(const GeminiBridgePage()),
           ),
           ListPageRow(
             icon: AppIcons.askAi,

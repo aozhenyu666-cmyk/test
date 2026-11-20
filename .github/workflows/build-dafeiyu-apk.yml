@@ -44,6 +44,7 @@ jobs:
           (cd app/assets/engine/plugins/dsh-go-companion && node --test test/*.test.mjs)
           (cd app/assets/engine/plugins/dsh-go-memory && node --test test/*.test.mjs)
           (cd tooling/pc-companion-sync && node --test test/*.test.mjs)
+          (cd tooling/gemini-bridge && node --test test/*.test.mjs)
       - name: End-to-end on the real DSH engine (warm, cold, feature checks)
         run: bash tooling/companion-e2e/run.sh
       - uses: subosito/flutter-action@v2

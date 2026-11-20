@@ -1774,6 +1774,7 @@ export function apply(ctx) {
       pullMode: opts.pullMode ?? v4Hub?.getPullMode?.(now),
       kbDirPath: opts.kbDirPath ?? (() => { try { const d = notesDir(); return d ? kbDir(d, home()) : '' } catch { return '' } })(),
       owner: opts.owner ?? String(config.owner || '他'),
+      bridge: opts.bridge ?? bridgeHealthy(now),
     })
     if (res.allowed) {
       saveGeminiGate(res.state)
@@ -1849,6 +1850,7 @@ export function apply(ctx) {
     }
     return {
       setting,
+      bridge: bridgeHealthy(now),
       context: contextLines({
         front: phone.label || phone.app || '',
         frontMinutes: Number(phone.minutes) || 0,
@@ -5204,6 +5206,7 @@ export function apply(ctx) {
         minutes: 15,
         mode: 'think',
         setting: extras.setting,
+        bridge: extras.bridge,
         context: [...cardLines, ...extras.context.filter((l) => !l.startsWith('这次摇到的思维方式'))],
       })
       card.geminiPrompt = brief
@@ -7528,7 +7531,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7612,6 +7615,7 @@ export function apply(ctx) {
         if (path === '/tiers') return send(res, 200, tiersRoute(body.value))
         if (path === '/seals') return send(res, 200, sealsRoute(body.value))
         if (path === '/covenant') return send(res, 200, covenantRoute(body.value))
+        if (path === '/gemini-bridge') return send(res, 200, await bridgeRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
         if (path === '/tracks') return send(res, 200, tracksRoute(body.value))
@@ -8117,7 +8121,7 @@ export function apply(ctx) {
       writeVaultText(join(kb, COVENANT_PROPOSALS_FILE), renderProposals(state.proposals, sisterNames(), fmtDay))
     } catch {}
   }
-  const sisterNames = () => ({ companion: '鱼丸', strategist: '鲸澜', ...(config.names && typeof config.names === 'object' ? config.names : {}) })
+  const sisterNames = () => ({ companion: '鱼丸', strategist: '鲸澜', gemini: 'Gemini', ...(config.names && typeof config.names === 'object' ? config.names : {}) })
   /** 文件 → 生效版。force：手机上刚改过，不等 mtime 节流。 */
   function syncCovenantNow(now = Date.now(), { force = false } = {}) {
     const path = covenantPath()
@@ -8317,6 +8321,235 @@ export function apply(ctx) {
       writeVaultText(path, replaceRuleInText(text, id, null))
       st = syncCovenantNow(now, { force: true })
       return view(st, { ruleId: id, waiting: Boolean(st.pending[id]) })
+    }
+    return { v: 1, ok: false, error: 'bad-action' }
+  }
+
+  // ---------------------------------------------------------------- 2026-11-20 Gemini 桥（手机这一端）
+  // 电脑上跑 tooling/gemini-bridge（Gemini 的自定义应用 = MCP）。手机引擎只听 127.0.0.1、手机上 NekoBox 和
+  // Tailscale 不能同时开，所以是手机主动去同步：每 ~20 秒 POST 一次 /bridge/sync，
+  // 上行「今天」的快照，下行 Gemini 写的命令（回执 / 加验收点 / 提议规矩），按手机上的规矩再验一遍，结果回传。
+  // 没有任何放松类命令——桥那边也没有这种工具。
+  const BRIDGE_INTERVAL_MS = 20_000
+  const BRIDGE_IDLE_INTERVAL_MS = 60_000
+  const BRIDGE_TIMEOUT_MS = 10_000
+  const bridgeConf = () => {
+    const b = config.bridge && typeof config.bridge === 'object' ? config.bridge : {}
+    return { enabled: b.enabled !== false && Boolean(b.url && b.key), url: String(b.url || '').replace(/\/+$/, ''), key: String(b.key || '') }
+  }
+  const loadBridgeState = () => {
+    const raw = readState(stateFile('gemini-bridge.json'), null) || {}
+    return {
+      lastOkAt: Number(raw.lastOkAt) || 0, lastTryAt: Number(raw.lastTryAt) || 0, lastError: String(raw.lastError || ''),
+      done: Array.isArray(raw.done) ? raw.done.slice(-200) : [], pendingResults: Array.isArray(raw.pendingResults) ? raw.pendingResults.slice(-50) : [],
+      applied: Number(raw.applied) || 0, lastCommandAt: Number(raw.lastCommandAt) || 0,
+    }
+  }
+  const saveBridgeState = (s) => writeJson(stateFile('gemini-bridge.json'), s)
+  /** 桥最近 10 分钟同步成功过：给 Gemini 的背景里写「用工具」。 */
+  function bridgeHealthy(now = Date.now()) {
+    if (!bridgeConf().enabled) return false
+    try {
+      return now - loadBridgeState().lastOkAt < 10 * 60_000
+    } catch {
+      return false
+    }
+  }
+  const hmParse = (v) => {
+    const m = /^(\d{1,2})[:：](\d{2})$/.exec(String(v || '').trim())
+    return m ? Number(m[1]) * 60 + Number(m[2]) : null
+  }
+  /** 上行快照：Gemini 用 dafeiyu_today 看到的就是它。 */
+  function bridgeSnapshot(now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const today = dayString(now, tz)
+    const min = zoneMinuteOfDay(now, tz)
+    const seals = loadSeals(now, tz)
+    const mapSeal = (x) => ({
+      id: x.id, title: x.title, kind: x.kind, kindLabel: SEAL_KINDS[x.kind]?.label || x.kind, unit: SEAL_KINDS[x.kind]?.unit || '',
+      start: x.startMinute >= 0 ? sealHm(x.startMinute) : null, due: sealHm(x.dueMinute), stretch: x.stretch, floor: x.floor,
+      actual: x.actual, status: x.status, source: x.source, sameDay: x.sameDay, paidMinutes: x.paidMinutes, opened: Boolean(x.openedAt),
+    })
+    const lock = lockingSeal(seals, { now, today })
+    const run = runningBoutNow()
+    let funLeft = null
+    try {
+      funLeft = timeLedgerNow(now, tz, lastPhone).funLeft
+    } catch {}
+    let cov = { rules: [] }
+    try {
+      cov = syncCovenantNow(now)
+    } catch {}
+    let deadlines = []
+    try {
+      deadlines = (v4Hub?.upcomingDeadlines ? v4Hub.upcomingDeadlines(now) : []).slice(0, 5).map((d) => ({ title: String(d.title || ''), daysLeft: Number(d.daysLeft) }))
+    } catch {}
+    const workStarted = workStartedToday(now, tz)
+    return {
+      v: 1, at: now, day: today, hm: sealHm(min),
+      cold: !workStarted && min < COLD_CUTOFF_MINUTE, coldCutoff: sealHm(COLD_CUTOFF_MINUTE), workStarted, cutoffPassed: min >= SEAL_CUTOFF_MINUTE,
+      timeline: seals.items.filter((x) => x.day === today).sort((a, b) => a.dueMinute - b.dueMinute).map(mapSeal),
+      tomorrow: seals.items.filter((x) => x.day === nextYmd(today)).sort((a, b) => a.dueMinute - b.dueMinute).map(mapSeal),
+      locking: lock ? { id: lock.id, title: lock.title, actual: lock.actual, floor: lock.floor, until: sealHm(Math.round((lock.lockUntil - startOfDay(now, config.timeZone)) / 60_000)) } : null,
+      bout: run ? { title: String(live?.goal || run.kind || ''), minutes: Math.round((now - Number(run.openedAt || now)) / 60_000), sealId: String(live?.sealId || '') } : null,
+      balance: funLeft === null ? null : { funLeft },
+      deadlines,
+      receiptsToday: loadGeminiReceipts().items.filter((r) => r.day === today).length,
+      covenant: {
+        iron: cov.rules.filter((r) => r.hardness === '铁律').map((r) => ({ id: r.id, title: r.title })),
+        rules: cov.rules.map((r) => ({ id: r.id, title: r.title, do: r.do, hardness: r.hardness, who: r.who })),
+      },
+      names: sisterNames(),
+    }
+  }
+  /** 一条命令 → 按手机的规矩做（做不成就说为什么）。 */
+  function applyBridgeCommand(cmd, now = Date.now()) {
+    const p = cmd?.payload && typeof cmd.payload === 'object' ? cmd.payload : {}
+    if (cmd?.type === 'receipt') {
+      const r = recordGeminiReceipt({ ...p, id: cmd.id }, { via: 'gemini-mcp', now })
+      const it = r.receipt
+      const word = { pass: '过', partial: '半过', fail: '没过' }[it.verdict]
+      const tz = zoneOr(config.timeZone)
+      const seal = it.sealId ? loadSeals(now, tz).items.find((x) => x.id === it.sealId) : null
+      return { ok: true, text: '回执收到：「' + (it.topic || '回执') + '」' + word +
+        (p.verdict === 'pass' && it.verdict !== 'pass' ? '（「过」要 2 组像样的问答，这条按半过记）' : '') +
+        (seal ? '；验收点「' + seal.title + '」现在 ' + seal.actual + '/' + seal.stretch + (SEAL_KINDS[seal.kind]?.unit || '') : (p.checkpointId ? '；没找到这个验收点，只记了回执' : '')) + '。' }
+    }
+    if (cmd?.type === 'add_checkpoints') {
+      const seals = (Array.isArray(p.items) ? p.items : []).map((x) => ({
+        title: x.title, kind: x.kind, stretch: x.stretch, floor: x.floor, path: x.path, app: x.app, estMinutes: x.est_minutes ?? x.estMinutes,
+        dueMinute: hmParse(x.due), startMinute: hmParse(x.start),
+      }))
+      const r = sealsRoute({ action: 'plan-day', target: p.target === 'tomorrow' ? 'tomorrow' : 'today', seals, by: 'gemini' })
+      const added = (r.added || []).map((x) => '「' + x.title + '」' + (x.startMinute >= 0 ? sealHm(x.startMinute) + '–' : '') + sealHm(x.dueMinute) + (x.sameDay ? '（现加，七折）' : ''))
+      const skipped = (r.skipped || []).map((x) => '「' + x.title + '」' + (x.text || x.error))
+      return { ok: added.length > 0, text: (added.length ? '加上了：' + added.join('、') + '。到开始时刻手机自动开局。' : '一条都没加上。') + (skipped.length ? ' 没加的：' + skipped.join('；') : '') }
+    }
+    if (cmd?.type === 'propose_rule') {
+      const st = syncCovenantNow(now)
+      const r = addProposal(st.proposals, { ...p, by: 'gemini' }, now)
+      if (!r.ok) return { ok: false, text: r.text }
+      const next = { ...st, proposals: r.proposals }
+      saveCovenant(next)
+      writeCovenantSide(next, now)
+      record({ state: 'covenant-propose', at: now, by: 'gemini', id: r.proposal.id, title: r.proposal.rule.title })
+      return { ok: true, text: '提上去了，等他在手机「公约」页批；批之前不算数。' }
+    }
+    return { ok: false, text: '手机不认识这种命令：' + String(cmd?.type || '') }
+  }
+  let bridgeInflight = null
+  /** 同步一次。force：手机页上点「立即同步」或刚处理完命令要回结果。 */
+  async function bridgeSync({ force = false, now = Date.now(), fetchFn = globalThis.fetch } = {}) {
+    const conf = bridgeConf()
+    if (!conf.enabled || typeof fetchFn !== 'function') return { ok: false, error: 'not-configured' }
+    if (bridgeInflight) return bridgeInflight
+    const st0 = loadBridgeState()
+    const gap = now - st0.lastCommandAt < 5 * 60_000 || lastPhone?.screenOn ? BRIDGE_INTERVAL_MS : BRIDGE_IDLE_INTERVAL_MS
+    if (!force && now - st0.lastTryAt < gap - 1000) return { ok: true, skipped: true }
+    bridgeInflight = (async () => {
+      let st = { ...st0, lastTryAt: now }
+      const post = async (body) => {
+        const ctl = new AbortController()
+        const timer = setTimeout(() => ctl.abort(), BRIDGE_TIMEOUT_MS)
+        try {
+          const res = await fetchFn(conf.url + '/bridge/sync', {
+            method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + conf.key }, body: JSON.stringify(body), signal: ctl.signal,
+          })
+          const text = await res.text()
+          if (!res.ok) throw new Error(res.status === 401 ? '手机密钥不对（401）' : 'HTTP ' + res.status)
+          return JSON.parse(text || '{}')
+        } finally {
+          clearTimeout(timer)
+        }
+      }
+      try {
+        const first = await post({ snapshot: bridgeSnapshot(now), results: st.pendingResults })
+        st = { ...st, pendingResults: [], lastOkAt: Date.now(), lastError: '' }
+        const results = []
+        for (const cmd of Array.isArray(first?.commands) ? first.commands : []) {
+          if (!cmd?.id) continue
+          if (st.done.includes(cmd.id)) {
+            results.push({ id: cmd.id, ok: true, text: '已经处理过。' })
+            continue
+          }
+          let r
+          try {
+            r = applyBridgeCommand(cmd, Date.now())
+          } catch (error) {
+            r = { ok: false, text: '手机处理出错：' + String((error && error.message) || error).slice(0, 120) }
+          }
+          record({ state: 'bridge-command', at: Date.now(), type: cmd.type, id: cmd.id, ok: r.ok === true })
+          st.done = [...st.done, cmd.id].slice(-200)
+          st.applied += 1
+          st.lastCommandAt = Date.now()
+          results.push({ id: cmd.id, ok: r.ok === true, text: r.text })
+        }
+        if (results.length) {
+          // 处理完马上回一次（带上新快照），Gemini 那边的工具调用正在等这个结果。
+          try {
+            await post({ snapshot: bridgeSnapshot(Date.now()), results })
+          } catch (error) {
+            st.pendingResults = [...st.pendingResults, ...results].slice(-50)
+            st.lastError = '回结果失败：' + String((error && error.message) || error).slice(0, 120)
+          }
+        }
+        saveBridgeState(st)
+        return { ok: true, commands: results.length }
+      } catch (error) {
+        const msg = error?.name === 'AbortError' ? '连不上（10 秒超时）' : String((error && error.message) || error).slice(0, 160)
+        saveBridgeState({ ...st, lastError: msg })
+        return { ok: false, error: msg }
+      } finally {
+        bridgeInflight = null
+      }
+    })()
+    return bridgeInflight
+  }
+  let bridgeTimer = null
+  function ensureBridgeTimer() {
+    if (bridgeTimer || !bridgeConf().enabled) return
+    bridgeTimer = setInterval(() => {
+      if (!bridgeConf().enabled) {
+        clearInterval(bridgeTimer)
+        bridgeTimer = null
+        return
+      }
+      bridgeSync().catch(() => {})
+    }, BRIDGE_INTERVAL_MS)
+    bridgeTimer.unref?.()
+  }
+  /** POST /gemini-bridge：status / config（url、key、enabled）/ sync（立即同步）/ forget（清掉配置）。 */
+  async function bridgeRoute(body) {
+    const b = body && typeof body === 'object' ? body : {}
+    const action = String(b.action || 'status')
+    const view = (extra = {}) => {
+      const conf = bridgeConf()
+      const st = loadBridgeState()
+      return {
+        v: 1, ok: true, configured: Boolean(conf.url && conf.key), enabled: conf.enabled, url: conf.url, keyTail: conf.key ? conf.key.slice(-4) : '',
+        lastOkAt: st.lastOkAt, lastTryAt: st.lastTryAt, lastError: st.lastError, applied: st.applied, healthy: bridgeHealthy(),
+        receiptsToday: loadGeminiReceipts().items.filter((r) => r.day === dayString(Date.now(), zoneOr(config.timeZone))).length, ...extra,
+      }
+    }
+    if (action === 'status') return view()
+    if (action === 'config') {
+      const url = String(b.url ?? config.bridge?.url ?? '').trim().replace(/\/+$/, '')
+      if (url && !/^https:\/\/[^\s/]+(\/[^\s]*)?$/.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?/.test(url)) {
+        return { v: 1, ok: false, error: 'bad-url', text: '地址要是 https://…（Tailscale Funnel 给的那个）。' }
+      }
+      const key = b.key === undefined ? String(config.bridge?.key || '') : String(b.key).trim()
+      commit({ bridge: { url, key, enabled: b.enabled === undefined ? true : b.enabled !== false } })
+      ensureBridgeTimer()
+      const r = url && key ? await bridgeSync({ force: true }) : { ok: false }
+      return view({ synced: r.ok === true, error: r.error || '' })
+    }
+    if (action === 'sync') {
+      const r = await bridgeSync({ force: true })
+      return view({ synced: r.ok === true, error: r.error || '' })
+    }
+    if (action === 'forget') {
+      commit({ bridge: null })
+      return view()
     }
     return { v: 1, ok: false, error: 'bad-action' }
   }
@@ -9274,6 +9507,11 @@ export function apply(ctx) {
     } catch (error) {
       console.error('[companion] 公约.md 同步失败：' + String((error && error.message) || error))
     }
+    // Gemini 桥：不挡这一拍（异步），另有 20 秒的定时器兜着。
+    if (bridgeConf().enabled) {
+      ensureBridgeTimer()
+      bridgeSync({ now }).catch(() => {})
+    }
     try {
       syncVaultRules(now)
     } catch (error) {
@@ -9902,7 +10140,10 @@ export function apply(ctx) {
           reason: arbRes.skipReason === 'hourly-cap' ? 'hourly_max' : 'cooldown',
           nextCheckAt: now + 5 * 60_000,
         })
-      } else if (out.speak || (arbRes.candidates.length > 0 && ['withdrawal', 'in-conversation', 'in-flight'].includes(arbRes.skipReason))) {
+      } else if (out.speak || ['in-conversation', 'in-flight'].includes(arbRes.skipReason) ||
+        (arbRes.candidates.length > 0 && arbRes.skipReason === 'withdrawal')) {
+        // 正在聊 / 正在回：不管这一拍有没有候选球都照实说（深夜没有候选时原来会漏成 plan 的 cooldown，
+        // 下一次检查也就晚了 5 分钟）。撤回期仍然只在有候选时才说。
         const fallbackReason = arbRes.skipReason === 'withdrawal' ? 'withdrawal' : (arbRes.skipReason || 'filtered')
         Object.assign(out, {
           speak: false,

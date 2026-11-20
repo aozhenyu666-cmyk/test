@@ -249,7 +249,7 @@ export function cleanProposal(raw) {
   if (!rule) return null
   return {
     id: str(raw.id, 24),
-    by: raw.by === 'companion' || raw.by === 'strategist' ? raw.by : 'strategist',
+    by: raw.by === 'companion' || raw.by === 'strategist' || raw.by === 'gemini' ? raw.by : 'strategist',
     at: Number(raw.at) || 0,
     chapter: Number(rule.id.split('.')[0]),
     rule: { title: rule.title, do: rule.do, who: rule.who, hardness: rule.hardness, scenes: rule.scenes },
@@ -276,7 +276,7 @@ export function addProposal(proposals, { by, chapter, title, do: doText, who, ha
   return { ok: true, proposal: p, proposals: [...list, p].slice(-60) }
 }
 
-export function renderProposals(proposals, names = { companion: '鱼丸', strategist: '鲸澜' }, fmtDay = (t) => new Date(t).toISOString().slice(0, 10)) {
+export function renderProposals(proposals, names = { companion: '鱼丸', strategist: '鲸澜', gemini: 'Gemini' }, fmtDay = (t) => new Date(t).toISOString().slice(0, 10)) {
   const open = (proposals || []).filter((p) => p.status === 'open')
   const lines = ['# 公约 · 两条鱼的提议', '', '> 她们只能提议新规矩，你在手机「公约」页批了才写进 公约.md。也可以自己把整条抄进 公约.md（加规矩立即生效）。', '']
   if (!open.length) lines.push('现在没有在等批的提议。')

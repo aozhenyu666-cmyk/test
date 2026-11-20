@@ -79,6 +79,7 @@ export function buildStandardGeminiBrief({
   commitments = [],
   recap = null,
   gear = null,
+  bridge = false,
 } = {}) {
   const resolvedSetting = setting || loadGeminiSetting(kbDirPath)
   const resolvedContext = Array.isArray(context) && context.length
@@ -95,6 +96,7 @@ export function buildStandardGeminiBrief({
     gear,
     setting: resolvedSetting,
     context: resolvedContext,
+    bridge,
   })
 }
 
@@ -136,6 +138,7 @@ export function requestGemini(rawState, opts = {}) {
         commitments: opts.commitments,
         recap: opts.recap,
         gear: opts.gear,
+        bridge: opts.bridge === true,
       })
 
   if (mode === 'manual') {

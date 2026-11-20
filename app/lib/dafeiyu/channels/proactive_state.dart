@@ -930,6 +930,17 @@ class ProactiveChannel {
     }
   }
 
+  /// Gemini 桥：手机引擎主动同步到电脑上的桥（Gemini 的自定义应用 / MCP）。
+  Future<Map<String, dynamic>?> bridgeOp(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('bridgeOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   /// 公约：他和两条鱼之间的成文规矩（真源是笔记库 大肥鱼/公约.md）。
   Future<Map<String, dynamic>?> covenantOp(Map<String, Object?> body) async {
     try {
