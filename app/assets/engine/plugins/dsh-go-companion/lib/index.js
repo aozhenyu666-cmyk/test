@@ -8231,7 +8231,8 @@ export function apply(ctx) {
     const items = templateSeals(tp, { minuteOfDay: min })
     const r = items.length ? sealsRoute({ action: 'plan-day', target: 'today', seals: items, by: 'template' }) : { added: [] }
     saveVerify({ ...loadVerify(), appliedDay: today, appliedTemplate: tp.name })
-    record({ state: 'template-applied', at: now, template: tp.name, added: (r.added || []).length, recovery: Boolean(v.recovery?.active) })
+    const noBank = (r.skipped || []).filter((x) => x.error === 'no-bank').length
+    record({ state: 'template-applied', at: now, template: tp.name, added: (r.added || []).length, noBank, recovery: Boolean(v.recovery?.active) })
   }
   /** 今晚的娱乐用量（手机报的今天 fun / game 分钟；过了零点手机清零，eveningStep 接着加）。 */
   function eveningNow(now = Date.now(), tz = zoneOr(config.timeZone)) {
@@ -9036,6 +9037,16 @@ export function apply(ctx) {
     return { ok: true, review: r.review }
   }
   const pendingWeekReview = () => loadWeekReviews().items.find((r) => r.status === 'pending') || null
+  /** 题库里有几道题：题库类验收点要靠它，题库空着就别立（立了也只能被锁）。 */
+  const bankCount = () => {
+    try {
+      const b = readState(stateFile('bank.json'), null)
+      return Array.isArray(b?.题目) ? b.题目.length : 0
+    } catch {
+      return 0
+    }
+  }
+  const NO_BANK_TEXT = '题库是空的：题库类验收点做不了（到点只会被锁）。先在「题库」页导入题目。'
   /** 今天开过局没有（开工了没有）：时间轴的冷热线要用。 */
   function workStartedToday(now, tz) {
     if (runningBoutNow()) return true
@@ -9171,6 +9182,7 @@ export function apply(ctx) {
     }
     const state = loadSeals(now, tz)
     if (action === 'add') {
+      if (b.seal?.kind === 'quiz' && bankCount() === 0) return { v: 1, ok: false, error: 'no-bank', text: NO_BANK_TEXT }
       const r = addSeal(state, b.seal || {}, { now, today, minuteOfDay: min, workStarted: workStartedToday(now, tz), by: b.by === 'gemini' ? 'gemini' : '' })
       if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text }
       saveSeals(r.state, now, tz, { type: 'add', seal: r.seal })
@@ -9222,14 +9234,18 @@ export function apply(ctx) {
       return { ...view(state), review: r.review }
     }
     if (action === 'plan-day') {
-      // 一次定一串（时间轴）：合格的加，不合格的说明原因。
-      const r = addSeals(state, Array.isArray(b.seals) ? b.seals.map((x) => ({ ...x, target: b.target === 'tomorrow' ? 'tomorrow' : 'today' })) : [],
+      // 一次定一串（时间轴）：合格的加，不合格的说明原因。题库空着时题库类的先挑出来（立了也只能被锁）。
+      const all = Array.isArray(b.seals) ? b.seals : []
+      const noBank = bankCount() === 0
+      const blocked = noBank ? all.filter((x) => x?.kind === 'quiz') : []
+      const r = addSeals(state, all.filter((x) => !(noBank && x?.kind === 'quiz')).map((x) => ({ ...x, target: b.target === 'tomorrow' ? 'tomorrow' : 'today' })),
         { now, today, minuteOfDay: min, workStarted: workStartedToday(now, tz), by: ['gemini', 'ai', 'template'].includes(b.by) ? b.by : '' })
       if (r.added.length) {
         saveSeals(r.state, now, tz, { type: 'plan-day', ids: r.added.map((x) => x.id), by: String(b.by || 'user') })
         record({ state: 'seal-plan-day', at: now, n: r.added.length, by: String(b.by || 'user') })
       }
-      return { ...view(r.added.length ? r.state : state), ok: r.ok, added: r.added, skipped: r.skipped }
+      const skipped = [...blocked.map((x) => ({ title: String(x?.title || ''), error: 'no-bank', text: NO_BANK_TEXT })), ...r.skipped]
+      return { ...view(r.added.length ? r.state : state), ok: r.ok, added: r.added, skipped }
     }
     if (action === 'open') {
       // 他在手机上点「现在开这一局」。

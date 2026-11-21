@@ -62,6 +62,8 @@ async function withHome(fn) {
   try {
     mkdirSync(join(home, 'companion'), { recursive: true })
     writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, timeZone: TZ, quietStart: 12, quietEnd: 12 }))
+    // 题库类验收点要题库里有题（空题库会被拒：立了只能被锁）
+    writeFileSync(join(home, 'companion', 'bank.json'), JSON.stringify({ 题库版本: 1, id: 'b', 名称: '行测', 题目: [{ id: 'q-1', 题干: '题', 选项: ['甲', '乙'], 答案: 'A', 解析: '甲' }] }))
     const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
     const seals = (body) => call(h(), 'POST', '/seals', body).then((r) => r.body)
     return await fn({ home, seals, h })

@@ -120,6 +120,7 @@ test('关默认验收：明天才生效，今天照旧', async () => {
 
 test('到点没定今天：自动套模板（大肥鱼/模板.md 他自己改的那份），来源 template、不打折', async () => {
   await withHome(async ({ h, home }) => {
+    writeFileSync(join(home, 'companion', 'bank.json'), JSON.stringify({ 题库版本: 1, id: 'b', 名称: '行测', 题目: [{ id: 'q-1', 题干: '题', 选项: ['甲', '乙'], 答案: 'A', 解析: '甲' }] }))
     writeFileSync(join(home, 'companion', '模板.md'), '## 工作日（00:00 自动套）\n- 23:58 晚到的一套 · 题库 15 题 · 保底 5\n\n## 休息日（00:00 自动套）\n- 23:58 晚到的一套 · 题库 15 题 · 保底 5\n')
     await plan(h, { app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 3, screenOn: true })
     const st = json(home, 'seals.json')
@@ -163,4 +164,17 @@ test('晚间上限：18:00 后娱乐用够了，锁到明早 7 点、余额花�
     assert.match(up.text, /明晚起 120/)
     assert.equal(up.verify.evening.cap, 30)
   }, { eveningCap: { minutes: 30 }, timeZone: EVENING_TZ, lockTimeZone: false })
+})
+
+test('题库空着：模板里的题库类不立（立了只能被锁）、手动加也拒，说清楚先导题库', async () => {
+  await withHome(async ({ h, home, seals }) => {
+    writeFileSync(join(home, 'companion', '模板.md'), '## 工作日（00:00 自动套）\n- 23:58 一套题 · 题库 15 题 · 保底 5\n- 23:58 截图交付 · 截图 1 张 · 保底 1\n\n## 休息日（00:00 自动套）\n- 23:58 一套题 · 题库 15 题 · 保底 5\n- 23:58 截图交付 · 截图 1 张 · 保底 1\n')
+    await plan(h, { app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 3, screenOn: true })
+    const items = json(home, 'seals.json').items
+    assert.ok(!items.some((x) => x.kind === 'quiz'), '题库类没立')
+    assert.ok(items.some((x) => x.title === '截图交付'), '别的照立')
+    const add = await seals({ action: 'add', seal: { title: '手动加题', kind: 'quiz', stretch: 10, dueMinute: 1439, target: 'today' } })
+    assert.equal(add.error, 'no-bank')
+    assert.match(add.text, /先在「题库」页导入/)
+  }, ALL_DAY)
 })
