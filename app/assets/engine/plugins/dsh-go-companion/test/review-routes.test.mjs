@@ -66,7 +66,8 @@ async function withHome(fn) {
     const agents = { [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) }
     const h = host(agents)
     const post = (path, body) => call(h(), 'POST', path, body).then((r) => r.body)
-    return await fn({ home, post, agents })
+    const plan = (phone) => call(h(), 'POST', '/plan', { roll: 0, timeZone: TZ, phone })
+    return await fn({ home, post, agents, plan })
   } finally {
     if (old === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = old
@@ -208,5 +209,45 @@ test('体检和快照看得到到期卡', async () => {
     const it = h.items.find((x) => x.id === 'review')
     assert.ok(it, JSON.stringify(h.items.map((x) => x.id)))
     assert.match(it.label, /1 张复习卡到期/)
+  })
+})
+
+test('两条鱼抽问：待命亮屏有到期卡 → 候选里有 review-quiz；等兑现的卡不抽；rate_review_card 只改排期（不算验过）', async () => {
+  await withHome(async ({ home, plan, agents }) => {
+    writeCards(home, [
+      card({ id: 'rc-wait', q: '等兑现的卡不该被抽', sealId: 'seal-x', counts: true, fsrs: { state: 0, due: Date.now() - 600_000 } }),
+      card({ id: 'rc-q', q: '首鼠两端是什么意思', a: '犹豫不决' }),
+    ])
+    await plan({ app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 2, screenOn: true })
+    const ledger = readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    const pick = ledger.filter((e) => e.state === 'speak-pick').pop()
+    assert.ok(pick, '有发球仲裁记录')
+    assert.ok(pick.candidates.some((c) => (c.reason || c) === 'review-quiz' || JSON.stringify(c).includes('review-quiz')), JSON.stringify(pick.candidates))
+    // 抽到了的话：记一次、上下文里有这张卡；不管抽没抽到，都不会是等兑现的那张
+    const quiz = ledger.find((e) => e.state === 'review-quiz')
+    if (quiz) {
+      assert.equal(quiz.cardId, 'rc-q')
+      assert.equal(json(home, 'review-quiz.json').n, 1)
+    }
+    // 她判：只改排期，不算验过，不发分钟
+    const tool = agents[SIS].tools.rate_review_card
+    const res = await tool.execute({ card_id: 'rc-q', remembered: true })
+    assert.equal(res.ok, true, res.text)
+    const c = json(home, 'review-cards.json').items.find((x) => x.id === 'rc-q')
+    assert.equal(c.history[0].channel, 'sister')
+    assert.equal(c.history[0].verified, false)
+    assert.ok(c.fsrs.due > Date.now() + 86_400_000 / 2)
+    assert.equal((await tool.execute({ card_id: 'nope', remembered: false })).ok, false)
+  })
+})
+
+test('两条鱼抽问：一天最多 2 次、隔 3 小时', async () => {
+  await withHome(async ({ home, plan }) => {
+    writeCards(home, [card({ id: 'rc-q2', q: '一张到期卡的题干' })])
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date())
+    writeFileSync(join(home, 'companion', 'review-quiz.json'), JSON.stringify({ day: today, n: 2, lastAt: Date.now() - 5 * 3_600_000 }))
+    await plan({ app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 2, screenOn: true })
+    const ledger = readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8')
+    assert.doesNotMatch(ledger, /review-quiz/)
   })
 })

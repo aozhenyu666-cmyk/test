@@ -330,6 +330,13 @@ export function companionSpecialLines(special, names, allowTools = false) {
   if (special.reason === 'radar-game-binge' || special.reason === 'radar-drift') {
     return ['内核行为雷达刚刚 0 延迟先行锁住了他：' + (special.note || '检测到娱乐/游戏或高频切换') + '。用你平时毒舌/顽皮的一两句话当场点破他，问他到底要换正事还是继续挨锁。']
   }
+  if (special.reason === 'review-quiz') {
+    const n = special.note || {}
+    const opts = Array.isArray(n.options) && n.options.length ? '（可以给选项：' + n.options.map((o, i) => String.fromCharCode(65 + i) + '. ' + o).join(' ') + '）' : ''
+    return ['抽他一张到期的复习卡' + (n.topic ? '（' + n.topic + '）' : '') + '：「' + (n.q || '') + '」' + opts + '。' +
+      '用你自己的口气随口一问（像「喂，前两天你记的那个……还记得吗？」），一两句，先别给提示、别说答案（标准答案：' + (n.a || '') + '，留着他答完再对）。' +
+      '他答了再判——答出要点算记得，答不上 / 敷衍 / 岔开算忘了，告诉他答案。']
+  }
   if (special.reason === 'restart-takeover') {
     return ['刚才后台引擎刚重启恢复回来（' + (special.note || '规则与时钟已原地续接') + '）。用一句自然的话报个平安并把当前正事/时钟接上，不要像系统播报。']
   }

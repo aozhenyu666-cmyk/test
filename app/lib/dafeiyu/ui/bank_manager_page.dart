@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
 import '../../ui/common/segmented_pill.dart';
 import '../../ui/common/status_chip.dart';
@@ -13,6 +14,7 @@ import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../bank/bank_text_extract.dart';
 import '../channels/proactive_state.dart';
+import 'review_page.dart';
 
 /// 备考题库与锁屏刷题解锁中心（默认：答对 10 题解锁 5 分钟）。
 class BankManagerPage extends StatefulWidget {
@@ -38,6 +40,7 @@ class _BankManagerPageState extends State<BankManagerPage> {
   bool _appendMode = true;
   String? _banner;
   Map<String, dynamic> _bankData = const {};
+  Map<String, dynamic>? _review;
 
   @override
   void initState() {
@@ -53,11 +56,13 @@ class _BankManagerPageState extends State<BankManagerPage> {
   }
 
   Future<void> _refresh() async {
-    final res = await _channel.bankOp();
+    final both = await Future.wait([_channel.bankOp(), _channel.reviewOp({'action': 'summary'})]);
+    final res = both[0];
     if (!mounted) return;
     setState(() {
       _loading = false;
       if (res != null) _bankData = res;
+      _review = both[1];
     });
   }
 
@@ -240,6 +245,28 @@ D. 个人主观情绪
             tone: StatusTone.idle,
             text: _loading ? '读取中…' : '当前解锁规则：答对 $reqCount 题 → 临时放行 $unlockMin 分钟',
           ),
+        ),
+        ListPageCard(
+          key: const ValueKey('bank-review'),
+          title: '个人复习卡（FSRS）',
+          margin: const EdgeInsets.only(bottom: 14),
+          children: [
+            ListPageRow(
+              key: const ValueKey('bank-review-row'),
+              icon: AppIcons.recurring,
+              title: _review == null
+                  ? '复习卡：引擎没应答'
+                  : '今天到期 ${_review!['dueCount'] ?? 0} 张 · 共 ${_review!['totalCards'] ?? 0} 张'
+                      '${_review!['retention7d'] == null ? '' : ' · 7 天留存 ${_review!['retention7d']}%'}',
+              subtitle: '锁屏刷题先出到期卡（带选项的代码判，算 1 题；自己对答案的算 0.7 题），都不进上面的题库答对数',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () async {
+                await ReviewPage.open(context, channel: _channel);
+                if (mounted) unawaited(_refresh());
+              },
+            ),
+          ],
         ),
         GlassSurface(
           tier: GlassTier.card,

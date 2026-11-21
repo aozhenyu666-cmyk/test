@@ -71,7 +71,7 @@ test('C1 任一主状态的工具子集都不超过上限（14）', () => {
 })
 
 test('C2 全部工具每一个都至少在一个状态下可达', () => {
-  assert.equal(ALL_TOOLS.length, 40) // capture_review_card（2026-11-21 复习卡）+ health_check（2026-11-21 体检）+ set_evening_cap（2026-11-21 晚间娱乐上限）+ start_work / spend_balance（2026-11-21 超级验收者：一句话开工、花余额说理由）+ add_checkpoints（2026-11-20 时间轴，早上定 / 晚上封）+ propose_covenant（2026-11-20 公约，晚上对账时提）+ 22 个原有工具 + fish_index（P0-3）+ take_stance/revise_stance（A1）+ mount_propose/mount_park/mount_close（C1）+ preset（R9 A）+ brain（行为大脑第一版）+ compose_bout_protocol（M4.2 鲸澜动态造局）+ open_bout/plan_bouts（2026-11 主动开局、排局）
+  assert.equal(ALL_TOOLS.length, 41) // capture_review_card / rate_review_card（2026-11-21 复习卡）+ health_check（2026-11-21 体检）+ set_evening_cap（2026-11-21 晚间娱乐上限）+ start_work / spend_balance（2026-11-21 超级验收者：一句话开工、花余额说理由）+ add_checkpoints（2026-11-20 时间轴，早上定 / 晚上封）+ propose_covenant（2026-11-20 公约，晚上对账时提）+ 22 个原有工具 + fish_index（P0-3）+ take_stance/revise_stance（A1）+ mount_propose/mount_park/mount_close（C1）+ preset（R9 A）+ brain（行为大脑第一版）+ compose_bout_protocol（M4.2 鲸澜动态造局）+ open_bout/plan_bouts（2026-11 主动开局、排局）
   assert.equal(new Set(ALL_TOOLS).size, ALL_TOOLS.length, '并集里不许有重复')
   for (const name of ALL_TOOLS) {
     const reachable = STATE_TABLE.filter((r) => r.tools.includes(name)).map((r) => r.id)
@@ -119,7 +119,7 @@ test('C15 fullToolAccess 关闭时主状态一变，手上的工具跟着换（�
   })
 })
 
-test('C16 默认全权限放开：两姐妹在待命与深夜都挂满 40 个全部工具', async () => {
+test('C16 默认全权限放开：两姐妹在待命与深夜都挂满 41 个全部工具', async () => {
   await withHome(async (home) => {
     const { sis, big } = mountPair(home, {}, 'night')
     assert.equal(Object.keys(sis.tools).length, ALL_TOOLS.length)

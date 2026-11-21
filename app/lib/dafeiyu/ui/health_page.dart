@@ -14,6 +14,7 @@ import 'bank_manager_page.dart';
 import 'covenant_page.dart';
 import 'gemini_bridge_page.dart';
 import 'proactive_page.dart';
+import 'review_page.dart';
 import 'seal_page.dart';
 
 /// 体检：一页看出体系哪一环断了。手机这边的权限（无障碍、悬浮窗、通知、闹钟、电池、保活）这页自己读；
@@ -108,8 +109,9 @@ class _HealthPageState extends State<HealthPage> with WidgetsBindingObserver {
       case 'vault':
         await _go(const ProactivePage());
       case 'bank':
-      case 'review':
         await _go(BankManagerPage(channel: _channel));
+      case 'review':
+        await _go(ReviewPage(channel: _channel));
       case 'seals':
         await _go(SealPage(channel: _channel));
       case 'covenant':

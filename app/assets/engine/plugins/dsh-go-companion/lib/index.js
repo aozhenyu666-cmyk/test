@@ -2849,7 +2849,7 @@ export function apply(ctx) {
             : '今晚娱乐已用 ' + vv.evening.used + '/' + vv.evening.cap + ' 分钟（18:00 起算，用完锁到明早 7 点）。')
         }
       } catch {}
-      return [...vLines, ...sealPromptLines(loadSeals(now, tz), { today: dayString(now, tz), hm: sealHm }), ...reviewPromptLines(loadWeekReviews(), now)]
+      return [...vLines, ...sealPromptLines(loadSeals(now, tz), { today: dayString(now, tz), hm: sealHm }), ...reviewPromptLines(loadWeekReviews(), now), ...reviewQuizLines(now)]
     },
     upsertWorkItemNow: (item, { now = Date.now(), mirror = true } = {}) => {
       const tz = zoneOr(config.timeZone)
@@ -7028,7 +7028,7 @@ export function apply(ctx) {
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
-        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role), addCheckpointsTool(role), startWorkTool(role), spendBalanceTool(role), eveningCapTool(role), healthTool(), captureReviewCardTool(),
+        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role), addCheckpointsTool(role), startWorkTool(role), spendBalanceTool(role), eveningCapTool(role), healthTool(), captureReviewCardTool(), rateReviewCardTool(),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
         fishIndexTool(), presetTool(role), brainTool(role), composeBoutTool(role),
         openBoutTool(role), planBoutsTool(role),
@@ -9340,6 +9340,69 @@ export function apply(ctx) {
     }
     return { v: 1, ok: false, error: 'bad-action' }
   }
+  // ---- 两条鱼抽问（验收第二批·二）：只改排期，永远不发分钟（她们问、他答、她们判——都不算「验过」）。
+  const REVIEW_QUIZ_MAX_PER_DAY = 2
+  const REVIEW_QUIZ_GAP_MS = 3 * 3_600_000
+  const REVIEW_QUIZ_PENDING_MS = 40 * 60_000
+  const loadReviewQuiz = () => readState(stateFile('review-quiz.json'), null) || {}
+  /** 这一拍能不能抽一张：待命、亮屏、没在跑局、今天还没满 2 次、离上次 ≥3 小时；不抽还在等「隔天回忆」兑现的卡。 */
+  function reviewQuizCandidate(now, tz, phone) {
+    if (config.reviewQuiz === false || !phone?.screenOn) return null
+    if (mainStateNow() !== 'standby') return null
+    if (runningBoutNow()) return null
+    const st = loadReviewQuiz()
+    const today = dayString(now, tz)
+    const n = st.day === today ? Number(st.n) || 0 : 0
+    if (n >= REVIEW_QUIZ_MAX_PER_DAY || now - (Number(st.lastAt) || 0) < REVIEW_QUIZ_GAP_MS) return null
+    const card = dueCards(loadReviewCards(), now, { limit: 1, filter: (c) => !(c.sealId && delayedRecall(c) === '') })[0]
+    if (!card) return null
+    return {
+      role: 'companion', reason: 'review-quiz', outReason: 'review-quiz', priority: 5, at: now,
+      note: { cardId: card.id, topic: card.topic, q: card.q, a: card.a, hint: card.hint, options: card.options },
+    }
+  }
+  function markReviewQuiz(p, now, tz) {
+    const st = loadReviewQuiz()
+    const today = dayString(now, tz)
+    writeJson(stateFile('review-quiz.json'), {
+      day: today, n: (st.day === today ? Number(st.n) || 0 : 0) + 1, lastAt: now,
+      pending: { cardId: p.note?.cardId || '', q: String(p.note?.q || '').slice(0, 200), a: String(p.note?.a || '').slice(0, 240), at: now },
+    })
+    record({ state: 'review-quiz', at: now, cardId: p.note?.cardId || '' })
+  }
+  /** 抽问之后 40 分钟内：进两条鱼的上下文，他答了就判、调 rate_review_card。 */
+  function reviewQuizLines(now) {
+    const pd = loadReviewQuiz().pending
+    if (!pd?.cardId || now - Number(pd.at || 0) > REVIEW_QUIZ_PENDING_MS) return []
+    return ['刚才抽问了他一张复习卡 [' + pd.cardId + ']「' + pd.q + '」（标准答案：' + pd.a + '）。他答了就判：答出要点 → rate_review_card remembered=true；答不上 / 敷衍 / 岔开 → false，并把答案告诉他。只判一次，不发分钟。']
+  }
+  function rateReviewCardTool() {
+    return {
+      name: 'rate_review_card',
+      description: '你抽问了他一张到期复习卡、他答了之后用：答出要点 remembered=true，答不上 / 敷衍 / 岔开 false。只改这张卡下次什么时候再问，不发任何分钟、不算验收（你们俩抽问不算「验过」）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          card_id: { type: 'string', description: '卡的 id（上下文里 [rc-…]）' },
+          remembered: { type: 'boolean' },
+          shaky: { type: 'boolean', description: '答出来了但磕磕绊绊（可选）' },
+        },
+        required: ['card_id', 'remembered'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const rating = args.remembered === true ? (args.shaky === true ? 2 : 3) : 1
+        const r = rateReviewCardNow(String(args.card_id || ''), rating, 'sister', now)
+        if (!r.ok) return { ok: false, text: '没找到这张卡（id 抄错了？）。' }
+        const st = loadReviewQuiz()
+        if (st.pending?.cardId === r.card.id) writeJson(stateFile('review-quiz.json'), { ...st, pending: null })
+        const days = r.card.fsrs.scheduledDays
+        return { ok: true, text: rating === 1 ? '记下了：10 分钟后锁屏会再问他这张。' : '记下了：' + days + ' 天后再问。' }
+      },
+    }
+  }
   /** 两条鱼的工具：他说「把这个记进复习卡」。进池不算学习制卡张数（聊天随手记的不算数）。 */
   function captureReviewCardTool() {
     return {
@@ -10889,6 +10952,13 @@ export function apply(ctx) {
       const withLock = Number(radar.forceLevel) >= 3 && !hardCapped
       speakCandidates.push({ role: targetRole, reason: radar.ballReason || 'radar-drift', priority: withLock ? 3 : 5, withLock, at: now, note: radar.forceWhy })
     }
+    // 2026-11-21 两条鱼抽问到期复习卡：待命、亮屏、没在跑局、一天最多 2 次、隔 3 小时；只排期，不发分钟。
+    if (canTalk && !gem.inside && !hold && !emergencyActive) {
+      try {
+        const rq = reviewQuizCandidate(now, tz, phone)
+        if (rq) speakCandidates.push(rq)
+      } catch {}
+    }
     const restartTakeover = readState(stateFile('restart-takeover.json'), null)
     if (restartTakeover && !restartTakeover.handled && now - Number(restartTakeover.at) < 30 * 60_000) {
       speakCandidates.push({ role: 'companion', reason: 'restart-takeover', priority: 5, at: now, note: restartTakeover.note })
@@ -10966,6 +11036,7 @@ export function apply(ctx) {
       }
       if (p.reason === 'gemini-voice-check') saveGearState({ ...loadGearState(), gemVoiceWarnAt: now })
       if (p.reason === 'gemini-checkpoint') saveGearState({ ...loadGearState(), gemCheckpointAt: now })
+      if (p.reason === 'review-quiz') markReviewQuiz(p, now, tz)
       if (p.reason === 'restart-takeover' && restartTakeover) writeJson(stateFile('restart-takeover.json'), { ...restartTakeover, handled: true })
       if (p.isBaseDecide) {
         nextSpeaker = null
