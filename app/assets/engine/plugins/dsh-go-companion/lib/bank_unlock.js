@@ -7,6 +7,12 @@ import { parseBank, BANK_VERSION } from './bank.js'
 
 export const DEFAULT_QUIZ_REQUIRED = 10
 export const DEFAULT_UNLOCK_MINUTES = 5
+/**
+ * 2026-11-21 没有选项的题（简答）只能自己对答案：算 0.7 题解锁进度、不进题库答对数（题库类验收点只认代码判的题）。
+ * 个人复习卡同理：4 选 1 答对算 1 题，自己翻答案说「记得」算 0.7 题；都不进题库答对数。
+ */
+export const SELF_JUDGED_WEIGHT = 0.7
+const round1 = (v) => Math.round(v * 10) / 10
 
 function cleanLine(s) {
   return String(s || '').trim()
@@ -164,6 +170,8 @@ export function cleanBankUnlockState(raw) {
     },
     session: {
       solved: Math.max(0, Number(session.solved) || 0),
+      reviewDone: Math.max(0, Number(session.reviewDone) || 0),
+      currentCard: String(session.currentCard || ''),
       seenIds: Array.isArray(session.seenIds) ? session.seenIds.map(String).slice(-120) : [],
       currentId: String(session.currentId || ''),
     },
@@ -172,6 +180,8 @@ export function cleanBankUnlockState(raw) {
       answered: Math.max(0, Number(stats.answered) || 0),
       correct: Math.max(0, Number(stats.correct) || 0),
       unlocksTotal: Math.max(0, Number(stats.unlocksTotal) || 0),
+      selfPassed: Math.max(0, Number(stats.selfPassed) || 0),
+      reviewed: Math.max(0, Number(stats.reviewed) || 0),
       lastUnlockAt: Number(stats.lastUnlockAt) || 0,
     },
   }
@@ -255,7 +265,8 @@ export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = D
   const nextWrong = correct
     ? state.wrongIds.filter((x) => x !== qid)
     : [...new Set([...state.wrongIds, qid])].slice(-200)
-  const nextSolved = correct ? state.session.solved + 1 : state.session.solved
+  const selfJudged = !opts.length
+  const nextSolved = round1(state.session.solved + (correct ? (selfJudged ? SELF_JUDGED_WEIGHT : 1) : 0))
   const unlocked = nextSolved >= state.config.requiredCount
   const unlockMinutes = state.config.unlockMinutes
   const unlockUntil = unlocked ? now + unlockMinutes * 60_000 : 0
@@ -264,13 +275,17 @@ export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = D
     config: state.config,
     session: {
       solved: unlocked ? 0 : nextSolved,
+      reviewDone: unlocked ? 0 : state.session.reviewDone,
+      currentCard: unlocked ? '' : state.session.currentCard,
       seenIds: unlocked ? [] : nextSeen,
       currentId: '',
     },
     wrongIds: nextWrong,
     stats: {
+      ...state.stats,
       answered: state.stats.answered + 1,
-      correct: state.stats.correct + (correct ? 1 : 0),
+      correct: state.stats.correct + (correct && !selfJudged ? 1 : 0),
+      selfPassed: state.stats.selfPassed + (correct && selfJudged ? 1 : 0),
       unlocksTotal: state.stats.unlocksTotal + (unlocked ? 1 : 0),
       lastUnlockAt: unlocked ? now : state.stats.lastUnlockAt,
     },
@@ -280,6 +295,8 @@ export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = D
   return {
     ok: true,
     correct,
+    selfJudged,
+    weight: correct ? (selfJudged ? SELF_JUDGED_WEIGHT : 1) : 0,
     unlocked,
     unlockUntil,
     unlockMinutes,
@@ -291,5 +308,38 @@ export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = D
     wrongCount: nextWrong.length,
     question: unlocked ? null : preview.question,
     state: unlocked ? nextState : preview.state,
+  }
+}
+
+/** 锁屏这一轮最多先出几张到期复习卡（剩下的用题库补齐）。 */
+export const reviewCapFor = (required) => Math.max(1, Math.floor(Math.max(1, Number(required) || DEFAULT_QUIZ_REQUIRED) / 2))
+
+/**
+ * 锁屏答了一张个人复习卡：按权重记解锁进度（不进题库答对数），够了就解锁。
+ * weight：4 选 1 答对 1、自己说记得 0.7、答错 / 忘了 0。
+ */
+export function creditReviewAnswer(stateRaw, { weight = 0, now = Date.now() } = {}) {
+  const state = cleanBankUnlockState(stateRaw)
+  const nextSolved = round1(state.session.solved + Math.max(0, Number(weight) || 0))
+  const unlocked = nextSolved >= state.config.requiredCount
+  const unlockMinutes = state.config.unlockMinutes
+  return {
+    unlocked,
+    unlockUntil: unlocked ? now + unlockMinutes * 60_000 : 0,
+    unlockMinutes,
+    solved: nextSolved,
+    required: state.config.requiredCount,
+    state: {
+      ...state,
+      session: unlocked
+        ? { solved: 0, reviewDone: 0, currentCard: '', seenIds: [], currentId: '' }
+        : { ...state.session, solved: nextSolved, reviewDone: state.session.reviewDone + 1, currentCard: '' },
+      stats: {
+        ...state.stats,
+        reviewed: state.stats.reviewed + 1,
+        unlocksTotal: state.stats.unlocksTotal + (unlocked ? 1 : 0),
+        lastUnlockAt: unlocked ? now : state.stats.lastUnlockAt,
+      },
+    },
   }
 }

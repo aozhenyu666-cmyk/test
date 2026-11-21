@@ -25,9 +25,11 @@ export const INSTRUCTIONS = [
   '你没有解锁、加娱乐额度、豁免、改小验收点的工具，也不要答应他这些；他要放松，告诉他去手机上走正规出口（豁免要写理由、占一次紧急解除）。',
   '他说「开始了」就 dafeiyu_start_work；他要玩，先要一句理由再 dafeiyu_spend_balance（花的是他自己挣的余额，晚上有上限）。',
   '觉得缺一条规矩（比如他反复用同一个借口），用 dafeiyu_propose_rule 提议，他在手机上批了才生效。',
+  '聊透一个知识点 / 讲完一道错题，用 dafeiyu_push_cards 沉成复习卡（手机按遗忘曲线 12 小时后开始问他）；他丢真题 / 拍错题给你，洗成标准结构用 dafeiyu_import_questions 灌进手机题库。',
+  '开聊或空闲时看一眼 dafeiyu_review_due，顺手考他 1–2 张到期卡（别给提示，让他先说）；交回执时把评分放进 reviewed_cards——你判的才算数，他说「记得」不算。',
 ].join('\n')
 
-const KIND_ENUM = ['quiz', 'external_quiz', 'file', 'screenshots', 'app_minutes', 'bout_minutes', 'gemini_receipt']
+const KIND_ENUM = ['quiz', 'external_quiz', 'file', 'screenshots', 'app_minutes', 'bout_minutes', 'gemini_receipt', 'study_cards']
 
 export function toolDefs({ vault = false } = {}) {
   const ro = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
@@ -103,7 +105,8 @@ export function toolDefs({ vault = false } = {}) {
       title: '加验收点',
       description: '把他说定的安排落成时间轴验收点：到开始时刻手机自动开局，到截止时刻代码判，没过保底就锁。只能加，不能改小、不能删。' +
         '每条必须能被代码验：quiz=DSH 题库答对数；external_quiz=外部 App 刷题（要 app 包名）；file=笔记库某文件的字数增量（要 path）；' +
-        'screenshots=截图张数；app_minutes=某 App 用时（要 app）；bout_minutes=通过验收的局的分钟数；gemini_receipt=你交的「过」的回执条数。',
+        'screenshots=截图张数；app_minutes=某 App 用时（要 app）；bout_minutes=通过验收的局的分钟数；gemini_receipt=你交的「过」的回执条数；' +
+        'study_cards=学习制卡张数（你推的带选项的卡、「过」的回执里的问答、BrainOS 命题卡算数；交卡当天发一半奖励，隔天复习答对够保底再发另一半）。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -153,8 +156,92 @@ export function toolDefs({ vault = false } = {}) {
             items: { type: 'object', properties: { q: { type: 'string' }, a: { type: 'string' } }, required: ['q', 'a'], additionalProperties: false },
           },
           verdict: { type: 'string', enum: ['pass', 'partial', 'fail'], description: 'pass=答得上来、东西是真的；partial=一半；fail=说不清 / 没做' },
+          reviewed_cards: {
+            type: 'array',
+            maxItems: 10,
+            description: '这次你当场考了哪些到期复习卡（dafeiyu_review_due 里的 id）、你判的结果：again=没答上 / hard=磕磕绊绊 / good=答上了 / easy=张口就来',
+            items: {
+              type: 'object',
+              properties: { card_id: { type: 'string' }, rating: { type: 'string', enum: ['again', 'hard', 'good', 'easy'] } },
+              required: ['card_id', 'rating'],
+              additionalProperties: false,
+            },
+          },
         },
         required: ['topic', 'did', 'next', 'verdict'],
+        additionalProperties: false,
+      },
+      annotations: add,
+    },
+    {
+      name: 'dafeiyu_review_due',
+      title: '看到期复习卡',
+      description: '他今天到期的个人复习卡（最多 10 张，带答案——你是考官，别直接念答案）、近 7 天隔夜回忆通过率、错得最多的主题、题库错题最多的题型。' +
+        '标了「等隔天回忆」的卡，你考的这一次决定他那个学习制卡验收点的第二半奖励——严格判。',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: ro,
+    },
+    {
+      name: 'dafeiyu_push_cards',
+      title: '推复习卡',
+      description: '把聊透的知识点 / 讲完的错题沉成复习卡（1–10 张），手机按遗忘曲线 12 小时后开始在锁屏和复习页问他。问要能单独看懂，答要短而准。' +
+        '给 4 个选项 + answer（A–D）的卡锁屏能代码判，算学习制卡张数；只有问答的卡也收，但不算张数（他只能自己对答案）。checkpoint_id 填学习制卡验收点的 id（可选）。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          cards: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 10,
+            items: {
+              type: 'object',
+              properties: {
+                topic: { type: 'string', description: '主题，如「资料分析」' },
+                q: { type: 'string', description: '问' },
+                a: { type: 'string', description: '答（有选项时写正确项的内容或解析）' },
+                hint: { type: 'string', description: '成立前提 / 易错点（可选）' },
+                options: { type: 'array', minItems: 2, maxItems: 6, items: { type: 'string' }, description: '选项（可选，不带字母前缀）' },
+                answer: { type: 'string', description: '有选项时：正确项字母 A–F' },
+              },
+              required: ['q', 'a'],
+              additionalProperties: false,
+            },
+          },
+          checkpoint_id: { type: 'string', description: '学习制卡验收点 id（可选）' },
+        },
+        required: ['cards'],
+        additionalProperties: false,
+      },
+      annotations: add,
+    },
+    {
+      name: 'dafeiyu_import_questions',
+      title: '灌题进题库',
+      description: '把他丢给你的真题 / 拍的错题洗成标准结构灌进手机题库（1–30 题，按题干去重，锁屏刷题和题库类验收点用的就是它）。答案必须是你核对过的。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          bank_name: { type: 'string', description: '如「行测-资料分析错题」（追加进现有题库时可不填）' },
+          bank_id: { type: 'string' },
+          questions: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 30,
+            items: {
+              type: 'object',
+              properties: {
+                stem: { type: 'string', description: '题干' },
+                options: { type: 'array', maxItems: 6, items: { type: 'string' }, description: '选项（不带字母前缀）' },
+                answer: { type: 'string', description: '答案（选择题写字母）' },
+                analysis: { type: 'string', description: '解析' },
+                type: { type: 'string', description: '题型，如「资料分析」' },
+              },
+              required: ['stem', 'answer'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['questions'],
         additionalProperties: false,
       },
       annotations: add,
@@ -243,6 +330,24 @@ export function todayText(snap, now) {
   if (Number(snap.receiptsToday) > 0) lines.push('今天你已经交过 ' + snap.receiptsToday + ' 条回执。')
   const iron = snap.covenant?.iron || []
   if (iron.length) lines.push('公约铁律：' + iron.map((r) => r.id + ' ' + r.title).join('；') + '（全文用 dafeiyu_rules）。')
+  return lines.join('\n')
+}
+
+const RETENTION = (r) => (r === null || r === undefined ? '—' : r + '%')
+/** 到期复习卡给 Gemini 看的样子（带答案：它是考官）。 */
+export function reviewText(snap) {
+  const r = snap?.review
+  if (!r) return '手机还没传复习卡（同步过一次之后就有）。'
+  if (!r.totalCards) return '复习卡池是空的。聊透一个知识点就用 dafeiyu_push_cards 沉一张。'
+  const lines = ['复习卡 ' + r.totalCards + ' 张，今天到期 ' + r.dueCount + ' 张；近 7 天隔夜回忆通过 ' + RETENTION(r.retention7d) + '（' + (r.reviewed7d || 0) + ' 张）。']
+  for (const c of Array.isArray(r.due) ? r.due : []) {
+    lines.push('- [' + c.id + ']' + (c.topic ? '〔' + c.topic + '〕' : '') + c.q +
+      (Array.isArray(c.options) && c.options.length ? '（' + c.options.map((o, i) => String.fromCharCode(65 + i) + '. ' + o).join(' ') + '）' : '') +
+      ' —— 答：' + c.a + (c.hint ? '（前提：' + c.hint + '）' : '') + (c.lapses ? ' · 忘过 ' + c.lapses + ' 次' : '') + (c.pendingRecall ? ' · 等隔天回忆（你这次判的定他第二半奖励）' : ''))
+  }
+  if (Array.isArray(r.weakTopics) && r.weakTopics.length) lines.push('忘得最多：' + r.weakTopics.map((x) => x.topic + '（' + x.lapses + ' 次）').join('、'))
+  if (Array.isArray(r.weakBank) && r.weakBank.length) lines.push('题库错题最多：' + r.weakBank.map((x) => x.topic + '（' + x.wrong + ' 题）').join('、'))
+  lines.push('考的时候先别给提示；考完交回执时把评分放进 reviewed_cards。')
   return lines.join('\n')
 }
 
@@ -338,9 +443,26 @@ export async function callTool(ctx, name, args = {}) {
       if (args.verdict === 'pass' && qa.length < 2) {
         return fail('判「过」至少要 2 组问答（你问的、他的原话）。没问够就继续问，或者判 partial。')
       }
+      const reviewed = (Array.isArray(args.reviewed_cards) ? args.reviewed_cards : []).slice(0, 10)
+        .filter((x) => x && typeof x.card_id === 'string' && ['again', 'hard', 'good', 'easy'].includes(x.rating))
       return writeTool(ctx, 'receipt', {
-        checkpointId: args.checkpoint_id || '', topic: args.topic, did: args.did, next: args.next, qa, verdict: args.verdict,
+        checkpointId: args.checkpoint_id || '', topic: args.topic, did: args.did, next: args.next, qa, verdict: args.verdict, reviewedCards: reviewed,
       }, '交回执')
+    }
+    case 'dafeiyu_review_due':
+      return text(reviewText(snap))
+    case 'dafeiyu_push_cards': {
+      const cards = (Array.isArray(args.cards) ? args.cards : []).slice(0, 10)
+        .filter((c) => c && String(c.q || '').trim() && String(c.a || '').trim())
+        .map((c) => ({ topic: c.topic || '', q: c.q, a: c.a, hint: c.hint || '', options: Array.isArray(c.options) ? c.options.slice(0, 6) : [], answer: c.answer || '' }))
+      if (!cards.length) return fail('cards 是空的（每张要有 q 和 a）。')
+      return writeTool(ctx, 'push_review_cards', { source: 'gemini_mcp', items: cards, checkpointId: args.checkpoint_id || '' }, '推复习卡')
+    }
+    case 'dafeiyu_import_questions': {
+      const qs = (Array.isArray(args.questions) ? args.questions : []).slice(0, 30)
+        .filter((q) => q && String(q.stem || '').trim() && String(q.answer || '').trim())
+      if (!qs.length) return fail('questions 是空的（每题要有 stem 和 answer）。')
+      return writeTool(ctx, 'import_questions', { bankName: args.bank_name || '', bankId: args.bank_id || '', questions: qs }, '灌题')
     }
     case 'dafeiyu_start_work':
       return writeTool(ctx, 'start_work', { hours: args.hours, sprint: args.sprint === true }, '开工')

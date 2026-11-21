@@ -150,3 +150,92 @@ test('手机配好桥 → 快照上去；Gemini 交回执、加验收点、提�
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('复习卡和题库互通：回执问答自动成卡、Gemini 推卡、BrainOS 从本机口推命题卡和导题、Gemini 判的评分改排期', async () => {
+  const min = minuteOfDay(Date.now(), TZ)
+  if (min > 1380) return
+  const dir = mkdtempSync(join(tmpdir(), 'dfy-bridge-review-'))
+  const old = process.env.DSH_HOME
+  process.env.DSH_HOME = join(dir, 'home')
+  mkdirSync(join(dir, 'home', 'companion'), { recursive: true })
+  writeFileSync(join(dir, 'home', 'companion', 'config.json'), JSON.stringify({ timeZone: TZ, quietStart: 12, quietEnd: 12 }))
+  writeFileSync(join(dir, 'home', 'companion', 'bank.json'), JSON.stringify({ 题库版本: 1, id: 'b', 名称: '行测', 题目: [{ id: 'q-1', 题干: '已有的一道题', 选项: ['甲', '乙'], 答案: 'A', 解析: '甲' }] }))
+  const store = createStore(join(dir, 'bridge.json'))
+  const bridge = createBridge({ store, resultWaitMs: 5000 })
+  const server = createServer(bridge.handler)
+  const local = createServer(bridge.localHandler)
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  await new Promise((r) => local.listen(0, '127.0.0.1', r))
+  const base = 'http://127.0.0.1:' + server.address().port
+  const L = 'http://127.0.0.1:' + local.address().port
+  const lk = { 'content-type': 'application/json', authorization: 'Bearer ' + store.state.secret.localKey }
+  const cards = () => JSON.parse(readFileSync(join(dir, 'home', 'companion', 'review-cards.json'), 'utf8')).items
+  try {
+    const call = plugin()
+    const cfg = await call('/gemini-bridge', { action: 'config', url: base, key: store.state.secret.phoneKey })
+    assert.equal(cfg.synced, true, JSON.stringify(cfg))
+    const tool = (name, args) => import('../mcp.mjs').then((m) => m.callTool(bridge.ctx, name, args))
+    const roundTrip = async (p) => {
+      await new Promise((r) => setTimeout(r, 120))
+      await call('/gemini-bridge', { action: 'sync' })
+      return p
+    }
+
+    // 1. 判「过」的回执：两组像样的问答自动成卡（算学习制卡）
+    const rec = await roundTrip(tool('dafeiyu_submit_receipt', { topic: '资料分析', did: '讲清了', next: '刷题', verdict: 'pass',
+      qa: [{ q: '增长率怎么算出来', a: '现期除以基期再减一' }, { q: '基期量怎么求出来', a: '现期除以一加增长率' }] }))
+    assert.match(rec.content[0].text, /问答收成 2 张复习卡/)
+    assert.equal(cards().filter((c) => c.source === 'gemini_receipt' && c.counts).length, 2)
+
+    // 2. Gemini 推卡：一张选择卡（算数）、一张问答卡（不算数）
+    const push = await roundTrip(tool('dafeiyu_push_cards', { cards: [
+      { topic: '数量', q: '下面哪个是质数', a: '7', options: ['4', '7', '9', '15'], answer: 'B' },
+      { topic: '言语', q: '「首鼠两端」是什么意思', a: '犹豫不决、动摇不定' },
+    ] }))
+    assert.match(push.content[0].text, /收了 2 张复习卡（其中 1 张算学习制卡/)
+    const choice = cards().find((c) => c.q === '下面哪个是质数')
+    assert.equal(choice.answerIndex, 1)
+
+    // 3. BrainOS 走本机口推命题卡（同步等结果），重复推不生双卡
+    const prop = { externalId: 'brain-prop-42', topic: '资料分析', q: '【资料分析】什么前提下不能截两位？', a: '选项首位相同且次位差 ≤2% 时要截三位', premise: '首位相同且次位差 ≤2%' }
+    const ingP = fetch(L + '/bridge/local/ingest', { method: 'POST', headers: lk, body: JSON.stringify({ source: 'brainos_proposition', items: [prop] }) }).then((r) => r.json())
+    const ing = await roundTrip(ingP)
+    assert.match(ing.text, /收了 1 张/)
+    const again = await roundTrip(fetch(L + '/bridge/local/ingest', { method: 'POST', headers: lk, body: JSON.stringify({ source: 'brainos_proposition', items: [prop] }) }).then((r) => r.json()))
+    assert.match(again.text, /1 张已经有了/)
+    const bc = cards().filter((c) => c.externalId === 'brain-prop-42')
+    assert.equal(bc.length, 1)
+    assert.equal(bc[0].source, 'brainos')
+    assert.equal(bc[0].counts, true)
+    assert.match(bc[0].hint, /首位相同/)
+
+    // 4. BrainOS / Gemini 导题：按题干去重
+    const imp = await roundTrip(fetch(L + '/bridge/local/import-questions', { method: 'POST', headers: lk, body: JSON.stringify({
+      questions: [{ stem: '已有的一道题', options: ['甲', '乙'], answer: 'A' }, { stem: '新的一道题：2+3=?', options: ['4', '5'], answer: 'B', analysis: '加法' }] }) }).then((r) => r.json()))
+    assert.match(imp.text, /题库新增 1 题（现在一共 2 题）/, JSON.stringify(imp))
+    const gimp = await roundTrip(tool('dafeiyu_import_questions', { questions: [{ stem: '新的一道题：2+3=?', options: ['4', '5'], answer: 'B' }] }))
+    assert.equal(gimp.isError, true, '全是重复的：一题没进')
+
+    // 5. 快照里看得到卡池；本机 today 也是
+    await call('/gemini-bridge', { action: 'sync' })
+    const due = await tool('dafeiyu_review_due', {})
+    assert.match(due.content[0].text, /复习卡 5 张/)
+    const lt = await (await fetch(L + '/bridge/local/today', { headers: lk })).json()
+    assert.equal(lt.review.totalCards, 5)
+
+    // 6. Gemini 当场考了一张、交回执带评分 → 手机改排期（验过）
+    const rated = await roundTrip(tool('dafeiyu_submit_receipt', { topic: '抽查', did: '口头答了', next: '继续', verdict: 'partial', reviewed_cards: [{ card_id: choice.id, rating: 'good' }] }))
+    assert.match(rated.content[0].text, /复习卡排期改了 1 张/)
+    const after = cards().find((c) => c.id === choice.id)
+    assert.equal(after.history.length, 1)
+    assert.equal(after.history[0].channel, 'gemini')
+    assert.equal(after.history[0].verified, true)
+    // 笔记库没连：卡照样在手机里（镜像只是附带）
+  } finally {
+    server.close()
+    local.close()
+    if (old === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = old
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

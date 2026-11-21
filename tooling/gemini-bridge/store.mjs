@@ -1,7 +1,7 @@
 // 大肥鱼 · Gemini 桥：状态存储（一个 JSON 文件，原子写）。
 //
 // 存什么：
-//   secret    配对口令（Gemini 授权时输一次）、手机密钥（手机同步用）
+//   secret    配对口令（Gemini 授权时输一次）、手机密钥（手机同步用）、本机密钥（电脑上别的程序走 127.0.0.1:8788 用）
 //   clients   Gemini 动态注册来的 OAuth 客户端
 //   codes     授权码（5 分钟、一次性）
 //   access / refresh  令牌——只存哈希，不存原文
@@ -46,7 +46,7 @@ export function safeEqual(a, b) {
 export function emptyState() {
   return {
     v: 1,
-    secret: { passphrase: newPassphrase(), phoneKey: 'dfy_' + token(24) },
+    secret: { passphrase: newPassphrase(), phoneKey: 'dfy_' + token(24), localKey: 'dfyl_' + token(24) },
     clients: {},
     codes: {},
     access: {},
@@ -66,6 +66,12 @@ export function createStore(file, { now = () => Date.now() } = {}) {
   } catch {
     state = emptyState()
   }
+  // 2026-11-21 本机互通接口的密钥：老的状态文件里没有，补一把（手机密钥、口令不动）。
+  let patched = false
+  if (!state.secret?.localKey) {
+    state.secret = { ...state.secret, localKey: 'dfyl_' + token(24) }
+    patched = true
+  }
   const save = () => {
     mkdirSync(dirname(file), { recursive: true })
     const tmp = join(dirname(file), '.' + Date.now() + '.tmp')
@@ -83,7 +89,7 @@ export function createStore(file, { now = () => Date.now() } = {}) {
       ids.sort((a, b) => state.clients[a].at - state.clients[b].at).slice(0, ids.length - MAX_CLIENTS).forEach((id) => delete state.clients[id])
     }
   }
-  if (!existsSync(file)) save()
+  if (!existsSync(file) || patched) save()
   return {
     get state() {
       return state

@@ -12,6 +12,8 @@ export const TIME_ENTRY_KINDS = Object.freeze([
   'earned_bout',
   'earned_bank',
   'earned_seal',
+  // 2026-11-21 学习制卡的第二半（隔天复习答对才发），记账上和验收点奖励算一处。
+  'earned_review',
   'break',
   'penalty',
   'used_fun',
@@ -108,7 +110,7 @@ export function computeTimeLedger({
     const m = posInt(e.minutes)
     if (e.kind === 'earned_bout') sumBout += m
     else if (e.kind === 'earned_bank') sumBank += m
-    else if (e.kind === 'earned_seal') sumSeal += m
+    else if (e.kind === 'earned_seal' || e.kind === 'earned_review') sumSeal += m
     else if (e.kind === 'break') sumBreak += m
     else if (e.kind === 'penalty') sumPenalty += m
     else if (e.kind === 'used_fun') extraFunUsed += m

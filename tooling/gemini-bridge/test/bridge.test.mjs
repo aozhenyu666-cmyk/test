@@ -6,6 +6,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { createBridge } from '../server.mjs'
 import { createStore } from '../store.mjs'
 import { GOOGLE_REDIRECT, LOCKOUT_FAILS } from '../oauth.mjs'
@@ -139,7 +140,7 @@ test('MCP：initialize / tools/list / 通知回 202；没同步过时 today 说�
     assert.equal((await rpc(http, tk, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202)
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()
     const names = list.result.tools.map((t) => t.name)
-    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_propose_rule'])
+    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule'])
     assert.ok(!names.some((n) => /unlock|quota|waive|lower|delete/.test(n)), '没有放松类工具')
     assert.equal(list.result.tools[0].annotations.readOnlyHint, true)
     const today = await (await rpc(http, tk, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dafeiyu_today', arguments: {} } })).json()
@@ -200,7 +201,7 @@ test('笔记库只读：能搜能读；日记 / 越界不读', async () => {
     const { access_token: tk } = await connect(http, store)
     const call = async (name, args) => (await (await rpc(http, tk, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } })).json()).result
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()
-    assert.equal(list.result.tools.length, 13)
+    assert.equal(list.result.tools.length, 16)
     assert.match((await call('dafeiyu_search_notes', { query: '增长率' })).content[0].text, /学习\/行测\.md/)
     assert.doesNotMatch((await call('dafeiyu_search_notes', { query: '不该被读到' })).content[0].text, /私事/)
     assert.match((await call('dafeiyu_read_note', { path: '学习/行测.md' })).content[0].text, /现期\/基期/)
@@ -209,4 +210,127 @@ test('笔记库只读：能搜能读；日记 / 越界不读', async () => {
     assert.equal((await call('dafeiyu_read_note', { path: '/etc/passwd' })).isError, true)
     assert.match((await call('dafeiyu_recent_notes', { days: 3 })).content[0].text, /学习\/行测\.md/)
   }, { vault: true })
+})
+
+test('本机互通接口（8788）：只认本机来源 + 本机密钥；手机密钥不行；公网端口上没有这些路径', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfy-local-'))
+  const store = createStore(join(dir, 'state.json'))
+  assert.match(store.state.secret.localKey, /^dfyl_/)
+  assert.notEqual(store.state.secret.localKey, store.state.secret.phoneKey)
+  const bridge = createBridge({ store, resultWaitMs: 600 })
+  const pub = createServer(bridge.handler)
+  const loc = createServer(bridge.localHandler)
+  await new Promise((r) => pub.listen(0, '127.0.0.1', r))
+  await new Promise((r) => loc.listen(0, '127.0.0.1', r))
+  const P = 'http://127.0.0.1:' + pub.address().port
+  const L = 'http://127.0.0.1:' + loc.address().port
+  const auth = (k) => ({ authorization: 'Bearer ' + k })
+  const key = store.state.secret.localKey
+  try {
+    // 公网（funnel）那个端口：没有本机接口
+    assert.equal((await fetch(P + '/bridge/local/today', { headers: auth(key) })).status, 404)
+    // 本机端口：没密钥 / 手机密钥 → 401
+    assert.equal((await fetch(L + '/bridge/local/today')).status, 401)
+    assert.equal((await fetch(L + '/bridge/local/today', { headers: auth(store.state.secret.phoneKey) })).status, 401)
+    // 来源不是本机 → 403（直接喂 handler 一个假的远端地址）
+    const fake = Readable.from([])
+    fake.method = 'GET'
+    fake.url = '/bridge/local/today'
+    fake.headers = auth(key)
+    fake.socket = { remoteAddress: '100.101.102.103' }
+    const res = { status: 0, writeHead(st) { this.status = st }, end() {} }
+    await bridge.localHandler(fake, res)
+    assert.equal(res.status, 403)
+    // today：没同步过也答
+    const t0 = await (await fetch(L + '/bridge/local/today', { headers: auth(key) })).json()
+    assert.equal(t0.ok, true)
+    assert.equal(t0.phoneOnline, false)
+    // 手机同步一次（带复习摘要）
+    const sync = (body) => fetch(P + '/bridge/sync', json(body, auth(store.state.secret.phoneKey))).then((r) => r.json())
+    await sync({ snapshot: { ...SNAP, review: { dueCount: 1, totalCards: 3, retention7d: 80, reviewed7d: 5, due: [{ id: 'rc-1', topic: '资料分析', q: '截位直除何时截三位', a: '首位相同且次位差小', lapses: 1, options: [], pendingRecall: true }], weakTopics: [] } } })
+    const t1 = await (await fetch(L + '/bridge/local/today', { headers: auth(key) })).json()
+    assert.equal(t1.phoneOnline, true)
+    assert.equal(t1.review.dueCount, 1)
+    assert.equal(t1.today.timeline[0].id, 'seal-a')
+    assert.match(t1.reviewText, /等隔天回忆/)
+    // ingest（async）：立即 202，命令排上
+    const ing = await fetch(L + '/bridge/local/ingest?async=1', json({ source: 'brainos_proposition', items: [{ externalId: 'brain-prop-42', topic: '资料分析', q: '【资料分析】什么前提下不能截两位？', a: '首位相同且次位差 ≤2%', premise: '首位相同' }, { q: '' }], reviewed: [{ card_id: 'rc-1', rating: 'good' }] }, auth(key)))
+    assert.equal(ing.status, 202)
+    const pulled = await sync({})
+    const types = pulled.commands.map((c) => c.type)
+    assert.deepEqual(types, ['review_ratings', 'push_review_cards'])
+    const push = pulled.commands[1].payload
+    assert.equal(push.source, 'brainos')
+    assert.equal(push.items.length, 1, '空卡被筛掉')
+    assert.equal(push.items[0].externalId, 'brain-prop-42')
+    assert.equal(push.items[0].hint, '首位相同')
+    assert.equal(pulled.commands[0].payload.channel, 'brainos')
+    await sync({ results: pulled.commands.map((c) => ({ id: c.id, ok: true, text: 'ok' })) })
+    // ingest（同步）：手机回了结果就带回去
+    const waiting = fetch(L + '/bridge/local/ingest', json({ items: [{ q: '第二张卡的问题', a: '答案' }] }, auth(key))).then((r) => r.json())
+    await new Promise((r) => setTimeout(r, 50))
+    const p2 = await sync({})
+    await sync({ results: [{ id: p2.commands[0].id, ok: true, text: '收了 1 张复习卡' }] })
+    assert.match((await waiting).text, /收了 1 张/)
+    // 空的 → 400；import-questions 排 import_questions
+    assert.equal((await fetch(L + '/bridge/local/ingest', json({ items: [] }, auth(key)))).status, 400)
+    const imp = await fetch(L + '/bridge/local/import-questions?async=1', json({ bankName: '资料分析错题', rawTextOrJson: '1. 题干一\nA. 甲 B. 乙\n答案：A' }, auth(key)))
+    assert.equal(imp.status, 202)
+    const p3 = await sync({})
+    assert.equal(p3.commands[0].type, 'import_questions')
+    assert.equal(p3.commands[0].payload.bankName, '资料分析错题')
+  } finally {
+    pub.close()
+    loc.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('老的状态文件没有本机密钥：读的时候补一把，口令和手机密钥不动', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfy-old-'))
+  try {
+    writeFileSync(join(dir, 'state.json'), JSON.stringify({ v: 1, secret: { passphrase: 'aaaa-bbbb-cccc-dddd', phoneKey: 'dfy_old' } }))
+    const store = createStore(join(dir, 'state.json'))
+    assert.equal(store.state.secret.phoneKey, 'dfy_old')
+    assert.equal(store.state.secret.passphrase, 'aaaa-bbbb-cccc-dddd')
+    assert.match(store.state.secret.localKey, /^dfyl_/)
+    assert.equal(createStore(join(dir, 'state.json')).state.secret.localKey, store.state.secret.localKey, '存下来了，重启不换')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('Gemini 的三个新工具：看到期卡（带答案）、推卡、灌题；回执带评分', async () => {
+  await withBridge(async ({ http, store }) => {
+    const { access_token: tk } = await connect(http, store)
+    const sync = (body) => http('/bridge/sync', json(body, { authorization: 'Bearer ' + store.state.secret.phoneKey })).then((r) => r.json())
+    const call = (name, args, id = 7) => rpc(http, tk, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }).then((r) => r.json())
+    assert.match((await call('dafeiyu_review_due', {})).result.content[0].text, /还没传复习卡/)
+    await sync({ snapshot: { ...SNAP, review: { dueCount: 1, totalCards: 1, retention7d: null, due: [{ id: 'rc-9', q: '哪个是质数', a: '7', options: ['4', '7'], lapses: 0 }], weakTopics: [], weakBank: [{ topic: '数量', wrong: 3 }] } } })
+    const due = (await call('dafeiyu_review_due', {})).result.content[0].text
+    assert.match(due, /\[rc-9\]哪个是质数（A\. 4 B\. 7） —— 答：7/)
+    assert.match(due, /题库错题最多：数量（3 题）/)
+    const pushP = call('dafeiyu_push_cards', { cards: [{ q: '问一', a: '答一' }, { q: '', a: 'x' }], checkpoint_id: 'seal-s' })
+    await new Promise((r) => setTimeout(r, 50))
+    const c1 = await sync({})
+    assert.equal(c1.commands[0].type, 'push_review_cards')
+    assert.equal(c1.commands[0].payload.items.length, 1)
+    assert.equal(c1.commands[0].payload.checkpointId, 'seal-s')
+    assert.equal(c1.commands[0].payload.source, 'gemini_mcp')
+    await sync({ results: [{ id: c1.commands[0].id, ok: true, text: '收了 1 张复习卡' }] })
+    assert.match((await pushP).result.content[0].text, /收了 1 张/)
+    const impP = call('dafeiyu_import_questions', { bank_name: '数量错题', questions: [{ stem: '1+1=?', options: ['1', '2'], answer: 'B' }, { stem: '没答案' }] })
+    await new Promise((r) => setTimeout(r, 50))
+    const c2 = await sync({})
+    assert.equal(c2.commands[0].type, 'import_questions')
+    assert.equal(c2.commands[0].payload.questions.length, 1)
+    await sync({ results: [{ id: c2.commands[0].id, ok: true, text: '题库新增 1 题' }] })
+    assert.match((await impP).result.content[0].text, /新增 1 题/)
+    const rP = call('dafeiyu_submit_receipt', { topic: '抽查', did: '口头答了两张卡', next: '继续', verdict: 'partial', reviewed_cards: [{ card_id: 'rc-9', rating: 'good' }, { card_id: 'rc-x', rating: 'meh' }] })
+    await new Promise((r) => setTimeout(r, 50))
+    const c3 = await sync({})
+    assert.deepEqual(c3.commands[0].payload.reviewedCards, [{ card_id: 'rc-9', rating: 'good' }])
+    await sync({ results: [{ id: c3.commands[0].id, ok: true, text: '回执收到' }] })
+    await rP
+  })
 })

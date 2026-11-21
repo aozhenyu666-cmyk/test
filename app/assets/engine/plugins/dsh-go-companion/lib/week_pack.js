@@ -22,7 +22,7 @@ const EMERGENCY = new Set(['emergency-pass-grant', 'emergency-exit', 'breakglass
  * @param {(at:number)=>string} p.dayOf 毫秒 → 当地日期
  * @param {number} [p.days]
  */
-export function weekPack({ entries = [], seals = { items: [] }, today, dayOf, days = 7 } = {}) {
+export function weekPack({ entries = [], seals = { items: [] }, today, dayOf, days = 7, reviewLine = '' } = {}) {
   const span = Math.max(1, Math.min(14, Math.round(n(days) || 7)))
   const list = []
   for (let i = span - 1; i >= 0; i--) list.push(prevYmd(today, i))
@@ -65,7 +65,7 @@ export function weekPack({ entries = [], seals = { items: [] }, today, dayOf, da
     emergencies: sum('emergencies'), takeovers: sum('takeovers'), lowerRefused: sum('lowerRefused'),
     emptyDays: rows.filter((r) => r.total === 0).length,
   }
-  return { totals, rows, waivers, text: packText(totals, rows, waivers) }
+  return { totals, rows, waivers, reviewLine, text: packText(totals, rows, waivers, reviewLine) }
 }
 
 export const WEEK_PROMPT = [
@@ -80,7 +80,7 @@ export const WEEK_PROMPT = [
   '最多 3 条调整。不要安慰，不要建议「多休息」之类的空话；数字支持不了的结论不要下。',
 ].join('\n')
 
-function packText(t, rows, waivers) {
+function packText(t, rows, waivers, reviewLine = '') {
   const lines = ['# 大肥鱼 · 周冷数据（' + t.from + ' ~ ' + t.to + '）', '']
   lines.push('## 总数')
   lines.push('- 验收点 ' + t.checkpoints + ' 个：过拉伸 ' + t.stretch + '，过保底 ' + t.floor + '，没过保底 ' + t.below + '，豁免 ' + t.waived +
@@ -88,6 +88,7 @@ function packText(t, rows, waivers) {
   lines.push('- 一个验收点都没有的天：' + t.emptyDays + ' 天')
   lines.push('- 挣到的娱乐分钟（验收点）：' + t.paid + '；开局 ' + t.bouts + ' 次')
   lines.push('- Gemini 回执 ' + t.receipts + ' 条（判「过」' + t.receiptsPass + '）')
+  if (reviewLine) lines.push('- ' + reviewLine)
   lines.push('- 紧急解除 / 破窗 ' + t.emergencies + ' 次；被接管 ' + t.takeovers + ' 次；想把封印改小被拒 ' + t.lowerRefused + ' 次')
   lines.push('', '## 每天', '', '| 日期 | 点 | 拉伸 | 保底 | 没过 | 豁免 | 现加 | 分钟 | 局 | 回执(过) | 紧急 | 接管 |', '|---|---|---|---|---|---|---|---|---|---|---|---|')
   for (const r of rows) {

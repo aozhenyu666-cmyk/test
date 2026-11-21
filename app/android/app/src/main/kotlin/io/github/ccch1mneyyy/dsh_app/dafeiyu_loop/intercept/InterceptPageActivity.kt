@@ -397,11 +397,13 @@ class InterceptPageActivity : Activity() {
     }
 
     private fun renderQuizPayload(res: Map<*, *>) {
-        val solved = (res["solved"] as? Number)?.toInt() ?: 0
+        // 2026-11-21 自己对答案的题只算 0.7 题：进度可能是小数，整数时不带小数点。
+        val solvedRaw = (res["solved"] as? Number)?.toDouble() ?: 0.0
+        val solved = if (solvedRaw % 1.0 == 0.0) solvedRaw.toInt().toString() else String.format(java.util.Locale.US, "%.1f", solvedRaw)
         val required = (res["required"] as? Number)?.toInt() ?: 10
         val unlockMin = (res["unlockMinutes"] as? Number)?.toInt() ?: 5
         val bankTotal = (res["bankTotal"] as? Number)?.toInt() ?: 0
-        if (bankTotal <= 0) {
+        if (bankTotal <= 0 && res["question"] == null) {
             quizProgressView?.text = "题库为空（0 题）"
             quizStemView?.text = "请先在 DSH Go 的「题库中心」粘贴或导入题目；之后遇到娱乐锁屏，只要做对 $required 题即可放行 $unlockMin 分钟。"
             quizFeedbackView?.visibility = View.GONE
@@ -421,10 +423,29 @@ class InterceptPageActivity : Activity() {
         val rawOptions = q["options"] as? List<*> ?: emptyList<Any?>()
         val optBox = quizOptionsBox ?: return
         optBox.removeAllViews()
-        if (rawOptions.isEmpty()) {
-            // 无预设选项的简答题：提供「我已口头/心中作答 · 核对答案」开关
+        if (rawOptions.isEmpty() && q["kind"] == "review") {
+            // 2026-11-21 个人复习卡（没有选项）：先在心里答，再看答案，自己判「记得 / 忘了」。
+            // 自判只改复习排期、只算 0.7 题；不算题库答对数。
+            val ans = (q["answer"] as? String).orEmpty()
+            optBox.addView(pillButton("想好了，看答案（自己对的只算 0.7 题）", secondary = false) {
+                quizFeedbackView?.apply {
+                    visibility = View.VISIBLE
+                    setTextColor(palette.muted)
+                    text = "答案：$ans"
+                }
+                optBox.removeAllViews()
+                optBox.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(pillButton("忘了", secondary = true, weight = 1f) { submitQuizChoice("FORGOT") },
+                        LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(8) })
+                    addView(pillButton("记得", secondary = false, weight = 1f) { submitQuizChoice("REMEMBER") },
+                        LinearLayout.LayoutParams(0, dp(46), 1f))
+                })
+            })
+        } else if (rawOptions.isEmpty()) {
+            // 无预设选项的简答题：只能自己核对答案——2026-11-21 起只算 0.7 题、不进题库答对数（题库类验收点不认）。
             val ansHint = (q["answer"] as? String).orEmpty()
-            optBox.addView(pillButton("查看标准答案并记作已过", secondary = false) {
+            optBox.addView(pillButton("查看标准答案并记作已过（只算 0.7 题）", secondary = false) {
                 submitQuizChoice(ansHint.ifBlank { "PASS" })
             })
         } else {

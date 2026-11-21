@@ -8,7 +8,7 @@
 // - dept_skills.js (四部门防骗红旗 / 反沉没成本 / 三段因果链可执行 Skill)
 
 import { join } from 'node:path'
-import { cleanBankUnlockState, judgeQuizAnswer, pickNextQuizQuestion } from './bank_unlock.js'
+import { cleanBankUnlockState, creditReviewAnswer, judgeQuizAnswer, pickNextQuizQuestion, reviewCapFor, SELF_JUDGED_WEIGHT } from './bank_unlock.js'
 import { parseBankAny } from './bank_import.js'
 import { evaluateAutonomy14d, evaluateAutonomyLevel } from './autonomy.js'
 import {
@@ -94,6 +94,8 @@ export function createV4Hub(deps) {
     grantTempPass,
     toolOutput,
     loadEpisodes = () => null,
+    // 2026-11-21 个人复习卡（FSRS）接锁屏：{ next(now) → 卡 | null, get(id) → 卡 | null, rate(id, rating, channel, now) }。
+    reviewCards = null,
     loadGemini = () => ({}),
     saveGemini = () => {},
     loadExternal = () => ({}),
@@ -365,6 +367,8 @@ export function createV4Hub(deps) {
     const st = loadBankUnlock()
 
     if (action === 'status' || action === 'quiz_session') {
+      const card = serveReviewCard(st, now)
+      if (card) return { v: 1, ok: true, ...card.payload }
       const preview = pickNextQuizQuestion(rawBank, st)
       if (preview.state) saveBankUnlock(preview.state)
       return {
@@ -429,6 +433,22 @@ export function createV4Hub(deps) {
       const offset = merge ? rawBank.题目.length : 0
       const parsed = parseBankAny(raw, { offset })
       if (!parsed.ok) return { v: 1, ok: false, error: parsed.error, skipped: parsed.skipped.slice(0, 30), skippedCount: parsed.skipped.length, format: parsed.format }
+      // 追加时按题干去重（Gemini / BrainOS 反复推同一批题不生双份）。
+      if (merge) {
+        const norm = (t) => String(t || '').replace(/[\s\p{P}\p{S}]/gu, '').toLowerCase().slice(0, 120)
+        const seen = new Set(rawBank.题目.map((q) => norm(q.题干)))
+        const fresh = []
+        for (const q of parsed.questions) {
+          const k = norm(q.题干)
+          if (k && seen.has(k)) parsed.skipped.push({ n: fresh.length + 1, why: '题库里已经有了（题干重复）' })
+          else {
+            seen.add(k)
+            fresh.push(q)
+          }
+        }
+        if (!fresh.length) return { v: 1, ok: true, importedCount: 0, bankTotal: rawBank.题目.length, bankName: rawBank.名称, format: parsed.format, skipped: parsed.skipped.slice(0, 30), skippedCount: parsed.skipped.length, warnings: ['全部 ' + parsed.questions.length + ' 题题库里都有了'] }
+        parsed.questions = fresh
+      }
       const name = String(opts.name || (merge ? rawBank.名称 : '') || '备考题库').slice(0, 60)
       const mergedBank = {
         题库版本: 1,
@@ -471,6 +491,10 @@ export function createV4Hub(deps) {
       return importText(raw, { append: body?.append, name: body?.name, id: body?.id })
     }
 
+    if (action === 'quiz_answer' && String(body?.questionId || '').startsWith('rc:') && reviewCards) {
+      return answerReviewCard(st, String(body.questionId).slice(3), String(body?.answer || ''), now)
+    }
+
     if (action === 'quiz_answer') {
       const judged = judgeQuizAnswer(rawBank, st, {
         questionId: body?.questionId,
@@ -479,35 +503,127 @@ export function createV4Hub(deps) {
       })
       if (!judged.ok) return { v: 1, ok: false, error: judged.error }
       saveBankUnlock(judged.state)
-      if (judged.unlocked) {
-        try {
-          grantTempPass?.(judged.unlockUntil, `刷题达标 ${judged.solved} 题（${judged.unlockMinutes}m）`)
-        } catch {
-          // ignore
-        }
-        try {
-          onBankUnlock?.({ minutes: judged.unlockMinutes, solved: judged.solved, until: judged.unlockUntil, now })
-        } catch {
-          // ignore
-        }
-        record({
-          state: 'quiz-unlock',
-          at: now,
-          solved: judged.solved,
-          unlockMinutes: judged.unlockMinutes,
-          until: judged.unlockUntil,
-        })
-        recordStoryline({
-          kind: 'quiz_unlock',
-          actor: 'user',
-          summary: `锁屏答对 ${judged.solved} 题解锁 ${judged.unlockMinutes}m 通行`,
-          at: now,
-        }, now)
+      if (judged.unlocked) unlockByQuiz(judged, now)
+      // 下一题：这一轮的复习卡名额还没用完、又有到期卡，先出卡。
+      if (!judged.unlocked) {
+        const card = serveReviewCard(judged.state, now)
+        if (card) return { v: 1, ...judged, question: card.payload.question, state: undefined }
       }
       return { v: 1, ...judged }
     }
 
     return { v: 1, ok: false, error: `未知 action: ${action}` }
+  }
+
+  /** 锁屏这一轮该先出的到期复习卡（名额 = 要求题数的一半）；出了就记在 session 里，答完才换。 */
+  function serveReviewCard(st, now) {
+    if (!reviewCards) return null
+    const cap = reviewCapFor(st.config.requiredCount)
+    let card = null
+    try {
+      if (st.session.currentCard) card = reviewCards.get(st.session.currentCard)
+      if (!card && st.session.reviewDone < cap) card = reviewCards.next(now)
+    } catch {
+      card = null
+    }
+    if (!card) return null
+    if (card.id !== st.session.currentCard) saveBankUnlock({ ...st, session: { ...st.session, currentCard: card.id } })
+    const rawBank = loadRawBank()
+    const choice = card.options.length > 0
+    return {
+      card,
+      payload: {
+        config: st.config,
+        stats: st.stats,
+        wrongCount: st.wrongIds.length,
+        bankName: String(rawBank?.名称 || '个人复习卡'),
+        bankTotal: Array.isArray(rawBank?.题目) ? rawBank.题目.length : 0,
+        solved: st.session.solved,
+        required: st.config.requiredCount,
+        unlockMinutes: st.config.unlockMinutes,
+        question: {
+          id: 'rc:' + card.id,
+          kind: 'review',
+          stem: (card.topic ? '【复习 · ' + card.topic + '】' : '【复习】') + card.q,
+          options: choice ? card.options : [],
+          // 没有选项的卡：先藏答案，他点「看答案」再显示、自己判「记得 / 忘了」（只算 0.7 题）。
+          answer: choice ? undefined : card.a + (card.hint ? '（前提：' + card.hint + '）' : ''),
+          type: '复习卡',
+          selfWeight: SELF_JUDGED_WEIGHT,
+        },
+      },
+    }
+  }
+
+  /** 锁屏答一张复习卡：4 选 1 代码判（验过）；无选项的 REMEMBER / FORGOT 自判（只改排期，算 0.7 题）。 */
+  function answerReviewCard(st, cardId, answer, now) {
+    const card = reviewCards.get(cardId)
+    if (!card) {
+      saveBankUnlock({ ...st, session: { ...st.session, currentCard: '' } })
+      return { v: 1, ok: false, error: '这张复习卡已经不在了（被删了？），换下一题' }
+    }
+    const token = answer.trim().toUpperCase()
+    let correct
+    let weight
+    let channel
+    if (card.options.length) {
+      const idx = /^[A-F]$/.test(token) ? token.charCodeAt(0) - 65 : -1
+      correct = idx === card.answerIndex
+      weight = correct ? 1 : 0
+      channel = 'lockscreen'
+    } else {
+      correct = token === 'REMEMBER' || token === 'PASS' || token === 'GOOD'
+      weight = correct ? SELF_JUDGED_WEIGHT : 0
+      channel = 'self'
+    }
+    try {
+      reviewCards.rate(card.id, correct ? 3 : 1, channel, now)
+    } catch {}
+    const r = creditReviewAnswer(st, { weight, now })
+    saveBankUnlock(r.state)
+    if (r.unlocked) unlockByQuiz(r, now)
+    const next = r.unlocked ? null : serveReviewCard(r.state, now)
+    let question = next ? next.payload.question : null
+    let bankTotal = Array.isArray(loadRawBank()?.题目) ? loadRawBank().题目.length : 0
+    if (!r.unlocked && !next) {
+      const preview = pickNextQuizQuestion(loadRawBank(), r.state)
+      if (preview.state) saveBankUnlock(preview.state)
+      question = preview.question
+      bankTotal = preview.bankTotal
+    }
+    return {
+      v: 1, ok: true, review: true, correct, selfJudged: !card.options.length, weight,
+      unlocked: r.unlocked, unlockUntil: r.unlockUntil, unlockMinutes: r.unlockMinutes,
+      correctAnswer: card.options.length ? String.fromCharCode(65 + card.answerIndex) + '. ' + card.options[card.answerIndex] : card.a,
+      explain: card.a + (card.hint ? '（前提：' + card.hint + '）' : '') + (correct ? '' : '——明天再问你一次。'),
+      solved: r.solved, required: r.required, bankTotal, wrongCount: st.wrongIds.length, question,
+    }
+  }
+
+  function unlockByQuiz(judged, now) {
+    try {
+      grantTempPass?.(judged.unlockUntil, `刷题达标 ${judged.solved} 题（${judged.unlockMinutes}m）`)
+    } catch {
+      // ignore
+    }
+    try {
+      onBankUnlock?.({ minutes: judged.unlockMinutes, solved: judged.solved, until: judged.unlockUntil, now })
+    } catch {
+      // ignore
+    }
+    record({
+      state: 'quiz-unlock',
+      at: now,
+      solved: judged.solved,
+      unlockMinutes: judged.unlockMinutes,
+      until: judged.unlockUntil,
+    })
+    recordStoryline({
+      kind: 'quiz_unlock',
+      actor: 'user',
+      summary: `锁屏答对 ${judged.solved} 题解锁 ${judged.unlockMinutes}m 通行`,
+      at: now,
+    }, now)
   }
 
   function contractSessionView(now = Date.now(), { escalatedOnly = false } = {}) {

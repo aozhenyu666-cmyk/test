@@ -24,12 +24,18 @@ export const SEAL_KINDS = Object.freeze({
   app_minutes: { label: 'App 用时', unit: '分钟' },
   bout_minutes: { label: '通过验收的局', unit: '分钟' },
   gemini_receipt: { label: 'Gemini 回执', unit: '条' },
+  study_cards: { label: '学习制卡', unit: '张' },
 })
 export const SEAL_SOURCES = Object.freeze(['night', 'morning', 'live', 'ai', 'gemini', 'template'])
 /** 当天开工前的冷静线：这之前（且还没开过局）定的时间轴不打折。 */
 export const COLD_CUTOFF_MINUTE = 10 * 60
 /** 局已经按时长给过一份放风，这一类验收点的奖励减半，免得一份活拿两份全额。 */
-export const KIND_REWARD_FACTOR = Object.freeze({ bout_minutes: 0.5 })
+export const KIND_REWARD_FACTOR = Object.freeze({ bout_minutes: 0.5, study_cards: 0.5 })
+/**
+ * 2026-11-21 学习制卡两段兑现：交卡当天先发一半（上面的 0.5）；隔天以后，绑在这一点上的卡在「创建 12 小时后的
+ * 第一次、被验过的复习」里答对够保底张数，再发同样多的另一半（earned_review）。当场刷完、自己翻答案说记得都不算。
+ */
+export const DEFERRED_KINDS = Object.freeze(['study_cards'])
 
 export const SEAL_CUTOFF_MINUTE = 23 * 60
 export const SEAL_GRACE_MS = 60_000
@@ -82,6 +88,8 @@ export function cleanSeal(raw) {
     lockUntil: int(raw.lockUntil, 0),
     waivedReason: str(raw.waivedReason, 120),
     raisedAt: int(raw.raisedAt, 0),
+    deferredPaid: Math.max(0, int(raw.deferredPaid, 0)),
+    deferredAt: int(raw.deferredAt, 0),
   }
 }
 
@@ -241,6 +249,8 @@ export function measure(seal, facts = {}) {
       return Math.max(0, int(facts.boutMinutes?.[seal.id], 0))
     case 'gemini_receipt':
       return Math.max(0, int(facts.receipts?.[seal.id], 0))
+    case 'study_cards':
+      return Math.max(0, int(facts.studyCards?.[seal.id], 0))
     default:
       return 0
   }
@@ -291,6 +301,24 @@ export function tickSeals(stateRaw, facts, { now = Date.now(), today, dueAtOf })
     return next
   })
   return { state: { ...s, items }, pays, changed }
+}
+
+/**
+ * 学习制卡的第二半（不限今天）：过了档、第一半发过、第二半还没发，且延迟回忆通过张数 ≥ 保底 → 发和第一半一样多。
+ * progressOf(seal) → 通过了几张（调用方从卡池算）。每条最多发一次。
+ */
+export function settleDeferred(stateRaw, progressOf, { now = Date.now() } = {}) {
+  const s = cleanSeals(stateRaw)
+  const pays = []
+  const items = s.items.map((seal) => {
+    if (!DEFERRED_KINDS.includes(seal.kind) || seal.deferredPaid > 0 || seal.paidMinutes <= 0) return seal
+    if (seal.status !== 'floor' && seal.status !== 'stretch') return seal
+    const passed = Math.max(0, int(progressOf(seal), 0))
+    if (passed < seal.floor) return seal
+    pays.push({ id: seal.id, minutes: seal.paidMinutes, title: seal.title, passed })
+    return { ...seal, deferredPaid: seal.paidMinutes, deferredAt: now }
+  })
+  return { state: { ...s, items }, pays, changed: pays.length > 0 }
 }
 
 /** 现在锁着的那一条（到点没过保底、60 分钟还没到、也没交够）。 */

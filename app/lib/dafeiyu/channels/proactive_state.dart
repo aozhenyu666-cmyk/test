@@ -963,6 +963,17 @@ class ProactiveChannel {
     }
   }
 
+  /// 复习卡（FSRS · 验收第二批）：summary / due / list / answer（4 选 1 代码判）/ rate（自己对答案，只改排期）/ add / delete。
+  Future<Map<String, dynamic>?> reviewOp(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('reviewOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   /// 封印（验收第一批）：前一晚立约、只能加码、代码判、到点没过保底进锁。
   Future<Map<String, dynamic>?> sealsOp(Map<String, Object?> body) async {
     try {

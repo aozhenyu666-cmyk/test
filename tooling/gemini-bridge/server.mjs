@@ -11,6 +11,7 @@
 //   node server.mjs --public-url https://你的电脑名.你的tailnet.ts.net --vault "D:/Obsidian/我的库"
 //   node server.mjs --show-secrets      再看一遍配对口令和手机密钥
 //   node server.mjs --revoke            撤销所有 Gemini 授权（之后要在 Gemini 里重新连）
+//   node server.mjs --local-port 0      不开本机互通接口（默认 127.0.0.1:8788，给 BrainOS 这类本机程序用，绝不要 funnel 它）
 
 import { createServer as createHttpServer } from 'node:http'
 import { homedir } from 'node:os'
@@ -21,6 +22,7 @@ import {
   approve, authorizePage, authServerMetadata, checkAuthorize, checkBearer, protectedResourceMetadata, register, revokeAll, tokenEndpoint,
 } from './oauth.mjs'
 import { createEvents, handleRpc, phoneSync, todayText } from './mcp.mjs'
+import { createLocalApi, LOCAL_PORT } from './local.mjs'
 
 const MAX_BODY = 1_000_000
 
@@ -170,7 +172,9 @@ export function createBridge(opts) {
       return send(res, Number(e?.status) || 500, { error: 'server_error' })
     }
   }
-  return { handler, ctx, events, todayText: () => todayText(store.state.snapshot, store.now()) }
+  // 本机互通接口（127.0.0.1:8788）：和 Gemini 用同一个命令队列、同一个事件，手机取走命令时两边都能拿到结果。
+  const localHandler = createLocalApi({ store, events, resultWaitMs: opts.resultWaitMs })
+  return { handler, localHandler, ctx, events, todayText: () => todayText(store.state.snapshot, store.now()) }
 }
 
 // ---------------------------------------------------------------- 命令行
@@ -198,8 +202,10 @@ async function main() {
   if (argv('show-secrets')) {
     console.log('配对口令（Gemini 授权页输入）：' + s.passphrase)
     console.log('手机密钥（DSH Go →「Gemini 桥」页填）：' + s.phoneKey)
+    console.log('本机密钥（电脑上 BrainOS 等程序调 127.0.0.1:' + LOCAL_PORT + ' 用）：' + s.localKey)
     return
   }
+  const localPort = Number(argv('local-port', process.env.DAFEIYU_LOCAL_PORT || String(LOCAL_PORT)))
   const bridge = createBridge({
     store, publicUrl, vaultDir: vaultDir ? resolve(vaultDir) : '',
     allowLocalRedirect: Boolean(argv('allow-local-redirect')),
@@ -214,6 +220,13 @@ async function main() {
     console.log('—— 手机密钥（DSH Go →「Gemini 桥」页填）：' + s.phoneKey)
     console.log('另开一个终端：tailscale funnel ' + port + '   （把本机端口开到公网 https）')
   })
+  if (localPort > 0 && localPort !== port) {
+    // 只听 127.0.0.1，不管 --host 给的是什么：这个口子永远不出本机。
+    createHttpServer(bridge.localHandler).listen(localPort, '127.0.0.1', () => {
+      console.log('本机互通接口：http://127.0.0.1:' + localPort + '/bridge/local/{today,ingest,import-questions}（不要 funnel 这个端口）')
+      console.log('—— 本机密钥（Authorization: Bearer …）：' + s.localKey)
+    }).on('error', (e) => console.log('本机互通接口没起来（' + String(e?.code || e?.message || e) + '），其余照常：', localPort))
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

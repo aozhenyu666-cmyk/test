@@ -81,6 +81,44 @@ DSH Go → 伴侣中枢 → 开口与连麦 → **Gemini 桥**：
 | 想让 Gemini 全部重新授权 | `node tooling\gemini-bridge\server.mjs --revoke` |
 | 想换配对口令 / 手机密钥 | 删掉 `%USERPROFILE%\.dafeiyu-bridge\bridge-state.json` 重启（Gemini 和手机都要重配） |
 
+## 六½、本机互通接口（127.0.0.1:8788，给电脑上的 BrainOS 等程序）
+
+桥启动时另开一个**只听 127.0.0.1** 的端口 8788（`--local-port 0` 关掉）。**千万别 funnel 它**：
+Funnel 转进来的请求在本机看来也是 127.0.0.1，所以这个口子靠的是「不出本机的端口 + 单独的本机密钥」两道。
+
+- 本机密钥：桥启动时打印 `本机密钥 dfyl_…`，或 `node server.mjs --show-secrets`。和手机密钥不是一把。
+- 每个请求带 `Authorization: Bearer dfyl_…`；来源不是本机 → 403，密钥不对 → 401。
+- 写操作和 Gemini 一样只是排队，手机下次同步（约 20 秒）取走、按手机上的规矩再验一遍。
+  默认最多等 20 秒拿手机的结果（200 `{ok, text}`）；等不到或加 `?async=1` → 202 `{ok:true, queued}`。
+- 这里**没有**任何解锁、加额度、豁免、改小、删除的口子。
+
+| 接口 | 请求 | 返回 / 效果 |
+|---|---|---|
+| `GET /bridge/local/today` | — | `{phoneOnline, syncedAt, todayText, reviewText, today:{day, timeline, locking, bout, balance}, verifier, review:{dueCount, totalCards, retention7d, due:[{id, topic, q, a, hint, options, lapses, pendingRecall}], weakTopics, weakBank}, health}` |
+| `POST /bridge/local/ingest` | `{source:"brainos_proposition", items:[{externalId, topic, q, a, premise?, options?, answer_letter?}], reviewed?:[{card_id, rating:"again"\|"hard"\|"good"\|"easy"}], checkpoint_id?, alsoReceipt?}` | 卡进手机 FSRS 复习池（externalId / 题干去重，一次最多 10 张，12 小时后开始问）；`reviewed` 是你那边考过的到期卡评分（算「验过」，能兑现学习制卡第二半） |
+| `POST /bridge/local/import-questions` | `{bankName?, bankId?, rawTextOrJson}` 或 `{questions:[{stem, options?, answer, analysis?, type?}]}` | 追加进手机题库（题干去重；文本 / JSON / 答案集中在末尾都认，一次最多约 900 KB） |
+
+BrainOS 那边约 50 行胶水的写法（Python 标准库就够）：
+
+```python
+import json, urllib.request
+KEY = "dfyl_..."   # 本机密钥
+def dfy(path, body=None):
+    req = urllib.request.Request("http://127.0.0.1:8788" + path, method="POST" if body is not None else "GET",
+        data=None if body is None else json.dumps(body).encode(), headers={"authorization": "Bearer " + KEY, "content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        return json.load(r)
+
+# learn_harness_step(record_proposition) 之后：
+dfy("/bridge/local/ingest?async=1", {"source": "brainos_proposition", "items": [
+    {"externalId": f"brain-prop-{row_id}", "topic": topic, "q": question, "a": proposition, "premise": premise}]})
+# daily_align()：
+today = dfy("/bridge/local/today")
+```
+
+卡的规矩（手机上定死，BrainOS 改不了）：BrainOS 命题卡算「学习制卡」张数；交卡当天学习制卡验收点发一半，
+隔天第一次被验过的复习（锁屏 4 选 1、Gemini / BrainOS 报的评分）答对够保底才发另一半；他自己翻答案说「记得」只改排期。
+
 ## 七、技术细节（给以后改代码的人）
 
 - MCP：Streamable HTTP，`POST /mcp`，JSON 应答（不开 SSE）；协议版本 2025-11-25 / 2025-06-18 / 2025-03-26 / 2024-11-05。
@@ -93,4 +131,5 @@ DSH Go → 伴侣中枢 → 开口与连麦 → **Gemini 桥**：
   [litellm#46640](https://github.com/BerriAI/litellm/issues/46640)。
 - 手机同步：`POST /bridge/sync`（Bearer 手机密钥）`{snapshot, results}` → `{commands}`；手机处理完马上再同步一次回结果，
   写工具最多等 20 秒拿结果，等不到就告诉 Gemini「已排队」。命令按 id 去重，重放不会重复处理。
-- 测试：`cd tooling/gemini-bridge && node --test test/*.test.mjs`（含插件 ↔ 桥 ↔ 模拟 Gemini 的整条链）。
+- 本机互通接口：`local.mjs`，和 Gemini 共用命令队列与结果事件；命令类型 `push_review_cards` / `review_ratings` / `import_questions`。
+- 测试：`cd tooling/gemini-bridge && node --test test/*.test.mjs`（含插件 ↔ 桥 ↔ 模拟 Gemini / 模拟 BrainOS 的整条链）。

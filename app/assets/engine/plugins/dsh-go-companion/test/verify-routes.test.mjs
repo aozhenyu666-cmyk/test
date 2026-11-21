@@ -82,7 +82,8 @@ async function withHome(fn, extra = {}) {
 }
 
 const json = (home, name) => JSON.parse(readFileSync(join(home, 'companion', name), 'utf8'))
-const ALL_DAY = { day: { windows: { workday: [[0, 1440]], restday: [[0, 1440]], outing: [[0, 1440]] } } }
+// 全天都是工作时段、没有饭点（饭点里默认验收本来就让路，测试别撞上午饭）。
+const ALL_DAY = { day: { windows: { workday: [[0, 1440]], restday: [[0, 1440]], outing: [[0, 1440]] } }, wall: { meals: [] } }
 const plan = (h, phone) => call(h(), 'POST', '/plan', { roll: 0, timeZone: TZ, phone })
 
 test('工作时段里什么都不说：/plan 下发「默认验收」会话，只放常用 App；花余额期间让路', async () => {

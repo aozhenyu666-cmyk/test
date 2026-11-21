@@ -22,6 +22,7 @@ const Map<String, (String, String, IconData)> kSealKinds = {
   'app_minutes': ('App 用时', '分钟', AppIcons.time),
   'bout_minutes': ('通过验收的局', '分钟', AppIcons.workflow),
   'gemini_receipt': ('Gemini 回执', '条', AppIcons.chat),
+  'study_cards': ('学习制卡', '张', AppIcons.skill),
 };
 
 /// 时间轴上的一段：「09:00–10:30」或「10:30 前」。
@@ -834,6 +835,15 @@ class _SealEditorState extends State<_SealEditor> {
                   ),
                 ],
               ),
+              if (_kind == 'study_cards') ...[
+                const SizedBox(height: 12),
+                Text(
+                  '交卡当天先发一半奖励；隔天复习时答对够保底张数，再发另一半（当场刷、自己翻答案说记得都不算）。'
+                  '算数的卡：Gemini 推的带选项卡、判「过」的回执里的问答、BrainOS 命题卡；跟鱼聊天随手记的进复习池，但不算张数。',
+                  key: const ValueKey('seal-study-hint'),
+                  style: TextStyle(color: colors.textTertiary),
+                ),
+              ],
               if (_kind == 'file') ...[
                 const SizedBox(height: 12),
                 TextField(
