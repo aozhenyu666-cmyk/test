@@ -109,6 +109,8 @@ function setup(home, cfg = {}) {
     quietEnd: 12,
     minGapMs: 0,
     diceThreshold: 100,
+    // 这组用例测的是会话 / 连麦本身：不让工作时段的「默认验收」会话混进来（它有自己的 verify-routes）。
+    verifyMode: { enabled: false },
     ...cfg,
   }))
   const db = new DatabaseSync(join(home, 'fish-memory', 'fish-memory.sqlite'))

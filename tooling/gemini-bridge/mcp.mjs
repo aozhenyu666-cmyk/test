@@ -48,6 +48,13 @@ export function toolDefs({ vault = false } = {}) {
       annotations: ro,
     },
     {
+      name: 'dafeiyu_health',
+      title: '体检',
+      description: '体系哪一环断了：手机有没有在跟引擎对表、测试模式、笔记库、题库、默认验收、时间轴、公约、复习卡。他说「是不是又坏了」先看这个。',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: ro,
+    },
+    {
       name: 'dafeiyu_week',
       title: '这一周的冷数据',
       description: '最近 7 天只有数字的一包：每天几个验收点、过了几个、没过几个、豁免（带他写的理由）、现加几个、挣了多少分钟、开局、回执、紧急解除、被接管。' +
@@ -317,6 +324,8 @@ export async function callTool(ctx, name, args = {}) {
       return text(todayText(snap, store.now()), snap ? { structuredContent: { snapshot: { ...snap, covenant: undefined, weekText: undefined } } } : {})
     case 'dafeiyu_rules':
       return text(rulesText(snap))
+    case 'dafeiyu_health':
+      return text(snap?.health?.text || '手机还没传体检结果（同步过一次之后就有）。')
     case 'dafeiyu_week':
       return text(snap?.weekText ? snap.weekText : '手机还没传这一周的数据（同步过一次之后就有）。')
     case 'dafeiyu_add_checkpoints': {

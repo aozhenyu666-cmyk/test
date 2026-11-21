@@ -271,6 +271,9 @@ function isSystemVaultFile(rel) {
     // 2026-11-20：公约（规矩本身，已经单独进上下文）和封印的镜像表不是「他写的笔记」，别被随手翻出来。
     (rel.startsWith(KB_DIR + '/') && base.startsWith('公约')) ||
     rel.startsWith(KB_DIR + '/封印/') ||
+    // 2026-11-21：体系自己写的（模板、体检、恢复日、周验收、复习卡、Gemini 回执）也不是「他写的笔记」。
+    rel === KB_DIR + '/模板.md' ||
+    ['体检', '恢复日', '周验收', '复习卡', 'Gemini/回执'].some((d) => rel.startsWith(KB_DIR + '/' + d + '/')) ||
     base.startsWith('_')
 }
 

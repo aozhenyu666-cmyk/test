@@ -247,6 +247,7 @@ object BuiltinPluginGuest {
                 "lib/week_review.js",
                 "lib/bank_import.js",
                 "lib/verifier_mode.js",
+                "lib/health.js",
                 "lib/plan_modality.js",
                 "lib/telemetry_charts.js",
                 "lib/v4_hub.js",

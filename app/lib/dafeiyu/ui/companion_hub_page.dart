@@ -17,6 +17,7 @@ import '../../ui/pets/pet_settings_page.dart';
 import 'app_tiers_page.dart';
 import 'covenant_page.dart';
 import 'gemini_bridge_page.dart';
+import 'health_page.dart';
 import 'records_page.dart';
 import 'today_cards.dart';
 import 'proactive_page.dart';
@@ -706,6 +707,15 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
         title: '锁怎么落',
         margin: _groupMargin,
         children: [
+          ListPageRow(
+            key: const ValueKey('hub-health'),
+            icon: AppIcons.diagnostics,
+            title: '体检：哪一环断了',
+            subtitle: '无障碍、保活、测试模式、笔记库、题库、默认验收、Gemini 桥……一页看全，点一下去修',
+            subtitleMaxLines: 2,
+            chevron: true,
+            onTap: () => _openPage(const HealthPage()),
+          ),
           if (_lockShadow != null)
             ListPageRow(
               icon: AppIcons.info,

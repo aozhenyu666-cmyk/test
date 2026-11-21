@@ -9,6 +9,7 @@ import '../../ui/common/status_chip.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../channels/proactive_state.dart';
+import 'health_page.dart';
 
 /// 今日使用情况：硬日判 + 时间账 + 时间投向合成一张卡（局页和中枢共用这一张，不各画一份）。
 /// 点任意位置进完整的统计页（完整时间账、24h 切片、App 排行、晚间总报）。
@@ -293,8 +294,9 @@ class _LockReadinessCardState extends State<LockReadinessCard> with WidgetsBindi
             icon: AppIcons.lock,
             iconColor: colors.success,
             title: '锁机就绪',
-            subtitle: '无障碍已连 · 测试模式已关 · 被锁出不来时下拉通知栏点「紧急解除」',
+            subtitle: '无障碍已连 · 测试模式已关 · 被锁出不来时下拉通知栏点「紧急解除」 · 点这一行看体检',
             subtitleMaxLines: 2,
+            onTap: () => unawaited(HealthPage.open(context, channel: widget.channel)),
             trailing: Switch.adaptive(value: false, onChanged: _busy ? null : (v) => unawaited(_setShadow(v))),
           ),
         ],

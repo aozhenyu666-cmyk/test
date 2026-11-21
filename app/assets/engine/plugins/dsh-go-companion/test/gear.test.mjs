@@ -84,7 +84,8 @@ function setup(home, extra = {}) {
   // R7 P0-3：`state` 钉主状态，不能摊进 config.json（那是真配置）。
   const { state = 'standby', ...rest } = extra
   mkdirSync(join(home, 'companion'), { recursive: true })
-  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, ...rest }))
+  // 这组用例测的是会话 / 连麦本身：不让工作时段的「默认验收」会话混进来（它有自己的 verify-routes）。
+  writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: SIS, strategistSessionId: BIG, quietStart: 12, quietEnd: 12, verifyMode: { enabled: false }, ...rest }))
   const sis = agentOf(SIS)
   const big = agentOf(BIG)
   const h = host({ [SIS]: sis, [BIG]: big }, state)

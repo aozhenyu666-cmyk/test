@@ -930,6 +930,17 @@ class ProactiveChannel {
     }
   }
 
+  /// 体检：引擎这边看得到的每一环（手机权限由页面自己补）。
+  Future<Map<String, dynamic>?> healthStatus() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('healthStatus');
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   /// Gemini 桥：手机引擎主动同步到电脑上的桥（Gemini 的自定义应用 / MCP）。
   Future<Map<String, dynamic>?> bridgeOp(Map<String, Object?> body) async {
     try {

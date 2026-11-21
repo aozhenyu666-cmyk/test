@@ -86,6 +86,8 @@ test('手机配好桥 → 快照上去；Gemini 交回执、加验收点、提�
     const today = await tool('dafeiyu_today', {})
     assert.match(today.content[0].text, /Gemini 抽背资料分析/)
     assert.match(today.content[0].text, /公约铁律/)
+    const health = await tool('dafeiyu_health', {})
+    assert.match(health.content[0].text, /体检/)
     const week = await tool('dafeiyu_week', {})
     assert.match(week.content[0].text, /周冷数据/)
     assert.match(week.content[0].text, /【周验收】/)

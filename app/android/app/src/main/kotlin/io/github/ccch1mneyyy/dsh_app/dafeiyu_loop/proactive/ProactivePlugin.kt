@@ -329,6 +329,7 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/tiers", body)
             }
+            "healthStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/health", null)
             "bridgeOp" -> {
                 // 2026-11-20 Gemini 桥：status / config（url、key）/ sync / forget。同步本身在插件里（手机主动去连电脑上的桥）。
                 val body = linkedMapOf<String, Any?>()
@@ -457,6 +458,8 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             "notifications" to (nm?.areNotificationsEnabled() == true),
             "exactAlarm" to (Build.VERSION.SDK_INT < 31 || am?.canScheduleExactAlarms() == true),
             "battery" to (pm?.isIgnoringBatteryOptimizations(context.packageName) == true),
+            // 2026-11-21 体检：引擎保活想不想要（他点过「停止」就是 false，之后不会自动拉起）。
+            "keeper" to io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.shouldKeep(context),
         )
     }
 

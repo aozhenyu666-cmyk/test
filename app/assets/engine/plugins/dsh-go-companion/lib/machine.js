@@ -74,7 +74,7 @@ export const STATE_TABLE = [
     tools: ['notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'tighten_today', 'workflow_propose', 'open_bout', 'plan_bouts'] },
   { id: 'break', priority: 60, enter: ['break'], lock: 'open', back: null,
     agenda: '放风：纯陪聊，到点回待命。',
-    tools: ['spend_balance', 'set_evening_cap', 'notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control', 'open_bout', 'plan_bouts', 'gemini_live'] },
+    tools: ['spend_balance', 'set_evening_cap', 'health_check', 'notes_vault', 'fish_index', 'sister_note', 'grant_break', 'vault_search', 'vault_recent_notes', 'workflow_propose', 'dafeiyu_control', 'open_bout', 'plan_bouts', 'gemini_live'] },
   { id: 'standby', priority: 50, enter: ['always'], lock: 'standby', back: null,
     agenda: '待命：帮他挑下一件事、拆出第一步；10 分钟没动就开追问锁。',
     // C1：挂载卡的三件套在待命里齐（挑下一件事靠的就是「他手上推到哪」）。

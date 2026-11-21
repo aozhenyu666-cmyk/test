@@ -162,6 +162,7 @@ import {
   replaceRuleInText, syncCovenant,
 } from './covenant.js'
 import { weekPack } from './week_pack.js'
+import { healthItems, healthSummary, healthText } from './health.js'
 import { addReview, cleanReview, decideReview, parseWeekReview, reviewMarkdown, reviewPromptLines } from './week_review.js'
 import {
   DEFAULT_TEMPLATES, checkSpend, checkStart, dayOutcomes, defaultVerify, parseTemplates, recoveryStep, renderTemplates,
@@ -7020,7 +7021,7 @@ export function apply(ctx) {
         controlTool(), startTaskTool(role), blockTool(role), tightenTool(role), relaxTool(role),
         wallTool(role), verdictTool(role), breakTool(role), endTaskTool(role),
         dailyPlanTool(role), dailyReviewTool(role), predictTool(role), workflowTool(role),
-        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role), addCheckpointsTool(role), startWorkTool(role), spendBalanceTool(role), eveningCapTool(role),
+        takeStanceTool(role), reviseStanceTool(role), proposeCovenantTool(role), addCheckpointsTool(role), startWorkTool(role), spendBalanceTool(role), eveningCapTool(role), healthTool(),
         mountProposeTool(role), mountParkTool(role), mountCloseTool(role),
         fishIndexTool(), presetTool(role), brainTool(role), composeBoutTool(role),
         openBoutTool(role), planBoutsTool(role),
@@ -7557,7 +7558,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7641,6 +7642,7 @@ export function apply(ctx) {
         if (path === '/tiers') return send(res, 200, tiersRoute(body.value))
         if (path === '/seals') return send(res, 200, sealsRoute(body.value))
         if (path === '/covenant') return send(res, 200, covenantRoute(body.value))
+        if (path === '/health') return send(res, 200, { v: 1, ok: true, ...healthNow(Date.now()) })
         if (path === '/gemini-bridge') return send(res, 200, await bridgeRoute(body.value))
         if (path === '/wall/appeal') return send(res, 200, wallAppealRoute(body.value))
         if (path === '/sisters') return send(res, 200, sistersRoute(body.value))
@@ -7968,6 +7970,7 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/today') return send(res, 200, v4Hub.todayViewV4())
       if (req.method === 'GET' && path === '/horizons') return send(res, 200, v4Hub.horizonsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bank') return send(res, 200, v4Hub.bankRoute({ action: 'status' }))
+      if (req.method === 'GET' && path === '/health') return send(res, 200, { v: 1, ok: true, ...healthNow(Date.now()) })
       if (req.method === 'GET' && path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/autonomy') return send(res, 200, { v: 1, ok: true, autonomy: v4Hub.computeAutonomy() })
       if (req.method === 'GET' && path === '/analytics') {
@@ -8115,6 +8118,81 @@ export function apply(ctx) {
       // 写不进去就算了：生效的是 config
     }
   }
+  // ---------------------------------------------------------------- 2026-11-21 体检
+  let lastPlanAt = 0
+  function healthNow(now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const today = dayString(now, tz)
+    const safe = (fn, d = null) => {
+      try {
+        return fn()
+      } catch {
+        return d
+      }
+    }
+    const info = safe(() => intensityStateNow(now, tz), null)
+    const pl = safe(() => loadPassLedger(now, tz), null)
+    const vv = safe(() => verifyView(now, tz), {}) || {}
+    const seals = safe(() => loadSeals(now, tz), { items: [] })
+    const todays = seals.items.filter((x) => x.day === today)
+    const lock = safe(() => lockingSeal(seals, { now, today }), null)
+    const cov = safe(() => syncCovenantNow(now), { rules: [], proposals: [] })
+    const t = safe(() => templatesToday(now, tz), null)
+    const kind = safe(() => dayKindOf(now, tz, config), 'workday')
+    const tp = t ? (vv.recovery ? t.recovery : kind === 'workday' ? t.workday : kind === 'restday' ? t.restday : null) : null
+    const br = safe(() => loadBridgeState(), {})
+    const emCap = Number(info?.emergencyDisarmDailyCap) || 0
+    const emUsed = Number(pl?.emergency?.count) || 0
+    const facts = {
+      now, lastPlanAt,
+      lockShadow: config.lockShadow !== false,
+      hardCapped: Boolean(info?.hardInterventions?.capped),
+      emergencyLeft: emCap ? Math.max(0, emCap - emUsed) : null,
+      vault: safe(() => vaultKb(), '') || '',
+      bankCount: safe(() => bankCount(), 0),
+      verifyEnabled: vv.enabled !== false, verifyActive: vv.active === true, recovery: vv.recovery === true,
+      timelineToday: todays.length,
+      timelinePassed: todays.filter((x) => x.status === 'floor' || x.status === 'stretch').length,
+      pastApplyAt: Boolean(tp && tp.applyAt != null && zoneMinuteOfDay(now, tz) >= tp.applyAt && vv.enabled !== false),
+      sealLocking: lock ? '「' + lock.title + '」' + lock.actual + '/' + lock.floor : '',
+      covenantRules: (cov.rules || []).length,
+      covenantPending: (cov.proposals || []).filter((p) => p.status === 'open').length,
+      eveningActive: Boolean(vv.evening?.active), eveningHit: Boolean(vv.evening?.hit), eveningUsed: vv.evening?.used || 0, eveningCap: vv.evening?.cap || 0,
+      balance: safe(() => timeLedgerNow(now, tz, lastPhone).funLeft, null),
+      bridgeConfigured: safe(() => bridgeConf().enabled, false), bridgeHealthy: safe(() => bridgeHealthy(now), false), bridgeError: br?.lastError || '',
+      reviewDue: safe(() => (typeof reviewDueCount === 'function' ? reviewDueCount(now) : 0), 0),
+    }
+    const items = healthItems(facts)
+    return { items, summary: healthSummary(items), text: healthText(items) }
+  }
+  /** 每天一行写进 大肥鱼/体检/年-月.md（7 点以后第一拍）：出问题时翻得到是哪天哪一环先断的。 */
+  function healthDaily(now, tz) {
+    if (zoneMinuteOfDay(now, tz) < 7 * 60) return
+    const today = dayString(now, tz)
+    const st = readState(stateFile('health.json'), null) || {}
+    if (st.day === today) return
+    const h = healthNow(now)
+    writeJson(stateFile('health.json'), { day: today, at: now, summary: h.summary, history: [...(Array.isArray(st.history) ? st.history : []), { day: today, line: h.summary.line }].slice(-60) })
+    record({ state: 'health-daily', at: now, ok: h.summary.ok, warn: h.summary.warn, error: h.summary.error })
+    try {
+      const kb = vaultKb()
+      if (kb) {
+        const path = join(kb, '体检', today.slice(0, 7) + '.md')
+        const prev = readVaultText(path) || '# ' + today.slice(0, 7) + ' · 体检\n\n每天早上第一拍记一行：哪一环断了一眼看得到。\n'
+        writeVaultText(path, prev.replace(/\s+$/, '') + '\n- ' + today.slice(5) + ' ' + zoneHm(now, tz) + '  ' + h.summary.line + '\n')
+      }
+    } catch {}
+  }
+  function healthTool() {
+    return {
+      name: 'health_check',
+      description: '体检：看体系哪一环断了（手机有没有在对表、测试模式、笔记库、题库、默认验收、时间轴、公约、Gemini 桥、复习卡）。他说「是不是又坏了」「锁怎么不灵」时先调它，照着说哪里断了、去哪修。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => ({ ok: true, text: healthNow(Date.now()).text }),
+    }
+  }
+
   // ---------------------------------------------------------------- 2026-11-21 超级验收者的底层设定
   // 规则在 verifier_mode.js。他不下任何指令也成立：工作时段默认验收（只放常用 App）、到点自动套模板、
   // 连续两天没过保底进恢复日；花挣来的余额要先说一句理由；跟鱼说「开始了」时段外也进。
@@ -8146,6 +8224,8 @@ export function apply(ctx) {
   /** 关默认验收是放松：明天才生效（今天的照旧）。开是收紧：立即。 */
   function verifyEnabled(now = Date.now(), tz = zoneOr(config.timeZone)) {
     const vm = config.verifyMode && typeof config.verifyMode === 'object' ? config.verifyMode : {}
+    // 配置文件里显式写了 enabled:false（测试 / adb）就关；手机上的关闭按钮走 offFrom（明天起）。
+    if (vm.enabled === false) return false
     return !(vm.offFrom && dayString(now, tz) >= vm.offFrom)
   }
   function verifyStateNow(now = Date.now(), tz = zoneOr(config.timeZone), phone = lastPhone) {
@@ -8697,6 +8777,14 @@ export function apply(ctx) {
       balance: funLeft === null ? null : { funLeft },
       deadlines,
       receiptsToday: loadGeminiReceipts().items.filter((r) => r.day === today).length,
+      health: (() => {
+        try {
+          const h = healthNow(now)
+          return { line: h.summary.line, text: h.text }
+        } catch {
+          return null
+        }
+      })(),
       verify: (() => {
         try {
           const vv = verifyView(now, tz)
@@ -9969,6 +10057,7 @@ export function apply(ctx) {
   function planRoute(body) {
     const now = Date.now()
     const tz = requestZone(body?.timeZone, config)
+    lastPlanAt = now
     try {
       syncTierFile(now)
     } catch (error) {
@@ -10307,6 +10396,9 @@ export function apply(ctx) {
     } catch (error) {
       console.error('[companion] 封印结算失败：' + String((error && error.message) || error))
     }
+    try {
+      healthDaily(now, tz)
+    } catch {}
     // 超级验收者：恢复日判定、到点自动套模板。
     try {
       verifyTick(now, tz, phone)
