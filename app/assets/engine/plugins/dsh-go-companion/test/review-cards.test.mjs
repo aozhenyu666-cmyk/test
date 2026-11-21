@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  addCards, cleanPool, deferredProgress, delayedRecall, dueCards, rateCard, receiptToCards, reviewSummary, reviewWeekLine, mirrorLine,
+  addCards, answerLockReviewCard, cleanPool, deferredProgress, delayedRecall, dueCards, rateCard, receiptToCards, reviewSummary, reviewWeekLine, mirrorLine,
   MAX_CARDS, FIRST_DUE_MS,
 } from '../lib/review_cards.js'
 import { addSeal, cleanSeals, settleDeferred, tickSeals, SEAL_KINDS } from '../lib/seal.js'
@@ -193,4 +193,60 @@ test('锁屏：无选项的题库题自己对答案只算 0.7 题、不进题库
   assert.equal(r2.state.session.reviewDone, 1)
   assert.equal(reviewCapFor(10), 5)
   assert.equal(reviewCapFor(1), 1)
+})
+
+test('1.1 防连点重复判题：judgeQuizAnswer 与 answerLockReviewCard 对旧题号/旧卡号返回 duplicate 且不推进进度', () => {
+  const bank = {
+    题目: [
+      { id: 'q1', 题干: '第一道题干够长', 选项: ['甲', '乙'], 答案: 'A', 解析: '甲' },
+      { id: 'q2', 题干: '第二道题干够长', 选项: ['丙', '丁'], 答案: 'B', 解析: '丁' },
+    ],
+  }
+  const r1 = judgeQuizAnswer(bank, { config: { requiredCount: 5 }, session: { currentId: 'q1' } }, { questionId: 'q1', answer: 'A', now: T0 })
+  assert.equal(r1.ok, true)
+  assert.equal(r1.correct, true)
+  assert.equal(r1.solved, 1)
+  assert.equal(r1.state.session.currentId, 'q2', '判完立刻切到下一题 ID')
+
+  // 重复提交上一题 q1：忽略且绝不改 solved / stats / wrongIds / seenIds
+  const dupQuiz = judgeQuizAnswer(bank, r1.state, { questionId: 'q1', answer: 'A', now: T0 + 200 })
+  assert.equal(dupQuiz.ok, true)
+  assert.equal(dupQuiz.duplicate, true)
+  assert.equal(dupQuiz.ignored, true)
+  assert.equal(dupQuiz.solved, 1)
+  assert.equal(dupQuiz.state.stats.answered, r1.state.stats.answered)
+  assert.equal(dupQuiz.state.stats.correct, r1.state.stats.correct)
+  assert.deepEqual(dupQuiz.state.session.seenIds, r1.state.session.seenIds)
+
+  // 锁屏复习卡判题：匹配 currentCard 正常判题并调用 FSRS rateCard；不匹配则返回 duplicate 且不重复调用 rateCard
+  const added = addCards(null, [
+    { q: '哪个是质数？', options: ['4', '7'], answer: 'B' },
+    { q: '简答复习卡的题干', a: '标准答案' },
+  ], { now: T0 })
+  const [c1, c2] = added.added
+  const unlockSt = { config: { requiredCount: 5, unlockMinutes: 5 }, session: { solved: 0, currentCard: c1.id } }
+
+  // 提交非当前卡 c2 → 忽略，c2 的 FSRS reps / history 均不变
+  const stale = answerLockReviewCard(added.state, unlockSt, { cardId: `rc:${c2.id}`, answer: 'REMEMBER', now: T0 + 100 })
+  assert.equal(stale.ok, true)
+  assert.equal(stale.duplicate, true)
+  assert.equal(stale.ignored, true)
+  assert.equal(stale.solved, 0)
+  assert.equal(stale.state.items.find((x) => x.id === c2.id).history.length, 0)
+
+  // 提交当前卡 c1 → 正常判对 +1，FSRS 记录 1 次，currentCard 清空
+  const ok1 = answerLockReviewCard(added.state, unlockSt, { cardId: c1.id, answer: 'B', now: T0 + 300 })
+  assert.equal(ok1.duplicate, false)
+  assert.equal(ok1.correct, true)
+  assert.equal(ok1.solved, 1)
+  assert.equal(ok1.state.items.find((x) => x.id === c1.id).history.length, 1)
+  assert.equal(ok1.unlockState.session.currentCard, '')
+
+  // 切到下一卡 c2 后再连点旧卡 c1 → duplicate 且不增加 c1 的 history
+  const nextSt = { ...ok1.unlockState, session: { ...ok1.unlockState.session, currentCard: c2.id } }
+  const dupCard = answerLockReviewCard(ok1.state, nextSt, { cardId: `rc:${c1.id}`, answer: 'B', now: T0 + 500 })
+  assert.equal(dupCard.duplicate, true)
+  assert.equal(dupCard.ignored, true)
+  assert.equal(dupCard.solved, 1)
+  assert.equal(dupCard.state.items.find((x) => x.id === c1.id).history.length, 1)
 })

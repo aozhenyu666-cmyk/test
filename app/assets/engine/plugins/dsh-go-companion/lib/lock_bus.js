@@ -41,12 +41,12 @@ const SOURCE_ALIAS = Object.freeze({
 
 const VALID_KINDS = new Set(['allowlist', 'deny', 'open'])
 const DEFAULT_PRIORITY_BY_SOURCE = Object.freeze({
-  'gemini-cell': 'P1',
-  contract: 'P2',
-  takeover: 'P2.5',
-  preset: 'P3',
-  wall: 'P3',
-  night: 'P4',
+  night: 'P1',
+  'gemini-cell': 'P2',
+  contract: 'P3',
+  takeover: 'P3.5',
+  preset: 'P4',
+  wall: 'P4',
   lease: 'P5',
   radar: 'P6',
   switch: 'P6',

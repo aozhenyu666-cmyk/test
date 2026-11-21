@@ -131,7 +131,7 @@ function make(stem, options, answer, analysis, type = '', material = '') {
 // ---------------------------------------------------------------- 表格（CSV / TSV）
 
 export function parseDelimited(text) {
-  const src = String(text || '').replace(/\r\n?/g, '\n')
+  const src = String(text || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
   const firstLine = src.split('\n', 1)[0]
   const delim = (firstLine.match(/\t/g) || []).length >= (firstLine.match(/,/g) || []).length && firstLine.includes('\t') ? '\t' : ','
   const rows = []
@@ -199,18 +199,24 @@ function fromTable(rows) {
 // ---------------------------------------------------------------- 纯文本
 
 const OPT_LINE = /^[(（]?([A-Ha-h])[)）.、．:：]\s*(.*)$/
-/** 同一行里的多个选项：「A.甲 B.乙 C.丙 D.丁」或「A．甲B．乙C．丙D．丁」。 */
-export function splitInlineOptions(line) {
+/** 同一行里的多个选项（可指定起始字母下标，支持两行两列排布如 A/B 后接 C/D）。 */
+function splitInlineOptionsFrom(line, startIdx = 0) {
   const s = toHalf(String(line || ''))
   const marks = []
   const re = /(?:^|[\s　]|(?<=[^A-Za-z]))[(（]?([A-H])[)）.、．:：]/g
   let m
   while ((m = re.exec(s))) marks.push({ letter: m[1], at: m.index + m[0].length, start: m.index })
-  // 必须是 A、B、C… 依次出现
   const seq = []
-  for (const k of marks) if (k.letter === LETTERS[seq.length]) seq.push(k)
+  for (const k of marks) {
+    if (k.letter === LETTERS[startIdx + seq.length]) seq.push(k)
+  }
   if (seq.length < 2) return []
   return seq.map((k, i) => clean(s.slice(k.at, i + 1 < seq.length ? seq[i + 1].start : s.length)))
+}
+
+/** 同一行里的多个选项：「A.甲 B.乙 C.丙 D.丁」或「A．甲B．乙C．丙D．丁」。 */
+export function splitInlineOptions(line) {
+  return splitInlineOptionsFrom(line, 0)
 }
 
 const SECTION_HEAD = /^(?:第[一二三四五六七八九十]+部分|[一二三四五六七八九十]+[、.．]\s*\S{2,12}|【?(?:常识判断|言语理解与表达|言语理解|数量关系|判断推理|资料分析|政治理论|申论)】?)\s*$/
@@ -267,7 +273,7 @@ function parseAnswerKey(lines) {
 }
 
 function fromText(text) {
-  const lines = toHalf(String(text || '')).replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/　/g, ' ').trimEnd())
+  const lines = toHalf(String(text || '').replace(/^\uFEFF/, '')).replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/　/g, ' ').trimEnd())
   // 答案区：从最后一个「参考答案 / 答案与解析」标题开始，或者末尾连着很多「1.A 2.B」的行。
   let ansAt = -1
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -387,12 +393,158 @@ function fromText(text) {
   return { questions, skipped, format: ansAt >= 0 ? 'text+key' : 'text' }
 }
 
+// ---------------------------------------------------------------- 标签块（--- 分隔 / 【题型】【材料】【题目】【选项】【答案】【解析】）
+
+const TAG_SEP = /^-{3,}$/
+const TAG_TYPE = /^【\s*(?:题型|类型)\s*】\s*[:：]?\s*(.*)$/
+const TAG_MAT = /^【\s*材料\s*】\s*[:：]?\s*(.*)$/
+const TAG_STEM = /^【\s*(?:题目|题干)\s*】\s*[:：]?\s*(.*)$/
+const TAG_OPT = /^【\s*选项\s*】\s*[:：]?\s*(.*)$/
+const TAG_ANS = /^(?:【\s*(?:参考|正确)?答案\s*】|(?:正确|参考)?答案(?:是|为)?\s*[:：])\s*(.*)$/
+const TAG_ANA = /^(?:【\s*(?:解析|答案解析|详解)\s*】|(?:解析|详解|思路|解释)\s*[:：])\s*(.*)$/
+
+function fromTagBlocks(text) {
+  const lines = toHalf(String(text || '').replace(/^\uFEFF/, ''))
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/　/g, ' ').trim())
+  const blocks = []
+  let cur = null
+  const ensure = () => {
+    if (!cur) cur = { section: 'stem', type: '', material: [], stem: [], options: [], answer: '', analysis: [] }
+    return cur
+  }
+  const hasContent = (b) => Boolean(b && (b.stem.length || b.options.length || b.answer))
+  const flush = () => {
+    if (cur && (cur.stem.length || cur.options.length || cur.answer || cur.material.length)) {
+      blocks.push(cur)
+    }
+    cur = null
+  }
+  const pushOptionLine = (b, line) => {
+    const startIdx = b.options.length
+    const firstLetter = LETTERS[startIdx]
+    if (firstLetter && new RegExp(`^[(（]?${firstLetter}[)）.、．:：]`).test(line)) {
+      const multi = splitInlineOptionsFrom(line, startIdx)
+      if (multi.length >= 2) {
+        b.options.push(...multi)
+        b.section = 'options'
+        return true
+      }
+    }
+    const om = OPT_LINE.exec(line)
+    if (om && om[1].toUpperCase() === LETTERS[startIdx]) {
+      b.options.push(clean(om[2]))
+      b.section = 'options'
+      return true
+    }
+    return false
+  }
+
+  for (const line of lines) {
+    if (!line) continue
+    if (TAG_SEP.test(line)) {
+      flush()
+      continue
+    }
+    let m
+    if ((m = TAG_TYPE.exec(line))) {
+      if (hasContent(cur)) flush()
+      const b = ensure()
+      b.type = clean(m[1])
+      b.section = 'stem'
+      continue
+    }
+    if ((m = TAG_MAT.exec(line))) {
+      if (hasContent(cur)) flush()
+      const b = ensure()
+      b.section = 'material'
+      if (m[1]) b.material.push(clean(m[1]))
+      continue
+    }
+    if ((m = TAG_STEM.exec(line))) {
+      if (hasContent(cur)) flush()
+      const b = ensure()
+      b.section = 'stem'
+      if (m[1]) b.stem.push(clean(m[1]))
+      continue
+    }
+    if ((m = TAG_OPT.exec(line))) {
+      const b = ensure()
+      b.section = 'options'
+      if (m[1] && !pushOptionLine(b, clean(m[1]))) b.options.push(clean(m[1]))
+      continue
+    }
+    if ((m = TAG_ANS.exec(line))) {
+      const b = ensure()
+      const rawAns = m[1] || ''
+      const anaSplit = rawAns.split(/【\s*(?:解析|答案解析|详解)\s*】\s*[:：]?\s*/)
+      const ansPart = clean(anaSplit[0])
+      const ansMatch = /^([A-Ha-h]{1,8}|[√×对错]|正确|错误)/.exec(ansPart)
+      b.answer = normalizeAnswer(ansMatch ? ansMatch[1] : ansPart, 0)
+      if (anaSplit.length > 1) {
+        const restAna = clean(anaSplit.slice(1).join(' '))
+        if (restAna) b.analysis.push(restAna)
+        b.section = 'analysis'
+      } else {
+        b.section = 'answer'
+      }
+      continue
+    }
+    if ((m = TAG_ANA.exec(line))) {
+      const b = ensure()
+      b.section = 'analysis'
+      if (m[1]) b.analysis.push(clean(m[1]))
+      continue
+    }
+
+    const b = ensure()
+    if (b.section === 'material') {
+      b.material.push(line)
+      continue
+    }
+    if (b.section === 'analysis') {
+      b.analysis.push(line)
+      continue
+    }
+    if (pushOptionLine(b, line)) continue
+    if (b.section === 'options' && b.options.length) {
+      b.options[b.options.length - 1] += ' ' + line
+    } else if (b.section === 'stem') {
+      b.stem.push(line)
+    }
+  }
+  flush()
+
+  const questions = []
+  const skipped = []
+  blocks.forEach((b, i) => {
+    const stem = clean(b.stem.join(' '))
+    const material = clean(b.material.join(' '))
+    const answer = normalizeAnswer(b.answer, b.options.length)
+    const analysis = clean(b.analysis.join(' '))
+    const why = !stem ? '缺题干' : !answer ? '缺答案' : ''
+    if (why) {
+      skipped.push({ n: i + 1, why, preview: stem.slice(0, 30) })
+      return
+    }
+    questions.push(make(stem, b.options, answer, analysis, b.type, material))
+  })
+  return { questions, skipped, format: 'tag-blocks' }
+}
+
+const IMPORT_FORMAT_GUIDE =
+  '【标准文本样例 1（编号式）】\n' +
+  '1. 下列属于扩张性财政政策的是：\nA. 提高税率\nB. 增加政府支出\nC. 减少转移支付\nD. 提高准备金率\n答案：B\n解析：增加政府支出属于扩张性财政政策。\n' +
+  '【标准文本样例 2（--- 标签块）】\n' +
+  '【题型】常识判断\n【材料】可选材料段落\n【题目】题干内容\nA. 选项一\nB. 选项二\n【答案】A\n【解析】解析内容\n---'
+
 /**
  * 认格式、解析、编号。
  * @returns {{ok:boolean, questions:object[], skipped:{n,why,preview}[], format:string, error?:string}}
  */
 export function parseBankAny(raw, { offset = 0 } = {}) {
-  const s = typeof raw === 'string' ? raw.replace(/^﻿/, '').trim() : ''
+  const s = typeof raw === 'string' ? raw.replace(/^\uFEFF/, '').trim() : ''
   let res = null
   if (raw && typeof raw === 'object') res = fromJson(raw)
   else if (s.startsWith('{') || s.startsWith('[')) {
@@ -409,18 +561,104 @@ export function parseBankAny(raw, { offset = 0 } = {}) {
       if (t && t.questions.length) res = t
     }
   }
+  const hasDashSep = /^\s*---+\s*$/m.test(s)
+  const hasStructTag = /【\s*(?:题目|题干|题型|材料|选项)\s*】/.test(s)
+  const hasAnyTag = /【\s*(?:题目|题干|题型|材料|选项|答案|参考答案|正确答案|解析|答案解析|详解)\s*】/.test(s)
+  if ((!res || !res.questions.length) && (hasStructTag || (hasDashSep && hasAnyTag))) {
+    const tb = fromTagBlocks(s)
+    if (tb && tb.questions.length) res = tb
+  }
   if (!res || !res.questions.length) {
     const t = fromText(s)
     if (!res || t.questions.length > res.questions.length) res = t
   }
-  const questions = res.questions.slice(0, MAX_QUESTIONS).map((q, i) => ({ id: 'q-' + (offset + i + 1), ...q }))
+  if ((!res || !res.questions.length) && hasDashSep) {
+    const tb = fromTagBlocks(s)
+    if (tb && (tb.questions.length > (res?.questions?.length || 0) || (!res?.skipped?.length && tb.skipped.length))) {
+      res = tb
+    }
+  }
+  const questions = (res?.questions || []).slice(0, MAX_QUESTIONS).map((q, i) => ({ id: 'q-' + (offset + i + 1), ...q }))
   if (!questions.length) {
+    const skipped = res?.skipped || []
     return {
-      ok: false, questions: [], skipped: res.skipped || [], format: res.format,
-      error: (res.skipped || []).length
-        ? '找到 ' + res.skipped.length + ' 道题，但都缺答案或题干（答案在别的文件里？把答案页一起导进来，或把答案贴在最后「参考答案 1.A 2.B…」）'
-        : '没认出题目：每题要有题号和答案（答案可以紧跟每题，也可以统一放在最后）',
+      ok: false, questions: [], skipped, format: res?.format || 'text',
+      sample: IMPORT_FORMAT_GUIDE,
+      error: skipped.length
+        ? '未能识别出题目格式：找到 ' + skipped.length + ' 道题，但都缺答案或题干（答案在别的文件里？把答案页一起导进来，或把答案贴在最后「参考答案 1.A 2.B…」）\n' + IMPORT_FORMAT_GUIDE
+        : '未能识别出题目格式：每题要有题号和答案，或使用 --- 分隔的标签块（【题目】【答案】）。\n' + IMPORT_FORMAT_GUIDE,
     }
   }
   return { ok: true, questions, skipped: res.skipped || [], format: res.format }
+}
+
+/**
+ * 逐题导入预览（纯函数）：生成结构化预览列表并标出可疑问题 issues[]。
+ * @returns {{ok:boolean, format:string, total:number, issueCount:number, skipped:object[], error:string, items:Array<{index:number, id:string, type:string, stem:string, options:string[], answer:string, analysis:string, issues:string[]}>}}
+ */
+export function buildImportPreview(parsedResult) {
+  const list = Array.isArray(parsedResult)
+    ? parsedResult
+    : Array.isArray(parsedResult?.questions)
+      ? parsedResult.questions
+      : Array.isArray(parsedResult?.题目)
+        ? parsedResult.题目
+        : []
+  const items = list.map((q, i) => {
+    const stem = String(q?.题干 ?? q?.stem ?? q?.question ?? '').trim()
+    const rawOpts = q?.选项 ?? q?.options
+    const options = Array.isArray(rawOpts) ? rawOpts.map((o) => String(o ?? '').trim()).filter(Boolean) : []
+    const answer = String(q?.答案 ?? q?.answer ?? '').trim()
+    const analysis = String(q?.解析 ?? q?.analysis ?? '').trim()
+    const type = String(q?.题型 ?? q?.type ?? '').trim()
+    const issues = []
+
+    const stemBody = stem.replace(/^【材料】[^\n]*\n?/, '').trim()
+    if (stem.length < 6 || (stemBody && stemBody.length < 6)) {
+      issues.push('题干过短（少于 6 字）')
+    }
+
+    const ansUpper = answer.toUpperCase()
+    const looksLikeChoice = options.length > 0 || /^[A-H]{1,4}$/.test(ansUpper) || /选择|单选|多选/.test(type)
+    if (looksLikeChoice && options.length < 2) {
+      issues.push('选择题选项少于 2 个')
+    }
+
+    if (!answer) {
+      issues.push('缺少答案')
+    } else if (options.length >= 2) {
+      const validLetters = LETTERS.slice(0, options.length)
+      if (/^[A-H]+$/.test(ansUpper)) {
+        const outOfRange = ansUpper.split('').some((ch) => !validLetters.includes(ch))
+        if (outOfRange) issues.push('答案不在现有选项字母范围内')
+      } else if (!options.some((o) => clean(o) === clean(answer))) {
+        issues.push('答案不在现有选项字母范围内')
+      }
+    }
+
+    if (!analysis || analysis.startsWith('（题库没给解析）') || /^本题参考答案为\s/.test(analysis)) {
+      issues.push('缺解析')
+    }
+
+    return {
+      index: i + 1,
+      id: String(q?.id || `q-${i + 1}`),
+      type,
+      stem,
+      options,
+      answer,
+      analysis,
+      issues,
+    }
+  })
+
+  return {
+    ok: Boolean(parsedResult?.ok ?? items.length > 0),
+    format: String(parsedResult?.format || ''),
+    total: items.length,
+    issueCount: items.filter((x) => x.issues.length > 0).length,
+    skipped: Array.isArray(parsedResult?.skipped) ? parsedResult.skipped : [],
+    error: String(parsedResult?.error || ''),
+    items,
+  }
 }

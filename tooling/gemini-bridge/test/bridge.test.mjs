@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { createBridge } from '../server.mjs'
 import { createStore } from '../store.mjs'
+import { readInbox } from '../vault.mjs'
 import { GOOGLE_REDIRECT, LOCKOUT_FAILS } from '../oauth.mjs'
 
 const GOOGLE_SIX = [
@@ -137,10 +138,11 @@ test('MCP：initialize / tools/list / 通知回 202；没同步过时 today 说�
     const init = await (await rpc(http, tk, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'gemini' } } })).json()
     assert.equal(init.result.protocolVersion, '2025-06-18')
     assert.match(init.result.instructions, /不迎合/)
+    assert.match(init.result.instructions, /dafeiyu_read_inbox/)
     assert.equal((await rpc(http, tk, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202)
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()
     const names = list.result.tools.map((t) => t.name)
-    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule'])
+    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_read_inbox', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule'])
     assert.ok(!names.some((n) => /unlock|quota|waive|lower|delete/.test(n)), '没有放松类工具')
     assert.equal(list.result.tools[0].annotations.readOnlyHint, true)
     const today = await (await rpc(http, tk, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dafeiyu_today', arguments: {} } })).json()
@@ -201,7 +203,7 @@ test('笔记库只读：能搜能读；日记 / 越界不读', async () => {
     const { access_token: tk } = await connect(http, store)
     const call = async (name, args) => (await (await rpc(http, tk, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } })).json()).result
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()
-    assert.equal(list.result.tools.length, 16)
+    assert.equal(list.result.tools.length, 17)
     assert.match((await call('dafeiyu_search_notes', { query: '增长率' })).content[0].text, /学习\/行测\.md/)
     assert.doesNotMatch((await call('dafeiyu_search_notes', { query: '不该被读到' })).content[0].text, /私事/)
     assert.match((await call('dafeiyu_read_note', { path: '学习/行测.md' })).content[0].text, /现期\/基期/)
@@ -333,4 +335,127 @@ test('Gemini 的三个新工具：看到期卡（带答案）、推卡、灌题�
     await sync({ results: [{ id: c3.commands[0].id, ok: true, text: '回执收到' }] })
     await rP
   })
+})
+
+test('vault.readInbox：不存在优雅返回；按日期分段与条目解析并支持 limit', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfy-inbox-'))
+  try {
+    const emptyRes = readInbox(dir)
+    assert.deepEqual(emptyRes, { ok: true, exists: false, entries: [], raw: '' })
+    assert.equal(readInbox('').ok, false)
+
+    mkdirSync(join(dir, '大肥鱼'), { recursive: true })
+    writeFileSync(join(dir, '大肥鱼', '收件箱.md'), '\uFEFF# 大肥鱼 · 收件箱\n\n## 2026-11-20\n- 21:05 [随记] 资料分析百化分老忘\n- 22:10 [卡壳] 数量关系行程问题列不出式\n\n## 2026-11-21\n- 09:30 [灵感] 选项差距大时直接截两位\n- 没有时间和标签的纯碎片\n')
+
+    const all = readInbox(dir, { limit: 10 })
+    assert.equal(all.ok, true)
+    assert.equal(all.exists, true)
+    assert.equal(all.total, 4)
+    assert.equal(all.entries.length, 4)
+    assert.deepEqual(all.entries[0], { day: '2026-11-20', time: '21:05', tag: '随记', text: '资料分析百化分老忘', raw: '- 21:05 [随记] 资料分析百化分老忘' })
+    assert.deepEqual(all.entries[1], { day: '2026-11-20', time: '22:10', tag: '卡壳', text: '数量关系行程问题列不出式', raw: '- 22:10 [卡壳] 数量关系行程问题列不出式' })
+    assert.equal(all.entries[2].day, '2026-11-21')
+    assert.equal(all.entries[2].tag, '灵感')
+    assert.equal(all.entries[3].day, '2026-11-21')
+    assert.equal(all.entries[3].text, '没有时间和标签的纯碎片')
+    assert.match(all.rawSnippet, /2026-11-21/)
+
+    const recent2 = readInbox(dir, { limit: 2 })
+    assert.equal(recent2.ok, true)
+    assert.equal(recent2.total, 4)
+    assert.equal(recent2.entries.length, 2)
+    assert.equal(recent2.entries[0].text, '选项差距大时直接截两位')
+    assert.equal(recent2.entries[1].text, '没有时间和标签的纯碎片')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('四部门 dafeiyu_read_inbox（MCP）与 GET /bridge/local/inbox（本机接口）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfy-dept-'))
+  const vaultDir = join(dir, 'vault')
+  mkdirSync(join(vaultDir, '大肥鱼'), { recursive: true })
+  writeFileSync(join(vaultDir, '大肥鱼', '收件箱.md'), '## 2026-11-21\n- 08:40 [随记] 早上背了两页申论金句\n- 10:15 [卡壳] 基期倍数公式老跟比重混淆\n- 11:00 [灵感] 错题按题型归类进题库\n')
+
+  const store = createStore(join(dir, 'state.json'))
+  const bridge = createBridge({ store, vaultDir, resultWaitMs: 600 })
+  const pub = createServer(bridge.handler)
+  const loc = createServer(bridge.localHandler)
+  await new Promise((r) => pub.listen(0, '127.0.0.1', r))
+  await new Promise((r) => loc.listen(0, '127.0.0.1', r))
+  const P = 'http://127.0.0.1:' + pub.address().port
+  const L = 'http://127.0.0.1:' + loc.address().port
+  const http = (path, init = {}) => fetch(P + path, { redirect: 'manual', ...init })
+  const auth = (k) => ({ authorization: 'Bearer ' + k })
+  const key = store.state.secret.localKey
+  try {
+    // 1. 鉴权校验：公网 404、无密钥/手机密钥 401、非本机 IP 403
+    assert.equal((await fetch(P + '/bridge/local/inbox', { headers: auth(key) })).status, 404)
+    assert.equal((await fetch(L + '/bridge/local/inbox')).status, 401)
+    assert.equal((await fetch(L + '/bridge/local/inbox', { headers: auth(store.state.secret.phoneKey) })).status, 401)
+    const fake = Readable.from([])
+    fake.method = 'GET'
+    fake.url = '/bridge/local/inbox'
+    fake.headers = auth(key)
+    fake.socket = { remoteAddress: '100.101.102.103' }
+    const fakeRes = { status: 0, writeHead(st) { this.status = st }, end() {} }
+    await bridge.localHandler(fake, fakeRes)
+    assert.equal(fakeRes.status, 403)
+
+    // 2. 手机同步快照（含手机收件箱条数、卡壳、未过保底验收点、到期复习摘要）
+    const syncBody = {
+      snapshot: {
+        ...SNAP,
+        timeline: [
+          ...SNAP.timeline,
+          { id: 'seal-low', title: '申论大作文提纲', kind: 'file', kindLabel: '笔记字数', unit: '字', start: '08:00', due: '09:30', stretch: 600, floor: 300, actual: 80, status: 'below', source: 'morning', sameDay: false },
+        ],
+        locking: { id: 'seal-low', title: '申论大作文提纲', actual: 80, floor: 300, until: '12:00' },
+        phoneInbox: { count: 2, items: [{ day: '2026-11-21', time: '10:20', tag: '卡壳', text: '大作文总论点立意不稳' }] },
+        stuck: ['材料三的数据没看懂'],
+        review: { dueCount: 2, totalCards: 5, retention7d: 75, reviewed7d: 4, due: [{ id: 'rc-2', topic: '资料分析', q: '基期倍数怎么列式', a: 'A/B * (1+b)/(1+a)', lapses: 1 }], weakTopics: [{ topic: '资料分析', lapses: 2 }], weakBank: [{ topic: '数量关系', wrong: 4 }] },
+      },
+    }
+    const syncRes = await fetch(P + '/bridge/sync', json(syncBody, auth(store.state.secret.phoneKey)))
+    assert.equal(syncRes.status, 200)
+
+    // 3. GET /bridge/local/inbox 验证（带 limit=2）
+    const localRes = await fetch(L + '/bridge/local/inbox?limit=2', { headers: auth(key) })
+    assert.equal(localRes.status, 200)
+    const localBody = await localRes.json()
+    assert.equal(localBody.ok, true)
+    assert.equal(localBody.vaultConfigured, true)
+    assert.equal(localBody.vaultInbox.total, 3)
+    assert.equal(localBody.vaultInbox.entries.length, 2)
+    assert.equal(localBody.phone.inboxCount, 2)
+    assert.ok(localBody.phone.stuck.some((s) => s.includes('材料三的数据没看懂')))
+    assert.ok(localBody.phone.stuck.some((s) => s.includes('大作文总论点立意不稳')))
+    assert.equal(localBody.phone.belowFloor.length, 1)
+    assert.equal(localBody.phone.belowFloor[0].id, 'seal-low')
+    assert.equal(localBody.phone.review.dueCount, 2)
+    assert.match(localBody.inboxText, /基期倍数公式老跟比重混淆/)
+
+    // 4. MCP dafeiyu_read_inbox 调用验证
+    const { access_token: tk } = await connect(http, store)
+    const mcpRes = await (await rpc(http, tk, {
+      jsonrpc: '2.0',
+      id: 11,
+      method: 'tools/call',
+      params: { name: 'dafeiyu_read_inbox', arguments: { limit: 2 } },
+    })).json()
+    const toolResult = mcpRes.result
+    assert.ok(!toolResult.isError)
+    assert.match(toolResult.content[0].text, /电脑端收件箱/)
+    assert.match(toolResult.content[0].text, /基期倍数公式老跟比重混淆/)
+    assert.match(toolResult.content[0].text, /手机收件箱 2 条/)
+    assert.match(toolResult.content[0].text, /申论大作文提纲/)
+    assert.match(toolResult.content[0].text, /今日到期 2 张/)
+    assert.equal(toolResult.structuredContent.vaultInbox.entries.length, 2)
+    assert.equal(toolResult.structuredContent.phone.belowFloor[0].id, 'seal-low')
+    assert.equal(toolResult.structuredContent.phone.review.dueCount, 2)
+  } finally {
+    pub.close()
+    loc.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

@@ -99,6 +99,43 @@ interface NotificationPort {
 }
 
 /**
+ * Pure JVM-testable tracker for companion lock -> release transitions (1.4).
+ * Prevents repeated per-tick releaseCompanionLock() calls when no active companion lock exists
+ * (e.g. during hardCapDowngrade where /plan sends release=true every tick).
+ */
+class CompanionReleaseTracker {
+    private var lastWasLocked: Boolean = false
+    private var releasedSinceLastLock: Boolean = false
+
+    fun onEnforced() {
+        lastWasLocked = true
+        releasedSinceLastLock = false
+    }
+
+    fun onExplicitRelease() {
+        lastWasLocked = false
+        releasedSinceLastLock = true
+    }
+
+    fun shouldReleaseOnPlan(locked: Boolean, releaseFlag: Boolean, hasActiveCompanionLock: Boolean): Boolean {
+        if (locked) {
+            lastWasLocked = true
+            releasedSinceLastLock = false
+            return false
+        }
+        if (releaseFlag && !releasedSinceLastLock && (lastWasLocked || hasActiveCompanionLock)) {
+            lastWasLocked = false
+            releasedSinceLastLock = true
+            return true
+        }
+        if (!hasActiveCompanionLock) {
+            lastWasLocked = false
+        }
+        return false
+    }
+}
+
+/**
  * Android adapter for the proactive kernel (loop/core). Owns one [Coordinator] and one
  * [ProactiveScheduler] per process, builds the [Gate] from DSH's own state (read only), runs the
  * kernel's commands, and keeps exactly one timer: a main-thread callback at the coordinator's next
@@ -511,7 +548,7 @@ object ProactiveRuntime {
      * ([LockPriority.ORDER] is the table). Null when nothing is in force.
      */
     fun primaryLock(now: Long = System.currentTimeMillis()): LockRule? {
-        if (!::app.isInitialized || breaking() || inEmergencyPass(now)) return null
+        if (!::app.isInitialized || hasUnifiedRelease(now)) return null
         val list = ArrayList(ruleBook()?.active(now).orEmpty())
         val r = refuseUntil()
         if (r > now && list.none { it.until >= r }) list.add(LockRule(LockPriority.KIND_REFUSE, r))
@@ -535,8 +572,8 @@ object ProactiveRuntime {
 
     /** Whether a lock in force right now would lock [pkg] (the lock page asks before superseding). */
     fun wouldLock(pkg: String): Boolean {
-        if (!::app.isInitialized || breaking() || inEmergencyPass() || !listed(pkg)) return false
         val now = System.currentTimeMillis()
+        if (!::app.isInitialized || hasUnifiedRelease(now) || !listed(pkg)) return false
         return now < lockUntil(now) || sessionActive() || (force?.app == pkg && now < (force?.until ?: 0L))
     }
 
@@ -576,7 +613,7 @@ object ProactiveRuntime {
             entertainment = safeEntertain,
             dwellMs = dwell,
             graceMs = sessionGrace,
-            breakGlass = breaking() || inEmergencyPass(),
+            breakGlass = hasUnifiedRelease(now),
             strict = sessionStrict,
             bounceCount = bounceCount,
         ))
@@ -630,8 +667,8 @@ object ProactiveRuntime {
 
     /** 4 级锁：同一个 App 启动时连发的窗口事件只锁一次（输入法已由 FrontChange 排除）。 */
     private fun lockInSession(pkg: String): Boolean {
-        if (breaking() || inEmergencyPass()) return false
         val now = System.currentTimeMillis()
+        if (hasUnifiedRelease(now)) return false
         if (forcedApp == pkg && now - forcedAt < SESSION_LOCK_DEBOUNCE_MS) return true
         forcedApp = pkg
         forcedAt = now
@@ -702,6 +739,17 @@ object ProactiveRuntime {
     @Volatile private var emergencyReasonText: String? = null
     private var emergencyExpiryTask: Runnable? = null
 
+    /** 统一放行（刷题达标 / 花余额放行），独立于 /plan 的 emergencyPass，避免下一次 /plan 巡检把它误清。 */
+    @Volatile private var tempReleaseUntilAt: Long = -1L
+    @Volatile private var tempReleaseReasonText: String? = null
+    private var tempReleaseExpiryTask: Runnable? = null
+    private var boutBufferExpiryTask: Runnable? = null
+
+    private val companionReleaseTracker = CompanionReleaseTracker()
+    @Volatile private var activeBoutScopeKey: String? = null
+    @Volatile private var lastSessionBy: String? = null
+    @Volatile private var lastFunLeft: Int? = null
+
     fun inEmergencyPass(now: Long = System.currentTimeMillis()): Boolean {
         if (!::app.isInitialized) return false
         if (emergencyUntilAt < 0) {
@@ -710,6 +758,130 @@ object ProactiveRuntime {
             emergencyReasonText = prefs?.getString("emergency_reason", null)
         }
         return emergencyUntilAt > now
+    }
+
+    fun inTempRelease(now: Long = System.currentTimeMillis()): Boolean {
+        if (!::app.isInitialized) return false
+        if (tempReleaseUntilAt < 0) {
+            val prefs = runCatching { app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE) }.getOrNull()
+            tempReleaseUntilAt = prefs?.getLong("temp_release_until", 0L) ?: 0L
+            tempReleaseReasonText = prefs?.getString("temp_release_reason", null)
+        }
+        return tempReleaseUntilAt > now
+    }
+
+    /** 统一放行总闸：无论 arbiterEnforce 开/关，均一致认这几条放行通道。 */
+    fun hasUnifiedRelease(now: Long = System.currentTimeMillis()): Boolean {
+        if (!::app.isInitialized) return false
+        if (breaking() || inEmergencyPass(now) || inTempRelease(now)) return true
+        return runCatching { InterceptRuntime.isBoutBufferActive() }.getOrDefault(false)
+    }
+
+    fun cachedFunLeft(): Int? = lastFunLeft
+
+    fun currentBoutBufferKey(): String {
+        val explicit = activeBoutScopeKey?.takeIf { it.isNotBlank() }
+        if (explicit != null) return explicit
+        val fState = runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime.state() }.getOrNull()
+        if (fState?.active == true && fState.startedAt > 0L) return "focus:${fState.startedAt}"
+        val day = BeijingClock.dayOf(System.currentTimeMillis())
+        if (lastSessionBy == "verify") return "verify:$day"
+        if (lastSessionBy == "seal") return "seal:${workWhy?.take(24).orEmpty()}:$day"
+        if (sessionActive() && sessionUntil > 0L) return "session:$sessionUntil"
+        return "day:$day"
+    }
+
+    fun canOfferBoutBuffer(lockMode: String): Boolean {
+        if (!::app.isInitialized) return false
+        val primary = primaryLock()?.kind
+        val arbiterPrio = runCatching { ArbiterShadow.current()?.priority }.getOrNull()
+        if (primary == LockPriority.KIND_NIGHT || arbiterPrio == "P1") return false
+        val focusActive = runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime.isActive() }.getOrDefault(false)
+        val arbiterAllowlist = runCatching { ArbiterShadow.current()?.mode == io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ArbiterDecision.MODE_ALLOWLIST }.getOrDefault(false)
+        val inBoutOrVerify = focusActive || sessionActive() || lastSessionBy == "verify" || lastSessionBy == "seal" ||
+            arbiterAllowlist || lockMode == io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.InterceptRules.MODE_STRICT ||
+            arbiterPrio in setOf("P3", "P3.5", "P4", "P5")
+        if (!inBoutOrVerify) return false
+        return InterceptRuntime.canTriggerBoutBuffer(currentBoutBufferKey())
+    }
+
+    fun onBoutBufferActivated(durationMs: Long) {
+        if (!::app.isInitialized) return
+        force = null
+        forcedApp = null
+        companionReleaseTracker.onExplicitRelease()
+        releaseCompanionLock()
+        boutBufferExpiryTask?.let { main.removeCallbacks(it) }
+        val r = Runnable { onBoutBufferExpired() }
+        boutBufferExpiryTask = r
+        main.postDelayed(r, durationMs.coerceAtLeast(1_000L) + 250L)
+    }
+
+    private fun onBoutBufferExpired() {
+        boutBufferExpiryTask = null
+        if (!::app.isInitialized) return
+        val fg = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
+        if (!fg.isNullOrBlank()) {
+            lastFront = null
+            onForeground(fg)
+            if (sessionActive()) sessionFront(fg, forceCheck = true)
+            runCatching { InterceptRuntime.onForeground(fg) }
+        }
+    }
+
+    fun applyTempRelease(until: Long, reason: String?) {
+        if (!::app.isInitialized) return
+        val now = System.currentTimeMillis()
+        if (until <= now) {
+            onTempReleaseExpired()
+            return
+        }
+        tempReleaseUntilAt = until
+        tempReleaseReasonText = reason?.takeIf { it.isNotBlank() }?.take(60)
+        runCatching {
+            app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit()
+                .putLong("temp_release_until", until)
+                .putString("temp_release_reason", tempReleaseReasonText)
+                .apply()
+        }
+        force = null
+        forcedApp = null
+        companionReleaseTracker.onExplicitRelease()
+        releaseCompanionLock()
+        if (!inEmergencyPass(now)) {
+            EmergencyCapsule.show(app, until, tempReleaseReasonText) {
+                main.post { onTempReleaseExpired() }
+            }
+        }
+        tempReleaseExpiryTask?.let { main.removeCallbacks(it) }
+        val expiry = Runnable { onTempReleaseExpired() }
+        tempReleaseExpiryTask = expiry
+        main.postDelayed(expiry, (until - now + 150L).coerceAtLeast(500L))
+        syncGuardianMirror()
+        consultPlanSoon(minGapMs = 0L)
+    }
+
+    private fun onTempReleaseExpired() {
+        tempReleaseExpiryTask?.let { main.removeCallbacks(it) }
+        tempReleaseExpiryTask = null
+        tempReleaseUntilAt = 0L
+        tempReleaseReasonText = null
+        runCatching {
+            app.getSharedPreferences(REFUSE_PREFS, Context.MODE_PRIVATE).edit()
+                .putLong("temp_release_until", 0L)
+                .remove("temp_release_reason")
+                .apply()
+        }
+        if (!inEmergencyPass()) EmergencyCapsule.hide()
+        syncGuardianMirror()
+        consultPlanSoon(minGapMs = 0L)
+        val fg = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
+        if (!fg.isNullOrBlank()) {
+            lastFront = null
+            onForeground(fg)
+            if (sessionActive()) sessionFront(fg, forceCheck = true)
+            runCatching { InterceptRuntime.onForeground(fg) }
+        }
     }
 
     fun emergencyRemainingText(now: Long = System.currentTimeMillis()): String? {
@@ -753,7 +925,7 @@ object ProactiveRuntime {
                 .remove("emergency_reason")
                 .apply()
         }
-        EmergencyCapsule.hide()
+        if (!inTempRelease()) EmergencyCapsule.hide()
         syncGuardianMirror()
         consultPlanSoon(minGapMs = 0L)
         val bouncePkg = sessionApp()
@@ -778,6 +950,7 @@ object ProactiveRuntime {
                 val now = System.currentTimeMillis()
                 if (okFlag && until > now) {
                     force = null
+                    companionReleaseTracker.onExplicitRelease()
                     releaseCompanionLock()
                     applyEmergencyPassState(until, reason)
                     consultPlanSoon(minGapMs = 0L)
@@ -834,6 +1007,7 @@ object ProactiveRuntime {
             val fg = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime
             if (fg.isActive()) fg.pause(minutes.coerceIn(3, 30))
         }
+        companionReleaseTracker.onExplicitRelease()
         runCatching { releaseCompanionLock() }
         postEvent("emergency-exit", "minutes" to minutes, "reason" to "lockpage_longpress_dsh") {
             consultPlanSoon(minGapMs = 0L)
@@ -848,26 +1022,66 @@ object ProactiveRuntime {
         }
     }
 
-    /** 锁屏刷题判题：提交用户选择；若达到所需题数则立即发放 N 分钟临时放行胶囊并解除当前锁页。 */
+    /** 锁屏刷题判题：提交用户选择；若达到所需题数且服务端直接放行，立即激活统一临时放行并解除当前锁页。 */
     fun submitBankQuizAnswer(questionId: String, answer: String, done: (Map<*, *>?) -> Unit) {
         if (!::app.isInitialized) { done(null); return }
         main.post {
             fetchPluginRoute(routeCallback { m ->
+                val ok = m["ok"] == true
+                val duplicate = m["duplicate"] == true || m["ignored"] == true
                 val unlocked = m["unlocked"] == true
-                val until = (m["unlockUntil"] as? Number)?.toLong() ?: 0L
+                val earnedOnly = m["earnedOnly"] == true || m["needSpend"] == true
+                val passActive = m["passActive"] == true
+                val spendUntil = (m["spendUntil"] as? Number)?.toLong() ?: 0L
+                val unlockUntil = (m["unlockUntil"] as? Number)?.toLong() ?: 0L
+                val unlockMinutes = (m["unlockMinutes"] as? Number)?.toInt() ?: 5
                 val now = System.currentTimeMillis()
-                if (unlocked && until > now) {
-                    force = null
-                    forcedApp = null
-                    applyEmergencyPassState(until, "刷题达标放行")
-                    releaseCompanionLock()
-                    consultPlanSoon(minGapMs = 0L)
+                val grantedUntil = maxOf(unlockUntil, spendUntil)
+                val shouldReleaseNow = ok && !duplicate && (
+                    (unlocked && !earnedOnly) ||
+                    passActive ||
+                    spendUntil > now
+                )
+                if (shouldReleaseNow) {
+                    val effectiveUntil = if (grantedUntil > now) grantedUntil else now + unlockMinutes.coerceIn(1, 60) * 60_000L
+                    applyTempRelease(effectiveUntil, "刷题达标放行")
                 }
                 done(m)
             }, "POST", "/bank", linkedMapOf(
                 "action" to "quiz_answer",
                 "questionId" to questionId,
                 "answer" to answer,
+            ))
+        }
+    }
+
+    /** 花挣来的余额放行（POST /seals action=spend）：与刷题/arbiterEnforce 共用统一放行状态。 */
+    fun spendBalance(minutes: Int, reason: String, done: (ok: Boolean, until: Long, message: String?) -> Unit) {
+        if (!::app.isInitialized) { done(false, 0L, "未初始化"); return }
+        val mins = minutes.coerceIn(5, 60)
+        val why = reason.trim().take(120)
+        main.post {
+            fetchPluginRoute(routeCallback { m ->
+                val okFlag = m["ok"] == true
+                val verifySpendUntil = (((m["verify"] as? Map<*, *>)?.get("spend") as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L
+                val rawUntil = (m["until"] as? Number)?.toLong() ?: verifySpendUntil
+                val now = System.currentTimeMillis()
+                if (okFlag) {
+                    val effectiveUntil = if (rawUntil > now) rawUntil else now + mins * 60_000L
+                    applyTempRelease(effectiveUntil, "花余额放行：${why.take(24)}")
+                    done(true, effectiveUntil, m["text"] as? String)
+                } else {
+                    val errMap = m["error"] as? Map<*, *>
+                    val msg = (m["text"] as? String)?.takeIf { it.isNotBlank() }
+                        ?: (errMap?.get("message") as? String)?.takeIf { it.isNotBlank() }
+                        ?: (m["error"] as? String)?.takeIf { it.isNotBlank() }
+                        ?: "花余额放行未通过"
+                    done(false, 0L, msg)
+                }
+            }, "POST", "/seals", linkedMapOf(
+                "action" to "spend",
+                "minutes" to mins,
+                "reason" to why,
             ))
         }
     }
@@ -1048,6 +1262,7 @@ object ProactiveRuntime {
                 setSession(0L, emptySet(), null, SessionPolicy.DEFAULT_GRACE_MS)
                 force = null
                 forcedApp = null
+                companionReleaseTracker.onExplicitRelease()
                 runCatching { releaseCompanionLock() }
                 // l10n:keep agent tool result
                 "当前工作/专注限制已解除，App 现在恢复可用。"
@@ -1241,6 +1456,10 @@ object ProactiveRuntime {
         val restless = synchronized(switches) { switches.count { tNow - it.first <= 90_000L } >= 5 }
         if (restless) consultPlanSoon(minGapMs = 5_000L)
         val now = System.currentTimeMillis()
+        if (hasUnifiedRelease(now)) {
+            consultPlanSoon(minGapMs = 15_000L)
+            return
+        }
         // H5: 当 arbiterEnforce 开启且已有裁决器输出时，直接按 ArbiterDecision.decide 执法（永不锁/测试模式/紧急解除仍优先于一切）。
         val arbiterOutcome = ArbiterShadow.evaluateForEnforce(app, packageName)
         if (arbiterOutcome != null) {
@@ -1324,6 +1543,7 @@ object ProactiveRuntime {
                 if (ok) {
                     setBreakUntil(until)
                     force = null
+                    companionReleaseTracker.onExplicitRelease()
                     releaseCompanionLock()
                     consultPlanSoon(minGapMs = 0L)
                 }
@@ -1378,7 +1598,7 @@ object ProactiveRuntime {
     /** In front and it counts: listed, screen on, and no pass (破窗放风 / 训练放行 / 白名单 / 互动舱) allows it. */
     private fun defiantIn(pkg: String?, screenOn: Boolean): Boolean {
         if (pkg == null || !screenOn) return false
-        if (!listed(pkg) || breaking()) return false
+        if (!listed(pkg) || hasUnifiedRelease()) return false
         return runCatching { !InterceptRuntime.hasPass(pkg) }.getOrDefault(true)
     }
 
@@ -1433,6 +1653,7 @@ object ProactiveRuntime {
         setBreakUntil(until)
         force = null
         forcedApp = null
+        companionReleaseTracker.onExplicitRelease()
         runCatching { releaseCompanionLock() }
         val pending = LockSafety.pendingDisarms(app)
         if (pending.isNotEmpty()) {
@@ -1493,7 +1714,7 @@ object ProactiveRuntime {
         // 不是锁——以前它默认关，重装后所有锁（严格局、接管、超额封禁）在这里静默返回，表现为「什么都锁不住」。
         // 锁的闸门只有三道：测试模式（shadowHit）、紧急解除、永不锁名单（桌面 / DSH / 系统 / 输入法 / 代理）。
         if (!::app.isInitialized) return
-        if (breaking()) return
+        if (hasUnifiedRelease()) return
         if (LockSafety.disarmed(app)) {
             Log.i(TAG, "disarmed: skip force on ${f.app}")
             return
@@ -1532,6 +1753,7 @@ object ProactiveRuntime {
                             unlockHow = arbiterOutcome.unlockHow,
                         )
                     }.getOrDefault(false)
+                    if (shown) companionReleaseTracker.onEnforced()
                     Log.i(TAG, "arbiterEnforce force=${f.level} ${f.app} shown=$shown")
                     return
                 }
@@ -1546,6 +1768,7 @@ object ProactiveRuntime {
         }
         // 直接覆盖展示专属锁屏界面，不再反复发 GLOBAL_ACTION_HOME 把人踢回 vivo 桌面导致与桌面死循环互弹。
         val shown = runCatching { InterceptRuntime.forceBlock(app, f.app, f.why, strict = f.refuse) }.getOrDefault(false)
+        if (shown) companionReleaseTracker.onEnforced()
         Log.i(TAG, "companion force=${f.level} ${f.app} shown=$shown")
     }
 
@@ -1601,17 +1824,27 @@ object ProactiveRuntime {
             if (app.isBlank() || why.isBlank()) null else app to why
         }?.toMap() ?: emptyMap()
         // Gemini 互动舱：插件给 allow 就进入"只许 Gemini"，null 就退出（插件明示解锁时可强清 AI 工作模式）。
-        applySession(map["session"] as? Map<*, *>, force = map["clearWorkSession"] == true)
+        val sessionMap = map["session"] as? Map<*, *>
+        lastSessionBy = sessionMap?.get("by") as? String
+        lastFunLeft = ((map["timeLedger"] as? Map<*, *>)?.get("funLeft") as? Number)?.toInt()
+        activeBoutScopeKey = ((map["bout"] as? Map<*, *>)?.get("id") as? String)?.takeIf { it.isNotBlank() }
+            ?: (sessionMap?.get("boutId") as? String)?.takeIf { it.isNotBlank() }
+            ?: (sessionMap?.get("sealId") as? String)?.takeIf { it.isNotBlank() }
+            ?: ((map["lockArbiter"] as? Map<*, *>)?.get("boutId") as? String)?.takeIf { it.isNotBlank() }
+            ?: ((map["lockArbiter"] as? Map<*, *>)?.get("sealId") as? String)?.takeIf { it.isNotBlank() }
+        applySession(sessionMap, force = map["clearWorkSession"] == true)
         val refusing = System.currentTimeMillis() < lockUntil()
         force = if (level >= 3 && !target.isNullOrBlank()) {
             // C5: while a rule lock is in force the page names only the primary lock's requirement.
             Force(level, target, (if (refusing) lockWhy() else null) ?: why, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = refusing)
         } else null
-        // 只在插件明说"讲通了，放行"时解锁。力度低于 3 不算：锁屏页弹出后前台是 DSH 自己、
-        // 赶回桌面后前台是桌面，插件看到的力度本来就是 0——那时解锁等于锁几秒就自己打开游戏。
-        if (level < 3 && f?.get("release") == true) releaseCompanionLock()
+        // 只在 companion 锁刚从锁态释放那一拍解锁，禁止在本来没有活跃 companion 锁时每拍重复调用 releaseCompanionLock()。
+        val hasActiveCompanionLock = runCatching { InterceptRuntime.hasOpenCompanionLock() }.getOrDefault(false)
+        if (companionReleaseTracker.shouldReleaseOnPlan(force != null, f?.get("release") == true, hasActiveCompanionLock)) {
+            releaseCompanionLock()
+        }
         force?.let { enforce(it) }
-        if (force == null && ArbiterShadow.enforceEnabled(app)) {
+        if (force == null && !hasUnifiedRelease(stamp) && ArbiterShadow.enforceEnabled(app)) {
             val fg = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
             if (!fg.isNullOrBlank()) {
                 val outcome = ArbiterShadow.evaluateForEnforce(app, fg)

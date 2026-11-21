@@ -9,7 +9,8 @@
 
 import { join } from 'node:path'
 import { cleanBankUnlockState, creditReviewAnswer, judgeQuizAnswer, pickNextQuizQuestion, reviewCapFor, SELF_JUDGED_WEIGHT } from './bank_unlock.js'
-import { parseBankAny } from './bank_import.js'
+import { buildImportPreview, parseBankAny } from './bank_import.js'
+import { answerLockReviewCard } from './review_cards.js'
 import { evaluateAutonomy14d, evaluateAutonomyLevel } from './autonomy.js'
 import {
   archivePathInKb,
@@ -428,11 +429,41 @@ export function createV4Hub(deps) {
       }
       return { v: 1, ok: true, index: idx }
     }
-    const importText = (raw, opts) => {
+    const importText = (raw, opts = {}) => {
       const merge = Boolean(opts.append && rawBank && Array.isArray(rawBank.题目))
       const offset = merge ? rawBank.题目.length : 0
+      const previewOnly = Boolean(opts.previewOnly)
+      const uploadId = opts.uploadId ? String(opts.uploadId) : undefined
       const parsed = parseBankAny(raw, { offset })
-      if (!parsed.ok) return { v: 1, ok: false, error: parsed.error, skipped: parsed.skipped.slice(0, 30), skippedCount: parsed.skipped.length, format: parsed.format }
+      if (!parsed.ok) {
+        return {
+          v: 1,
+          ok: false,
+          count: 0,
+          error: parsed.error,
+          sample: parsed.sample || '',
+          skipped: parsed.skipped.slice(0, 30),
+          skippedCount: parsed.skipped.length,
+          format: parsed.format,
+          ...(uploadId ? { uploadId } : {}),
+        }
+      }
+      if (previewOnly) {
+        const preview = buildImportPreview(parsed)
+        return {
+          v: 1,
+          ok: true,
+          previewOnly: true,
+          ...(uploadId ? { uploadId } : {}),
+          format: parsed.format,
+          count: preview.total,
+          total: preview.total,
+          issueCount: preview.issueCount,
+          skippedCount: parsed.skipped?.length || 0,
+          skipped: (parsed.skipped || []).slice(0, 30),
+          items: preview.items,
+        }
+      }
       // 追加时按题干去重（Gemini / BrainOS 反复推同一批题不生双份）。
       if (merge) {
         const norm = (t) => String(t || '').replace(/[\s\p{P}\p{S}]/gu, '').toLowerCase().slice(0, 120)
@@ -474,21 +505,25 @@ export function createV4Hub(deps) {
     if (action === 'import-finish') {
       const id = safeId(body?.uploadId)
       const dir = join(uploadDir(), id)
+      const previewOnly = Boolean(body?.previewOnly)
       let raw = ''
       try {
         raw = readdirSyncV(dir).filter((f) => f.endsWith('.part')).sort().map((f) => readFileSyncV(join(dir, f), 'utf8')).join('')
       } catch {
         return { v: 1, ok: false, error: '没找到上传的内容（超过一小时被清掉了？重新导一次）' }
       } finally {
-        try {
-          rmSyncV(dir, { recursive: true, force: true })
-        } catch {}
+        if (!previewOnly) {
+          try {
+            rmSyncV(dir, { recursive: true, force: true })
+          } catch {}
+        }
       }
-      return importText(raw, { append: body?.append, name: body?.name, id: body?.id })
+      return importText(raw, { append: body?.append, name: body?.name, id: body?.id, previewOnly, uploadId: id })
     }
-    if (action === 'import') {
+    if (action === 'import' || action === 'preview') {
       const raw = body?.raw ?? body?.text ?? body?.bank
-      return importText(raw, { append: body?.append, name: body?.name, id: body?.id })
+      const previewOnly = action === 'preview' || Boolean(body?.previewOnly)
+      return importText(raw, { append: body?.append, name: body?.name, id: body?.id, previewOnly })
     }
 
     if (action === 'quiz_answer' && String(body?.questionId || '').startsWith('rc:') && reviewCards) {
@@ -502,14 +537,39 @@ export function createV4Hub(deps) {
         now,
       })
       if (!judged.ok) return { v: 1, ok: false, error: judged.error }
+      if (judged.duplicate) return { v: 1, ...judged, state: undefined }
       saveBankUnlock(judged.state)
-      if (judged.unlocked) unlockByQuiz(judged, now)
+      let bankRes = null
+      if (judged.unlocked) bankRes = unlockByQuiz(judged, now)
+      if (judged.unlocked && bankRes?.earnedOnly) {
+        const card = serveReviewCard(judged.state, now)
+        let nextQuestion = card ? card.payload.question : null
+        if (!nextQuestion) {
+          const preview = pickNextQuizQuestion(loadRawBank(), judged.state)
+          if (preview.state) saveBankUnlock(preview.state)
+          nextQuestion = preview.question
+        }
+        return {
+          v: 1,
+          ...judged,
+          state: undefined,
+          unlocked: false,
+          roundComplete: true,
+          earnedOnly: true,
+          needSpend: true,
+          earnedAdded: bankRes.earnedAdded,
+          dailyBankEarned: bankRes.dailyBankEarned,
+          dailyBankCap: bankRes.dailyBankCap,
+          capped: bankRes.capped,
+          question: nextQuestion,
+        }
+      }
       // 下一题：这一轮的复习卡名额还没用完、又有到期卡，先出卡。
       if (!judged.unlocked) {
         const card = serveReviewCard(judged.state, now)
         if (card) return { v: 1, ...judged, question: card.payload.question, state: undefined }
       }
-      return { v: 1, ...judged }
+      return { v: 1, ...judged, state: undefined }
     }
 
     return { v: 1, ok: false, error: `未知 action: ${action}` }
@@ -557,57 +617,78 @@ export function createV4Hub(deps) {
 
   /** 锁屏答一张复习卡：4 选 1 代码判（验过）；无选项的 REMEMBER / FORGOT 自判（只改排期，算 0.7 题）。 */
   function answerReviewCard(st, cardId, answer, now) {
-    const card = reviewCards.get(cardId)
-    if (!card) {
-      saveBankUnlock({ ...st, session: { ...st.session, currentCard: '' } })
-      return { v: 1, ok: false, error: '这张复习卡已经不在了（被删了？），换下一题' }
+    const r = answerLockReviewCard(reviewCards, st, { cardId, answer, now, selfWeight: SELF_JUDGED_WEIGHT })
+    if (!r.ok) {
+      if (r.unlockState) saveBankUnlock(r.unlockState)
+      return { v: 1, ok: false, error: r.error }
     }
-    const token = answer.trim().toUpperCase()
-    let correct
-    let weight
-    let channel
-    if (card.options.length) {
-      const idx = /^[A-F]$/.test(token) ? token.charCodeAt(0) - 65 : -1
-      correct = idx === card.answerIndex
-      weight = correct ? 1 : 0
-      channel = 'lockscreen'
-    } else {
-      correct = token === 'REMEMBER' || token === 'PASS' || token === 'GOOD'
-      weight = correct ? SELF_JUDGED_WEIGHT : 0
-      channel = 'self'
+    if (r.duplicate) {
+      return {
+        v: 1,
+        ok: true,
+        duplicate: true,
+        ignored: true,
+        review: true,
+        correct: false,
+        unlocked: false,
+        solved: r.solved,
+        required: r.required,
+        unlockMinutes: r.unlockMinutes,
+      }
     }
-    try {
-      reviewCards.rate(card.id, correct ? 3 : 1, channel, now)
-    } catch {}
-    const r = creditReviewAnswer(st, { weight, now })
-    saveBankUnlock(r.state)
-    if (r.unlocked) unlockByQuiz(r, now)
-    const next = r.unlocked ? null : serveReviewCard(r.state, now)
+    saveBankUnlock(r.unlockState)
+    let bankRes = null
+    if (r.unlocked) bankRes = unlockByQuiz(r, now)
+    const needNext = !r.unlocked || Boolean(bankRes?.earnedOnly)
+    const next = needNext ? serveReviewCard(r.unlockState, now) : null
     let question = next ? next.payload.question : null
     let bankTotal = Array.isArray(loadRawBank()?.题目) ? loadRawBank().题目.length : 0
-    if (!r.unlocked && !next) {
-      const preview = pickNextQuizQuestion(loadRawBank(), r.state)
+    if (needNext && !next) {
+      const preview = pickNextQuizQuestion(loadRawBank(), r.unlockState)
       if (preview.state) saveBankUnlock(preview.state)
       question = preview.question
       bankTotal = preview.bankTotal
     }
+    if (r.unlocked && bankRes?.earnedOnly) {
+      return {
+        v: 1,
+        ok: true,
+        review: true,
+        correct: r.correct,
+        selfJudged: r.selfJudged,
+        weight: r.weight,
+        unlocked: false,
+        roundComplete: true,
+        earnedOnly: true,
+        needSpend: true,
+        earnedAdded: bankRes.earnedAdded,
+        dailyBankEarned: bankRes.dailyBankEarned,
+        dailyBankCap: bankRes.dailyBankCap,
+        capped: bankRes.capped,
+        unlockUntil: r.unlockUntil,
+        unlockMinutes: r.unlockMinutes,
+        correctAnswer: r.correctAnswer,
+        explain: r.explain,
+        solved: r.solved,
+        required: r.required,
+        bankTotal,
+        wrongCount: st.wrongIds.length,
+        question,
+      }
+    }
     return {
-      v: 1, ok: true, review: true, correct, selfJudged: !card.options.length, weight,
+      v: 1, ok: true, review: true, correct: r.correct, selfJudged: r.selfJudged, weight: r.weight,
       unlocked: r.unlocked, unlockUntil: r.unlockUntil, unlockMinutes: r.unlockMinutes,
-      correctAnswer: card.options.length ? String.fromCharCode(65 + card.answerIndex) + '. ' + card.options[card.answerIndex] : card.a,
-      explain: card.a + (card.hint ? '（前提：' + card.hint + '）' : '') + (correct ? '' : '——明天再问你一次。'),
+      correctAnswer: r.correctAnswer,
+      explain: r.explain,
       solved: r.solved, required: r.required, bankTotal, wrongCount: st.wrongIds.length, question,
     }
   }
 
   function unlockByQuiz(judged, now) {
+    let bankRes = null
     try {
-      grantTempPass?.(judged.unlockUntil, `刷题达标 ${judged.solved} 题（${judged.unlockMinutes}m）`)
-    } catch {
-      // ignore
-    }
-    try {
-      onBankUnlock?.({ minutes: judged.unlockMinutes, solved: judged.solved, until: judged.unlockUntil, now })
+      bankRes = onBankUnlock?.({ minutes: judged.unlockMinutes, solved: judged.solved, until: judged.unlockUntil, now }) || null
     } catch {
       // ignore
     }
@@ -616,14 +697,18 @@ export function createV4Hub(deps) {
       at: now,
       solved: judged.solved,
       unlockMinutes: judged.unlockMinutes,
+      earnedAdded: bankRes?.earnedAdded,
       until: judged.unlockUntil,
     })
     recordStoryline({
       kind: 'quiz_unlock',
       actor: 'user',
-      summary: `锁屏答对 ${judged.solved} 题解锁 ${judged.unlockMinutes}m 通行`,
+      summary: bankRes?.earnedOnly
+        ? `锁屏答对 ${judged.solved} 题挣得 ${bankRes.earnedAdded}m 余额`
+        : `锁屏答对 ${judged.solved} 题解锁 ${judged.unlockMinutes}m 通行`,
       at: now,
     }, now)
+    return bankRes
   }
 
   function contractSessionView(now = Date.now(), { escalatedOnly = false } = {}) {

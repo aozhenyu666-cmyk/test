@@ -284,7 +284,7 @@ test('I10 每天硬干预达上限后，只剩深夜锁和契约逾期锁，其�
     // 深夜锁（0:30–7:00，按服务端时钟）本来就不受硬干预上限约束（isLockExemptFromDailyCap）。
     // 测试只改了手机上报的本地时间，CI 若恰在北京深夜跑，服务端会判深夜锁——这时锁是对的，原因必须是深夜。
     if (p.body.lockArbiter?.source === 'NIGHT_CURFEW') {
-      assert.equal(p.body.lock?.priority, 'P4', 'I10: 满额时还在锁，只能是深夜锁')
+      assert.equal(p.body.lock?.priority, 'P1', 'I10: 满额时还在锁，只能是深夜锁')
     } else {
       assert.equal(p.body.force.level, 0, 'I10: 达到硬干预日上限后降级为只提醒')
       assert.equal(p.body.force.app, undefined)
@@ -572,8 +572,8 @@ test('H4 & I8 时间账单一真相（挣来制）：扣罚先扣挣来的再扣
   const g = computeTimeLedger({ day: '2026-11-19', carry: 200, gameQuota: 60, tierOf: () => 'game', today: [{ app: 'g', minutes: 50 }] })
   assert.equal(g.funLeft, 150)
   assert.equal(g.gameLeft, 10, '游戏今天上限 60，已玩 50')
-  // 结转有上限。
-  assert.equal(computeTimeLedger({ day: '2026-11-19', carry: 5000 }).carry, 600)
+  // 结转有上限（CARRY_CAP_MIN = 300）。
+  assert.equal(computeTimeLedger({ day: '2026-11-19', carry: 5000 }).carry, 300)
 
   // 四处一致性（/today, /analytics, /plan lock.quota, 晚报）
   await withHome(async (home) => {
@@ -704,24 +704,26 @@ test('H5 lock_bus：过期自动修剪、来源撤销防幽灵锁、P2.5 接管�
   bus.revokeBySource('radar', { now })
   assert.equal(bus.list(now).length, 0, 'revokeBySource 彻底清除幽灵锁')
 
-  // 2) P2.5 TAKEOVER_STRICT 位于 P2 CONTRACT_OVERDUE_STRICT 与 P3 BOUT_STRICT 之间
+  // 2) P1 NIGHT_CURFEW 仅次于 P0；P3.5 TAKEOVER_STRICT 位于 P3 CONTRACT_OVERDUE_STRICT 与 P4 BOUT_STRICT 之间
+  assert.ok(LOCK_PRIORITIES.indexOf('EMERGENCY_SUSPEND') < LOCK_PRIORITIES.indexOf('NIGHT_CURFEW'))
+  assert.ok(LOCK_PRIORITIES.indexOf('NIGHT_CURFEW') < LOCK_PRIORITIES.indexOf('GEMINI_LIVE_CELL'))
   assert.ok(LOCK_PRIORITIES.indexOf('CONTRACT_OVERDUE_STRICT') < LOCK_PRIORITIES.indexOf('TAKEOVER_STRICT'))
   assert.ok(LOCK_PRIORITIES.indexOf('TAKEOVER_STRICT') < LOCK_PRIORITIES.indexOf('BOUT_STRICT'))
 
-  const p2OverP25 = computeUnifiedLockArbiter({
+  const p3OverP35 = computeUnifiedLockArbiter({
     contractSession: { strict: true, until: now + 600_000, why: '契约逾期' },
     takeoverSession: { until: now + 600_000, why: '接管回位' },
     now,
   })
-  assert.equal(p2OverP25.priority, 'P2')
+  assert.equal(p3OverP35.priority, 'P3')
 
-  const p25OverP3 = computeUnifiedLockArbiter({
+  const p35OverP4 = computeUnifiedLockArbiter({
     takeoverSession: { until: now + 600_000, allow: ['md.obsidian'], why: '系统接管强制回位' },
     presetStrict: { until: now + 600_000, allow: ['md.obsidian'], why: '普通严格局' },
     now,
   })
-  assert.equal(p25OverP3.priority, 'P2.5')
-  assert.equal(p25OverP3.source, 'TAKEOVER_STRICT')
+  assert.equal(p35OverP4.priority, 'P3.5')
+  assert.equal(p35OverP4.source, 'TAKEOVER_STRICT')
 
   // 3) I1 & I2：所有系统底座永不被锁，所有非 open 锁皆带 why 与 unlockHow
   const baseApps = [
@@ -741,11 +743,11 @@ test('H5 lock_bus：过期自动修剪、来源撤销防幽灵锁、P2.5 接管�
     { pkg: 'com.android.chrome', label: 'Chrome' },
   ]
   const modes = [
-    { priority: 'P1', source: 'GEMINI_LIVE_CELL', label: '连麦', why: '连麦中', unlockHow: '完成连麦', allow: [] },
-    { priority: 'P2', source: 'CONTRACT_OVERDUE_STRICT', label: '契约', why: '契约逾期', unlockHow: '交验收', allow: ['md.obsidian'] },
-    { priority: 'P2.5', source: 'TAKEOVER_STRICT', label: '接管', why: '接管中', unlockHow: '回正事', allow: ['md.obsidian'] },
-    { priority: 'P3', source: 'BOUT_STRICT', label: '严格局', why: '专注局', unlockHow: '完成局', allow: ['md.obsidian'] },
-    { priority: 'P4', source: 'NIGHT_CURFEW', label: '深夜', why: '深夜睡', unlockHow: '早7点开', allow: [] },
+    { priority: 'P1', source: 'NIGHT_CURFEW', label: '深夜', why: '深夜睡', unlockHow: '早7点开', allow: [] },
+    { priority: 'P2', source: 'GEMINI_LIVE_CELL', label: '连麦', why: '连麦中', unlockHow: '完成连麦', allow: [] },
+    { priority: 'P3', source: 'CONTRACT_OVERDUE_STRICT', label: '契约', why: '契约逾期', unlockHow: '交验收', allow: ['md.obsidian'] },
+    { priority: 'P3.5', source: 'TAKEOVER_STRICT', label: '接管', why: '接管中', unlockHow: '回正事', allow: ['md.obsidian'] },
+    { priority: 'P4', source: 'BOUT_STRICT', label: '严格局', why: '专注局', unlockHow: '完成局', allow: ['md.obsidian'] },
     { priority: 'P5', source: 'CONTRACT_FLEX', label: '护航', why: '契约护航', unlockHow: '提交验收', allow: ['md.obsidian'] },
     { priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自由', why: '自由态', unlockHow: '保持节奏', allow: ['*'] },
   ]
@@ -955,7 +957,7 @@ test('H7 & I9 评价统一：硬日判为主、空转投入分<=39、14天自律
 
 // ---------------------------------------------------------------- 挣来制：跨天结转（2026-11-19）
 
-test('挣来制：没花完的余额第二天接着用；新的一天不白给 120', async () => {
+test('挣来制：没花完的余额第二天接着用；每日保底 30 分钟（不白给 120）', async () => {
   await withHome(async (home) => {
     seedHome(home, { intensity: 'standard' })
     const day = new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10)
@@ -966,8 +968,8 @@ test('挣来制：没花完的余额第二天接着用；新的一天不白给 1
     const phone = cleanPhone({ app: 'com.tencent.mm', label: '微信', minutes: 1, screenOn: true, local: '10:00', today: [] })
     const plan = await call(host.handler, 'POST', '/dsh-go-companion/v1/plan', { v: 1, timeZone: TZ, phone })
     assert.equal(plan.body.timeLedger.carry, 45, '昨天的 45 分钟带进今天')
-    assert.equal(plan.body.timeLedger.funQuota, 0, '标准档没有白给的保底')
-    assert.equal(plan.body.timeLedger.funLeft, 45)
+    assert.equal(plan.body.timeLedger.funQuota, 30, '默认无条件保底 30 分钟（4.1 温和留油）')
+    assert.equal(plan.body.timeLedger.funLeft, 75)
     const w = JSON.parse(readFileSync(join(home, 'companion', 'fun-wallet.json'), 'utf8'))
     assert.equal(w.day, day)
     assert.equal(w.carryIn, 45)

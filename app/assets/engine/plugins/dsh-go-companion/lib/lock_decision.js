@@ -47,14 +47,22 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
     return { ...base, mode: 'open', allow: [], deny: [], needPass: [], why: nonEmpty(a.why, '紧急放行中'), unlockHow: nonEmpty(a.unlockHow, '倒计时结束后恢复') }
   }
 
-  // P1–P4（含 P2.5 接管）：裁决器已经给了「只许哪些」。连麦舱补上 Gemini 和代理；接管补工作应用。
-  if (['P1', 'P2', 'P2.5', 'P3', 'P4'].includes(a.priority)) {
-    const extra = a.priority === 'P1'
+  // P1–P4（含 P3.5 接管）：裁决器已经给了「只许哪些」。连麦舱（P2/GEMINI_LIVE_CELL）补上 Gemini 和代理；接管（P3.5/TAKEOVER_STRICT）补工作应用。
+  if (['P1', 'P2', 'P3', 'P3.5', 'P4'].includes(a.priority)) {
+    const strictSources = new Set(['NIGHT_CURFEW', 'GEMINI_LIVE_CELL', 'CONTRACT_OVERDUE_STRICT', 'TAKEOVER_STRICT', 'BOUT_STRICT'])
+    const role = strictSources.has(a.source)
+      ? a.source
+      : (a.priority === 'P1' ? 'NIGHT_CURFEW'
+        : a.priority === 'P2' ? 'GEMINI_LIVE_CELL'
+          : a.priority === 'P3' ? 'CONTRACT_OVERDUE_STRICT'
+            : a.priority === 'P3.5' ? 'TAKEOVER_STRICT'
+              : a.priority === 'P4' ? 'BOUT_STRICT' : '')
+    const extra = role === 'GEMINI_LIVE_CELL'
       ? [...GEMINI_PACKAGES, ...PROXY_PACKAGES]
-      : (a.priority === 'P2.5' ? [...WORK_DEFAULT, ...ofTier('work'), ...GEMINI_PACKAGES, ...PROXY_PACKAGES] : [])
-    const withLease = (a.priority === 'P3' || a.priority === 'P2.5') && leaseApp ? [leaseApp] : []
+      : (role === 'TAKEOVER_STRICT' ? [...WORK_DEFAULT, ...ofTier('work'), ...GEMINI_PACKAGES, ...PROXY_PACKAGES] : [])
+    const withLease = (role === 'BOUT_STRICT' || role === 'TAKEOVER_STRICT') && leaseApp ? [leaseApp] : []
     const allow = Array.isArray(a.allow) && !a.allow.includes('*') ? a.allow : []
-    const needPass = (a.priority === 'P3' || a.priority === 'P2.5')
+    const needPass = (role === 'BOUT_STRICT' || role === 'TAKEOVER_STRICT')
       ? ofTier('dual').filter((p) => p !== leaseApp && !allow.includes(p) && !safeBase(p))
       : []
     return {

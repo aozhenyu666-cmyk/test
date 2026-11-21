@@ -167,9 +167,11 @@ import { addCards, cleanPool, dueCards, rateCard, deleteCard, delayedRecall, def
 import { previewIntervals } from './fsrs.js'
 import { addReview, cleanReview, decideReview, parseWeekReview, reviewMarkdown, reviewPromptLines } from './week_review.js'
 import {
-  DEFAULT_TEMPLATES, checkSpend, checkStart, dayOutcomes, defaultVerify, parseTemplates, recoveryStep, renderTemplates,
-  shouldApplyTemplate, templateSeals, verifyPromptLines, eveningOf, eveningStep, eveningCapFor, setEveningCap, EVENING_END,
+  DEFAULT_BASE_FUN_MIN, DEFAULT_TEMPLATES, applyNodCardOverrides, buildNodCard, checkSpend, checkStart, dayOutcomes, defaultVerify,
+  parseTemplates, recoveryStep, renderTemplates, shouldApplyTemplate, templateSeals, verifyPromptLines, eveningOf, eveningStep,
+  eveningCapFor, setEveningCap, EVENING_END,
 } from './verifier_mode.js'
+import { appendInboxEntry, buildStrategizeBundle, readInboxEntries } from './inbox_dept.js'
 import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
@@ -1476,7 +1478,7 @@ export function apply(ctx) {
           until: Number(s.until),
           why: s.why || (isTakeover ? '系统接管强制回位' : '专时严格锁定'),
           unlockHow: isTakeover ? '回到指定正事应用即自动解除（或到期/使用紧急解除）' : '完成本轮任务或到期自动解锁',
-          priority: isTakeover ? 'P2.5' : 'P2',
+          priority: isTakeover ? 'P3.5' : 'P3',
           replaceSource: true,
         }, now)
       } else {
@@ -1752,7 +1754,7 @@ export function apply(ctx) {
       today: todayRows,
       tierOf: tierFnNow(),
       passMinutes: passMinutesToday(now, tz),
-      funQuota: info.thresholds.funQuotaMin,
+      funQuota: Math.max(DEFAULT_BASE_FUN_MIN, Number(info.thresholds.funQuotaMin) || 0),
       gameQuota: info.thresholds.gameQuotaMin,
       earnedBout: legacyEarnedExtra,
       carry,
@@ -1797,6 +1799,8 @@ export function apply(ctx) {
   let lastRhythm = null
   // 2026-11-20 公约挑场景用：上一拍裁决器是不是在锁。
   let lastLockActive = false
+  // 2026-11-21 1.4 止血：记录上一拍是否处于伴侣强制锁态，只在锁态刚转为可放行那一拍发 release: true。
+  let prevCompanionLocked = false
   let lastApplyWindow = null
   /** A4：块结束时该问的那句「这一块记到哪个部」——内容层，30 分钟内有效。 */
   let slotAskNext = null
@@ -2542,8 +2546,9 @@ export function apply(ctx) {
     }
     // 墙：默认严格的时间表锁（白天非吃饭时段 default，夜里 night）。深夜锁这里不重复推（下面 rhythm 的 night 管），
     // 只推白天的默认锁；手机端 LockPriority 里 default 排在普通之上、拒绝之下。
+    const spendPassActive = Boolean(config.spendPass && Number(config.spendPass.until) > now)
     const wd = wallDecision(wallCfgNow(), now, tz)
-    if (wd.locked && wd.kind === WALL_KIND_DEFAULT && !earnedOpen(now, tz)) {
+    if (wd.locked && wd.kind === WALL_KIND_DEFAULT && !earnedOpen(now, tz) && !spendPassActive) {
       push(WALL_KIND_DEFAULT, wd.until, wd.why)
     }
     // 2026-11-21 晚间娱乐上限用完：娱乐 / 游戏锁到明早 7:00（余额再多也不开；Gemini 常驻不锁）。
@@ -2810,7 +2815,15 @@ export function apply(ctx) {
     getGeminiSession: (now) => geminiSessionView(now),
     getAiWorkSession: (now) => aiWorkSessionView(now),
     getTaskLease: (now) => taskLeaseView(now),
-    getWallDecision: (now) => wallDecision(wallCfgNow(), now, zoneOr(config.timeZone)),
+    getWallDecision: (now = Date.now()) => {
+      const tz = zoneOr(config.timeZone)
+      const wd = wallDecision(wallCfgNow(), now, tz)
+      const spendUntil = Number(config.spendPass?.until) || 0
+      if (spendUntil > now && wd.locked && wd.kind !== 'night') {
+        return { ...wd, locked: false, kind: null, openUntil: Math.max(Number(wd.openUntil) || 0, spendUntil) }
+      }
+      return wd
+    },
     getSpeaker: () => (nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'),
     getCommitments: (now) => readCommitments(home(), now, 3).map((c) => c.statement),
     getGeminiExtras: (now, dice) => geminiExtras(now, dice),
@@ -2873,19 +2886,27 @@ export function apply(ctx) {
     getTodayBrainStats: (now = Date.now()) => brainRt.view(now),
     onContractClear: (now = Date.now()) => { lockBus.revokeBySource('contract', { now }) },
     onBankUnlock: ({ minutes, solved, until, now = Date.now() } = {}) => {
+      const BANK_EARN_DAILY_CAP = 60
       const tz = zoneOr(config.timeZone)
       const day = dayString(now, tz)
       const mins = Math.max(1, Math.round(Number(minutes) || 5))
-      const plRes = requestPass(loadPassLedger(now, tz), 'earned', {
-        source: 'bank',
-        minutes: mins,
-        reason: `锁屏答对 ${solved || 10} 题解锁 ${mins}m`,
-        until,
-        now,
-        day,
-      })
-      if (plRes.ok) savePassLedger(plRes.state)
-      recordTimeEntryNow({ kind: 'earned_bank', minutes: mins, reason: `题库解锁 ${solved || 10} 题`, at: now, tz })
+      const tlState = loadTimeLedger(now, tz)
+      const todayBankEarned = tlState.entries
+        .filter((e) => e.kind === 'earned_bank' && (!e.day || e.day === day))
+        .reduce((s, e) => s + (Number(e.minutes) || 0), 0)
+      const remain = Math.max(0, BANK_EARN_DAILY_CAP - todayBankEarned)
+      const added = Math.min(mins, remain)
+      if (added > 0) {
+        recordTimeEntryNow({ kind: 'earned_bank', minutes: added, reason: `题库挣余额 ${solved || 10} 题`, at: now, tz })
+      }
+      return {
+        earnedOnly: true,
+        needSpend: true,
+        earnedAdded: added,
+        dailyBankEarned: todayBankEarned + added,
+        dailyBankCap: BANK_EARN_DAILY_CAP,
+        capped: added < mins,
+      }
     },
     requestGeminiGate: (opts) => requestGeminiViaGate(opts),
   })
@@ -8821,6 +8842,21 @@ export function apply(ctx) {
         iron: cov.rules.filter((r) => r.hardness === '铁律').map((r) => ({ id: r.id, title: r.title })),
         rules: cov.rules.map((r) => ({ id: r.id, title: r.title, do: r.do, hardness: r.hardness, who: r.who })),
       },
+      inbox: (() => {
+        try {
+          const kb = vaultKb() || home()
+          const items = readInboxEntries(kb, { limit: 20 })
+          const stuckItems = items.filter((e) => e.tag === '卡壳')
+          return {
+            count: items.length,
+            recent: items.slice(-5),
+            stuckCount: stuckItems.length,
+            stuckItems: stuckItems.slice(-5),
+          }
+        } catch {
+          return { count: 0, recent: [], stuckCount: 0, stuckItems: [] }
+        }
+      })(),
       names: sisterNames(),
     }
   }
@@ -9634,7 +9670,7 @@ export function apply(ctx) {
     if (action === 'spend') {
       const r = spendBalance({ minutes: b.minutes, reason: b.reason, by: 'panel' }, now)
       if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text }
-      return { ...view(state), text: r.text }
+      return { ...view(state), until: r.until, minutes: r.minutes, text: r.text }
     }
     if (action === 'start') {
       const r = startWork({ hours: b.hours, sprint: b.sprint === true, by: 'panel' }, now)
@@ -9722,6 +9758,105 @@ export function apply(ctx) {
       saveSeals(pre.state, now, tz, { type: 'waive', id: pre.seal.id, reason })
       record({ state: 'seal-waive', at: now, id: pre.seal.id, reason: reason.slice(0, 80) })
       return view(pre.state, { seal: pre.seal })
+    }
+    if (action === 'inbox_add') {
+      const kb = vaultKb() || home()
+      const r = appendInboxEntry(kb, { text: b.text, tag: b.tag || '随记', at: now, tz })
+      if (!r.ok) return { v: 1, ok: false, error: r.error }
+      record({ state: 'inbox-add', at: now, tag: r.tag })
+      return { v: 1, ok: true, entry: r.entry, error: r.error }
+    }
+    if (action === 'inbox_list') {
+      const kb = vaultKb() || home()
+      const items = readInboxEntries(kb, { limit: b.limit || 20 })
+      return { v: 1, ok: true, items, total: items.length }
+    }
+    if (action === 'inbox_bundle') {
+      const kb = vaultKb() || home()
+      const entries = readInboxEntries(kb, { limit: b.limit || 15 })
+      const stuckFromInbox = entries
+        .filter((e) => e.tag === '卡壳')
+        .map((e) => `${e.day ? e.day + ' ' : ''}${e.time ? e.time + ' ' : ''}${e.text}`.trim())
+      const locking = lockingSeal(state, { now, today })
+      const overdueSeals = state.items.filter((x) => x.day === today && (x.status === 'below' || (locking && x.id === locking.id)))
+      const dueReviews = (() => {
+        try {
+          return reviewSnapshot(now)
+        } catch {
+          return { dueCount: 0, duePreview: [], weakTopics: [] }
+        }
+      })()
+      const bundle = buildStrategizeBundle({
+        kbDir: kb,
+        inboxLimit: b.limit || 15,
+        stuckItems: [...stuckFromInbox, ...(Array.isArray(b.stuckItems) ? b.stuckItems : [])],
+        overdueSeals,
+        dueReviews,
+        today,
+      })
+      return {
+        v: 1,
+        ok: true,
+        markdown: bundle.markdown,
+        inboxCount: bundle.inboxCount,
+        stuckCount: bundle.stuckCount,
+        dueReviewCount: bundle.dueReviewCount,
+      }
+    }
+    if (action === 'nod_card_get') {
+      const t = templatesToday(now, tz)
+      const v = loadVerify()
+      const kind = dayKindOf(now, tz, config)
+      const tp = v.recovery?.active ? t.recovery : kind === 'restday' ? t.restday : t.workday
+      const nod = buildNodCard({
+        template: tp,
+        existingSeals: state.items.filter((x) => x.day === today),
+        minuteOfDay: min,
+        today,
+      })
+      return { v: 1, ok: true, ...nod }
+    }
+    if (action === 'nod_card_confirm') {
+      const t = templatesToday(now, tz)
+      const v = loadVerify()
+      const kind = dayKindOf(now, tz, config)
+      const tp = v.recovery?.active ? t.recovery : kind === 'restday' ? t.restday : t.workday
+      const nod = buildNodCard({
+        template: tp,
+        existingSeals: state.items.filter((x) => x.day === today),
+        minuteOfDay: min,
+        today,
+      })
+      if (!nod.needed) {
+        return {
+          v: 1,
+          ok: false,
+          error: nod.reason || 'already_has_seals',
+          text: '今天已经有验收点了。',
+          added: [],
+          items: state.items.filter((x) => x.day === today || x.day === nextYmd(today)),
+        }
+      }
+      const edits = Array.isArray(b.items) ? b.items : (Array.isArray(b.edits) ? b.edits : [])
+      const sealsToAdd = applyNodCardOverrides(nod.items, edits)
+      const r = addSeals(state, sealsToAdd, {
+        now,
+        today,
+        minuteOfDay: min,
+        workStarted: workStartedToday(now, tz),
+        by: 'template',
+      })
+      if (r.added.length) {
+        saveSeals(r.state, now, tz, { type: 'nod-card-confirm', ids: r.added.map((x) => x.id) })
+        saveVerify({ ...loadVerify(), appliedDay: today, appliedTemplate: tp.name || 'nod_card' })
+        record({ state: 'nod-card-confirm', at: now, added: r.added.length })
+      }
+      return {
+        ...view(r.added.length ? r.state : state),
+        ok: r.added.length > 0 || sealsToAdd.length === 0,
+        added: r.added,
+        skipped: r.skipped,
+      }
     }
     return { v: 1, ok: false, error: 'bad-action' }
   }
@@ -11099,9 +11234,13 @@ export function apply(ctx) {
 
     const epUntil = emergencyActive ? activeEmergency.until : 0
     const v4ContractTick = v4Hub.onPlanTick(now)
-    const wd = wallDecision(wallCfgNow(), now, tz)
-    const nightLocked = Boolean(wd.locked && wd.kind === 'night')
+    const wdRaw = wallDecision(wallCfgNow(), now, tz)
+    const nightLocked = Boolean(wdRaw.locked && wdRaw.kind === 'night')
     const contractOverdue = Boolean(v4ContractTick.forceStrictByContract)
+    const spendPassActive = Boolean(config.spendPass && Number(config.spendPass.until) > now)
+    const wd = (spendPassActive && !nightLocked && !contractOverdue && wdRaw.kind !== 'night')
+      ? { ...wdRaw, locked: false, kind: null, openUntil: Math.max(Number(wdRaw.openUntil) || 0, Number(config.spendPass.until) || 0) }
+      : wdRaw
     const hardCapDowngrade = hardCapped && !nightLocked && !contractOverdue
 
     const effectiveForceLevel = (emergencyActive || hardCapDowngrade)
@@ -11112,7 +11251,6 @@ export function apply(ctx) {
       : (hardCapDowngrade
           ? '今天硬干预已经用满，改为温和提醒'
           : (radar.triggered ? (radar.forceWhy || force.why) : force.why))
-    const effectiveForceRelease = emergencyActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && Number(mind.brain.graceUntil) > now)))
     const mediaAction = !emergencyActive && !hardCapDowngrade && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     const speakerOut = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
     const takeoverActiveSession = !hardCapDowngrade && driveRes?.takeover?.active
@@ -11122,13 +11260,16 @@ export function apply(ctx) {
           why: '接管：' + String(driveRes.takeover.reason || '回到正事'),
         }
       : null
+    const verifySessNow = !emergencyActive ? verifySessionView(now) : null
     let lockArbiter = v4Hub.computeLockArbiter(now, {
       autonomy: v4ContractTick.autonomy,
       wall: { locked: (emergencyActive || hardCapDowngrade) ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
       takeoverSession: takeoverActiveSession,
-      ...(hardCapDowngrade ? { aiWorkSession: null, presetStrict: null, takeoverSession: null } : {}),
+      ...(hardCapDowngrade ? { aiWorkSession: null, presetStrict: verifySessNow, takeoverSession: null } : {}),
     })
-    if (hardCapDowngrade && !['P0', 'P2', 'P4'].includes(lockArbiter.priority)) {
+    const isVerifyLock = lockArbiter?.source === 'BOUT_STRICT' && (verifySessNow?.by === 'verify' || verifyStateNow(now, tz).active)
+    const keepOnHardCap = ['P0', 'P1', 'P3'].includes(lockArbiter.priority) || isVerifyLock
+    if (hardCapDowngrade && !keepOnHardCap) {
       lockArbiter = {
         active: false,
         priority: 'P6',
@@ -11140,6 +11281,10 @@ export function apply(ctx) {
       }
     }
     lastLockActive = Boolean(lockArbiter?.active)
+    const wantReleaseNow = emergencyActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && Number(mind.brain.graceUntil) > now)))
+    const companionLockedNow = !emergencyActive && (effectiveForceLevel >= 3 || Boolean(lockArbiter?.active))
+    const effectiveForceRelease = prevCompanionLocked && wantReleaseNow && !companionLockedNow
+    prevCompanionLocked = companionLockedNow
     const activeSisterSkin = resolveActiveSisterSkin({ speaker: speakerOut, lockArbiter })
     const timeLedger = timeLedgerNow(now, tz, phone)
     // 2026-11-18：裁决器的唯一输出（手机先影子对比，确认没问题再切成唯一执法依据）。
@@ -11149,7 +11294,7 @@ export function apply(ctx) {
         ? { priority: 'P0', source: 'EMERGENCY_SUSPEND', label: '紧急放行中', why: activeEmergency.reason || '紧急放行中', unlockHow: '倒计时结束后恢复' }
         : lockArbiter
       lockDecision = lockDecisionNow(now, tz, phone, effectiveLockInput, extState)
-      if (hardCapDowngrade && lockDecision) {
+      if (hardCapDowngrade && !keepOnHardCap && lockDecision) {
         lockDecision = { ...lockDecision, mode: 'free', deny: [], needPass: [], why: '今天硬干预已经用满（仅提醒）', unlockHow: '明日零点自动重置' }
       }
     } catch (error) {
@@ -11244,8 +11389,24 @@ export function apply(ctx) {
       cap: intensityFinal.emergencyDisarmDailyCap,
       now,
     })
+    const liveBoutId = String(live?.official?.view?.()?.boutId || '')
+    const liveSealId = String(live?.sealId || '')
+    const rawSessionOut = emergencyActive ? null : (hardCapDowngrade ? verifySessNow : sessionNow(now))
+    const sessionOut = rawSessionOut
+      ? {
+          ...rawSessionOut,
+          ...(liveBoutId && !rawSessionOut.boutId ? { boutId: liveBoutId } : {}),
+          ...(liveSealId && !rawSessionOut.sealId ? { sealId: liveSealId } : {}),
+        }
+      : null
+    const lockArbiterOut = (liveBoutId || liveSealId)
+      ? { ...lockArbiter, ...(liveBoutId ? { boutId: liveBoutId } : {}), ...(liveSealId ? { sealId: liveSealId } : {}) }
+      : lockArbiter
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
+      boutId: liveBoutId,
+      sealId: liveSealId,
+      ...(liveBoutId ? { bout: { id: liveBoutId, sealId: liveSealId } } : {}),
       arbiterEnforce: Boolean(config.arbiterEnforce),
       intensity: intensityFinal.intensity,
       effectiveIntensity: intensityFinal.effectiveIntensity,
@@ -11267,7 +11428,7 @@ export function apply(ctx) {
       planContract: v4ContractTick.contract,
       contractGraceWarning: v4ContractTick.graceWarning,
       geminiMinutesToday,
-      lockArbiter,
+      lockArbiter: lockArbiterOut,
       ...(lockDecision ? { lock: lockDecision } : {}),
       activeSisterSkin,
       ...(geminiAutoPull ? { geminiAutoPull } : {}),
@@ -11301,7 +11462,7 @@ export function apply(ctx) {
       refuse: !emergencyActive && !hardCapDowngrade && refuseUntilAt(now) > now ? { until: refuseUntilAt(now) } : null,
       gear: effectiveGear(config, now),
       // Gemini / 外部 Agent 租约互动舱：这段时间只许白名单包，其余 App 由手机直接锁；应急通行时让路。
-      session: (emergencyActive || hardCapDowngrade) ? null : sessionNow(now),
+      session: sessionOut,
       ...(forceUnlockUntil > now || onBreak(now) ? { clearWorkSession: true } : {}),
       // D4：预约的下一场连麦（手机据此 arm 闹钟；到点调 /gemini/due 取 launch）。
       geminiSchedule: (() => {

@@ -92,12 +92,12 @@ test('自由态的临时锁（雷达 / 切换次数 / 姐妹）进 deny；过期
   assert.equal(decideApp(d, 'com.ss.android.ugc.aweme', base).lock, false)
 })
 
-test('紧急放行全开；连麦舱只许 Gemini + NekoBox；深夜只剩底座', () => {
+test('紧急放行全开；深夜(P1)只剩底座；连麦舱(P2)只许 Gemini + NekoBox', () => {
   assert.equal(buildLockDecision({ arbiter: arb('P0') }).mode, 'open')
-  const g = buildLockDecision({ arbiter: arb('P1'), installed, tierOf: tf })
+  const g = buildLockDecision({ arbiter: arb('P2'), installed, tierOf: tf })
   assert.equal(decideApp(g, 'com.google.android.apps.bard', base).lock, false)
   assert.equal(decideApp(g, 'com.anthropic.claude', base).lock, true)
-  const night = buildLockDecision({ arbiter: arb('P4'), installed, tierOf: tf })
+  const night = buildLockDecision({ arbiter: arb('P1'), installed, tierOf: tf })
   assert.equal(decideApp(night, 'com.baidu.netdisk', base).lock, true)
   assert.equal(decideApp(night, 'com.android.dialer', base).lock, false)
 })

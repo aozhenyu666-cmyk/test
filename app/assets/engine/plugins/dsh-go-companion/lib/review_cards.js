@@ -10,6 +10,7 @@
 //   · 个人卡不算行测题：锁屏刷个人卡算解锁进度，但不进题库答对数（题库类验收点只认行测题）。
 
 import { createFsrsCard, cleanFsrs, reviewFsrsCard, ratingOf, sortDueCards } from './fsrs.js'
+import { cleanBankUnlockState, creditReviewAnswer, SELF_JUDGED_WEIGHT } from './bank_unlock.js'
 
 export const MAX_CARDS = 500
 export const FIRST_DUE_MS = 12 * 3_600_000
@@ -257,4 +258,103 @@ export function reviewWeekLine(poolRaw, { from, to, now = Date.now() } = {}) {
 export function mirrorLine(card) {
   const opts = card.options.length ? '（' + card.options.map((o, i) => String.fromCharCode(65 + i) + '. ' + o).join(' ') + '）' : ''
   return '- ' + (card.topic ? '[' + card.topic + '] ' : '') + card.q + opts + ' :: ' + card.a + (card.hint ? '（前提：' + card.hint + '）' : '') + '  `' + card.source + '`'
+}
+
+/**
+ * 锁屏复习卡判题（防连点重复判题 + 卡片存在性校验 + 4选1/自判 + FSRS rateCard + 解锁进度推进）。
+ * 严格比对 unlockState.session.currentCard（当其非空时），不匹配则原样返回 duplicate: true，
+ * 不推进解锁进度也不重复调用 FSRS rateCard。
+ */
+export function answerLockReviewCard(poolRaw, unlockStateRaw, { cardId, answer = '', now = Date.now(), selfWeight = SELF_JUDGED_WEIGHT } = {}) {
+  const unlockState = cleanBankUnlockState(unlockStateRaw)
+  const cleanId = String(cardId ?? '').replace(/^rc:/, '').trim()
+  const currentCard = String(unlockState.session.currentCard || '').replace(/^rc:/, '').trim()
+  const isAdapter = Boolean(poolRaw && typeof poolRaw.get === 'function' && typeof poolRaw.rate === 'function')
+  const pool = isAdapter ? null : cleanPool(poolRaw, now)
+
+  if ((currentCard && cleanId !== currentCard) || (!currentCard && unlockState.session.currentId)) {
+    return {
+      ok: true,
+      duplicate: true,
+      ignored: true,
+      review: true,
+      correct: false,
+      unlocked: false,
+      solved: unlockState.session.solved,
+      required: unlockState.config.requiredCount,
+      unlockMinutes: unlockState.config.unlockMinutes,
+      state: isAdapter ? poolRaw : pool,
+      unlockState,
+    }
+  }
+
+  const card = cleanId ? (isAdapter ? poolRaw.get(cleanId) : pool.items.find((x) => x.id === cleanId)) : null
+  if (!card) {
+    return {
+      ok: false,
+      error: '这张复习卡已经不在了（被删了？），换下一题',
+      state: isAdapter ? poolRaw : pool,
+      unlockState: {
+        ...unlockState,
+        session: { ...unlockState.session, currentCard: '' },
+      },
+    }
+  }
+
+  const token = String(answer ?? '').trim().toUpperCase()
+  const hasOptions = Array.isArray(card.options) && card.options.length > 0
+  let correct = false
+  let weight = 0
+  let channel = 'self'
+  if (hasOptions) {
+    const idx = /^[A-F]$/.test(token) ? token.charCodeAt(0) - 65 : -1
+    correct = idx === card.answerIndex
+    weight = correct ? 1 : 0
+    channel = 'lockscreen'
+  } else {
+    correct = token === 'REMEMBER' || token === 'PASS' || token === 'GOOD'
+    weight = correct ? selfWeight : 0
+    channel = 'self'
+  }
+
+  let nextPool = pool
+  let ratedCard = card
+  if (isAdapter) {
+    try {
+      const rated = poolRaw.rate(card.id, correct ? 3 : 1, channel, now)
+      if (rated && rated.card) ratedCard = rated.card
+    } catch {
+      // ignore adapter failure
+    }
+  } else {
+    const rated = rateCard(pool, card.id, correct ? 3 : 1, { now, channel })
+    if (rated.ok) {
+      nextPool = rated.state
+      ratedCard = rated.card
+    }
+  }
+
+  const credited = creditReviewAnswer(unlockState, { weight, cardId: card.id, now })
+  return {
+    ok: true,
+    duplicate: false,
+    ignored: false,
+    review: true,
+    correct,
+    selfJudged: !hasOptions,
+    weight,
+    channel,
+    unlocked: credited.unlocked,
+    unlockUntil: credited.unlockUntil,
+    unlockMinutes: credited.unlockMinutes,
+    correctAnswer: hasOptions
+      ? String.fromCharCode(65 + card.answerIndex) + '. ' + card.options[card.answerIndex]
+      : card.a,
+    explain: card.a + (card.hint ? '（前提：' + card.hint + '）' : '') + (correct ? '' : '——明天再问你一次。'),
+    solved: credited.solved,
+    required: credited.required,
+    card: ratedCard,
+    state: isAdapter ? poolRaw : nextPool,
+    unlockState: credited.state,
+  }
 }

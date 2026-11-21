@@ -1,7 +1,7 @@
 // 题库导入第二版：真机上导不进去的那几种写法，一种一条。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeAnswer, parseBankAny, parseDelimited, splitInlineOptions } from '../lib/bank_import.js'
+import { buildImportPreview, normalizeAnswer, parseBankAny, parseDelimited, splitInlineOptions } from '../lib/bank_import.js'
 
 const KEY_AT_END = `一、常识判断
 1. 下列属于扩张性财政政策的是：
@@ -100,10 +100,71 @@ test('答案规整 / 同行选项拆分的边角', () => {
   assert.deepEqual(splitInlineOptions('只是一句话 A. 没有 B'), [])
 })
 
-test('什么都认不出：说清楚怎么写', () => {
+test('什么都认不出：说清楚怎么写（含未能识别出题目格式及编号式/---标签块样例）', () => {
   const r = parseBankAny('今天天气不错')
   assert.equal(r.ok, false)
+  assert.match(r.error, /未能识别出题目格式/)
   assert.match(r.error, /题号和答案/)
+  assert.match(r.error, /---/)
+  assert.match(r.error, /【题目】/)
   const r2 = parseBankAny('1. 题一\nA. 甲\nB. 乙\n2. 题二\nA. 甲\nB. 乙')
   assert.match(r2.error, /都缺答案/)
+})
+
+test('UTF-8 BOM 剥离 + --- 分隔标签块格式（无数字题号、含【题型】【材料】【题目】【选项】【答案】【解析】及来源标识）', () => {
+  const tagText = '\uFEFF' + [
+    '【题型】言语理解',
+    '【材料】近年来，数字经济与实体经济加速融合，成为高质量发展的关键引擎。',
+    '【题目】（2024江苏A 29）这段文字意在强调：',
+    '【选项】',
+    'A. 数字经济已经完全取代实体经济',
+    'B. 融合发展是高质量发展的重要动力',
+    'C. 实体经济不再需要数字化转型',
+    'D. 经济增长只依赖技术单点突破',
+    '【答案】B',
+    '【解析】文段围绕数字经济与实体经济融合推动高质量发展展开，B项契合主旨。',
+    '---',
+    '【题型】判断推理',
+    '【题目】（2025国考 72）下列选项中与前两项逻辑一致的是：',
+    'A. 甲项 B. 乙项 C. 丙项 D. 丁项',
+    '【答案】C',
+    '【解析】逐一匹配结构，只有丙项保持同一因果链。',
+  ].join('\n')
+
+  const r = parseBankAny(tagText)
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.equal(r.format, 'tag-blocks')
+  assert.equal(r.questions.length, 2)
+  assert.equal(r.questions[0].题型, '言语理解')
+  assert.match(r.questions[0].题干, /^【材料】近年来，数字经济/)
+  assert.match(r.questions[0].题干, /（2024江苏A 29）这段文字意在强调：/)
+  assert.equal(r.questions[0].选项.length, 4)
+  assert.equal(r.questions[0].答案, 'B')
+  assert.equal(r.questions[1].题型, '判断推理')
+  assert.match(r.questions[1].题干, /^（2025国考 72）/)
+  assert.deepEqual(r.questions[1].选项, ['甲项', '乙项', '丙项', '丁项'])
+  assert.equal(r.questions[1].答案, 'C')
+})
+
+test('buildImportPreview：生成逐题预览并标出题干过短、选项不足、答案越界、缺解析等可疑问题', () => {
+  const preview = buildImportPreview({
+    ok: true,
+    format: 'tag-blocks',
+    questions: [
+      { id: 'q-1', 题型: '常识', 题干: '完整且长度足够的题干内容', 选项: ['甲', '乙', '丙'], 答案: 'B', 解析: '因为乙正确' },
+      { id: 'q-2', 题型: '选择', 题干: '太短了', 选项: ['只有一个'], 答案: 'D', 解析: '（题库没给解析）参考答案：D' },
+    ],
+  })
+  assert.equal(preview.ok, true)
+  assert.equal(preview.total, 2)
+  assert.equal(preview.issueCount, 1)
+  assert.deepEqual(preview.items[0].issues, [])
+  assert.equal(preview.items[0].index, 1)
+  assert.equal(preview.items[0].type, '常识')
+  assert.ok(preview.items[1].issues.some((x) => x.includes('题干过短')))
+  assert.ok(preview.items[1].issues.some((x) => x.includes('选项少于 2 个')))
+  assert.ok(preview.items[1].issues.some((x) => x.includes('缺解析')))
+
+  const outOfRange = buildImportPreview([{ 题干: '长度足够的测试题干在这里', 选项: ['甲', '乙'], 答案: 'D', 解析: '有解析' }])
+  assert.ok(outOfRange.items[0].issues.some((x) => x.includes('答案不在现有选项字母范围内')))
 })

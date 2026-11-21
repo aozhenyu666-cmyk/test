@@ -14,6 +14,7 @@ import 'plan_modality_page.dart';
 import 'plan_page.dart';
 import 'seal_page.dart';
 import 'strategy_horizons_page.dart';
+import 'today_cards.dart';
 
 /// 计划：原来散在三处的「今日计划（时间块）」「计划模态 / 契约台」「三层战略」收成一个入口。
 ///
@@ -39,14 +40,16 @@ class _PlanHubPageState extends State<PlanHubPage> {
   Map<String, dynamic> _today = const {};
   Map<String, dynamic>? _seals;
   bool _loading = true;
+  int _cardRefreshTick = 0;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_refresh());
+    unawaited(_refresh(fromInit: true));
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({bool fromInit = false}) async {
+    if (!fromInit && mounted) setState(() => _cardRefreshTick++);
     unawaited(_channel.sealsOp({'action': 'list'}).then((r) {
       if (mounted && r != null && r['ok'] == true) setState(() => _seals = r);
     }).catchError((_) {}));
@@ -110,6 +113,12 @@ class _PlanHubPageState extends State<PlanHubPage> {
               ? null
               : StatusChip(tone: StatusTone.warn, label: '最近截止 ${'${due.first['due']}'.substring(5)}'),
         ),
+        NodMenuCard(
+          key: const ValueKey('plan-nod-slot'),
+          channel: _channel,
+          refreshTick: _cardRefreshTick,
+          onLocked: () => unawaited(_refresh()),
+        ),
         ListPageCard(
           title: '从近到远',
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
@@ -157,6 +166,11 @@ class _PlanHubPageState extends State<PlanHubPage> {
               onTap: () => unawaited(_go(StrategyHorizonsPage(channel: _channel))),
             ),
           ],
+        ),
+        InboxCaptureCard(
+          key: const ValueKey('plan-inbox-slot'),
+          channel: _channel,
+          refreshTick: _cardRefreshTick,
         ),
         if (due.isNotEmpty)
           ListPageCard(

@@ -88,7 +88,11 @@ test('进上下文的话：默认验收、恢复日、正在花余额', () => {
   assert.match(l.join('\n'), /别打断/)
 })
 
-import { eveningCapFor, eveningOf, eveningStep, setEveningCap, EVENING_CAP_DEFAULT } from '../lib/verifier_mode.js'
+import {
+  DEFAULT_BASE_FUN_MIN, EVENING_CAP_DEFAULT,
+  applyNodCardOverrides, buildNodCard, eveningCapFor, eveningOf, eveningStep, setEveningCap,
+} from '../lib/verifier_mode.js'
+import { addSeals } from '../lib/seal.js'
 
 test('晚上：18:00 起算这一晚；过了零点还算前一晚；7:00 以后不算', () => {
   assert.deepEqual(eveningOf('D2', 'D1', 19 * 60), { evening: true, key: 'D2', beforeMidnight: true })
@@ -112,7 +116,9 @@ test('晚间用量：18:00 时的今天用量当起点；零点手机清零后�
   assert.equal(fresh.capHitAt, 0, '新的一晚重新算')
 })
 
-test('上限：默认 90；调低立即；调高明天起；夹在 30–180', () => {
+test('上限：默认 120；调低立即；调高明天起；夹在 30–180；保底默认 30', () => {
+  assert.equal(EVENING_CAP_DEFAULT, 120)
+  assert.equal(DEFAULT_BASE_FUN_MIN, 30)
   assert.equal(eveningCapFor(null, 'D1'), EVENING_CAP_DEFAULT)
   const low = setEveningCap(null, 60, { today: 'D1', tomorrow: 'D2' })
   assert.equal(low.immediate, true)
@@ -123,4 +129,43 @@ test('上限：默认 90；调低立即；调高明天起；夹在 30–180', ()
   assert.equal(eveningCapFor(high.value, 'D2'), 150, '明晚起')
   assert.equal(eveningCapFor({ minutes: 999 }, 'D1'), 180)
   assert.equal(setEveningCap(null, 0, { today: 'D1', tomorrow: 'D2' }).ok, false)
+})
+
+test('4.9 早上点头卡：今天已有验收点则返回 needed:false；否则生成可微调条目并安全喂给 addSeals', () => {
+  const today = '2026-11-21'
+  const skip = buildNodCard({
+    template: DEFAULT_TEMPLATES.workday,
+    existingSeals: [{ id: 's1', day: today, title: '已有' }],
+    minuteOfDay: 8 * 60,
+    today,
+  })
+  assert.equal(skip.needed, false)
+  assert.deepEqual(skip.items, [])
+
+  const nod = buildNodCard({
+    template: DEFAULT_TEMPLATES.workday,
+    existingSeals: [{ id: 'old', day: '2026-11-20', title: '昨天的' }],
+    minuteOfDay: 8 * 60 + 30,
+    today,
+  })
+  assert.equal(nod.needed, true)
+  assert.equal(nod.items.length, 2)
+  assert.equal(nod.items[0].kind, 'quiz')
+
+  // 微调：修改第一条 stretch/floor/时间窗（floor 超出 stretch 会被夹回；第二条不保留）
+  const edited = applyNodCardOverrides(nod.items, [
+    { id: nod.items[0].id, stretch: 15, floor: 99, startMinute: 9 * 60, dueMinute: 10 * 60 + 30, kind: 'screenshots', title: '恶意改类型' },
+    { id: nod.items[1].id, keep: false },
+  ])
+  assert.equal(edited.length, 1)
+  assert.equal(edited[0].kind, 'quiz', '不允许修改 kind')
+  assert.equal(edited[0].title, nod.items[0].title, '不允许修改 title')
+  assert.equal(edited[0].stretch, 15)
+  assert.equal(edited[0].floor, 15, 'floor 不得超过 stretch')
+  assert.equal(edited[0].startMinute, 9 * 60)
+  assert.equal(edited[0].dueMinute, 10 * 60 + 30)
+
+  const added = addSeals(null, edited, { now: NOW, today, minuteOfDay: 8 * 60 + 30, by: 'template' })
+  assert.equal(added.added.length, 1)
+  assert.equal(added.skipped.length, 0)
 })

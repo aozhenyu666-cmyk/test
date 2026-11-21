@@ -214,37 +214,41 @@ test('unified_arbiter: P0-P6 lock priority, 5-queue deduplication, and sister sk
   assert.equal(p0.source, 'EMERGENCY_SUSPEND')
   assert.equal(p0.active, false)
 
-  // P1 > P2 > P3 > P4 > P5 > P6
-  const p1 = computeUnifiedLockArbiter({
+  // P0 > P1(NIGHT) > P2(GEMINI) > P3(CONTRACT) > P3.5(TAKEOVER) > P4(BOUT) > P5 > P6
+  const p1Night = computeUnifiedLockArbiter({
+    wall: { locked: true, kind: 'night' },
+    geminiSession: { until: now + 600_000, topic: '连麦' },
+    presetStrict: { until: now + 600_000, allow: ['md.obsidian'], why: '严格局' },
+    now,
+  })
+  assert.equal(p1Night.priority, 'P1')
+  assert.equal(p1Night.source, 'NIGHT_CURFEW')
+
+  const p2Gem = computeUnifiedLockArbiter({
     geminiSession: { until: now + 600_000, topic: '申论审题', allow: ['com.google.android.apps.bard'] },
     contractSession: { strict: true, until: now + 600_000 },
     now,
   })
-  assert.equal(p1.priority, 'P1')
-  assert.equal(p1.source, 'GEMINI_LIVE_CELL')
-  assert.equal(resolveActiveSisterSkin({ speaker: 'companion', lockArbiter: p1 }), 'jinglan-girl')
+  assert.equal(p2Gem.priority, 'P2')
+  assert.equal(p2Gem.source, 'GEMINI_LIVE_CELL')
+  assert.equal(resolveActiveSisterSkin({ speaker: 'companion', lockArbiter: p2Gem }), 'jinglan-girl')
 
-  const p2 = computeUnifiedLockArbiter({
+  const p3Contract = computeUnifiedLockArbiter({
     contractSession: { strict: true, until: now + 600_000, allow: ['md.obsidian'] },
     presetStrict: { until: now + 600_000, allow: ['md.obsidian'] },
     now,
   })
-  assert.equal(p2.priority, 'P2')
-  assert.equal(p2.source, 'CONTRACT_OVERDUE_STRICT')
-  assert.equal(resolveActiveSisterSkin({ speaker: 'companion', lockArbiter: p2 }), 'jinglan-girl')
+  assert.equal(p3Contract.priority, 'P3')
+  assert.equal(p3Contract.source, 'CONTRACT_OVERDUE_STRICT')
+  assert.equal(resolveActiveSisterSkin({ speaker: 'companion', lockArbiter: p3Contract }), 'jinglan-girl')
 
-  const p3 = computeUnifiedLockArbiter({
+  const p4Bout = computeUnifiedLockArbiter({
     presetStrict: { until: now + 600_000, allow: ['md.obsidian'], why: '严格局' },
-    wall: { locked: true, kind: 'night' },
     now,
   })
-  assert.equal(p3.priority, 'P3')
-  assert.equal(p3.source, 'BOUT_STRICT')
-  assert.equal(resolveActiveSisterSkin({ speaker: 'companion', lockArbiter: p3 }), 'yuwan-girl')
-
-  const p4 = computeUnifiedLockArbiter({ wall: { locked: true, kind: 'night' }, now })
-  assert.equal(p4.priority, 'P4')
-  assert.equal(p4.source, 'NIGHT_CURFEW')
+  assert.equal(p4Bout.priority, 'P4')
+  assert.equal(p4Bout.source, 'BOUT_STRICT')
+  assert.equal(resolveActiveSisterSkin({ speaker: 'companion', lockArbiter: p4Bout }), 'yuwan-girl')
 
   const p5 = computeUnifiedLockArbiter({
     contractSession: { strict: false, until: now + 600_000, allow: ['tv.danmaku.bili', 'md.obsidian'] },

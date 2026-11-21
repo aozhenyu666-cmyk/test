@@ -9,11 +9,11 @@ const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d)
 
 export const LOCK_PRIORITIES = Object.freeze([
   'EMERGENCY_SUSPEND',
+  'NIGHT_CURFEW',
   'GEMINI_LIVE_CELL',
   'CONTRACT_OVERDUE_STRICT',
   'TAKEOVER_STRICT',
   'BOUT_STRICT',
-  'NIGHT_CURFEW',
   'CONTRACT_FLEX',
   'AUTONOMY_RELAXED',
 ])
@@ -51,12 +51,25 @@ export function computeUnifiedLockArbiter({
     }
   }
 
+  const nightReq = reqOf('night')
+  if ((wall?.locked === true && (wall?.kind === 'night' || wall?.night === true)) || nightReq) {
+    return {
+      active: true,
+      priority: 'P1',
+      source: 'NIGHT_CURFEW',
+      label: '深夜睡眠护栏',
+      why: String(wall?.why || nightReq?.why || '已进入深夜催睡时段，娱乐类应用全面锁定'),
+      allow: Array.isArray(wall?.allow) ? wall.allow : (Array.isArray(nightReq?.allow) ? nightReq.allow : []),
+      unlockHow: String(nightReq?.unlockHow || '次日晨间 07:00 自动解封（电话/短信/地图/支付始终放行）'),
+    }
+  }
+
   const gemReq = reqOf('gemini-cell')
   if ((geminiSession && (!geminiSession.until || num(geminiSession.until) > now)) || gemReq) {
     const src = geminiSession || gemReq
     return {
       active: true,
-      priority: 'P1',
+      priority: 'P2',
       source: 'GEMINI_LIVE_CELL',
       label: 'Gemini 共脑/审讯连麦舱',
       why: String(src?.topic ? `正在连麦「${src.topic}」` : (src?.why || 'Gemini Live 连麦中，只放行 Gemini 与急事底线')),
@@ -75,11 +88,11 @@ export function computeUnifiedLockArbiter({
   const contractReq = reqOf('contract')
   if (contractStrictActive || aiWorkStrictActive || contractReq?.kind === 'allowlist') {
     const src = contractStrictActive ? contractSession : (aiWorkStrictActive ? aiWorkSession : contractReq)
-    // 封印到点没过保底走同一档（P2），只是说法不同：解法是把保底交上。
+    // 封印到点没过保底走同一档（P3），只是说法不同：解法是把保底交上。
     const bySeal = contractStrictActive && contractSession?.by === 'seal'
     return {
       active: true,
-      priority: 'P2',
+      priority: 'P3',
       source: 'CONTRACT_OVERDUE_STRICT',
       label: bySeal ? '封印没过保底' : (contractStrictActive ? '契约逾期严格锁定' : '专时严格锁定'),
       why: String(src?.why || '计划验收点已超 1 分钟缓冲未交付，已自动剥离娱乐/视频仅保留工作工具'),
@@ -90,7 +103,7 @@ export function computeUnifiedLockArbiter({
     }
   }
 
-  // P2.5：接管强制回位（高于专注严格局 P3，低于契约逾期 P2）
+  // P3.5：接管强制回位（高于专注严格局 P4，低于契约逾期 P3）
   const takeoverReq = reqOf('takeover')
   const tkSrc = (takeoverSession && (!takeoverSession.until || num(takeoverSession.until) > now))
     ? takeoverSession
@@ -98,7 +111,7 @@ export function computeUnifiedLockArbiter({
   if (tkSrc) {
     return {
       active: true,
-      priority: 'P2.5',
+      priority: 'P3.5',
       source: 'TAKEOVER_STRICT',
       label: '接管强制回位',
       why: String(tkSrc?.why || '系统已接管：请立即回到指定正事应用'),
@@ -116,7 +129,7 @@ export function computeUnifiedLockArbiter({
     const byVerify = presetActive && presetStrict?.by === 'verify'
     return {
       active: true,
-      priority: 'P3',
+      priority: 'P4',
       source: 'BOUT_STRICT',
       label: byVerify ? '默认验收（工作时段）' : presetActive ? '专注严格局护栏' : '时段防分心护栏',
       why: String(pSrc?.why || wall?.why || wallReq?.why || '当前处于严格专注锁定，仅放行声明白名单与急事底线'),
@@ -126,19 +139,6 @@ export function computeUnifiedLockArbiter({
         : presetActive
         ? '完成本局收工验收，或在锁屏答对 10 道真题换取 5 分钟通行'
         : '开启契约护航局或进入约定放风时段后自动解锁',
-    }
-  }
-
-  const nightReq = reqOf('night')
-  if ((wall?.locked === true && (wall?.kind === 'night' || wall?.night === true)) || nightReq) {
-    return {
-      active: true,
-      priority: 'P4',
-      source: 'NIGHT_CURFEW',
-      label: '深夜睡眠护栏',
-      why: String(wall?.why || nightReq?.why || '已进入深夜催睡时段，娱乐类应用全面锁定'),
-      allow: Array.isArray(wall?.allow) ? wall.allow : (Array.isArray(nightReq?.allow) ? nightReq.allow : []),
-      unlockHow: String(nightReq?.unlockHow || '次日晨间 07:00 自动解封（电话/短信/地图/支付始终放行）'),
     }
   }
 
@@ -321,7 +321,9 @@ export function resolveActiveSisterSkin({ speaker = 'companion', lockArbiter = n
     speaker === 'strategist' ||
     prio === 'P1' ||
     prio === 'P2' ||
-    prio === 'P2.5' ||
+    prio === 'P3' ||
+    prio === 'P3.5' ||
+    src === 'NIGHT_CURFEW' ||
     src === 'GEMINI_LIVE_CELL' ||
     src === 'CONTRACT_OVERDUE_STRICT' ||
     src === 'TAKEOVER_STRICT'

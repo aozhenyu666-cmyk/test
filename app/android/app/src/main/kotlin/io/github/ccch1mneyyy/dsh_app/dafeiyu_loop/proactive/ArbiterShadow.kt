@@ -30,6 +30,7 @@ object ArbiterEnforcePolicy {
         disarmed: Boolean,
         shadow: Boolean,
         isSystem: Boolean = false,
+        released: Boolean = false,
     ): ArbiterEnforceOutcome? {
         if (!arbiterEnforce || decision == null) return null
         val p = pkg?.trim().orEmpty()
@@ -38,6 +39,9 @@ object ArbiterEnforcePolicy {
         }
         if (disarmed) {
             return ArbiterEnforceOutcome(shouldLock = false, why = "disarmed", unlockHow = "", reasonTag = "disarmed")
+        }
+        if (released) {
+            return ArbiterEnforceOutcome(shouldLock = false, why = "released", unlockHow = "", reasonTag = "released")
         }
         val verdict = decision.decide(p) { false }
         if (!verdict.lock) {
@@ -110,6 +114,8 @@ object ArbiterShadow {
     fun evaluateForEnforce(ctx: Context, pkg: String?): ArbiterEnforceOutcome? {
         if (!enforceEnabled(ctx)) return null
         val p = pkg?.trim().orEmpty()
+        val released = runCatching { ProactiveRuntime.hasUnifiedRelease() }.getOrDefault(false) ||
+            runCatching { InterceptRuntime.isBoutBufferActive() }.getOrDefault(false)
         return ArbiterEnforcePolicy.evaluate(
             arbiterEnforce = true,
             // 过期的裁决（引擎超过 10 分钟没给新的）不执法，退回旧路径。
@@ -119,7 +125,16 @@ object ArbiterShadow {
             disarmed = LockSafety.disarmed(ctx),
             shadow = LockSafety.shadow(ctx),
             isSystem = p.isNotEmpty() && SessionFactsOf.isSystem(ctx, p),
+            released = released,
         )
+    }
+
+    fun isNeedPass(ctx: Context, pkg: String?): Boolean {
+        if (!enforceEnabled(ctx)) return false
+        val p = pkg?.trim().orEmpty()
+        if (p.isEmpty()) return false
+        val d = current?.takeIf { ArbiterDecision.isFresh(receivedAt, System.currentTimeMillis()) } ?: return false
+        return p in d.needPass
     }
 
     fun update(raw: Any?) {

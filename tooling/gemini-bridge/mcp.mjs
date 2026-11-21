@@ -7,7 +7,7 @@
 // 结果回传。工具调用会等一小会儿拿结果，等不到就告诉 Gemini「已经交给手机」。
 
 import { EventEmitter } from 'node:events'
-import { readNote, recentNotes, searchNotes } from './vault.mjs'
+import { readInbox, readNote, recentNotes, searchNotes } from './vault.mjs'
 import { MAX_COMMANDS, token } from './store.mjs'
 
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
@@ -27,6 +27,7 @@ export const INSTRUCTIONS = [
   '觉得缺一条规矩（比如他反复用同一个借口），用 dafeiyu_propose_rule 提议，他在手机上批了才生效。',
   '聊透一个知识点 / 讲完一道错题，用 dafeiyu_push_cards 沉成复习卡（手机按遗忘曲线 12 小时后开始问他）；他丢真题 / 拍错题给你，洗成标准结构用 dafeiyu_import_questions 灌进手机题库。',
   '开聊或空闲时看一眼 dafeiyu_review_due，顺手考他 1–2 张到期卡（别给提示，让他先说）；交回执时把评分放进 reviewed_cards——你判的才算数，他说「记得」不算。',
+  '当用户说“看收件箱/整理碎片/卡住了”时调用 dafeiyu_read_inbox，合并看电脑端收件箱与手机卡壳、未过保底和到期复习摘要；聊透后用 dafeiyu_push_cards 沉卡或 dafeiyu_submit_receipt 交回执。',
 ].join('\n')
 
 const KIND_ENUM = ['quiz', 'external_quiz', 'file', 'screenshots', 'app_minutes', 'bout_minutes', 'gemini_receipt', 'study_cards']
@@ -179,6 +180,19 @@ export function toolDefs({ vault = false } = {}) {
       description: '他今天到期的个人复习卡（最多 10 张，带答案——你是考官，别直接念答案）、近 7 天隔夜回忆通过率、错得最多的主题、题库错题最多的题型。' +
         '标了「等隔天回忆」的卡，你考的这一次决定他那个学习制卡验收点的第二半奖励——严格判。',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: ro,
+    },
+    {
+      name: 'dafeiyu_read_inbox',
+      title: '看收件箱与卡壳点',
+      description: '四部门（谋划思考部）只读入口：合并读取电脑端 Obsidian「大肥鱼/收件箱.md」近期速记，以及手机最新快照里的收件箱条数、近期卡壳记录、未过保底验收点与到期复习摘要。方便一键整理碎片和卡壳点，聊透后调 dafeiyu_push_cards 或 dafeiyu_submit_receipt。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 50, description: '最多返回最近多少条速记（1-50，默认 20）' },
+        },
+        additionalProperties: false,
+      },
       annotations: ro,
     },
     {
@@ -357,6 +371,174 @@ export function rulesText(snap) {
   return rules.map((r) => '[' + r.hardness + '] ' + r.id + ' ' + r.title + (r.who && r.who !== '都' ? '（归' + r.who + '）' : '') + '：' + r.do).join('\n')
 }
 
+// ---------------------------------------------------------------- 四部门：收件箱 + 手机卡壳/复习合并视图
+
+function normalizeList(v) {
+  if (Array.isArray(v)) return v
+  if (v && typeof v === 'object') {
+    if (Array.isArray(v.items)) return v.items
+    if (Array.isArray(v.entries)) return v.entries
+    if (Array.isArray(v.recent)) return v.recent
+  }
+  return []
+}
+
+function normalizeTextItem(x) {
+  if (typeof x === 'string') return x.trim()
+  if (x && typeof x === 'object') {
+    const body = String(x.text ?? x.stuck ?? x.title ?? x.summary ?? x.content ?? '').trim()
+    if (!body) return ''
+    const head = [x.day, x.time, x.tag ? '[' + x.tag + ']' : ''].filter(Boolean).join(' ')
+    return head ? head + ' ' + body : body
+  }
+  return ''
+}
+
+export function inboxSummary(store, vaultDir = '', { limit = 20 } = {}) {
+  const safeLimit = Math.max(1, Math.min(50, Math.floor(Number(limit) || 20)))
+  const effectiveVault = String(vaultDir || process.env.DAFEIYU_VAULT || '').trim()
+  const vaultInbox = effectiveVault
+    ? readInbox(effectiveVault, { limit: safeLimit })
+    : { ok: true, exists: false, entries: [], raw: '' }
+
+  const snap = store?.state?.snapshot || null
+  const now = store?.now ? store.now() : Date.now()
+  const syncedAt = Number(store?.state?.snapshotAt || snap?.receivedAt || snap?.at || 0)
+  const phoneOnline = Boolean(snap) && now - syncedAt < PHONE_STALE_MS
+
+  const phoneInboxRaw = snap?.phoneInbox ?? snap?.inbox ?? null
+  const phoneInboxItems = normalizeList(phoneInboxRaw)
+  const phoneInboxCount = Number(phoneInboxRaw?.count ?? phoneInboxRaw?.total ?? phoneInboxItems.length) || 0
+
+  const verifier = snap?.verify ?? snap?.verifier ?? null
+  const stuckSeen = new Set()
+  const stuck = []
+  const pushStuck = (item) => {
+    const s = normalizeTextItem(item)
+    if (!s || stuckSeen.has(s)) return
+    stuckSeen.add(s)
+    stuck.push(s)
+  }
+  for (const src of [snap?.stuck, snap?.stuckItems, verifier?.stuck, phoneInboxRaw?.stuck, phoneInboxRaw?.stuckItems]) {
+    if (typeof src === 'string') pushStuck(src)
+    else for (const it of normalizeList(src)) pushStuck(it)
+  }
+  for (const it of phoneInboxItems) {
+    if (it && typeof it === 'object' && it.tag === '卡壳') pushStuck(it)
+  }
+
+  const belowFloor = (Array.isArray(snap?.timeline) ? snap.timeline : [])
+    .filter((x) => x && (x.status === 'below' || x.status === 'overdue_locked' || x.belowFloor === true))
+    .map((x) => ({
+      id: x.id,
+      title: x.title,
+      kindLabel: x.kindLabel || x.kind || '',
+      actual: Number(x.actual || 0),
+      floor: Number(x.floor || 0),
+      stretch: Number(x.stretch || 0),
+      unit: x.unit || '',
+      due: x.due || '',
+      status: x.status,
+    }))
+
+  const r = snap?.review || null
+  const review = r
+    ? {
+        totalCards: Number(r.totalCards || 0),
+        dueCount: Number(r.dueCount || 0),
+        retention7d: r.retention7d ?? null,
+        reviewed7d: Number(r.reviewed7d || 0),
+        due: (Array.isArray(r.due) ? r.due : []).slice(0, 10).map((c) => ({
+          id: c.id,
+          topic: c.topic || '',
+          q: c.q,
+          lapses: Number(c.lapses || 0),
+          pendingRecall: Boolean(c.pendingRecall),
+        })),
+        weakTopics: Array.isArray(r.weakTopics) ? r.weakTopics : [],
+        weakBank: Array.isArray(r.weakBank) ? r.weakBank : [],
+      }
+    : null
+
+  return {
+    ok: true,
+    limit: safeLimit,
+    phoneOnline,
+    syncedAt,
+    vaultConfigured: Boolean(effectiveVault),
+    vaultInbox,
+    phone: {
+      synced: Boolean(snap),
+      day: snap?.day || '',
+      hm: snap?.hm || '',
+      inboxCount: phoneInboxCount,
+      inboxItems: phoneInboxItems.slice(-safeLimit),
+      stuck: stuck.slice(-safeLimit),
+      belowFloor,
+      locking: snap?.locking || null,
+      verifier,
+      review,
+    },
+  }
+}
+
+export function inboxText(summary) {
+  const lines = []
+  const vi = summary.vaultInbox
+  if (!summary.vaultConfigured) {
+    lines.push('【电脑端收件箱】未配置 Obsidian 笔记库（启动桥时加 --vault 可直读 大肥鱼/收件箱.md）。')
+  } else if (!vi?.ok) {
+    lines.push('【电脑端收件箱】读取失败：' + (vi?.error || '未知错误'))
+  } else if (!vi.exists) {
+    lines.push('【电脑端收件箱】大肥鱼/收件箱.md 暂无文件（还没有桌面速记）。')
+  } else if (!vi.entries?.length) {
+    lines.push('【电脑端收件箱】大肥鱼/收件箱.md 目前是空的。')
+  } else {
+    lines.push('【电脑端收件箱】共 ' + vi.total + ' 条，展示最近 ' + vi.entries.length + ' 条：')
+    for (const e of vi.entries) {
+      const prefix = [e.day, e.time].filter(Boolean).join(' ')
+      lines.push('- ' + (prefix ? '[' + prefix + '] ' : '') + (e.tag ? '[' + e.tag + '] ' : '') + e.text)
+    }
+  }
+
+  const p = summary.phone
+  if (!p.synced) {
+    lines.push('【手机端快照】手机还没跟桥同步过。')
+  } else {
+    lines.push('【手机端摘要】' + (summary.phoneOnline ? '在线' : '离线/待同步') + (p.day ? '（' + p.day + (p.hm ? ' ' + p.hm : '') + '）' : '') + ' · 手机收件箱 ' + p.inboxCount + ' 条')
+    if (p.inboxItems?.length) {
+      for (const it of p.inboxItems.slice(-5)) {
+        const s = normalizeTextItem(it)
+        if (s) lines.push('  · ' + s)
+      }
+    }
+    if (p.stuck?.length) {
+      lines.push('【近期卡壳】')
+      for (const s of p.stuck) lines.push('- ' + s)
+    }
+    if (p.locking) {
+      lines.push('【当前锁定】「' + p.locking.title + '」' + p.locking.actual + '/' + p.locking.floor + '（最晚 ' + p.locking.until + '）')
+    }
+    if (p.belowFloor?.length) {
+      lines.push('【未过保底验收点】')
+      for (const x of p.belowFloor) {
+        lines.push('- [' + x.id + '] ' + x.due + ' 「' + x.title + '」' + x.actual + '/' + x.floor + x.unit)
+      }
+    }
+    if (p.verifier?.recovery) {
+      lines.push('【状态提示】今天是恢复日，先理清卡点再小步起步。')
+    }
+    if (p.review) {
+      const rv = p.review
+      lines.push('【到期复习摘要】总卡 ' + rv.totalCards + ' 张，今日到期 ' + rv.dueCount + ' 张，7 天通过率 ' + RETENTION(rv.retention7d) + '。')
+      if (rv.weakTopics?.length) lines.push('  忘得最多：' + rv.weakTopics.map((x) => x.topic + '（' + x.lapses + ' 次）').join('、'))
+      if (rv.weakBank?.length) lines.push('  错题最多：' + rv.weakBank.map((x) => x.topic + '（' + x.wrong + ' 题）').join('、'))
+    }
+  }
+  lines.push('整理完碎片与卡壳点并聊透后，用 dafeiyu_push_cards 沉成复习卡、用 dafeiyu_submit_receipt 交回执。')
+  return lines.join('\n')
+}
+
 // ---------------------------------------------------------------- 命令队列
 
 export function enqueue(store, type, payload) {
@@ -451,6 +633,10 @@ export async function callTool(ctx, name, args = {}) {
     }
     case 'dafeiyu_review_due':
       return text(reviewText(snap))
+    case 'dafeiyu_read_inbox': {
+      const summary = inboxSummary(store, vaultDir, { limit: args.limit })
+      return text(inboxText(summary), { structuredContent: summary })
+    }
     case 'dafeiyu_push_cards': {
       const cards = (Array.isArray(args.cards) ? args.cards : []).slice(0, 10)
         .filter((c) => c && String(c.q || '').trim() && String(c.a || '').trim())

@@ -97,13 +97,18 @@ test('工作时段里什么都不说：/plan 下发「默认验收」会话，�
     assert.ok(!s.allow.includes('com.ss.android.ugc.aweme'))
     const list = await seals({ action: 'list' })
     assert.equal(list.verify.active, true)
-    // 没余额：花不了
+    // 把今日保底 30 分钟娱乐用光后，没余额：花不了
+    await plan(h, {
+      app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 3, screenOn: true,
+      today: [{ app: 'com.ss.android.ugc.aweme', label: '抖音', minutes: 30, fun: true }],
+    })
     const poor = await seals({ action: 'spend', minutes: 20, reason: '看一集纪录片放松一下' })
     assert.equal(poor.ok, false)
     // 有余额（昨天结转 60）：说了理由能花，默认验收让路
     writeFileSync(join(home, 'companion', 'fun-wallet.json'), JSON.stringify({ v: 1, day: list.today, carryIn: 60, lastLeft: 60 }))
     const ok = await seals({ action: 'spend', minutes: 20, reason: '看一集纪录片放松一下' })
     assert.equal(ok.ok, true, JSON.stringify(ok).slice(0, 200))
+    assert.ok(Number(ok.until) > Date.now(), 'spend 返回体包含 until 字段')
     const r2 = await plan(h, { app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 4, screenOn: true })
     assert.notEqual(r2.body.session?.topic, '默认验收')
     assert.equal((await seals({ action: 'list' })).verify.spend.minutes, 20)

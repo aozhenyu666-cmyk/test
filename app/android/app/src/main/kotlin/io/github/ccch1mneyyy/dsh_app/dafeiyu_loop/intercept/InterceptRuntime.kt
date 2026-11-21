@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.LoopRuntime
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.AtomicJsonFile
@@ -20,10 +21,88 @@ import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.InterceptRules
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.Switches
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.VisibleSurface
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ArbiterShadow
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.LockSafety
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
+import io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist
 import java.io.File
 import java.util.UUID
+
+/**
+ * Pure JVM-testable 2.5-minute (150s) local bout switch-out buffer (4.13).
+ * Deduplicated per bout/seal scope key so each bout grants at most 1 temporary switch-out
+ * without consuming daily emergency disarm quota.
+ */
+class BoutSwitchBuffer(private val durationMs: Long = BUFFER_DURATION_MS) {
+    private val usedScopes = LinkedHashSet<String>()
+    private var activeScopeKey: String? = null
+    private var activeUntilElapsed: Long = 0L
+
+    @Synchronized
+    fun canTrigger(scopeKey: String, elapsedRealtime: Long): Boolean {
+        val key = scopeKey.trim()
+        if (key.isEmpty()) return false
+        if (isActive(elapsedRealtime)) return false
+        return key !in usedScopes
+    }
+
+    @Synchronized
+    fun trigger(scopeKey: String, elapsedRealtime: Long): Boolean {
+        val key = scopeKey.trim()
+        if (!canTrigger(key, elapsedRealtime)) return false
+        if (usedScopes.size >= MAX_SCOPES) {
+            usedScopes.firstOrNull()?.let { usedScopes.remove(it) }
+        }
+        usedScopes.add(key)
+        activeScopeKey = key
+        activeUntilElapsed = elapsedRealtime + durationMs.coerceAtLeast(1_000L)
+        return true
+    }
+
+    @Synchronized
+    fun isActive(elapsedRealtime: Long): Boolean {
+        val until = activeUntilElapsed
+        if (until <= 0L) return false
+        if (elapsedRealtime < until) return true
+        activeUntilElapsed = 0L
+        activeScopeKey = null
+        return false
+    }
+
+    @Synchronized
+    fun remainingSeconds(elapsedRealtime: Long): Int {
+        if (!isActive(elapsedRealtime)) return 0
+        return ((activeUntilElapsed - elapsedRealtime + 999L) / 1_000L).toInt().coerceAtLeast(1)
+    }
+
+    @Synchronized
+    fun activeScope(): String? = activeScopeKey
+
+    @Synchronized
+    fun usedScopesSnapshot(): List<String> = usedScopes.toList()
+
+    @Synchronized
+    fun restoreUsedScopes(scopes: Collection<String>) {
+        scopes.map { it.trim() }.filter { it.isNotEmpty() }.takeLast(MAX_SCOPES).forEach {
+            usedScopes.add(it)
+        }
+    }
+
+    companion object {
+        const val BUFFER_DURATION_MS = 150_000L
+        private const val MAX_SCOPES = 32
+    }
+}
+
+/**
+ * Pure JVM-testable guard deciding whether releasing a companion lock may auto-reopen [pkg].
+ * Prevents the B站 launch -> re-lock -> release -> re-launch infinite loop (1.4).
+ */
+object CompanionReleasePolicy {
+    fun shouldReopenTarget(pkg: String?, hasOpenOtherLock: Boolean, neverLock: Boolean): Boolean =
+        !pkg.isNullOrBlank() && !neverLock && !hasOpenOtherLock
+}
 
 /**
  * Android adapter for 娱乐 APP 拦截 (loop/core/Intercept.kt). Owns one [InterceptGuard] and one
@@ -39,10 +118,13 @@ import java.util.UUID
  */
 object InterceptRuntime {
     private const val TAG = "DshIntercept"
+    private const val BUFFER_PREFS = "dsh_bout_buffer"
+    private const val KEY_USED_SCOPES = "used_scopes"
     private val main = Handler(Looper.getMainLooper())
     private lateinit var app: Context
     private var guard: InterceptGuard? = null
     private var ledger: InterceptLedgerBook? = null
+    private val boutBuffer = BoutSwitchBuffer()
 
     /** The page must not stay up forever; the kernel keeps the receipt either way. */
     private const val PAGE_TTL_MS = 10 * 60_000L
@@ -50,6 +132,11 @@ object InterceptRuntime {
     fun ensure(context: Context): InterceptGuard {
         guard?.let { return it }
         app = context.applicationContext
+        runCatching {
+            val savedScopes = app.getSharedPreferences(BUFFER_PREFS, Context.MODE_PRIVATE)
+                .getStringSet(KEY_USED_SCOPES, emptySet()).orEmpty()
+            boutBuffer.restoreUsedScopes(savedScopes)
+        }
         val dir = File(File(app.filesDir, "loop"), "intercept")
         val book = InterceptLedgerBook(AtomicJsonFile(File(dir, "ledger.json")))
         book.recover()
@@ -123,6 +210,31 @@ object InterceptRuntime {
         LoopRuntime.configChanged()
     }
 
+    fun canTriggerBoutBuffer(scopeKey: String, elapsedRealtime: Long = SystemClock.elapsedRealtime()): Boolean =
+        boutBuffer.canTrigger(scopeKey, elapsedRealtime)
+
+    fun activateBoutBuffer(scopeKey: String, elapsedRealtime: Long = SystemClock.elapsedRealtime()): Boolean {
+        if (!boutBuffer.trigger(scopeKey, elapsedRealtime)) return false
+        if (::app.isInitialized) {
+            runCatching {
+                app.getSharedPreferences(BUFFER_PREFS, Context.MODE_PRIVATE).edit()
+                    .putStringSet(KEY_USED_SCOPES, boutBuffer.usedScopesSnapshot().toSet())
+                    .apply()
+            }
+        }
+        runCatching { ProactiveRuntime.onBoutBufferActivated(BoutSwitchBuffer.BUFFER_DURATION_MS) }
+        Log.i(TAG, "bout buffer activated for scope=$scopeKey (${BoutSwitchBuffer.BUFFER_DURATION_MS / 1000}s)")
+        return true
+    }
+
+    fun isBoutBufferActive(elapsedRealtime: Long = SystemClock.elapsedRealtime()): Boolean =
+        boutBuffer.isActive(elapsedRealtime)
+
+    fun boutBufferRemainingSeconds(elapsedRealtime: Long = SystemClock.elapsedRealtime()): Int =
+        boutBuffer.remainingSeconds(elapsedRealtime)
+
+    fun hasOpenCompanionLock(): Boolean = guardOrNull()?.openByCompanion() != null
+
     /** Whether the feature is on at all; part of [Switches] so the two features share one arbitration. */
     fun enabled(): Boolean = guard?.config?.enabled == true
 
@@ -136,13 +248,17 @@ object InterceptRuntime {
         val now = System.currentTimeMillis()
         expireStale(now)
         // 裁决器影子对比：只记新旧分歧，不执法。
-        runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ArbiterShadow.observe(app, packageName) }
+        runCatching { ArbiterShadow.observe(app, packageName) }
         // 2026-11-18 锁机安全：紧急解除期间什么都不锁；桌面 / DSH 自己 / 系统界面永远不锁。
         if (LockSafety.disarmed(app, now)) return
         if (LockSafety.neverLock(app, packageName)) return
+        // 统一放行（刷题达标 / 花余额放行 / 急事放行 / 破窗 / 2.5 分钟局内切出缓冲）优先级高于所有拦截。
+        if (runCatching { ProactiveRuntime.hasUnifiedRelease(now) }.getOrDefault(false) || isBoutBufferActive()) {
+            return
+        }
         // H5：arbiterEnforce=true 且已有裁决器输出时，只认 ArbiterDecision.decide 执法。
         val arbiterOutcome = runCatching {
-            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ArbiterShadow.evaluateForEnforce(app, packageName)
+            ArbiterShadow.evaluateForEnforce(app, packageName)
         }.getOrNull()
         if (arbiterOutcome != null) {
             if (arbiterOutcome.reasonTag == "shadow") {
@@ -189,6 +305,10 @@ object InterceptRuntime {
             Log.i(TAG, "companion lock refused for " + packageName + " (disarmed or never-lock)")
             return false
         }
+        if (runCatching { ProactiveRuntime.hasUnifiedRelease(now) }.getOrDefault(false) || isBoutBufferActive()) {
+            Log.i(TAG, "companion lock skipped for " + packageName + " (unified release or bout buffer active)")
+            return false
+        }
         // A lock already in force: show it again if its page is not on screen (or let a superseded
         // one go and decide this app afresh).
         if (resurface(packageName, why, now, unlockHow)) return true
@@ -214,8 +334,33 @@ object InterceptRuntime {
         if (!g.onReleased(id, RELEASE_RULE, now)) return false
         InterceptPageActivity.withdraw(id)
         VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, id)
-        if (pkg != null) runCatching { openTarget(context, pkg) }
-        Log.i(TAG, "companion force dropped: released " + pkg + " (" + id + ")")
+        val arbiterLocked = pkg != null && runCatching {
+            ArbiterShadow.evaluateForEnforce(context, pkg)?.shouldLock == true
+        }.getOrDefault(false)
+        val proactiveLocked = pkg != null && runCatching {
+            ProactiveRuntime.wouldLock(pkg)
+        }.getOrDefault(false)
+        val focusLocked = pkg != null && runCatching {
+            FocusRuntime.isActive() &&
+                pkg !in FocusRuntime.state().allowed &&
+                !SystemSafeAllowlist.isSelfPackage(pkg, context.packageName)
+        }.getOrDefault(false)
+        val guardStrictLocked = pkg != null && g.config.targetFor(pkg) != null &&
+            g.effectiveLockMode() == InterceptRules.MODE_STRICT &&
+            !runCatching { ProactiveRuntime.hasUnifiedRelease(now) }.getOrDefault(false) &&
+            !isBoutBufferActive()
+        val hasOpenOtherLock = arbiterLocked || proactiveLocked || focusLocked || guardStrictLocked
+        val neverLock = pkg != null && runCatching { LockSafety.neverLock(context, pkg) }.getOrDefault(false)
+        if (CompanionReleasePolicy.shouldReopenTarget(pkg, hasOpenOtherLock, neverLock)) {
+            runCatching { openTarget(context, pkg!!) }
+            Log.i(TAG, "companion force dropped: released and reopened $pkg ($id)")
+        } else {
+            Log.i(
+                TAG,
+                "companion force dropped: closed $pkg ($id), skip reopen " +
+                    "(arbiter=$arbiterLocked proactive=$proactiveLocked focus=$focusLocked guardStrict=$guardStrictLocked neverLock=$neverLock)",
+            )
+        }
         return true
     }
 

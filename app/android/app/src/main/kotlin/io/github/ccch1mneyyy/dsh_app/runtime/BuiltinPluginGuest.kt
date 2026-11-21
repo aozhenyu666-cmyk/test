@@ -286,6 +286,8 @@ object BuiltinPluginGuest {
                 // 2026-11-19 Wave 2 统一方案 v2（锁总线 / 任务单表 workStore）
                 "lib/lock_bus.js",
                 "lib/work_store.js",
+                // 2026-11-21 四部门收件箱纯模块（4.10）
+                "lib/inbox_dept.js",
             ),
         ),
     )

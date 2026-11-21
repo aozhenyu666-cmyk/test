@@ -240,7 +240,21 @@ export function pickNextQuizQuestion(rawBank, stateRaw) {
 export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = Date.now() } = {}) {
   const state = cleanBankUnlockState(stateRaw)
   const list = Array.isArray(rawBank?.题目) ? rawBank.题目 : []
-  const target = list.find((q, idx) => String(q.id || `idx-${idx}`) === String(questionId || state.session.currentId))
+  const submittedId = String(questionId ?? '').trim()
+  if ((state.session.currentId && submittedId !== state.session.currentId) || (!state.session.currentId && state.session.currentCard)) {
+    return {
+      ok: true,
+      duplicate: true,
+      ignored: true,
+      correct: false,
+      unlocked: false,
+      solved: state.session.solved,
+      required: state.config.requiredCount,
+      bankTotal: list.length,
+      state,
+    }
+  }
+  const target = list.find((q, idx) => String(q.id || `idx-${idx}`) === String(submittedId || state.session.currentId))
   if (!target) {
     return { ok: false, error: '题库里找不到这道题', state }
   }
@@ -318,8 +332,22 @@ export const reviewCapFor = (required) => Math.max(1, Math.floor(Math.max(1, Num
  * 锁屏答了一张个人复习卡：按权重记解锁进度（不进题库答对数），够了就解锁。
  * weight：4 选 1 答对 1、自己说记得 0.7、答错 / 忘了 0。
  */
-export function creditReviewAnswer(stateRaw, { weight = 0, now = Date.now() } = {}) {
+export function creditReviewAnswer(stateRaw, { weight = 0, cardId = '', now = Date.now() } = {}) {
   const state = cleanBankUnlockState(stateRaw)
+  const cleanCardId = String(cardId || '').replace(/^rc:/, '').trim()
+  const currentCardId = String(state.session.currentCard || '').replace(/^rc:/, '').trim()
+  if (cleanCardId && ((currentCardId && cleanCardId !== currentCardId) || (!currentCardId && state.session.currentId))) {
+    return {
+      duplicate: true,
+      ignored: true,
+      unlocked: false,
+      unlockUntil: 0,
+      unlockMinutes: state.config.unlockMinutes,
+      solved: state.session.solved,
+      required: state.config.requiredCount,
+      state,
+    }
+  }
   const nextSolved = round1(state.session.solved + Math.max(0, Number(weight) || 0))
   const unlocked = nextSolved >= state.config.requiredCount
   const unlockMinutes = state.config.unlockMinutes

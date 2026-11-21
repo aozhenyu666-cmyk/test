@@ -13,13 +13,16 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -33,6 +36,49 @@ import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveOverlay
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime
 import io.github.ccch1mneyyy.dsh_app.i18n.AppStrings
 import io.github.ccch1mneyyy.dsh_app.pet.OverlayPalette
+
+/** Pure JVM-testable response classifier and anti-double-tap policy for lockscreen quizzes (1.1, 1.3, 4.8). */
+enum class QuizResponseAction {
+    IGNORE_DUPLICATE,
+    IGNORE_STALE_QUESTION,
+    RETRY_ERROR,
+    RELEASE_NOW,
+    EARNED_NEED_SPEND,
+    ADVANCE_NEXT,
+}
+
+object QuizAntiDoubleTapPolicy {
+    fun classifyResponse(
+        submittedQuestionId: String?,
+        currentQuestionId: String?,
+        res: Map<*, *>?,
+    ): QuizResponseAction {
+        if (submittedQuestionId.isNullOrBlank() || submittedQuestionId != currentQuestionId) {
+            return QuizResponseAction.IGNORE_STALE_QUESTION
+        }
+        if (res == null) return QuizResponseAction.RETRY_ERROR
+        if (res["duplicate"] == true || res["ignored"] == true) {
+            return QuizResponseAction.IGNORE_DUPLICATE
+        }
+        if (res["ok"] == false) return QuizResponseAction.RETRY_ERROR
+        val unlocked = res["unlocked"] == true
+        val earnedOnly = res["earnedOnly"] == true || res["needSpend"] == true
+        val passActive = res["passActive"] == true
+        val spendUntil = (res["spendUntil"] as? Number)?.toLong() ?: 0L
+        val earnedAdded = (res["earnedAdded"] as? Number)?.toInt() ?: 0
+        if (passActive || spendUntil > 0L || (unlocked && !earnedOnly)) {
+            return QuizResponseAction.RELEASE_NOW
+        }
+        if (earnedOnly || earnedAdded > 0) {
+            return QuizResponseAction.EARNED_NEED_SPEND
+        }
+        return QuizResponseAction.ADVANCE_NEXT
+    }
+
+    /** Keep buttons disabled & quizBusy=true during postDelayed until renderQuizPayload finishes. */
+    fun keepBusyUntilNextQuestionRendered(action: QuizResponseAction): Boolean =
+        action == QuizResponseAction.ADVANCE_NEXT
+}
 
 /**
  * DSH Go V4 专属锁屏与专注直达页（彻底取代假退出/按数字/走 150 步/冲刺摆设）。
@@ -72,14 +118,23 @@ class InterceptPageActivity : Activity() {
     private var followupLabel: TextView? = null
     private var panelLabel: TextView? = null
 
-    // 题库闯关解锁 UI 状态
+    // 题库闯关解锁 UI 状态（锁页预览 + 整屏刷题视图）
+    private var lockPageContainer: ScrollView? = null
+    private var fullQuizContainer: LinearLayout? = null
+    private var inFullQuizMode = false
     private var quizBox: LinearLayout? = null
+    private var quizPreviewProgressView: TextView? = null
+    private var quizPreviewStemView: TextView? = null
+    private var quizStartBtn: Button? = null
     private var quizProgressView: TextView? = null
     private var quizStemView: TextView? = null
+    private var quizStemScroll: ScrollView? = null
     private var quizFeedbackView: TextView? = null
+    private var quizSpendShortcutBtn: Button? = null
     private var quizOptionsBox: LinearLayout? = null
     private var currentQuestionId: String? = null
     private var quizBusy = false
+    private var pendingQuizAdvance: Runnable? = null
 
     private val tick = object : Runnable {
         override fun run() {
@@ -141,6 +196,11 @@ class InterceptPageActivity : Activity() {
         followupUntil = ProactiveRuntime.followupUntil()
         followupBackTo = ProactiveRuntime.followupBackTo()
         followupQuestion = ProactiveRuntime.followupQuestion()
+        pendingQuizAdvance?.let { main.removeCallbacks(it) }
+        pendingQuizAdvance = null
+        inFullQuizMode = false
+        currentQuestionId = null
+        quizBusy = false
         live[id] = this
         setContentView(content(label))
         awaitVisible()
@@ -186,6 +246,10 @@ class InterceptPageActivity : Activity() {
 
     @Deprecated("Activity back handling; targetSdk 28")
     override fun onBackPressed() {
+        if (inFullQuizMode) {
+            exitFullQuizMode()
+            return
+        }
         if (followupUntil > System.currentTimeMillis()) return
         // 不再发 CATEGORY_HOME 踢回桌面：直接离开本页但保留记录，用户可自如打开 DSH 或白名单应用。
         dismissToDshOrStay()
@@ -194,6 +258,8 @@ class InterceptPageActivity : Activity() {
     override fun onDestroy() {
         main.removeCallbacks(proof)
         main.removeCallbacks(tick)
+        pendingQuizAdvance?.let { main.removeCallbacks(it) }
+        pendingQuizAdvance = null
         if (onScreenId == eventId) onScreenId = null
         InterceptRuntime.onPageGone(eventId)
         unregister()
@@ -374,19 +440,213 @@ class InterceptPageActivity : Activity() {
         dialog.show()
     }
 
-    /** 拉取题库闯关会话（答对 10 题解锁 5 分钟）。 */
+    private fun enterFullQuizMode() {
+        inFullQuizMode = true
+        lockPageContainer?.visibility = View.GONE
+        fullQuizContainer?.visibility = View.VISIBLE
+    }
+
+    private fun exitFullQuizMode() {
+        inFullQuizMode = false
+        fullQuizContainer?.visibility = View.GONE
+        lockPageContainer?.visibility = View.VISIBLE
+    }
+
+    private fun activateBoutBufferAndClose() {
+        val id = eventId ?: return
+        if (reported) return
+        val scopeKey = ProactiveRuntime.currentBoutBufferKey()
+        if (!InterceptRuntime.activateBoutBuffer(scopeKey)) {
+            android.widget.Toast.makeText(this, "本局切出缓冲已用完（每局限 1 次）", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        reported = true
+        main.removeCallbacks(proof)
+        pendingQuizAdvance?.let { main.removeCallbacks(it) }
+        pendingQuizAdvance = null
+        InterceptRuntime.onDismissed(id, "bout_buffer")
+        android.widget.Toast.makeText(this, "已开启 2.5 分钟切出缓冲（本局 1 次），到期恢复拦截", android.widget.Toast.LENGTH_SHORT).show()
+        if (!isFinishing) finish()
+    }
+
+    /** 花挣来的余额临时放行：选择时长 + 写一句理由 -> POST /seals action=spend -> 统一放行并打开目标 App。 */
+    private fun showSpendBalanceDialog(defaultReason: String = "") {
+        val ctx = this
+        val durations = listOf(5, 10, 15, 30)
+        val cachedLeft = ProactiveRuntime.cachedFunLeft()
+        var selectedMinutes = if (cachedLeft != null && cachedLeft in 5..9) 5 else 10
+        val column = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(20), dp(20), dp(18))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(24).toFloat()
+                setColor(palette.fill)
+                setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+            }
+        }
+        column.addView(TextView(ctx).apply {
+            text = "花挣来的余额 · 到点自动回专注"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextColor(palette.onTonal)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(999).toFloat()
+                setColor(palette.tonal)
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(10)
+        })
+        column.addView(TextView(ctx).apply {
+            text = "花余额放行"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+            setTextColor(palette.ink)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 0, 0, dp(4))
+        })
+        column.addView(TextView(ctx).apply {
+            text = if (cachedLeft != null) {
+                "当前可用娱乐余额约 $cachedLeft 分钟。选择放行时长并写一句理由（至少 4 个字）。"
+            } else {
+                "选择放行时长（5–60 分钟）并写一句理由（至少 4 个字），有余额即可立即放行。"
+            }
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTextColor(palette.muted)
+            setLineSpacing(0f, 1.25f)
+            setPadding(0, 0, 0, dp(12))
+        })
+        val chipViews = ArrayList<TextView>(durations.size)
+        fun syncChips() {
+            chipViews.forEachIndexed { idx, tv ->
+                val active = durations[idx] == selectedMinutes
+                tv.setTextColor(if (active) palette.onTonal else palette.ink)
+                tv.setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+                tv.background = GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat()
+                    setColor(if (active) palette.tonal else palette.pressed)
+                    setStroke(dp(if (active) 2 else 1).coerceAtLeast(1), if (active) palette.accent else palette.stroke)
+                }
+            }
+        }
+        val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+        durations.forEachIndexed { idx, mins ->
+            val chip = TextView(ctx).apply {
+                text = "${mins} 分钟"
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setPadding(dp(8), dp(10), dp(8), dp(10))
+                setOnClickListener {
+                    selectedMinutes = mins
+                    syncChips()
+                }
+            }
+            chipViews.add(chip)
+            row.addView(chip, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                if (idx < durations.lastIndex) marginEnd = dp(6)
+            })
+        }
+        column.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(10)
+        })
+        syncChips()
+        val reasonBox = EditText(ctx).apply {
+            hint = "理由（花在什么上、为什么现在，至少 4 字）"
+            if (defaultReason.isNotBlank()) setText(defaultReason)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextColor(palette.ink)
+            setHintTextColor(palette.muted)
+            minLines = 2
+            maxLines = 3
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(palette.pressed)
+                setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+            }
+        }
+        column.addView(reasonBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(12)
+        })
+        val dialog = android.app.Dialog(this)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setContentView(ScrollView(ctx).apply { addView(column) })
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        lateinit var confirmBtn: Button
+        confirmBtn = pillButton("确认花余额放行", primary = true, weight = 1.5f, onTap = {
+            val whyText = reasonBox.text?.toString()?.trim().orEmpty()
+            if (whyText.length < 4) {
+                android.widget.Toast.makeText(ctx, "请先写一句不少于 4 个字的理由", android.widget.Toast.LENGTH_SHORT).show()
+                return@pillButton
+            }
+            confirmBtn.isEnabled = false
+            confirmBtn.text = "放行中…"
+            ProactiveRuntime.spendBalance(selectedMinutes, whyText) { ok, _, errMsg ->
+                if (isFinishing || isDestroyed) return@spendBalance
+                if (!ok) {
+                    confirmBtn.isEnabled = true
+                    confirmBtn.text = "确认花余额放行"
+                    android.widget.Toast.makeText(ctx, errMsg ?: "花余额放行失败", android.widget.Toast.LENGTH_LONG).show()
+                    return@spendBalance
+                }
+                dialog.dismiss()
+                android.widget.Toast.makeText(ctx, errMsg ?: "✓ 已花余额放行 $selectedMinutes 分钟", android.widget.Toast.LENGTH_LONG).show()
+                reported = true
+                pendingQuizAdvance?.let { main.removeCallbacks(it) }
+                pendingQuizAdvance = null
+                eventId?.let { InterceptRuntime.onDismissed(it, "spend_balance") }
+                val pkg = packageName
+                if (!isFinishing) finish()
+                if (pkg != null) InterceptRuntime.openTarget(ctx, pkg)
+            }
+        })
+        val cancelBtn = pillButton("取消", secondary = true, weight = 1f, onTap = { dialog.dismiss() })
+        column.addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(cancelBtn, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(8) })
+            addView(confirmBtn, LinearLayout.LayoutParams(0, dp(46), 1.5f))
+        })
+        dialog.show()
+    }
+
+    private fun setQuizOptionsEnabled(enabled: Boolean) {
+        val box = quizOptionsBox ?: return
+        fun applyTo(v: View) {
+            if (v is Button) {
+                v.isEnabled = enabled
+                v.alpha = if (enabled) 1f else 0.5f
+            } else if (v is ViewGroup) {
+                for (i in 0 until v.childCount) {
+                    applyTo(v.getChildAt(i))
+                }
+            }
+        }
+        applyTo(box)
+    }
+
+    /** 拉取题库闯关会话（答对题数挣余额或临时放行）。 */
     private fun loadQuizQuestion() {
         val box = quizBox ?: return
+        pendingQuizAdvance?.let { main.removeCallbacks(it) }
+        pendingQuizAdvance = null
         quizBusy = true
+        setQuizOptionsEnabled(false)
         quizProgressView?.text = "题库读取中…"
+        quizPreviewProgressView?.text = "题库读取中…"
         ProactiveRuntime.fetchBankQuizSession { res ->
             if (isFinishing || isDestroyed) return@fetchBankQuizSession
             main.post {
-                quizBusy = false
+                if (isFinishing || isDestroyed) return@post
                 if (res == null || res["ok"] != true) {
+                    quizBusy = false
+                    currentQuestionId = null
+                    val emptyMsg = "还没有导入解锁题库。请点击上方「打开 DSH Go 工作台 / 题库」，导入考公/专业 JSON 或纯文本题库即可刷题挣余额。"
                     quizProgressView?.text = "暂无题库或引擎未连接"
-                    quizStemView?.text = "还没有导入解锁题库。请点击下方「回 DSH 导入题库」，导入考公/专业 JSON 或纯文本题库即可用「答 10 题换 5 分钟」。"
+                    quizPreviewProgressView?.text = "暂无题库或引擎未连接"
+                    quizStemView?.text = emptyMsg
+                    quizPreviewStemView?.text = emptyMsg
+                    quizStartBtn?.visibility = View.GONE
                     quizFeedbackView?.visibility = View.GONE
+                    quizSpendShortcutBtn?.visibility = View.GONE
                     quizOptionsBox?.removeAllViews()
                     box.visibility = View.VISIBLE
                     return@post
@@ -396,7 +656,11 @@ class InterceptPageActivity : Activity() {
         }
     }
 
-    private fun renderQuizPayload(res: Map<*, *>) {
+    private fun renderQuizPayload(res: Map<*, *>, keepFeedback: Boolean = false) {
+        if (!keepFeedback) {
+            quizFeedbackView?.visibility = View.GONE
+            quizSpendShortcutBtn?.visibility = View.GONE
+        }
         // 2026-11-21 自己对答案的题只算 0.7 题：进度可能是小数，整数时不带小数点。
         val solvedRaw = (res["solved"] as? Number)?.toDouble() ?: 0.0
         val solved = if (solvedRaw % 1.0 == 0.0) solvedRaw.toInt().toString() else String.format(java.util.Locale.US, "%.1f", solvedRaw)
@@ -404,24 +668,46 @@ class InterceptPageActivity : Activity() {
         val unlockMin = (res["unlockMinutes"] as? Number)?.toInt() ?: 5
         val bankTotal = (res["bankTotal"] as? Number)?.toInt() ?: 0
         if (bankTotal <= 0 && res["question"] == null) {
+            currentQuestionId = null
+            val msg = "请先在 DSH Go 的「题库中心」粘贴或导入题目；之后遇到娱乐锁屏，只要做对 $required 题即可挣 ${unlockMin} 分钟余额。"
             quizProgressView?.text = "题库为空（0 题）"
-            quizStemView?.text = "请先在 DSH Go 的「题库中心」粘贴或导入题目；之后遇到娱乐锁屏，只要做对 $required 题即可放行 $unlockMin 分钟。"
+            quizPreviewProgressView?.text = "题库为空（0 题）"
+            quizStemView?.text = msg
+            quizPreviewStemView?.text = msg
+            quizStartBtn?.visibility = View.GONE
             quizFeedbackView?.visibility = View.GONE
+            quizSpendShortcutBtn?.visibility = View.GONE
             quizOptionsBox?.removeAllViews()
+            quizBusy = false
             return
         }
         val q = res["question"] as? Map<*, *>
         if (q == null) {
+            currentQuestionId = null
+            val msg = "题库已全部刷完，可点「回到 DSH Go」补充新题库。"
             quizProgressView?.text = "今日进度 $solved / $required 题"
-            quizStemView?.text = "题库已全部刷完，可点「回到 DSH Go」补充新题库。"
+            quizPreviewProgressView?.text = "今日进度 $solved / $required 题"
+            quizStemView?.text = msg
+            quizPreviewStemView?.text = msg
+            quizStartBtn?.visibility = View.GONE
             quizOptionsBox?.removeAllViews()
+            quizBusy = false
             return
         }
         currentQuestionId = q["id"] as? String
-        quizProgressView?.text = "刷题解锁 $solved / $required 题 · 达标放行 $unlockMin 分钟"
-        quizStemView?.text = (q["stem"] as? String).orEmpty()
+        val progressText = "刷题挣余额 $solved / $required 题 · 达标 +$unlockMin 分钟"
+        val stemText = (q["stem"] as? String).orEmpty()
+        quizProgressView?.text = progressText
+        quizPreviewProgressView?.text = progressText
+        quizStemView?.text = stemText
+        quizPreviewStemView?.text = stemText
+        quizStemScroll?.scrollTo(0, 0)
+        quizStartBtn?.visibility = View.VISIBLE
         val rawOptions = q["options"] as? List<*> ?: emptyList<Any?>()
-        val optBox = quizOptionsBox ?: return
+        val optBox = quizOptionsBox ?: run {
+            quizBusy = false
+            return
+        }
         optBox.removeAllViews()
         if (rawOptions.isEmpty() && q["kind"] == "review") {
             // 2026-11-21 个人复习卡（没有选项）：先在心里答，再看答案，自己判「记得 / 忘了」。
@@ -437,9 +723,9 @@ class InterceptPageActivity : Activity() {
                 optBox.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     addView(pillButton("忘了", secondary = true, weight = 1f) { submitQuizChoice("FORGOT") },
-                        LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(8) })
+                        LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
                     addView(pillButton("记得", secondary = false, weight = 1f) { submitQuizChoice("REMEMBER") },
-                        LinearLayout.LayoutParams(0, dp(46), 1f))
+                        LinearLayout.LayoutParams(0, dp(48), 1f))
                 })
             })
         } else if (rawOptions.isEmpty()) {
@@ -457,22 +743,30 @@ class InterceptPageActivity : Activity() {
                 val btn = pillButton("$letter. $text", secondary = true) {
                     submitQuizChoice(letter)
                 }.apply {
+                    textSize = 15f
+                    minHeight = dp(48)
                     gravity = Gravity.CENTER_VERTICAL or Gravity.START
-                    setPadding(dp(14), dp(8), dp(14), dp(8))
+                    setPadding(dp(16), dp(11), dp(16), dp(11))
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = dp(6) }
+                    ).apply { topMargin = dp(8) }
                 }
                 optBox.addView(btn)
             }
         }
+        setQuizOptionsEnabled(true)
+        quizBusy = false
     }
 
     private fun submitQuizChoice(answer: String) {
         val qid = currentQuestionId ?: return
         if (quizBusy) return
         quizBusy = true
+        setQuizOptionsEnabled(false)
+        pendingQuizAdvance?.let { main.removeCallbacks(it) }
+        pendingQuizAdvance = null
+        quizSpendShortcutBtn?.visibility = View.GONE
         quizFeedbackView?.apply {
             visibility = View.VISIBLE
             text = "正在判题…"
@@ -481,42 +775,96 @@ class InterceptPageActivity : Activity() {
         ProactiveRuntime.submitBankQuizAnswer(qid, answer) { res ->
             if (isFinishing || isDestroyed) return@submitBankQuizAnswer
             main.post {
-                quizBusy = false
-                if (res == null) {
-                    quizFeedbackView?.text = "暂未连上引擎，请稍后重试"
-                    return@post
-                }
-                val correct = res["correct"] == true
-                val unlocked = res["unlocked"] == true
-                val explain = (res["explain"] as? String).orEmpty()
-                val correctAns = (res["correctAnswer"] as? String).orEmpty()
-                val unlockMin = (res["unlockMinutes"] as? Number)?.toInt() ?: 5
-                if (unlocked) {
-                    android.widget.Toast.makeText(
-                        this,
-                        "✓ 已答满目标题数，临时放行 $unlockMin 分钟！",
-                        android.widget.Toast.LENGTH_LONG,
-                    ).show()
-                    reported = true
-                    eventId?.let { InterceptRuntime.onDismissed(it, "quiz_unlock") }
-                    val pkg = packageName
-                    if (!isFinishing) finish()
-                    if (pkg != null) InterceptRuntime.openTarget(this, pkg)
-                    return@post
-                }
-                quizFeedbackView?.apply {
-                    visibility = View.VISIBLE
-                    setTextColor(if (correct) Color.parseColor("#1D8F63") else Color.parseColor("#C94A4A"))
-                    text = if (correct) {
-                        "✓ 回答正确！" + (if (explain.isNotBlank()) " $explain" else "")
-                    } else {
-                        "✗ 正确答案：$correctAns。" + (if (explain.isNotBlank()) "\n解析：$explain" else "")
+                if (isFinishing || isDestroyed || currentQuestionId != qid) return@post
+                when (val action = QuizAntiDoubleTapPolicy.classifyResponse(qid, currentQuestionId, res)) {
+                    QuizResponseAction.IGNORE_STALE_QUESTION -> return@post
+                    QuizResponseAction.IGNORE_DUPLICATE -> {
+                        if (res?.get("question") is Map<*, *>) {
+                            renderQuizPayload(res)
+                        } else {
+                            quizFeedbackView?.apply {
+                                visibility = View.VISIBLE
+                                setTextColor(palette.muted)
+                                text = "已忽略重复提交，正在同步下一题…"
+                            }
+                            loadQuizQuestion()
+                        }
+                        return@post
+                    }
+                    QuizResponseAction.RETRY_ERROR -> {
+                        quizBusy = false
+                        setQuizOptionsEnabled(true)
+                        val errText = (res?.get("error") as? String)?.takeIf { it.isNotBlank() }
+                            ?: "暂未连上引擎，请稍后重试"
+                        quizFeedbackView?.apply {
+                            visibility = View.VISIBLE
+                            setTextColor(Color.parseColor("#C94A4A"))
+                            text = errText
+                        }
+                        return@post
+                    }
+                    QuizResponseAction.RELEASE_NOW -> {
+                        val unlockMin = (res?.get("unlockMinutes") as? Number)?.toInt() ?: 5
+                        android.widget.Toast.makeText(
+                            this,
+                            "✓ 已答满目标题数，临时放行 $unlockMin 分钟！",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        reported = true
+                        eventId?.let { InterceptRuntime.onDismissed(it, "quiz_unlock") }
+                        val pkg = packageName
+                        if (!isFinishing) finish()
+                        if (pkg != null) InterceptRuntime.openTarget(this, pkg)
+                        return@post
+                    }
+                    QuizResponseAction.EARNED_NEED_SPEND -> {
+                        val earnedAdded = (res?.get("earnedAdded") as? Number)?.toInt() ?: 0
+                        val unlockMin = (res?.get("unlockMinutes") as? Number)?.toInt() ?: 5
+                        val addedMin = if (earnedAdded > 0) earnedAdded else unlockMin
+                        quizFeedbackView?.apply {
+                            visibility = View.VISIBLE
+                            setTextColor(Color.parseColor("#1D8F63"))
+                            text = "✓ 已答满目标题数！已挣得 +$addedMin 分钟娱乐余额（本次不自动发通行证），点击下方即可花余额放行。"
+                        }
+                        quizSpendShortcutBtn?.visibility = View.VISIBLE
+                        quizBusy = false
+                        setQuizOptionsEnabled(true)
+                        if (res?.get("question") is Map<*, *>) {
+                            val r = Runnable {
+                                pendingQuizAdvance = null
+                                if (!isFinishing && !isDestroyed && currentQuestionId == qid) {
+                                    renderQuizPayload(res, keepFeedback = true)
+                                }
+                            }
+                            pendingQuizAdvance = r
+                            main.postDelayed(r, 1_300L)
+                        }
+                        return@post
+                    }
+                    QuizResponseAction.ADVANCE_NEXT -> {
+                        val correct = res?.get("correct") == true
+                        val explain = (res?.get("explain") as? String).orEmpty()
+                        val correctAns = (res?.get("correctAnswer") as? String).orEmpty()
+                        quizFeedbackView?.apply {
+                            visibility = View.VISIBLE
+                            setTextColor(if (correct) Color.parseColor("#1D8F63") else Color.parseColor("#C94A4A"))
+                            text = if (correct) {
+                                "✓ 回答正确！" + (if (explain.isNotBlank()) " $explain" else "")
+                            } else {
+                                "✗ 正确答案：$correctAns。" + (if (explain.isNotBlank()) "\n解析：$explain" else "")
+                            }
+                        }
+                        // 保持 quizBusy = true 且按钮禁用，直到 postDelayed 渲染完下一题再解锁（1.1 防连点空窗）。
+                        val r = Runnable {
+                            pendingQuizAdvance = null
+                            if (!isFinishing && !isDestroyed && currentQuestionId == qid && res != null) {
+                                renderQuizPayload(res)
+                            }
+                        }
+                        pendingQuizAdvance = r
+                        main.postDelayed(r, if (correct) 450L else 1_300L)
                     }
                 }
-                // 短暂展示反馈并刷新下一题
-                main.postDelayed({
-                    if (!isFinishing && !isDestroyed) renderQuizPayload(res)
-                }, if (correct) 450L else 1_300L)
             }
         }
     }
@@ -787,7 +1135,60 @@ class InterceptPageActivity : Activity() {
                 bottomMargin = dp(10)
             })
 
-            // 2. 题库闯关解锁（答对 10 题开 5 分钟，替代按数字与走 150 步）
+            // 1.5 娱乐限制：刷题挣余额 / 花余额放行指引 + 局内切出缓冲（1.3, 4.8, 4.13）
+            val isLegacyNeedPass = ArbiterShadow.isNeedPass(ctx, packageName)
+            val canBoutBuffer = ProactiveRuntime.canOfferBoutBuffer(lockMode)
+            if (!isLegacyNeedPass || canBoutBuffer) {
+                addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(16).toFloat()
+                        setColor(palette.pressed)
+                        setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                    }
+                    if (!isLegacyNeedPass) {
+                        addView(TextView(ctx).apply {
+                            text = "刷题挣余额 / 花余额放行"
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                            setTypeface(typeface, Typeface.BOLD)
+                            setTextColor(palette.ink)
+                            setPadding(0, 0, 0, dp(4))
+                        })
+                        val leftBal = ProactiveRuntime.cachedFunLeft()
+                        addView(TextView(ctx).apply {
+                            text = if (leftBal != null) {
+                                "当前娱乐余额 $leftBal 分钟 · 刷题答满目标即可挣余额，写一句理由即可花余额临时放行。"
+                            } else {
+                                "刷题答满目标即可挣娱乐余额；写一句理由即可花余额临时放行（不占紧急次数）。"
+                            }
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                            setTextColor(palette.muted)
+                            setLineSpacing(0f, 1.25f)
+                            setPadding(0, 0, 0, dp(8))
+                        })
+                        addView(pillButton("花余额放行", primary = true) {
+                            showSpendBalanceDialog()
+                        }.apply {
+                            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44))
+                        })
+                    }
+                    if (canBoutBuffer) {
+                        addView(pillButton("切出缓冲 2.5 分钟（本局 1 次）", secondary = true) {
+                            activateBoutBufferAndClose()
+                        }.apply {
+                            layoutParams = LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                dp(42),
+                            ).apply { if (!isLegacyNeedPass) topMargin = dp(6) }
+                        })
+                    }
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(10)
+                })
+            }
+
+            // 2. 题库闯关预览卡（点击「开始整屏刷题」进入独立整屏答题视图，长题干绝不挤压选项）
             val qCard = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(12), dp(12), dp(12))
@@ -797,34 +1198,33 @@ class InterceptPageActivity : Activity() {
                     setStroke(dp(1).coerceAtLeast(1), palette.stroke)
                 }
                 addView(TextView(ctx).apply {
-                    quizProgressView = this
+                    quizPreviewProgressView = this
                     text = "刷题解锁 · 加载中…"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(palette.accent)
                     setPadding(0, 0, 0, dp(6))
                 })
                 addView(TextView(ctx).apply {
-                    quizStemView = this
+                    quizPreviewStemView = this
                     text = ""
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    maxLines = 3
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
                     setTextColor(palette.ink)
                     setLineSpacing(0f, 1.3f)
-                    setPadding(0, 0, 0, dp(6))
+                    setPadding(0, 0, 0, dp(8))
                 })
-                addView(TextView(ctx).apply {
-                    quizFeedbackView = this
+                addView(pillButton("开始整屏刷题", primary = false) {
+                    enterFullQuizMode()
+                }.apply {
+                    quizStartBtn = this
                     visibility = View.GONE
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-                    setLineSpacing(0f, 1.25f)
-                    setPadding(0, 0, 0, dp(6))
-                })
-                addView(LinearLayout(ctx).apply {
-                    quizOptionsBox = this
-                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44))
                 })
             }
             quizBox = qCard
+            qCard.setOnClickListener { if (currentQuestionId != null) enterFullQuizMode() }
             addView(qCard, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = dp(10)
             })
@@ -917,10 +1317,109 @@ class InterceptPageActivity : Activity() {
             quickRow(ctx)?.let { addView(it) }
             refreshChatSend()
         }
-        return ScrollView(ctx).apply {
+        val lockScroll = ScrollView(ctx).apply {
             isFillViewport = false
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             addView(card)
+        }
+        lockPageContainer = lockScroll
+
+        // 整屏刷题视图：顶栏（进度 + 返回锁页） -> 中间独立 ScrollView 题干/材料 -> 底部固定大号选项与反馈区
+        val fullQuiz = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            isClickable = true
+            fitsSystemWindows = true
+            setBackgroundColor(palette.fill)
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+
+            // 顶栏
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(ctx).apply {
+                    quizProgressView = this
+                    text = "刷题解锁 · 加载中…"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(palette.accent)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        marginEnd = dp(10)
+                    }
+                })
+                addView(pillButton("返回锁页", secondary = true) {
+                    exitFullQuizMode()
+                }.apply {
+                    textSize = 13f
+                    setPadding(dp(14), 0, dp(14), 0)
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        dp(38),
+                    )
+                })
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(10)
+            })
+
+            // 中间独立可滚动题干/材料区
+            addView(ScrollView(ctx).apply {
+                quizStemScroll = this
+                isFillViewport = false
+                overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+                setPadding(dp(14), dp(14), dp(14), dp(14))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(16).toFloat()
+                    setColor(palette.pressed)
+                    setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                }
+                addView(TextView(ctx).apply {
+                    quizStemView = this
+                    text = ""
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+                    setTextColor(palette.ink)
+                    setLineSpacing(0f, 1.38f)
+                })
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+
+            // 底部固定大号选项按钮与反馈区
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(ctx).apply {
+                    quizFeedbackView = this
+                    visibility = View.GONE
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setLineSpacing(0f, 1.25f)
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(12).toFloat()
+                        setColor(palette.pressed)
+                    }
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(6)
+                })
+                addView(pillButton("一键花余额放行", primary = true) {
+                    showSpendBalanceDialog("刷题挣到余额，放松休息")
+                }.apply {
+                    quizSpendShortcutBtn = this
+                    visibility = View.GONE
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(46),
+                    ).apply { bottomMargin = dp(6) }
+                })
+                addView(LinearLayout(ctx).apply {
+                    quizOptionsBox = this
+                    orientation = LinearLayout.VERTICAL
+                })
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(10)
+            })
+        }
+        fullQuizContainer = fullQuiz
+
+        return FrameLayout(ctx).apply {
+            addView(lockScroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(fullQuiz, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         }
     }
 

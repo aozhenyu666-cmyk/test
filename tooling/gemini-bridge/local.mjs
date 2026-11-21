@@ -5,6 +5,7 @@
 // 另外还要一把单独的本机密钥（localKey，跟手机密钥不是一把）：Authorization: Bearer <localKey>。
 //
 //   GET  /bridge/local/today              手机最近一次同步的「今天」（时间轴、验收、到期复习卡）
+//   GET  /bridge/local/inbox              电脑端收件箱（大肥鱼/收件箱.md）+ 手机端收件箱/卡壳/未过保底/复习摘要
 //   POST /bridge/local/ingest             推复习卡（BrainOS 命题卡）/ 报复习评分 / 顺带一条回执
 //   POST /bridge/local/import-questions   一批题灌进手机题库（按题干去重）
 //
@@ -12,7 +13,7 @@
 // 这里同样没有任何解锁、加额度、豁免、改小、删除的口子。
 
 import { safeEqual } from './store.mjs'
-import { enqueue, todayText, reviewText, PHONE_STALE_MS, RESULT_WAIT_MS } from './mcp.mjs'
+import { enqueue, todayText, reviewText, inboxSummary, inboxText, PHONE_STALE_MS, RESULT_WAIT_MS } from './mcp.mjs'
 
 export const LOCAL_PORT = 8788
 const MAX_BODY = 1_000_000
@@ -87,10 +88,11 @@ function waitResult(store, events, id, ms) {
 }
 
 /**
- * @param {{store, events, resultWaitMs?}} opts
+ * @param {{store, events, vaultDir?, resultWaitMs?}} opts
  * @returns {(req, res) => Promise<void>}
  */
-export function createLocalApi({ store, events, resultWaitMs = RESULT_WAIT_MS }) {
+export function createLocalApi({ store, events, vaultDir = '', resultWaitMs = RESULT_WAIT_MS }) {
+  const resolvedVaultDir = String(vaultDir || process.env.DAFEIYU_VAULT || '').trim()
   async function queue(req, res, url, type, payload) {
     const cmd = enqueue(store, type, payload)
     const age = store.now() - Number(store.state.snapshotAt || 0)
@@ -120,6 +122,15 @@ export function createLocalApi({ store, events, resultWaitMs = RESULT_WAIT_MS })
           verifier: snap?.verify || null,
           review: snap?.review || null,
           health: snap?.health?.line || '',
+        })
+      }
+      if (req.method === 'GET' && path === '/bridge/local/inbox') {
+        const rawLimit = Number(url.searchParams.get('limit'))
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(50, Math.max(1, Math.floor(rawLimit))) : 20
+        const summary = inboxSummary(store, resolvedVaultDir, { limit })
+        return send(res, 200, {
+          ...summary,
+          inboxText: inboxText(summary),
         })
       }
       if (req.method !== 'POST') return send(res, 404, { ok: false, error: 'not_found' })

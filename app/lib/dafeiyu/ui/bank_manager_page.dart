@@ -81,7 +81,7 @@ class _BankManagerPageState extends State<BankManagerPage> {
     });
   }
 
-  /// 选文件导入：可以一次选多个；Word / Excel 先在手机上抽成文字；每个文件分块传给引擎（引擎收请求上限 16 KB）。
+  /// 选文件导入：可以一次选多个；Word / Excel 先在手机上抽成文字；每个文件先预览解析结果，确认后再入库。
   Future<void> _pickFileImport() async {
     List<PlatformFile> picked;
     try {
@@ -98,7 +98,9 @@ class _BankManagerPageState extends State<BankManagerPage> {
       _busy = true;
       _banner = '读取 ${picked.length} 个文件…';
     });
-    final lines = <String>[];
+    final preErrors = <String>[];
+    final validPreps = <_PreparedUpload>[];
+    String firstSample = '';
     var first = true;
     for (final f in picked) {
       try {
@@ -109,20 +111,57 @@ class _BankManagerPageState extends State<BankManagerPage> {
         }
         final ext = extractBankText(f.name, bytes.takeBytes());
         if (ext.text.trim().isEmpty) {
-          lines.add('「${f.name}」：${ext.problem ?? '是空的'}');
+          preErrors.add('「${f.name}」：${ext.problem ?? '是空的'}');
           continue;
         }
-        final res = await _uploadText(
+        final bankName = picked.length == 1 ? f.name.replaceAll(RegExp(r'\.[^.]+$'), '') : _nameCtrl.text.trim();
+        final prep = await _previewUploadText(
           ext.text,
-          name: picked.length == 1 ? f.name.replaceAll(RegExp(r'\.[^.]+$'), '') : _nameCtrl.text.trim(),
+          name: bankName,
           append: first ? _appendMode : true,
           label: f.name,
+          extractProblem: ext.problem,
         );
+        final res = prep.preview;
+        final count = _previewCount(res);
+        if (res == null || res['ok'] != true || count == 0) {
+          final err = '${res?['error'] ?? (res == null ? '引擎没应答' : '未能识别出题目格式')}';
+          preErrors.add('「${f.name}」：$err');
+          if (firstSample.isEmpty && '${res?['sample'] ?? ''}'.trim().isNotEmpty) {
+            firstSample = '${res?['sample']}';
+          }
+          continue;
+        }
         first = false;
-        lines.add(_reportLine(f.name, res) + (ext.problem != null ? '（${ext.problem}）' : ''));
+        validPreps.add(prep);
       } on Exception catch (e) {
-        lines.add('「${f.name}」读取失败：$e');
+        preErrors.add('「${f.name}」读取失败：$e');
       }
+    }
+    if (!mounted) return;
+    if (validPreps.isEmpty) {
+      final errText = preErrors.isEmpty ? '未能识别出题目格式' : preErrors.join('\n');
+      setState(() {
+        _busy = false;
+        _banner = errText;
+      });
+      await _showPreviewErrorDialog(title: '文件未能识别题目', error: errText, sample: firstSample);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _banner = null;
+    });
+    final confirmed = await _showImportPreviewSheet(validPreps, preErrors: preErrors);
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _busy = true;
+      _banner = '正在入库…';
+    });
+    final lines = <String>[...preErrors];
+    for (final prep in validPreps) {
+      final res = await _commitPrepared(prep);
+      lines.add(_reportLine(prep.label, res) + (prep.extractProblem != null ? '（${prep.extractProblem}）' : ''));
     }
     await _refresh();
     if (!mounted) return;
@@ -132,23 +171,124 @@ class _BankManagerPageState extends State<BankManagerPage> {
     });
   }
 
-  /// 一份文字导进引擎：小的一次传，大的分块传（begin → chunk… → finish）。
-  Future<Map<String, dynamic>?> _uploadText(String text, {required String name, required bool append, String label = ''}) async {
+  /// 一份文字先发给引擎做解析预览：小的一次传，大的分块传（begin → chunk… → finish previewOnly:true）。
+  Future<_PreparedUpload> _previewUploadText(
+    String text, {
+    required String name,
+    required bool append,
+    String label = '',
+    String? extractProblem,
+  }) async {
     final bankName = name.isEmpty ? '备考真题库' : name;
     if (utf8.encode(text).length < 10 * 1024) {
-      return _channel.bankOp({'action': 'import', 'name': bankName, 'raw': text, 'append': append});
+      final res = await _channel.bankOp({
+        'action': 'import',
+        'name': bankName,
+        'raw': text,
+        'append': append,
+        'previewOnly': true,
+      });
+      return _PreparedUpload(
+        label: label,
+        bankName: bankName,
+        raw: text,
+        append: append,
+        chunked: false,
+        uploadId: null,
+        preview: res,
+        extractProblem: extractProblem,
+      );
     }
     final id = 'u${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}';
     final begin = await _channel.bankOp({'action': 'import-begin', 'uploadId': id});
-    if (begin?['ok'] != true) return {'ok': false, 'error': '引擎没应答（开始上传失败）'};
+    if (begin?['ok'] != true) {
+      return _PreparedUpload(
+        label: label,
+        bankName: bankName,
+        raw: text,
+        append: append,
+        chunked: true,
+        uploadId: id,
+        preview: const {'ok': false, 'error': '引擎没应答（开始上传失败）'},
+        extractProblem: extractProblem,
+      );
+    }
     final parts = chunkText(text);
     for (var i = 0; i < parts.length; i++) {
       if (mounted) setState(() => _banner = '上传${label.isEmpty ? '' : '「$label」'} ${i + 1}/${parts.length}…');
       final r = await _channel.bankOp({'action': 'import-chunk', 'uploadId': id, 'index': i, 'text': parts[i]});
-      if (r?['ok'] != true) return {'ok': false, 'error': '第 ${i + 1} 块没传上：${r?['error'] ?? '引擎没应答'}'};
+      if (r?['ok'] != true) {
+        return _PreparedUpload(
+          label: label,
+          bankName: bankName,
+          raw: text,
+          append: append,
+          chunked: true,
+          uploadId: id,
+          preview: {'ok': false, 'error': '第 ${i + 1} 块没传上：${r?['error'] ?? '引擎没应答'}'},
+          extractProblem: extractProblem,
+        );
+      }
     }
-    if (mounted) setState(() => _banner = '解析${label.isEmpty ? '' : '「$label」'}…');
-    return _channel.bankOp({'action': 'import-finish', 'uploadId': id, 'name': bankName, 'append': append});
+    if (mounted) setState(() => _banner = '解析预览${label.isEmpty ? '' : '「$label」'}…');
+    final res = await _channel.bankOp({
+      'action': 'import-finish',
+      'uploadId': id,
+      'name': bankName,
+      'append': append,
+      'previewOnly': true,
+    });
+    final resolvedId = res?['uploadId'] is String && (res!['uploadId'] as String).isNotEmpty
+        ? res['uploadId'] as String
+        : id;
+    return _PreparedUpload(
+      label: label,
+      bankName: bankName,
+      raw: text,
+      append: append,
+      chunked: true,
+      uploadId: resolvedId,
+      preview: res,
+      extractProblem: extractProblem,
+    );
+  }
+
+  /// 确认预览后真正入库。
+  Future<Map<String, dynamic>?> _commitPrepared(_PreparedUpload prep) {
+    if (prep.chunked) {
+      return _channel.bankOp({
+        'action': 'import-finish',
+        'uploadId': prep.uploadId,
+        'name': prep.bankName,
+        'append': prep.append,
+        'previewOnly': false,
+      });
+    }
+    return _channel.bankOp({
+      'action': 'import',
+      'name': prep.bankName,
+      'raw': prep.raw,
+      'append': prep.append,
+    });
+  }
+
+  List<Map<String, dynamic>> _previewItems(Map<String, dynamic>? res) {
+    final raw = res?['items'];
+    if (raw is! List) return const [];
+    return [for (final item in raw) if (item is Map) Map<String, dynamic>.from(item)];
+  }
+
+  int _previewCount(Map<String, dynamic>? res) {
+    final items = _previewItems(res);
+    return (res?['count'] as num?)?.toInt() ?? (res?['total'] as num?)?.toInt() ?? items.length;
+  }
+
+  int _previewSkippedCount(Map<String, dynamic>? res) {
+    if (res?['skippedCount'] is num) return (res!['skippedCount'] as num).toInt();
+    final skipped = res?['skipped'];
+    if (skipped is num) return skipped.toInt();
+    if (skipped is List) return skipped.length;
+    return 0;
   }
 
   String _reportLine(String label, Map<String, dynamic>? res) {
@@ -182,6 +322,346 @@ D. 个人主观情绪
     setState(() => _banner = '已填入示例模板，可按此格式粘贴更多考公/专业题');
   }
 
+  Future<void> _showPreviewErrorDialog({
+    required String title,
+    required String error,
+    required String sample,
+  }) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final colors = DshColors.of(ctx);
+        return AlertDialog(
+          key: const ValueKey('bank-import-error-dialog'),
+          title: Row(
+            children: [
+              Icon(AppIcons.error, size: 22, color: colors.danger),
+              const SizedBox(width: 8),
+              Expanded(child: Text(title)),
+            ],
+          ),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(error, style: theme.textTheme.bodyMedium?.copyWith(color: colors.danger)),
+                  if (sample.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text('标准格式样例：', style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: colors.codeWellBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: colors.codeWellBorder),
+                      ),
+                      child: SelectableText(
+                        sample,
+                        style: theme.textTheme.bodySmall?.copyWith(color: colors.codeWellFg),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            if (sample.trim().isNotEmpty)
+              TextButton(
+                key: const ValueKey('bank-error-use-sample'),
+                onPressed: () {
+                  _rawCtrl.text = sample;
+                  Navigator.of(ctx).pop();
+                  setState(() => _banner = '已填入标准样例，可直接修改或点击预览入库');
+                },
+                child: const Text('填入该样例'),
+              ),
+            FilledButton(
+              key: const ValueKey('bank-error-close'),
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<bool?> _showImportPreviewSheet(
+    List<_PreparedUpload> preps, {
+    List<String> preErrors = const [],
+  }) {
+    final totalCount = preps.fold<int>(0, (s, p) => s + _previewCount(p.preview));
+    final totalSkipped = preps.fold<int>(0, (s, p) => s + _previewSkippedCount(p.preview));
+    final formats = <String>{
+      for (final p in preps)
+        if ('${p.preview?['format'] ?? ''}'.trim().isNotEmpty) '${p.preview?['format']}'.trim(),
+    };
+    final rows = <({String fileLabel, Map<String, dynamic> item, List<String> issues})>[];
+    final skippedNotes = <String>[];
+    for (final p in preps) {
+      for (final item in _previewItems(p.preview)) {
+        final issues = [
+          for (final x in (item['issues'] is List ? item['issues'] as List : const []))
+            if ('$x'.trim().isNotEmpty) '$x'.trim(),
+        ];
+        rows.add((fileLabel: p.label, item: item, issues: issues));
+      }
+      if (p.preview?['skipped'] is List) {
+        for (final x in (p.preview!['skipped'] as List).take(5)) {
+          if (x is Map) {
+            final prefix = p.label.isEmpty ? '' : '「${p.label}」';
+            skippedNotes.add('$prefix第 ${x['n'] ?? '?'} 题：${x['why'] ?? '跳过'}');
+          }
+        }
+      }
+    }
+    final suspectCount = rows.where((r) => r.issues.isNotEmpty).length;
+    var onlySuspect = false;
+
+    return showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final theme = Theme.of(ctx);
+          final colors = DshColors.of(ctx);
+          final shown = onlySuspect ? rows.where((r) => r.issues.isNotEmpty).toList() : rows;
+          return SafeArea(
+            top: false,
+            child: SizedBox(
+              height: MediaQuery.sizeOf(ctx).height * 0.76,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '导入前预览',
+                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (formats.isNotEmpty)
+                        StatusChip(tone: StatusTone.idle, label: formats.join(' / ')),
+                      IconButton(
+                        tooltip: '关闭',
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        icon: const Icon(AppIcons.close, size: 18),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    key: const ValueKey('bank-preview-summary'),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: suspectCount > 0
+                          ? colors.warningContainer.withValues(alpha: 0.55)
+                          : colors.successContainer.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: suspectCount > 0
+                            ? colors.warning.withValues(alpha: 0.5)
+                            : colors.success.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '共 $totalCount 题 · 可疑 $suspectCount 题 · 跳过 $totalSkipped 题',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: suspectCount > 0 ? colors.onWarningContainer : colors.onSuccessContainer,
+                          ),
+                        ),
+                        if (suspectCount > 0) ...[
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              ChoiceChip(
+                                key: const ValueKey('bank-preview-filter-all'),
+                                label: Text('全部 (${rows.length})'),
+                                selected: !onlySuspect,
+                                onSelected: (_) => setSheetState(() => onlySuspect = false),
+                              ),
+                              ChoiceChip(
+                                key: const ValueKey('bank-preview-filter-suspect'),
+                                label: Text('仅看可疑 ($suspectCount)'),
+                                selected: onlySuspect,
+                                onSelected: (_) => setSheetState(() => onlySuspect = true),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (preErrors.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            preErrors.join('；'),
+                            style: theme.textTheme.bodySmall?.copyWith(color: colors.danger),
+                          ),
+                        ],
+                        if (skippedNotes.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            '跳过说明：${skippedNotes.join('；')}',
+                            style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: shown.isEmpty
+                        ? Center(
+                            child: Text(
+                              '共识别出 $totalCount 题（后端未返回明细条目）',
+                              style: theme.textTheme.bodyMedium?.copyWith(color: colors.textTertiary),
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: shown.length,
+                            separatorBuilder: (_, _) => const SizedBox(height: 8),
+                            itemBuilder: (_, idx) {
+                              final row = shown[idx];
+                              final item = row.item;
+                              final issues = row.issues;
+                              final hasIssues = issues.isNotEmpty;
+                              final options = item['options'] is List ? item['options'] as List : const [];
+                              final ans = '${item['answer'] ?? ''}'.trim();
+                              final analysis = '${item['analysis'] ?? ''}'.trim();
+                              final qIndex = item['index'] ?? (idx + 1);
+                              final qType = '${item['type'] ?? '选择'}'.trim();
+                              return Container(
+                                key: ValueKey('bank-preview-item-$qIndex'),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: hasIssues
+                                      ? colors.dangerContainer.withValues(alpha: 0.42)
+                                      : theme.colorScheme.surfaceContainerLow,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: hasIssues
+                                        ? colors.danger.withValues(alpha: 0.7)
+                                        : theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        if (row.fileLabel.isNotEmpty) ...[
+                                          Text(
+                                            '「${row.fileLabel}」',
+                                            style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                                          ),
+                                          const SizedBox(width: 4),
+                                        ],
+                                        Text(
+                                          '第 $qIndex 题 · $qType',
+                                          style: theme.textTheme.labelMedium?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                            color: hasIssues ? colors.danger : theme.colorScheme.primary,
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        Text(
+                                          '选项 ${options.length} 个 · 答案 ${ans.isEmpty ? '缺失' : ans}'
+                                          '${analysis.isNotEmpty ? ' · 有解析' : ''}',
+                                          style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '${item['stem'] ?? ''}',
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: theme.textTheme.bodyMedium,
+                                    ),
+                                    if (hasIssues) ...[
+                                      const SizedBox(height: 8),
+                                      Wrap(
+                                        spacing: 6,
+                                        runSpacing: 6,
+                                        children: [
+                                          for (final issue in issues)
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                              decoration: BoxDecoration(
+                                                color: colors.danger.withValues(alpha: 0.15),
+                                                borderRadius: BorderRadius.circular(999),
+                                                border: Border.all(color: colors.danger.withValues(alpha: 0.55)),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Icon(AppIcons.warning, size: 13, color: colors.danger),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    issue,
+                                                    style: theme.textTheme.labelSmall?.copyWith(
+                                                      color: colors.danger,
+                                                      fontWeight: FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          key: const ValueKey('bank-preview-cancel'),
+                          onPressed: () => Navigator.of(ctx).pop(false),
+                          child: const Text('取消'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton.icon(
+                          key: const ValueKey('bank-preview-confirm'),
+                          onPressed: () => Navigator.of(ctx).pop(true),
+                          icon: const Icon(AppIcons.success, size: 18),
+                          label: Text('确认入库（$totalCount 题）'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _submitImport() async {
     final raw = _rawCtrl.text.trim();
     if (raw.isEmpty) {
@@ -192,13 +672,37 @@ D. 个人主观情绪
       _busy = true;
       _banner = null;
     });
-    final res = await _uploadText(raw, name: _nameCtrl.text.trim(), append: _appendMode);
+    final prep = await _previewUploadText(raw, name: _nameCtrl.text.trim(), append: _appendMode);
+    if (!mounted) return;
+    final res = prep.preview;
+    final count = _previewCount(res);
+    if (res == null || res['ok'] != true || count == 0) {
+      final err = '${res?['error'] ?? (res == null ? '引擎没应答' : '未能识别出题目格式')}';
+      final sample = '${res?['sample'] ?? ''}';
+      setState(() {
+        _busy = false;
+        _banner = '导入预览失败：$err';
+      });
+      await _showPreviewErrorDialog(title: '未能识别题目', error: err, sample: sample);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _banner = null;
+    });
+    final confirmed = await _showImportPreviewSheet([prep]);
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _busy = true;
+      _banner = '正在入库…';
+    });
+    final commitRes = await _commitPrepared(prep);
     await _refresh();
     if (!mounted) return;
     setState(() {
       _busy = false;
-      if (res?['ok'] == true) _rawCtrl.clear();
-      _banner = _reportLine('', res);
+      if (commitRes?['ok'] == true) _rawCtrl.clear();
+      _banner = _reportLine('', commitRes);
     });
   }
 
@@ -313,77 +817,106 @@ D. 个人主观情绪
         GlassSurface(
           tier: GlassTier.card,
           borderRadius: AppShape.radiusLg,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('导入题目（文本 / Word / Excel / CSV / JSON，可多选）', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-                    ),
-                    TextButton.icon(
-                      onPressed: _busy ? null : _fillSampleTemplate,
-                      icon: const Icon(AppIcons.tip, size: 16),
-                      label: const Text('示例格式'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: '题库名称',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _rawCtrl,
-                  minLines: 6,
-                  maxLines: 12,
-                  decoration: const InputDecoration(
-                    labelText: '粘贴题目（1. 题干 / A.B.C.D. / 答案：；答案也可以统一放在最后「参考答案 1.A 2.B」或「1-5 ABCDA」）',
-                    alignLabelWithHint: true,
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  value: _appendMode,
-                  onChanged: (v) => setState(() => _appendMode = v),
-                  title: const Text('追加到现有题库'),
-                  subtitle: Text(_appendMode ? '保留原有题目并在后面新增' : '用这次导入替换整份题库'),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _busy ? null : _pickFileImport,
-                        icon: const Icon(AppIcons.files, size: 18),
-                        label: const Text('选文件（可多选）'),
+          child: Material(
+            type: MaterialType.transparency,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text('导入题目（文本 / Word / Excel / CSV / JSON，可多选）', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 2,
-                      child: FilledButton.icon(
-                        onPressed: _busy ? null : _submitImport,
-                        icon: const Icon(AppIcons.success, size: 18),
-                        label: Text(_busy ? '清洗入库中…' : '立即清洗入库'),
+                      TextButton.icon(
+                        onPressed: _busy ? null : _fillSampleTemplate,
+                        icon: const Icon(AppIcons.tip, size: 16),
+                        label: const Text('示例格式'),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    key: const ValueKey('bank-name-input'),
+                    controller: _nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '题库名称',
+                      border: OutlineInputBorder(),
+                      isDense: true,
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    key: const ValueKey('bank-raw-input'),
+                    controller: _rawCtrl,
+                    minLines: 6,
+                    maxLines: 12,
+                    decoration: const InputDecoration(
+                      labelText: '粘贴题目（1. 题干 / A.B.C.D. / 答案：；也支持 --- 与 【题目】【答案】 标签块）',
+                      alignLabelWithHint: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    value: _appendMode,
+                    onChanged: (v) => setState(() => _appendMode = v),
+                    title: const Text('追加到现有题库'),
+                    subtitle: Text(_appendMode ? '保留原有题目并在后面新增' : '用这次导入替换整份题库'),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          key: const ValueKey('bank-file-import'),
+                          onPressed: _busy ? null : _pickFileImport,
+                          icon: const Icon(AppIcons.files, size: 18),
+                          label: const Text('选文件（可多选）'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton.icon(
+                          key: const ValueKey('bank-import-submit'),
+                          onPressed: _busy ? null : _submitImport,
+                          icon: const Icon(AppIcons.success, size: 18),
+                          label: Text(_busy ? '清洗预览中…' : '预览并入库'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
       ],
     );
   }
+}
+
+class _PreparedUpload {
+  const _PreparedUpload({
+    required this.label,
+    required this.bankName,
+    required this.raw,
+    required this.append,
+    required this.chunked,
+    required this.uploadId,
+    required this.preview,
+    this.extractProblem,
+  });
+
+  final String label;
+  final String bankName;
+  final String raw;
+  final bool append;
+  final bool chunked;
+  final String? uploadId;
+  final Map<String, dynamic>? preview;
+  final String? extractProblem;
 }

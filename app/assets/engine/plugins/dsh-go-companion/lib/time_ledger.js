@@ -1,7 +1,7 @@
 // dsh-go-companion · 统一时间账（2026-11-19 · H4）
 //
 // 2026-11-19 挣来制：娱乐 / 游戏都从一个余额里花，余额 = 昨天结转 + 保底（标准档 0）+ 今天挣来的 - 扣罚。
-// 挣：局验收通过（按局长 1/3，10–40 分钟）、题库（10 题 5 分钟）、破窗；扣：违约扣罚。没花完的跨天结转（≤600）。
+// 挣：局验收通过（按局长 1/3，10–40 分钟）、题库（10 题 5 分钟）、破窗；扣：违约扣罚。没花完的跨天结转（≤300）。
 // 中枢（/today）、分析页（/analytics）、锁页（/plan lock.quota）、晚报、姐妹上下文全部取这同一个输出。
 
 import { GAME_QUOTA_MIN } from './quota.js'
@@ -71,7 +71,7 @@ export function appendTimeEntry(rawState, { kind, minutes = 0, reason = '', at =
 }
 
 /** 余额跨天结转的上限：再多也不能把一整天买下来。 */
-export const CARRY_CAP_MIN = 600
+export const CARRY_CAP_MIN = 300
 
 /**
  * 统一时间账单一真相计算函数（2026-11-19 改为「挣来制」）。

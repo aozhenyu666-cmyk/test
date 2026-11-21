@@ -91,5 +91,17 @@ class ArbiterEnforcePolicyTest {
         )!!
         assertEquals("test-mode shadow must defer real lock even under arbiterEnforce=true", false, shadowed.shouldLock)
         assertEquals("shadow tag expected", "shadow", shadowed.reasonTag)
+
+        val released = ArbiterEnforcePolicy.evaluate(
+            arbiterEnforce = true,
+            decision = strictDecision,
+            pkg = "tv.danmaku.bili",
+            neverLock = false,
+            disarmed = false,
+            shadow = false,
+            released = true,
+        )!!
+        assertEquals("unified release (quiz/spend/bout-buffer) must open even under arbiterEnforce=true", false, released.shouldLock)
+        assertEquals("released tag expected", "released", released.reasonTag)
     }
 }

@@ -173,7 +173,7 @@ export function createBridge(opts) {
     }
   }
   // 本机互通接口（127.0.0.1:8788）：和 Gemini 用同一个命令队列、同一个事件，手机取走命令时两边都能拿到结果。
-  const localHandler = createLocalApi({ store, events, resultWaitMs: opts.resultWaitMs })
+  const localHandler = createLocalApi({ store, events, vaultDir: opts.vaultDir, resultWaitMs: opts.resultWaitMs })
   return { handler, localHandler, ctx, events, todayText: () => todayText(store.state.snapshot, store.now()) }
 }
 

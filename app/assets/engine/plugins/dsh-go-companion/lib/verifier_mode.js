@@ -274,7 +274,8 @@ export function verifyPromptLines({ verify, recovery, spend, untilHm }) {
 
 export const EVENING_FROM = 18 * 60
 export const EVENING_END = 7 * 60
-export const EVENING_CAP_DEFAULT = 90
+export const EVENING_CAP_DEFAULT = 120
+export const DEFAULT_BASE_FUN_MIN = 30
 export const EVENING_CAP_MIN = 30
 export const EVENING_CAP_MAX = 180
 
@@ -323,4 +324,118 @@ export function setEveningCap(raw, minutes, { today, tomorrow }) {
   if (!Number(minutes)) return { ok: false, error: 'bad-minutes', text: '说个分钟数（' + EVENING_CAP_MIN + '–' + EVENING_CAP_MAX + '）。' }
   if (want <= cur) return { ok: true, value: { minutes: want }, immediate: true, text: '今晚起娱乐上限 ' + want + ' 分钟。' }
   return { ok: true, value: { minutes: cur, next: { minutes: want, from: tomorrow } }, immediate: false, text: '调高要等到明天：明晚起 ' + want + ' 分钟，今晚还是 ' + cur + ' 分钟。' }
+}
+
+// ---------------------------------------------------------------- 4.9 早上点头卡（纯函数）
+
+/**
+ * 生成早上点头卡预览条目。
+ * 如果当天已有验收点则直接返回 { needed: false, ... }；
+ * 否则从当日模板生成可微调的条目列表。
+ */
+export function buildNodCard({ template = DEFAULT_TEMPLATES.workday, existingSeals = [], minuteOfDay = 0, today = '' } = {}) {
+  const sealList = Array.isArray(existingSeals)
+    ? existingSeals
+    : (Array.isArray(existingSeals?.items) ? existingSeals.items : [])
+  const todaySeals = today ? sealList.filter((s) => s && s.day === today) : sealList.filter(Boolean)
+  if (todaySeals.length > 0) {
+    return {
+      needed: false,
+      reason: 'already_has_seals',
+      today: String(today || ''),
+      existingCount: todaySeals.length,
+      items: [],
+    }
+  }
+  const tp = Array.isArray(template) ? { name: '今日模板', items: template } : (template || DEFAULT_TEMPLATES.workday)
+  const seals = templateSeals(tp, { minuteOfDay: Math.max(0, Math.round(Number(minuteOfDay) || 0)) })
+  const items = seals.map((it, idx) => ({
+    id: String(it.id || `nod-${idx + 1}`),
+    title: it.title,
+    kind: it.kind,
+    stretch: it.stretch,
+    floor: it.floor,
+    startMinute: it.startMinute ?? null,
+    dueMinute: it.dueMinute,
+    estMinutes: it.estMinutes,
+    path: it.path || '',
+    app: it.app || '',
+  }))
+  return {
+    needed: items.length > 0,
+    reason: items.length > 0 ? 'ready' : 'all_due_passed',
+    today: String(today || ''),
+    templateName: String(tp?.name || ''),
+    existingCount: 0,
+    items,
+  }
+}
+
+/**
+ * 应用用户在早上点头卡上的微调：
+ * 仅允许调整 stretch / floor（保证 floor >= 1 且 floor <= stretch）与保留/微调时间窗，
+ * 返回标准化后可直接喂给 addSeals 的条目列表。
+ */
+export function applyNodCardOverrides(baseItems = [], edits = []) {
+  const list = Array.isArray(baseItems) ? baseItems : []
+  const editMap = new Map()
+  if (Array.isArray(edits)) {
+    edits.forEach((e, idx) => {
+      if (!e || typeof e !== 'object') return
+      const key = e.id != null ? String(e.id) : (list[idx]?.id != null ? String(list[idx].id) : String(idx))
+      editMap.set(key, e)
+    })
+  } else if (edits && typeof edits === 'object') {
+    for (const [k, v] of Object.entries(edits)) {
+      if (v && typeof v === 'object') editMap.set(String(k), v)
+    }
+  }
+
+  const out = []
+  list.forEach((base, idx) => {
+    if (!base || typeof base !== 'object') return
+    if (!SEAL_KINDS[base.kind]) return
+    const key = base.id != null ? String(base.id) : String(idx)
+    const edit = editMap.get(key) || editMap.get(String(idx)) || {}
+    if (edit.keep === false || edit.enabled === false || edit.remove === true) return
+
+    const rawStretch = edit.stretch !== undefined ? Number(edit.stretch) : Number(base.stretch)
+    const stretch = Math.max(1, Math.round(Number.isFinite(rawStretch) && rawStretch > 0 ? rawStretch : (Number(base.stretch) || 1)))
+    const rawFloor = edit.floor !== undefined ? Number(edit.floor) : Number(base.floor)
+    const fallbackFloor = Math.max(1, Math.min(stretch, Math.round(Number(base.floor) || Math.ceil(stretch / 2))))
+    const floor = Math.max(1, Math.min(stretch, Number.isFinite(rawFloor) ? Math.round(rawFloor) : fallbackFloor))
+
+    const rawDue = edit.dueMinute !== undefined && edit.dueMinute !== null ? Number(edit.dueMinute) : Number(base.dueMinute)
+    const dueMinute = Math.max(1, Math.min(1439, Number.isFinite(rawDue) ? Math.round(rawDue) : (Number(base.dueMinute) || 18 * 60)))
+
+    let startMinute = base.startMinute ?? null
+    if (edit.startMinute === null) {
+      startMinute = null
+    } else if (edit.startMinute !== undefined) {
+      const rawStart = Number(edit.startMinute)
+      if (Number.isFinite(rawStart)) startMinute = Math.max(0, Math.min(dueMinute - 1, Math.round(rawStart)))
+    }
+    if (startMinute !== null && startMinute >= dueMinute) {
+      startMinute = Math.max(0, dueMinute - 10)
+    }
+
+    const baseEst = Math.max(10, Math.min(240, Math.round(Number(base.estMinutes) || 60)))
+    const estMinutes = startMinute !== null
+      ? Math.max(10, Math.min(240, dueMinute - startMinute))
+      : baseEst
+
+    out.push({
+      title: String(base.title || '').slice(0, 80),
+      kind: base.kind,
+      stretch,
+      floor,
+      startMinute,
+      dueMinute,
+      estMinutes,
+      ...(base.path ? { path: String(base.path) } : {}),
+      ...(base.app ? { app: String(base.app) } : {}),
+      target: 'today',
+    })
+  })
+  return out
 }
