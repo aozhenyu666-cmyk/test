@@ -484,6 +484,18 @@ class ProactiveChannel {
     }
   }
 
+  /// 老板/主管全局审视简报（只读，后端 `GET /wall/boss-brief`）。读不到返回 null，由界面兜底合成。
+  Future<Map<String, dynamic>?> bossBrief() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('bossBrief');
+      if (raw is! Map) return null;
+      if (raw['error'] is Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   /// 第九轮 B1：今天的计划（插件 `GET /plan/day`）。
   ///
   /// 回 `plan`（今天的计划文档）/ `min`（当前分钟）/ `recent`（最近用过的包名，给选择器排序）。

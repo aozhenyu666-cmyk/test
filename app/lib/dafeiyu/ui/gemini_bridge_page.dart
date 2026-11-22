@@ -11,9 +11,11 @@ import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../channels/proactive_state.dart';
 
+enum _GeminiBridgeScene { icebreak, lockBounce, eveningCards, bossAudit }
+
 /// Gemini 桥：电脑上跑 tooling/gemini-bridge（Gemini 的自定义应用 = MCP），手机引擎每 ~20 秒主动去同步。
 ///
-/// 这一页只做三件事：填地址和密钥、看连没连上、立即同步一次。搭建步骤在仓库 tooling/gemini-bridge/README.md。
+/// 除了地址/密钥连接与同步，还提供「主动触发矩阵状态 & 4 场景一键唤起」。
 class GeminiBridgePage extends StatefulWidget {
   const GeminiBridgePage({super.key, this.channel});
 
@@ -28,6 +30,10 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
   final TextEditingController _url = TextEditingController();
   final TextEditingController _key = TextEditingController();
   Map<String, dynamic> _data = const {};
+  Map<String, dynamic>? _today;
+  Map<String, Object?>? _wall;
+  Map<String, dynamic>? _bossBrief;
+  int _snoozeUntilMs = 0;
   bool _loading = true;
   bool _busy = false;
   bool _failed = false;
@@ -51,6 +57,15 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
   }
 
   Future<void> _load({bool first = false}) async {
+    unawaited(_channel.todayStatus().then((t) {
+      if (mounted && t != null) setState(() => _today = t);
+    }).catchError((_) {}));
+    unawaited(_channel.wallStatus().then((w) {
+      if (mounted && w != null) setState(() => _wall = w);
+    }).catchError((_) {}));
+    unawaited(_channel.bossBrief().then((b) {
+      if (mounted && b != null) setState(() => _bossBrief = b);
+    }).catchError((_) {}));
     final r = await _channel.bridgeOp({'action': 'status'});
     if (!mounted) return;
     setState(() {
@@ -111,6 +126,95 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
     if (s < 60000) return '${(s / 1000).round()} 秒前';
     if (s < 3600000) return '${(s / 60000).round()} 分钟前';
     return '${(s / 3600000).round()} 小时前';
+  }
+
+  String _scenePrompt(_GeminiBridgeScene scene) {
+    int numOf(Object? v, [int d = 0]) => v is num ? v.round() : d;
+    final charts = _today?['charts'] is Map ? _today!['charts'] as Map : const {};
+    final buckets = charts['buckets'] is Map ? charts['buckets'] as Map : const {};
+    final briefObj = _today?['brief'] is Map ? _today!['brief'] as Map : const {};
+    final workMin = numOf(buckets['mainlineMin']) + numOf(buckets['videoStudyMin']) + numOf(buckets['geminiMin'] ?? _today?['geminiMinutesToday']);
+    final resolvedWork = workMin > 0 ? workMin : numOf(briefObj['focusMin']);
+    final funMin = buckets['funMin'] is num ? numOf(buckets['funMin']) : numOf(briefObj['funMin']);
+    final running = _today?['running'] is Map ? '${(_today!['running'] as Map)['title'] ?? ''}'.trim() : '';
+    final tasksRaw = _today?['tasks'] is List ? _today!['tasks'] as List : const [];
+    final tasksText = [
+      for (final x in tasksRaw.take(3))
+        if (x is Map && '${x['title'] ?? ''}'.trim().isNotEmpty) '${x['title']}',
+    ].join('；');
+    final lockWhy = '${_wall?['why'] ?? ''}'.trim();
+    final bridgeOnline = _data['healthy'] == true;
+    final bridgeHint = bridgeOnline
+        ? '（大肥鱼桥已在线，可直接调 dafeiyu_today / dafeiyu_wall 核对最新数据）'
+        : '（如桥未通请直接基于下列现场数据回答）';
+
+    switch (scene) {
+      case _GeminiBridgeScene.icebreak:
+        return [
+          '【场景：2 分钟破冰规划 · 定下今天第一步】$bridgeHint',
+          '- 当前现场：${running.isNotEmpty ? '进行中「$running」' : '当前无活跃专注局'} · 今日已专注 ${resolvedWork}m / 娱乐 ${funMin}m',
+          if (tasksText.isNotEmpty) '- 今日候选任务：$tasksText',
+          '请只用 2 分钟：帮我从当下拖延/漂移中切出来，直接定死今天接下来 25 分钟唯一的第一步动作、允许用的 App 和到点交付物，别泛泛鼓励。',
+        ].join('\n');
+      case _GeminiBridgeScene.lockBounce:
+        return [
+          '【场景：30 秒撞锁卡点诊断】$bridgeHint',
+          '- 现场锁态：${_wall?['locked'] == true ? '锁定中（${lockWhy.isEmpty ? '门禁规则拦截' : lockWhy}）' : '未锁定/刚被拦'} · 今日娱乐 ${funMin}m',
+          if (running.isNotEmpty) '- 当前在做的局：$running',
+          '请用 30 秒做卡点诊断：1) 我刚连续撞锁被拦，究竟真要解决什么问题，还是在逃避当前任务？2) 给出一个 2 分钟可立刻回工位的替代动作。',
+        ].join('\n');
+      case _GeminiBridgeScene.eveningCards:
+        return [
+          '【场景：晚间笔记与今日思考压成明天题库卡 / 因果卡】$bridgeHint',
+          '- 今日现场：累计工作 ${resolvedWork}m · 今日重点：$tasksText',
+          '请逼我用自己的话复述今天最关键的 1–2 个知识点或踩坑机制，并直接帮我压成：1) 可导入 DSH 锁屏题库的 JSON/文本题库卡（选择/知识卡/小问题）；2) 一张「触发→机制→下次行动」因果卡。',
+        ].join('\n');
+      case _GeminiBridgeScene.bossAudit:
+        final remotePrompt = '${_bossBrief?['bossPrompt'] ?? ''}'.trim();
+        if (remotePrompt.isNotEmpty) return remotePrompt;
+        final todayPrompt = '${(_today?['bossBrief'] is Map ? (_today!['bossBrief'] as Map)['bossPrompt'] : '') ?? ''}'.trim();
+        if (todayPrompt.isNotEmpty) return todayPrompt;
+        return [
+          '【角色指令：冷血主管 / 老板全局审视，零寒暄、严禁只盯单一微小时段】$bridgeHint',
+          '- 今日工作 ${resolvedWork}m vs 娱乐 ${funMin}m · 门禁：${_wall?['locked'] == true ? '锁定（$lockWhy）' : '放行'}${tasksText.isNotEmpty ? ' · 计划：$tasksText' : ''}',
+          '请先查客观事实，然后直接对我提出 3 个直击全局逃避模式的尖锐追问（承诺跳票、伪忙碌/娱乐占比、撞锁模式），并下达未来 24 小时唯一止损硬指令。',
+        ].join('\n');
+    }
+  }
+
+  Future<void> _triggerScene(_GeminiBridgeScene scene) async {
+    final topic = switch (scene) {
+      _GeminiBridgeScene.icebreak => '2 分钟破冰规划',
+      _GeminiBridgeScene.lockBounce => '30 秒撞锁卡点诊断',
+      _GeminiBridgeScene.eveningCards => '晚间笔记压成题库卡',
+      _GeminiBridgeScene.bossAudit => '老板全局审视质询',
+    };
+    final prompt = _scenePrompt(scene);
+    await Clipboard.setData(ClipboardData(text: prompt));
+    final ok = await _channel.launchGeminiProactive(
+      topic: topic,
+      brief: prompt,
+      mode: 'countdown_3s',
+      preferVoice: true,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(ok ? '已唤起 Gemini「$topic」（上下文已写入剪贴板）' : '已复制「$topic」现场 Prompt（可切去 Gemini 粘贴）'),
+      ),
+    );
+  }
+
+  Future<void> _snoozeAuto() async {
+    final until = DateTime.now().millisecondsSinceEpoch + 30 * 60000;
+    setState(() => _snoozeUntilMs = until);
+    unawaited(_channel.storylineOp({'action': 'snooze_gemini', 'minutes': 30}).catchError((_) => null));
+    if (!mounted) return;
+    final dt = DateTime.fromMillisecondsSinceEpoch(until);
+    final hhmm = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text('已将自动触发延后 30 分钟（至 $hhmm，手动唤起不受限制）')),
+    );
   }
 
   @override
@@ -194,6 +298,7 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
             ),
           ],
         ),
+        _triggerMatrixCard(colors),
         ListPageCard(
           title: 'Gemini 能做什么',
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
@@ -213,6 +318,105 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
             ListPageRow(icon: AppIcons.askAi, title: '3. Gemini 里加自定义应用', subtitle: '网页版 设置 → 应用 → 添加自定义应用，地址填 https://…ts.net/mcp，授权页输配对口令', subtitleMaxLines: 3),
             ListPageRow(icon: AppIcons.thisPhone, title: '4. 手机上填这一页', subtitle: '地址（不带 /mcp）+ 手机密钥，保存并连接', subtitleMaxLines: 2),
           ],
+        ),
+      ],
+    );
+  }
+
+  Widget _triggerMatrixCard(DshColors colors) {
+    final theme = Theme.of(context);
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final snoozed = _snoozeUntilMs > nowMs;
+    final snoozeMinLeft = snoozed ? ((_snoozeUntilMs - nowMs) / 60000).ceil() : 0;
+    final charts = _today?['charts'] is Map ? _today!['charts'] as Map : const {};
+    final buckets = charts['buckets'] is Map ? charts['buckets'] as Map : const {};
+    final gemMin = (buckets['geminiMin'] as num?)?.round() ?? (_today?['geminiMinutesToday'] as num?)?.round() ?? 0;
+    final funMin = (buckets['funMin'] as num?)?.round() ?? 0;
+
+    return ListPageCard(
+      key: const ValueKey('gemini-trigger-matrix-card'),
+      title: '主动触发矩阵状态 & 4 场景一键唤起',
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '分级冷却：急卡点 10m · 常规 20m · 日上限 10 次 · 绝不强抢屏',
+                      style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  StatusChip(
+                    tone: snoozed ? StatusTone.warn : (_data['healthy'] == true ? StatusTone.ok : StatusTone.idle),
+                    label: snoozed ? '已延后 ${snoozeMinLeft}m' : (_data['healthy'] == true ? '矩阵就绪' : '本地兜底'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _today != null ? '现场：Gemini ${gemMin}m · 娱乐 ${funMin}m' : '点击下方场景自动带入现场上下文并复制/唤起',
+                      style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('gemini-snooze-30m'),
+                    onPressed: () => unawaited(_snoozeAuto()),
+                    icon: const Icon(AppIcons.time, size: 15),
+                    label: const Text('延后自动 30m'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        ListPageRow(
+          key: const ValueKey('gemini-scene-icebreak'),
+          icon: AppIcons.play,
+          iconColor: theme.colorScheme.primary,
+          title: '破冰规划',
+          subtitle: '白天停滞/碎跳时，2 分钟定死今天唯一第一步与允许 App',
+          subtitleMaxLines: 2,
+          chevron: true,
+          onTap: () => unawaited(_triggerScene(_GeminiBridgeScene.icebreak)),
+        ),
+        ListPageRow(
+          key: const ValueKey('gemini-scene-lock-bounce'),
+          icon: AppIcons.warning,
+          iconColor: colors.warning,
+          title: '撞锁卡点诊断',
+          subtitle: '短时连续撞锁被拦时，30 秒拆解卡点（急冷却 10m）',
+          subtitleMaxLines: 2,
+          chevron: true,
+          onTap: () => unawaited(_triggerScene(_GeminiBridgeScene.lockBounce)),
+        ),
+        ListPageRow(
+          key: const ValueKey('gemini-scene-evening-cards'),
+          icon: AppIcons.skill,
+          iconColor: colors.success,
+          title: '晚间笔记变题库',
+          subtitle: '收局后或 21:30+，把今日思考压成明天题库卡与因果卡',
+          subtitleMaxLines: 2,
+          chevron: true,
+          onTap: () => unawaited(_triggerScene(_GeminiBridgeScene.eveningCards)),
+        ),
+        ListPageRow(
+          key: const ValueKey('gemini-scene-boss-audit'),
+          icon: AppIcons.report,
+          iconColor: colors.danger,
+          title: '主管全局审视',
+          subtitle: '冷血老板视角先查 7 日全局账本，再提 3 个直击逃避的尖锐追问',
+          subtitleMaxLines: 2,
+          chevron: true,
+          onTap: () => unawaited(_triggerScene(_GeminiBridgeScene.bossAudit)),
         ),
       ],
     );

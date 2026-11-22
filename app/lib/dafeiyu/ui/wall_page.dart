@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../l10n/l10n.dart';
 import '../channels/proactive_state.dart';
@@ -42,6 +43,7 @@ class _WallPageState extends State<WallPage> {
   Map<String, Object?>? _status;
   Map<String, dynamic>? _today;
   Map<String, dynamic>? _seals;
+  Map<String, dynamic>? _bossBrief;
   bool _loading = true;
   bool _failed = false;
   String _failedWhy = '';
@@ -62,6 +64,10 @@ class _WallPageState extends State<WallPage> {
     unawaited(_channel.sealsOp({'action': 'list'}).then((r) {
       if (mounted && r != null && r['ok'] == true) setState(() => _seals = r);
     }).catchError((_) {}));
+    // 老板全局审视简报：若接口暂未挂载，页面用 _today/_seals/_status 合成兜底。
+    unawaited(_channel.bossBrief().then((b) {
+      if (mounted && b != null) setState(() => _bossBrief = b);
+    }).catchError((_) {}));
     final thread = await _channel.wallThread();
     final status = await _channel.wallStatus();
     if (!mounted) return;
@@ -73,6 +79,114 @@ class _WallPageState extends State<WallPage> {
       _failedWhy = thread == null ? 'no_answer' : '';
       _loading = false;
     });
+  }
+
+  Map<String, dynamic> _resolvedBossBrief() {
+    final remote = _bossBrief ?? (_today?['bossBrief'] is Map ? Map<String, dynamic>.from(_today!['bossBrief'] as Map) : null);
+    if (remote != null && '${remote['bossPrompt'] ?? ''}'.trim().isNotEmpty) {
+      return remote;
+    }
+
+    int numOf(Object? v, [int d = 0]) => v is num ? v.round() : d;
+    final charts = _today?['charts'] is Map ? _today!['charts'] as Map : const {};
+    final buckets = charts['buckets'] is Map ? charts['buckets'] as Map : const {};
+    final briefObj = _today?['brief'] is Map ? _today!['brief'] as Map : const {};
+    final mainlineMin = numOf(buckets['mainlineMin']);
+    final videoMin = numOf(buckets['videoStudyMin']);
+    final geminiMin = numOf(buckets['geminiMin'] ?? _today?['geminiMinutesToday']);
+    final tinkerMin = numOf(buckets['toolTinkerMin']);
+    final workMin = mainlineMin + videoMin + geminiMin > 0
+        ? (mainlineMin + videoMin + geminiMin)
+        : numOf(briefObj['focusMin']);
+    final funMin = buckets['funMin'] is num ? numOf(buckets['funMin']) : numOf(briefObj['funMin']);
+
+    final sealItems = _seals?['items'] is List
+        ? [for (final x in _seals!['items'] as List) if (x is Map) Map<String, dynamic>.from(x)]
+        : const <Map<String, dynamic>>[];
+    final sealDone = sealItems.where((x) => x['status'] == 'floor' || x['status'] == 'stretch').length;
+    final sealMissed = sealItems.where((x) => x['status'] == 'below').length;
+    final verdicts = (_thread?.bubbles ?? const <WallBubble>[]).where((b) => !b.isSubmit && !b.isRule).toList();
+    final passN = verdicts.where((b) => b.pass == true).length;
+
+    final pl = _today?['passLedger'] is Map ? _today!['passLedger'] as Map : const {};
+    final em = pl['emergency'] is Map ? pl['emergency'] as Map : const {};
+    final emUsed = numOf(em['used']);
+    final locked = _status?['locked'] == true;
+    final lockWhy = '${_status?['why'] ?? ''}'.trim();
+
+    final rateTotal = sealItems.isNotEmpty ? sealItems.length : verdicts.length;
+    final rateDone = sealItems.isNotEmpty ? sealDone : passN;
+    final ratePct = rateTotal > 0 ? ((rateDone / rateTotal) * 100).round() : null;
+    final rateText = ratePct == null ? '暂无样本' : '$ratePct%（$rateDone/$rateTotal）';
+
+    final gaps = <String>[
+      if (ratePct != null && ratePct < 60) '近期兑现率偏低（$rateText${sealMissed > 0 ? ' · 含未过保底 $sealMissed 条' : ''}）',
+      if (funMin > 0 && funMin >= workMin) '今日娱乐 ${funMin}m 已逼近或反超正事 ${workMin}m',
+      if (tinkerMin >= 40 && tinkerMin > mainlineMin) '工具折腾 ${tinkerMin}m 超过主线产出 ${mainlineMin}m',
+      if (emUsed >= 2) '今日已动用紧急通行 $emUsed 次',
+      if (locked && lockWhy.isNotEmpty) '当前门禁锁定中：$lockWhy',
+    ];
+    if (gaps.isEmpty) {
+      gaps.add('重点盯防全局逃避模式：核查今日核心交付是否按时落地');
+    }
+
+    final headline = '兑现 $rateText · 今日正事 ${workMin}m / 娱乐 ${funMin}m · 应急 $emUsed 次';
+    final bossPrompt = [
+      '【角色指令：冷血直属主管 / 老板全局审视，零寒暄、零安慰、严禁只盯单一微小时段】',
+      '规则：先核查下方客观全局账本（若连着 dafeiyu 工具先调 dafeiyu_today / dafeiyu_wall 交叉验真），再基于整体逃避模式发问；不接受「明天一定」「差不多」等虚词。',
+      '',
+      '[全局事实快照]',
+      '- 计划/封印/墙核验兑现率：$rateText',
+      '- 今日真实时间投向：主线与学习 ${workMin}m（主线 ${mainlineMin}m / 网课 ${videoMin}m / Gemini ${geminiMin}m） vs 纯娱乐 ${funMin}m vs 折腾工具 ${tinkerMin}m',
+      '- 门禁与应急：${locked ? '当前锁定中（$lockWhy）' : '当前放行'} · 今日紧急通行 $emUsed 次 · 墙判定通过 $passN/${verdicts.length}',
+      '- 结构缺口：${gaps.join('；')}',
+      '',
+      '[强制输出要求]',
+      '1. 先用不超过 2 句话直接给出对当下全局态势的老板定性；',
+      '2. 紧接着提出 3 个直击全局逃避模式的尖锐追问（承诺跳票、娱乐/折腾替代硬骨头、撞锁与应急通行模式）；',
+      '3. 最后给出 1 条未来 24 小时唯一可验的止损硬指令。',
+    ].join('\n');
+
+    return {
+      'ok': true,
+      'headline': headline,
+      'keyGaps': gaps,
+      'bossPrompt': bossPrompt,
+      'snapshot': {
+        'fulfillmentRatePct': ratePct,
+        'todayWorkMin': workMin,
+        'todayFunMin': funMin,
+      },
+      'fallback': true,
+    };
+  }
+
+  Future<void> _copyBossBrief() async {
+    final brief = _resolvedBossBrief();
+    final prompt = '${brief['bossPrompt'] ?? ''}'.trim();
+    await Clipboard.setData(ClipboardData(text: prompt));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('已复制老板全局审视 Prompt，可直接贴给 Gemini / 审视 AI')),
+    );
+  }
+
+  Future<void> _launchBossGemini() async {
+    final brief = _resolvedBossBrief();
+    final prompt = '${brief['bossPrompt'] ?? ''}'.trim();
+    await Clipboard.setData(ClipboardData(text: prompt));
+    final ok = await _channel.launchGeminiProactive(
+      topic: '老板全局审视质询',
+      brief: prompt,
+      mode: 'countdown_3s',
+      preferVoice: true,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(ok ? '已唤起 Gemini 进行老板全局审视（Prompt 已备好）' : '已复制老板全局审视 Prompt（未直拉 Gemini，可手动切过去粘贴）'),
+      ),
+    );
   }
 
   @override
@@ -91,6 +205,7 @@ class _WallPageState extends State<WallPage> {
       ],
       children: [
         _statusHero(l),
+        _bossAuditCard(),
         if (_loading)
           const ListPageCard(children: [ListPageRow(icon: AppIcons.loading, title: '正在读墙的记录…')])
         else if (_failed)
@@ -136,6 +251,88 @@ class _WallPageState extends State<WallPage> {
         ),
         const SizedBox(height: 24),
       ],
+    );
+  }
+
+  /// 顶部紧凑「老板全局审视 · 喂给 Gemini」卡片（不干扰只收证据和申诉主流程）。
+  Widget _bossAuditCard() {
+    final theme = Theme.of(context);
+    final colors = DshColors.of(context);
+    final brief = _resolvedBossBrief();
+    final headline = '${brief['headline'] ?? ''}'.trim();
+    final gapsRaw = brief['keyGaps'];
+    final gaps = gapsRaw is List ? [for (final g in gapsRaw) '$g'.trim()].where((s) => s.isNotEmpty).toList() : const <String>[];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: GlassSurface(
+        key: const ValueKey('wall-boss-brief-card'),
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(AppIcons.report, size: 18, color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '老板全局审视 · 喂给 Gemini',
+                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  StatusChip(
+                    tone: gaps.any((g) => g.contains('偏低') || g.contains('反超') || g.contains('锁定'))
+                        ? StatusTone.warn
+                        : StatusTone.idle,
+                    label: brief['fallback'] == true ? '现场合成' : '全局账本',
+                  ),
+                ],
+              ),
+              if (headline.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  headline,
+                  style: AppType.tabular(theme.textTheme.bodySmall!.copyWith(fontWeight: FontWeight.w600)),
+                ),
+              ],
+              if (gaps.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  gaps.take(2).join('；'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('wall-boss-copy'),
+                      onPressed: () => unawaited(_copyBossBrief()),
+                      icon: const Icon(AppIcons.copy, size: 16),
+                      label: const Text('复制全局质询'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      key: const ValueKey('wall-boss-launch-gemini'),
+                      onPressed: () => unawaited(_launchBossGemini()),
+                      icon: const Icon(AppIcons.askAi, size: 16),
+                      label: const Text('问老板视角 Gemini'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

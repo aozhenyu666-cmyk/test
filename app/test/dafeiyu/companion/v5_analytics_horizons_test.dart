@@ -442,12 +442,13 @@ void main() {
 
     await pumpPhone(tester, PlanModalityPage(channel: ch, loopChannel: _FakeV5LoopChannel()));
     await settlePhone(tester);
-    expect(find.text('契约共创'), findsOneWidget);
-    expect(find.text('全天排局表'), findsOneWidget);
-    expect(find.text('防骗与主线体检'), findsOneWidget);
+    expect(find.text('1. 准备'), findsOneWidget);
+    expect(find.text('2. 构建'), findsOneWidget);
+    expect(find.text('3. 观看'), findsOneWidget);
 
-    await tester.tap(find.text('全天排局表'));
+    await tester.tap(find.text('2. 构建'));
     await settlePhone(tester);
+    await tester.scrollUntilVisible(find.text('写申论提纲'), 300, scrollable: find.byType(Scrollable).last);
     expect(find.text('写申论提纲'), findsOneWidget);
   });
 }

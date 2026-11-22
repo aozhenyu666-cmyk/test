@@ -9,6 +9,7 @@ import 'package:dsh_app/dafeiyu/ui/wall_page.dart';
 import 'package:dsh_app/ui/theme/app_icons.dart';
 import 'package:dsh_app/ui/theme/theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../phone/harness.dart';
@@ -18,16 +19,19 @@ final int at = DateTime(2026, 11, 10, 9, 5).millisecondsSinceEpoch;
 
 /// 顶替 `dsh/proactive`：不起引擎，只回答这一页会问的三件事。
 class FakeWall extends ProactiveChannel {
-  FakeWall({this.thread, this.statusBody, this.reply});
+  FakeWall({this.thread, this.statusBody, this.reply, this.bossBriefData, this.todayData});
 
   WallThread? thread;
 
   /// 不能叫 `status`：`ProactiveChannel.status()` 是同名方法，Dart 不允许字段和方法重名。
   Map<String, Object?>? statusBody;
   WallAppeal? reply;
+  Map<String, dynamic>? bossBriefData;
+  Map<String, dynamic>? todayData;
 
   int threadCalls = 0;
   final appeals = <({int at, String evidence, String? task})>[];
+  final geminiLaunches = <({String topic, String brief})>[];
 
   @override
   Future<WallThread?> wallThread() async {
@@ -37,6 +41,23 @@ class FakeWall extends ProactiveChannel {
 
   @override
   Future<Map<String, Object?>?> wallStatus() async => statusBody;
+
+  @override
+  Future<Map<String, dynamic>?> bossBrief() async => bossBriefData;
+
+  @override
+  Future<Map<String, dynamic>?> todayStatus() async => todayData;
+
+  @override
+  Future<bool> launchGeminiProactive({
+    String topic = '',
+    String brief = '',
+    String mode = 'countdown_3s',
+    bool preferVoice = true,
+  }) async {
+    geminiLaunches.add((topic: topic, brief: brief));
+    return true;
+  }
 
   @override
   Future<WallAppeal?> wallAppeal({required int at, required String evidence, String? task}) async {
@@ -241,5 +262,64 @@ void main() {
       find.ancestor(of: find.text('提交证据'), matching: find.byType(ListPageRow)),
     );
     expect(row.onTap, isNull);
+  });
+
+  testWidgets('W20 老板全局审视卡片：展示后端 bossBrief 并支持复制/拉起 Gemini', (tester) async {
+    String? copied;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map?)?['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+
+    final wall = FakeWall(
+      thread: threeBubbles(),
+      statusBody: {'locked': false},
+      bossBriefData: {
+        'ok': true,
+        'headline': '7日兑现 40% · 今日正事 30m / 娱乐 65m',
+        'keyGaps': ['今日纯娱乐 65m 已反超工作 30m'],
+        'bossPrompt': '【老板全局审视】先核查事实再问 3 个问题。',
+      },
+    );
+    await pumpWall(tester, wall);
+    await frames(tester);
+
+    expect(find.byKey(const ValueKey('wall-boss-brief-card')), findsOneWidget);
+    expect(find.textContaining('7日兑现 40%'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('wall-boss-copy')));
+    await frames(tester);
+    expect(copied, contains('老板全局审视'));
+
+    await tester.tap(find.byKey(const ValueKey('wall-boss-launch-gemini')));
+    await frames(tester);
+    expect(wall.geminiLaunches.length, 1);
+    expect(wall.geminiLaunches.single.brief, contains('先核查事实'));
+  });
+
+  testWidgets('W21 老板全局审视卡片：bossBrief 接口未挂载时用 _today/_status 合成兜底', (tester) async {
+    final wall = FakeWall(
+      thread: threeBubbles(),
+      statusBody: {'locked': true, 'why': '未交主线任务'},
+      bossBriefData: null,
+      todayData: {
+        'charts': {
+          'buckets': {'mainlineMin': 25, 'funMin': 50},
+        },
+        'passLedger': {'emergency': {'used': 2}},
+      },
+    );
+    await pumpWall(tester, wall);
+    await frames(tester);
+
+    expect(find.text('现场合成'), findsOneWidget);
+    expect(find.textContaining('今日正事 25m / 娱乐 50m'), findsOneWidget);
   });
 }
