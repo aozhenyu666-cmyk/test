@@ -78,26 +78,57 @@ class DshService : Service() {
                 val taskId = intent.data?.takeIf { it.scheme == PHONE_TASK_SCHEME }?.schemeSpecificPart?.toLongOrNull()
                 // l10n:keep agent stop reason
                 if (taskId != null) PhoneControl.get(this).stopShownTask("用户在通知里停止", taskId)
+                return if (running && installSink == null && controller.canRecreateService()) START_STICKY else START_NOT_STICKY
             }
             ACTION_STOP -> {
                 if (controller.phase != RuntimeController.Phase.INSTALLING) {
                     val expected = if (intent.hasExtra(EXTRA_STOP_GENERATION))
                         intent.getIntExtra(EXTRA_STOP_GENERATION, -1) else null
+                    // 没带代号的停止 = 他自己点的（通知栏「停止」/ 设置里停止）：保活不再拉，直到他再启动。
+                    if (expected == null) {
+                        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.markWanted(this, false, "userStop")
+                    }
                     if (controller.stopProcess(expected, intent.getStringExtra(EXTRA_STOP_OWNER))) {
                         running = false
                         stopForegroundCompat()
                     }
                 }
             }
-            ACTION_START, null -> if (controller.prepareServiceStart(recreated = intent == null)) {
-                ensureChannel(this)
-                val notification = buildNotification(this, controller)
-                foreground(notification)
-                running = true
-                acquireWakeLock()
-                registerNetworkCallback(controller)
-                logBackgroundPolicy(controller)
-                controller.startProcess()
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuServiceHooks.ACTION_RESTART_ENGINE -> {
+                EngineExitLog.note(this, "userRestartNotification", "phase=${controller.phase}")
+                controller.manualRestart()
+                return if (running) START_STICKY else START_NOT_STICKY
+            }
+            ACTION_START, ACTION_ENSURE_ENGINE, null -> {
+                val action = intent?.action
+                val allowed = if (action == ACTION_ENSURE_ENGINE) {
+                    controller.prepareEnsureEngine()
+                } else {
+                    controller.prepareServiceStart(recreated = intent == null)
+                }
+                if (allowed) {
+                    if (action == ACTION_START) {
+                        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.markWanted(this, true, "start")
+                    }
+                    if (intent == null) EngineExitLog.note(this, "stickyRestart", "phase=${controller.phase}")
+                    else if (action == ACTION_ENSURE_ENGINE) {
+                        EngineExitLog.note(this, "ensureEngine", "phase=${controller.phase}")
+                    }
+                    ensureChannel(this)
+                    val notification = buildNotification(this, controller)
+                    try {
+                        foreground(notification)
+                    } catch (e: Exception) {
+                        EngineExitLog.note(this, "foregroundRefused", e.toString())
+                        stopSelf(startId)
+                        return START_NOT_STICKY
+                    }
+                    running = true
+                    acquireWakeLock()
+                    registerNetworkCallback(controller)
+                    logBackgroundPolicy(controller)
+                    controller.startProcess()
+                }
             }
         }
         // A newer accepted command may still be waiting for onStartCommand, including a no-op stop.
@@ -106,6 +137,7 @@ class DshService : Service() {
     }
 
     override fun onDestroy() {
+        if (running) EngineExitLog.note(this, "serviceDestroyed", "phase=${RuntimeController.get(this).phase}")
         running = false
         installSink?.let { RuntimeController.get(this).removeSink(it) }
         installSink = null
@@ -184,11 +216,39 @@ class DshService : Service() {
         const val ACTION_INSTALL = "io.github.ccch1mneyyy.dsh_app.INSTALL"
         const val ACTION_INSTALL_DONE = "io.github.ccch1mneyyy.dsh_app.INSTALL_DONE"
         const val ACTION_START = "io.github.ccch1mneyyy.dsh_app.START"
+        const val ACTION_ENSURE_ENGINE = "io.github.ccch1mneyyy.dsh_app.ENSURE_ENGINE"
         const val ACTION_STOP = "io.github.ccch1mneyyy.dsh_app.STOP"
         const val ACTION_PHONE_STOP = "io.github.ccch1mneyyy.dsh_app.PHONE_STOP"
         private const val PHONE_TASK_SCHEME = "dsh-phone-task"
         private const val EXTRA_STOP_GENERATION = "stopGeneration"
         private const val EXTRA_STOP_OWNER = "stopOwner"
+
+        data class EnsureEngineResult(val status: String, val needsForeground: Boolean = false)
+
+        fun ensureEngine(context: Context): EnsureEngineResult {
+            val appCtx = context.applicationContext
+            val ctrl = RuntimeController.get(appCtx)
+            return when (ctrl.phase) {
+                RuntimeController.Phase.RUNNING -> EnsureEngineResult("already_running")
+                RuntimeController.Phase.STARTING -> EnsureEngineResult("already_starting")
+                RuntimeController.Phase.INSTALLING -> EnsureEngineResult("installing")
+                RuntimeController.Phase.STOPPING -> EnsureEngineResult("stopping")
+                RuntimeController.Phase.NOT_INSTALLED -> EnsureEngineResult("not_installed")
+                RuntimeController.Phase.INSTALLED, RuntimeController.Phase.ERROR -> {
+                    val intent = Intent(appCtx, DshService::class.java).setAction(ACTION_ENSURE_ENGINE)
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            appCtx.startForegroundService(intent)
+                        } else {
+                            appCtx.startService(intent)
+                        }
+                        EnsureEngineResult("started")
+                    } catch (_: Throwable) {
+                        EnsureEngineResult("needs_foreground", needsForeground = true)
+                    }
+                }
+            }
+        }
 
         /** 停止操作 for exactly [taskId]. The id is the intent's data, so every task gets its own
          * PendingIntent: a newer task's button never rewrites the one still on screen. */
@@ -344,15 +404,18 @@ class DshService : Service() {
                 )
                 builder.addAction(Notification.Action.Builder(null, AppStrings.get(context, R.string.service_stop_phone), stopPhone).build())
             }
-            // Phone control speaks first; then a voice model download (with its bar).
+            // Phone control speaks first; then a voice model download (with its bar); then a 局.
             val voice = if (phoneLine == null) voiceLine else null
             val progress = voiceProgress
             if (voice != null && progress != null) builder.setProgress(100, progress.coerceAtLeast(0), progress < 0)
             if (voice != null) builder.setOnlyAlertOnce(true)
+            val boutLine = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuServiceHooks
+                .boutLineAndApplyChronometer(context, builder, phoneLine != null || voice != null)
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuServiceHooks.addRestartAction(context, builder)
             return builder
                 .setSmallIcon(R.drawable.ic_stat_dsh)
                 .setContentTitle(AppStrings.APP_NAME)
-                .setContentText(phoneLine ?: voice ?: text)
+                .setContentText(phoneLine ?: voice ?: boutLine ?: text)
                 .setOngoing(true)
                 .setContentIntent(open)
                 .addAction(Notification.Action.Builder(null, AppStrings.get(context, R.string.service_stop), stop).build())

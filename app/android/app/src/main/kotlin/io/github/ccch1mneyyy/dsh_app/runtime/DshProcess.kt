@@ -144,6 +144,9 @@ class DshProcess(
         var authPending = !safe && authOverlay && AppAuthGuest.file(rootfs).isFile
         // On-device voice input: the recognizer's phone settings, same rule.
         var speechPending = !safe && speechOverlay && SpeechGuest.file(rootfs).isFile
+        // Bundled product plugins + optional PC bridge MCP: never in safe mode, and only if staged on disk.
+        var builtinPending = !safe && BuiltinPluginGuest.file(rootfs).isFile
+        var fishPending = !safe && FishMcpGuest.file(rootfs).isFile
         for (arg in launchArgv) {
             if (!bindsPlaced && arg == "/usr/bin/env") {
                 allBinds.forEach { argv += "-b"; argv += it }
@@ -164,7 +167,11 @@ class DshProcess(
                 if (withAuth != null) authPending = false
                 val withSpeech = if (speechPending) SpeechGuest.launchArg(withAuth ?: withSearch ?: withPhone ?: selected ?: arg) else null
                 if (withSpeech != null) speechPending = false
-                argv += expand(withSpeech ?: withAuth ?: withSearch ?: withPhone ?: selected ?: arg)
+                val withBuiltin = if (builtinPending) BuiltinPluginGuest.launchArg(withSpeech ?: withAuth ?: withSearch ?: withPhone ?: selected ?: arg) else null
+                if (withBuiltin != null) builtinPending = false
+                val withFish = if (fishPending) FishMcpGuest.launchArg(withBuiltin ?: withSpeech ?: withAuth ?: withSearch ?: withPhone ?: selected ?: arg) else null
+                if (withFish != null) fishPending = false
+                argv += expand(withFish ?: withBuiltin ?: withSpeech ?: withAuth ?: withSearch ?: withPhone ?: selected ?: arg)
             }
         }
         check(!safe || profileSelected) { "safe mode: this runtime's launch command has no `dsh web` to replace" }

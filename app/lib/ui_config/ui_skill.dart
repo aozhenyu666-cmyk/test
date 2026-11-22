@@ -50,6 +50,9 @@ const supportSkillName = 'dsh-go-support';
 /// Uses the same report, prompt and checked adapter as companion light mode.
 const companionAdaptSkillName = 'companion-adapt';
 
+/// The relationship core's daily workflow (shipped with dsh-go-relationship).
+const relationshipSkillName = 'dsh-go-relationship';
+
 /// The fifth: turns a clawd-on-desk theme into an importable pet pack. The converter
 /// and its friends ship as text next to SKILL.md (app/tool/pet_theme_convert.py is
 /// the source of truth) and are written to the skill folder's scripts/ so the agent
@@ -180,6 +183,7 @@ final extraSkillLoadersProvider = Provider<List<UiSkillBundleLoader>>((ref) {
     () => loadUiSkillBundle(null, supportSkillName),
     () => loadUiSkillBundle(null, companionAdaptSkillName),
     () => loadUiSkillBundle(null, petThemeSkillName),
+    () => loadUiSkillBundle(null, relationshipSkillName),
   ];
 });
 

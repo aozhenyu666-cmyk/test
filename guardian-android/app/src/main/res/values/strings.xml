@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">大肥鱼哨兵</string>
+    <string name="service_label">大肥鱼哨兵 · 双保险守护</string>
+    <string name="service_description">独立监听大肥鱼引擎与无障碍运行状态，在引擎关闭或绕过管控时触发全屏提醒与自动拉起。</string>
+</resources>

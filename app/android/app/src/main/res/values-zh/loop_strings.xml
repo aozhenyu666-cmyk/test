@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 触发测试 (loop/InteractionActivity.kt, loop/InteractionHub.kt). English in values/loop_strings.xml. -->
+<resources>
+    <string name="loop_page_title">DSH 触发测试</string>
+    <string name="loop_page_text">你打开了「%1$s」。这是第一条闭环的测试页面：点「返回」回去，并保存一条回执。</string>
+    <string name="loop_page_return">返回</string>
+    <string name="loop_channel">DSH 触发测试</string>
+    <string name="loop_channel_description">测试页面弹不出来时，用通知问你</string>
+    <string name="tile_bouts">局</string>
+    <string name="tile_bouts_running">进行中 · 今日 %1$d 拍</string>
+    <string name="tile_bouts_today">今日 %1$d 拍</string>
+    <string name="watchdog_channel">无障碍保活看门狗</string>
+    <string name="watchdog_title">DSH Go 无障碍看门狗</string>
+    <string name="watchdog_ok">无障碍服务运行正常</string>
+    <string name="watchdog_off">手机控制开关已关闭</string>
+    <string name="watchdog_restored">无障碍服务已自动拉起恢复</string>
+    <string name="watchdog_needs_manual">请在系统设置中重新开启无障碍服务</string>
+    <string name="watchdog_needs_grant">缺少无障碍授权，请在设置中重新授权</string>
+</resources>

@@ -61,8 +61,8 @@ PRUNE_DEV_METADATA="${PRUNE_DEV_METADATA:-1}"   # drop *.map / *.d.ts from node_
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1767225600}"  # 2026-01-01T00:00:00Z, fixed tar mtimes
 
 UBUNTU_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release"
-NODE_MIRROR="https://npmmirror.com/mirrors/node"
-NPM_REGISTRY="https://registry.npmmirror.com"
+NODE_MIRROR="${NODE_MIRROR:-https://npmmirror.com/mirrors/node}"
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 TERMUX_REPO="https://packages.termux.dev/apt/termux-main"
 UBUNTU_ARCHIVE_AMD64="https://mirrors.tuna.tsinghua.edu.cn/ubuntu"        # InRelease verified with gpgv
 UBUNTU_ARCHIVE_ARM64="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports"
@@ -286,6 +286,11 @@ npm_prefix_flags() {  # $1 = npm cpu, $2 = prefix dir; sets the caller's npm_fla
   )
 }
 
+retarget_lock() {  # $1 = package-lock.json
+  [[ "$NPM_REGISTRY" == "https://registry.npmmirror.com" ]] && return 0
+  sed -i "s#https://registry.npmmirror.com#${NPM_REGISTRY}#g" "$1"
+}
+
 warm_npm_cache() {  # $1 = host npm bin dir, $2 = pinned lock; updates caller's npm_flags
   [[ -n "$RUNTIME_INPUT_STORE_URL" ]] || return 0
   PATH="$1:$PATH" python3 -I "$HERE/lib/input_store.py" warm-npm \
@@ -304,6 +309,7 @@ install_dsh() {  # $1 = npm cpu, $2 = prefix dir
   if [[ -f "$lockdir/package-lock.json" ]]; then
     log "npm ci @deepseek-ai/dsh@$DSH_VERSION (cpu=$cpu, pinned lock)"
     cp "$lockdir/package.json" "$lockdir/package-lock.json" "$prefix/"
+    [[ -n "$RUNTIME_INPUT_STORE_URL" ]] || retarget_lock "$prefix/package-lock.json"
     warm_npm_cache "$bin" "$lockdir/package-lock.json"
     PATH="$bin:$PATH" npm ci "${npm_flags[@]}"
   else
@@ -337,6 +343,7 @@ install_pnpm() {  # $1 = npm cpu, $2 = prefix dir
   if [[ -f "$lockdir/package-lock.json" ]]; then
     log "npm ci pnpm@$PNPM_VERSION (pinned lock)"
     cp "$lockdir/package.json" "$lockdir/package-lock.json" "$prefix/"
+    [[ -n "$RUNTIME_INPUT_STORE_URL" ]] || retarget_lock "$prefix/package-lock.json"
     warm_npm_cache "$bin" "$lockdir/package-lock.json"
     PATH="$bin:$PATH" npm ci "${npm_flags[@]}"
   else
@@ -453,6 +460,10 @@ PYEOF
   local bridge="$HERE/bridge/dsh-go-bridge"
   local bridge_version
   bridge_version="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$bridge/package.json")"
+  # The proactive host plugin (D4): turns one Android proactive event into a real followup turn.
+  local proactive="$HERE/proactive/dsh-go-proactive"
+  local proactive_version
+  proactive_version="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$proactive/package.json")"
   local pnpm_prefix="$work/pnpm-prefix"
   install_pnpm "$npm_cpu" "$pnpm_prefix"
 
@@ -467,12 +478,13 @@ PYEOF
       sha256 "$lockfile"; sha256 "$pnpm_lockfile"
       # Preserve the reviewed pre-OHOS Android identity; changed Android inputs still invalidate it.
       python3 -I "$HERE/lib/android_recipe.py" --dsh-version "$DSH_VERSION"
+      (cd "$HERE" && find proactive -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
     } | sha256sum | cut -c1-12 )"
   local runtime_version="${RUNTIME_REVISION}-dsh${DSH_VERSION}-node${NODE_VERSION}-ubuntu${UBUNTU_VERSION}-${inputs_sha}"
   local runtime_info
-  runtime_info="$(printf '{"runtimeVersion":"%s","abi":"%s","dshVersion":"%s","nodeVersion":"%s","pnpmVersion":"%s","ubuntuVersion":"%s","prootVersion":"%s","dshPatches":%s,"dshGoBridge":"%s"}' \
+  runtime_info="$(printf '{"runtimeVersion":"%s","abi":"%s","dshVersion":"%s","nodeVersion":"%s","pnpmVersion":"%s","ubuntuVersion":"%s","prootVersion":"%s","dshPatches":%s,"dshGoBridge":"%s","dshGoProactive":"%s"}' \
     "$runtime_version" "$abi" "$DSH_VERSION" "$NODE_VERSION" "$PNPM_VERSION" "$UBUNTU_VERSION" "$PROOT_VERSION" \
-    "$(cat "$work/dsh-patches.json")" "$bridge_version")"
+    "$(cat "$work/dsh-patches.json")" "$bridge_version" "$proactive_version")"
 
   # -- rootfs archive --
   local -a archives=("$assets/rootfs-$abi.tar.$COMPRESS")
@@ -486,12 +498,12 @@ PYEOF
   "${PY[@]}" assemble --abi "$abi" --base "$base" --node "$node" --dsh-prefix "$prefix" --pnpm-prefix "$pnpm_prefix" \
     "${archive_args[@]}" --report "$out/build-report.json" --runtime-info "$runtime_info" \
     --compress "$COMPRESS" --xz-preset "$XZ_PRESET" --threads "$XZ_THREADS" --epoch "$SOURCE_DATE_EPOCH" "${prune[@]}" \
-    "${extra_debs[@]/#/--deb=}" --python "$python" --bridge "$bridge"
+    "${extra_debs[@]/#/--deb=}" --python "$python" --bridge "$bridge" --proactive "$proactive"
 
   local versions
-  versions="$(printf '{"runtimeVersion":"%s","dshVersion":"%s","nodeVersion":"%s","pnpmVersion":"%s","ubuntuVersion":"%s","prootVersion":"%s","tallocVersion":"%s","androidShmemVersion":"%s","dshPatches":%s,"dshGoBridge":"%s","build":{"inputsSha256_12":"%s","ubuntuBaseSha256":"%s","nodeSha256":"%s","dshLockSha256":"%s","pnpmIntegrity":"%s","sourceDateEpoch":%s}}' \
+  versions="$(printf '{"runtimeVersion":"%s","dshVersion":"%s","nodeVersion":"%s","pnpmVersion":"%s","ubuntuVersion":"%s","prootVersion":"%s","tallocVersion":"%s","androidShmemVersion":"%s","dshPatches":%s,"dshGoBridge":"%s","dshGoProactive":"%s","build":{"inputsSha256_12":"%s","ubuntuBaseSha256":"%s","nodeSha256":"%s","dshLockSha256":"%s","pnpmIntegrity":"%s","sourceDateEpoch":%s}}' \
     "$runtime_version" "$DSH_VERSION" "$NODE_VERSION" "$PNPM_VERSION" "$UBUNTU_VERSION" "$PROOT_VERSION" "$TALLOC_VERSION" "$SHMEM_VERSION" \
-    "$(cat "$work/dsh-patches.json")" "$bridge_version" \
+    "$(cat "$work/dsh-patches.json")" "$bridge_version" "$proactive_version" \
     "$inputs_sha" "$(sha256 "$base")" "$(sha256 "$node")" "$(sha256 "$lockfile")" "$PNPM_INTEGRITY" "$SOURCE_DATE_EPOCH")"
   "${PY[@]}" manifest --abi "$abi" --report "$out/build-report.json" --jnilibs "$work/jnilibs.json" \
     --versions "$versions" --out "$assets/manifest.json" >&2
@@ -543,6 +555,8 @@ main() {
   local abi
   for abi in "${abis[@]}"; do build_abi "$abi"; done
   write_index
+  "${PY[@]}" verify-outputs --out "$OUT" --abi "${abis[@]}" >&2 \
+    || die "runtime/out is not a complete bundle for: ${abis[*]}"
 }
 
 main "$@"

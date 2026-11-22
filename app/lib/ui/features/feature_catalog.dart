@@ -9,6 +9,9 @@ import 'package:dsh_client/dsh_client.dart' show PluginBundle;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../dafeiyu/dafeiyu_strings.dart';
+import '../../dafeiyu/ui/bout_voice_page.dart';
+import '../../dafeiyu/ui/companion_hub_page.dart';
 import '../../l10n/l10n.dart';
 import '../../plugins/native/native_icons.dart';
 import '../../plugins/native/native_state.dart';
@@ -44,6 +47,8 @@ import 'permission_page.dart';
 import 'schedules_page.dart';
 import 'session_export_page.dart';
 import 'skills_page.dart';
+
+Widget _companionHubPage(String? _) => const CompanionHubPage();
 
 /// Builds a native page; [sessionId] is the conversation open in the chat.
 typedef FeaturePageBuilder = Widget Function(String? sessionId);
@@ -320,6 +325,20 @@ final featureSections = <FeatureSection>[
       action: _backToChat,
       // l10n:keep DSH Web plugin title aliases used for deep-link matching
       web: const DshWebTarget(pluginItem: ['语音输入', 'Voice input']),
+    ),
+    FeatureItem.localized(
+      id: 'bout-voice',
+      title: (l10n) => DafeiyuStrings.fromL10n(l10n).catalogBoutVoice,
+      summary: (l10n) => DafeiyuStrings.fromL10n(l10n).catalogBoutVoiceSummary,
+      icon: AppIcons.voice,
+      native: (_) => const BoutVoicePage(),
+    ),
+    const FeatureItem(
+      id: 'companion-hub',
+      title: '大肥鱼中枢',
+      summary: '今日计划、每日四部门、姐妹记忆、墙与系统护栏的一站入口',
+      icon: AppIcons.bot,
+      native: _companionHubPage,
     ),
   ]),
   FeatureSection.localized((l10n) => l10n.catalogCommunitySharingSection, [

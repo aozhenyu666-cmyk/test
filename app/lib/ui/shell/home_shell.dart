@@ -11,9 +11,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../dafeiyu/dafeiyu_strings.dart';
+import '../../dafeiyu/ui/bouts_workspace_page.dart';
+import '../../dafeiyu/ui/wall_page.dart';
+import '../../l10n/l10n.dart';
 import '../../links/app_links.dart';
 import '../../pets/overlay_channel.dart' show petOverlayChannelProvider;
 import '../../pets/pet_overlay_bridge.dart';
+import '../../plugins/native/native_model.dart' show NativePanel;
+import '../../plugins/native/native_state.dart' show nativeContributionsProvider;
 import '../../state/adaptive_layout_state.dart';
 import '../../state/android_features.dart';
 import '../../state/drawer_view_state.dart' show drawerSelectionProvider;
@@ -22,6 +28,7 @@ import '../../state/sessions_state.dart' show currentSessionProvider;
 import '../bots/bot_alerts.dart';
 import '../chat/chat_screen.dart';
 import '../chat/composer_toast.dart' show composerToastGap;
+import '../common/segmented_pill.dart';
 import '../engine/engine_screen.dart';
 import '../engine/reset_outcome.dart';
 import '../features/all_features_page.dart';
@@ -55,6 +62,9 @@ import 'quick_panel.dart';
 import 'session_search_page.dart' show showSessionSearch;
 import 'sessions_drawer.dart';
 import 'system_entry_host.dart';
+
+/// The home shell's tabs, in bar order: 局 is the page the app opens on.
+enum HomeTab { bouts, wall, chat }
 
 /// Home: the chat screen, with the sessions drawer pulled over it from the left.
 ///
@@ -100,6 +110,16 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
 
   /// The same for [_quickPanel].
   bool _quickPanelOpen = false;
+
+  /// The tab on screen; 局, as the app opens on it.
+  HomeTab _tab = HomeTab.bouts;
+
+  /// True once the person explicitly tapped the 局 tab so an unavailable panel shows status instead
+  /// of silently bouncing back to Chat while still keeping initial startup cleanly on Chat.
+  bool _userPickedBouts = false;
+
+  /// Tabs already opened once. A tab is built on first visit and then kept mounted.
+  final _visited = <HomeTab>{HomeTab.bouts, HomeTab.chat};
 
   /// The pulled-over drawer's identity bar height: its notices stand above it.
   final _identityBar = ValueNotifier<double>(0);
@@ -163,6 +183,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
   void _closeQuickPanel() => _slideClosed(_quickPanel);
 
   void _revealChat(bool animate) {
+    // A notification, a share or a shortcut lands in the chat: show that tab.
+    if (_tab != HomeTab.chat) setState(() => _visited.add(_tab = HomeTab.chat));
     for (final side in [_drawer, _quickPanel]) {
       if (side.value == 0) continue;
       if (animate) {
@@ -282,10 +304,55 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
     };
   }
 
+  /// The 局 panel as a page; null until the engine has loaded the companion.
+  NativePanel? _boutsPanel() {
+    final plugin = ref.watch(nativeContributionsProvider).plugin('dsh-go-companion');
+    for (final panel in plugin?.panels ?? const <NativePanel>[]) {
+      if (panel.id == 'bouts') return panel;
+    }
+    return null;
+  }
+
+  Widget _tabBody(HomeTab tab, Widget chat, NativePanel? bouts, String? sessionId) => switch (tab) {
+    HomeTab.bouts => BoutsWorkspacePage(
+      key: const ValueKey('home-bouts'),
+      asTab: true,
+      nativePanel: bouts,
+      sessionId: sessionId,
+    ),
+    HomeTab.wall => const WallPage(key: ValueKey('home-wall'), asTab: true),
+    HomeTab.chat => chat,
+  };
+
+  /// 局 / 墙 / 对话 across the bottom, [shown] selected.
+  Widget _tabBar(HomeTab shown, NativePanel? bouts) {
+    final l = context.l10n;
+    return Padding(
+      key: const ValueKey('home-tab-bar'),
+      padding: EdgeInsets.fromLTRB(16, 8, 16, 8 + MediaQuery.paddingOf(context).bottom),
+      child: SegmentedPill<HomeTab>(
+        segments: [
+          PillSegment(HomeTab.bouts, bouts?.title ?? '局'),
+          PillSegment(HomeTab.wall, DafeiyuStrings.fromL10n(l).wallTitle),
+          PillSegment(HomeTab.chat, l.featuresChat),
+        ],
+        selected: shown,
+        onChanged: (tab) => setState(() {
+          _userPickedBouts = tab == HomeTab.bouts;
+          _visited.add(_tab = tab);
+        }),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final width = _drawerWidth(context);
     final sessionId = ref.watch(currentSessionProvider);
+    // On cold start before any user tap, fall back to Chat while the engine finishes loading
+    // companion contributions; once the person taps 局 directly, always enter the 局 tab.
+    final bouts = _boutsPanel();
+    final shown = _tab == HomeTab.bouts && bouts == null && !_userPickedBouts ? HomeTab.chat : _tab;
     final prefs = ref.watch(layoutPrefsProvider);
     // Multi-select in a list on screen (the open drawer, or the sidebar):
     // back ends it before anything else.
@@ -308,6 +375,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
         if (mounted) _quickPanel.value = 0;
       });
     }
+    final typing =
+        MediaQuery.sizeOf(context).height < WindowClass.compactHeight && MediaQuery.viewInsetsOf(context).bottom > 0;
     final chat = widget.chatBuilder?.call(_onMenu) ?? ChatScreen(onOpenDrawer: _onMenu, backdrop: false);
     // The floating pet outside the app hears every pet state.
     ref.listen<void>(petOverlayBridgeProvider, (_, _) {});
@@ -338,6 +407,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
                   backgroundColor: Colors.transparent,
                   // The chat screen handles the keyboard itself.
                   resizeToAvoidBottomInset: false,
+                  // The pulled-over drawer / quick panel covers the screen: no tabs under it.
+                  bottomNavigationBar: _open || _quickPanelOpen || typing ? null : _tabBar(shown, bouts),
                   body: Stack(
                     fit: StackFit.expand,
                     children: [
@@ -392,7 +463,16 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
                               // No drawer to pull while the sidebar shows.
                               behavior: HitTestBehavior.translucent,
                               gestures: {if (!sidebar) ..._drawerGestures, if (quickPanelOn) ..._quickPanelGestures},
-                              child: chat,
+                              // A tab stays mounted once opened (the chat keeps its
+                              // draft and scroll); the panel pages aren't built before
+                              // they are ever shown.
+                              child: IndexedStack(
+                                index: shown.index,
+                                children: [
+                                  for (final tab in HomeTab.values)
+                                    _visited.contains(tab) ? _tabBody(tab, chat, bouts, sessionId) : const SizedBox.shrink(),
+                                ],
+                              ),
                             ),
                             sidebar: SessionsDrawer(
                               key: const ValueKey('persistent-sidebar'),

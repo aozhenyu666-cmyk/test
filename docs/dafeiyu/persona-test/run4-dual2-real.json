@@ -1,0 +1,87 @@
+{
+  "at": "2026-11-07T07:43:57.564Z",
+  "model": "deepseek-flash",
+  "notes": [
+    {
+      "from": "companion",
+      "to": "strategist",
+      "text": "他下周三下午要去字节二面，自己说有点慌。这种费脑子的事我不掺和，你来跟他说两句吧，别让他一个人瞎想。",
+      "urgent": true,
+      "at": 1794037125076
+    }
+  ],
+  "log": [
+    {
+      "who": "我",
+      "text": "我刚吃了螺蛳粉，好臭哈哈",
+      "ms": 0,
+      "note": "对鱼丸"
+    },
+    {
+      "who": "鱼丸",
+      "text": "〔鱼丸〕螺蛳粉？隔着屏幕我都闻到了，你是不是想把我熏走好自己清净\n\n说真的，加香菜没？加了我就跟你急",
+      "ms": 9741,
+      "note": ""
+    },
+    {
+      "who": "我",
+      "text": "跟你说个事，我下周三下午要去字节二面，有点慌",
+      "ms": 0,
+      "note": "对鱼丸"
+    },
+    {
+      "who": "鱼丸",
+      "text": "〔鱼丸〕慌什么慌，字节又不会吃人——最多把你嚼两下\n\n这种费脑子的我去跟鲸澜说了，她比我严肃，专治你这种考前失眠的。我负责陪你慌。\n\n话说回来，二面过了你请我喝奶茶，十杯，不许赖。",
+      "ms": 6304,
+      "note": ""
+    },
+    {
+      "who": "我",
+      "text": "我下周有什么安排来着？",
+      "ms": 0,
+      "note": "对鲸澜"
+    },
+    {
+      "who": "鲸澜",
+      "text": "〔鲸澜〕下周的记录里，正经事只有一件：\n\n**周三 11/11 下午：字节二面。**\n\n周一到周二都还空着，周末也空着。也就是说，你有整整两天可以认真准备，不用等到最后一刻才临时抱佛脚。\n\n有件事需要确认：这次二面是技术面还是主管面或HR面？这决定接下来两天具体练什么。我先按技术面来假设；如果是主管面，要练的内容完全不同。你告诉我一声，我帮你把周一到周二拆成具体动作。\n\n另外，紧张是正常的。二面本来就比一面更看重“这人能不能一起干活”，不是你答题答得好不好。",
+      "ms": 8109,
+      "note": ""
+    },
+    {
+      "who": "我",
+      "text": "今天好累，不想动",
+      "ms": 0,
+      "note": "对鲸澜"
+    },
+    {
+      "who": "鲸澜",
+      "text": "（失败 {\"v\":1,\"requestId\":\"say-1794037136781-641355\",\"eventId\":\"say-1794037136781-641355\",\"sessionId\":\"session-e7708191-6a76-4be1-a0f8-af2d51d8277f\",\"state\":\"claimed\",\"acceptedAt\":1794037136791,\"claimedAt\":1794037136818,\"turn\":2,\"generatedAt\":null,\"text\":null,\"truncated\":false,\"failure\":null,\"cancelledAt\":null,\"deadline\":1794037256791,\"topicId\":null,\"topicKind\":null,\"serveType\":null,\"rallyId\":null,\"shot\":null,\"silence\":null,\"extra\":null,\"cold\":false}）",
+      "ms": 112114,
+      "note": ""
+    },
+    {
+      "who": "我",
+      "text": "你养了什么宠物来着",
+      "ms": 0,
+      "note": "对鱼丸"
+    },
+    {
+      "who": "鱼丸",
+      "text": "〔鱼丸〕仓鼠，叫芝麻。就那个一天到晚往嘴里塞东西的小家伙。\n\n你问这个干嘛，想来看它？它认生，而且最近胖了，抱起来像个小包子。",
+      "ms": 76572,
+      "note": ""
+    },
+    {
+      "who": "我",
+      "text": "我中午吃的啥你还记得不",
+      "ms": 0,
+      "note": "对鱼丸"
+    },
+    {
+      "who": "鱼丸",
+      "text": "（失败 {\"v\":1,\"requestId\":\"say-1794037325467-411251\",\"eventId\":\"say-1794037325467-411251\",\"sessionId\":\"session-814f0e6b-8b0b-4223-a27e-a8805fa1ead3\",\"state\":\"claimed\",\"acceptedAt\":1794037325475,\"claimedAt\":1794037325500,\"turn\":4,\"generatedAt\":null,\"text\":null,\"truncated\":false,\"failure\":null,\"cancelledAt\":null,\"deadline\":1794037445475,\"topicId\":null,\"topicKind\":null,\"serveType\":null,\"rallyId\":null,\"shot\":null,\"silence\":null,\"extra\":null,\"cold\":false}）",
+      "ms": 112097,
+      "note": ""
+    }
+  ]
+}

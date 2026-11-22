@@ -72,6 +72,7 @@ class MainActivity : FlutterActivity() {
             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.companion.CompanionVoicePlugin())
             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.speech.SpeechPlugin())
             engine.plugins.add(io.github.ccch1mneyyy.dsh_app.companion.CompanionWidgetPlugin())
+            io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuEntry.registerPlugins(engine)
             engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
             cache.put(ENGINE_ID, engine)
         }
@@ -122,6 +123,7 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         io.github.ccch1mneyyy.dsh_app.phone.background.BackgroundControl.get(applicationContext).restoreKeptChannel()
+        io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.DafeiyuEntry.onResume(this)
         inForeground = true
         // Coming back counts as activity: the first frames may not be scheduled yet.
         framesActive = true

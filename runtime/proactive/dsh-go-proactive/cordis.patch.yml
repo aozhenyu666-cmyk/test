@@ -1,0 +1,5 @@
+# Layer applied when a profile lists this bundle (`dsh plugin add dsh-go-proactive`).
+# The dsh-app runtime can instead load lib/index.js by absolute path, like dsh-go-bridge.
+- insert:
+    - id: dsh-go-proactive
+      name: dsh-go-proactive

@@ -172,6 +172,24 @@ flutter:
     # Engine-side auth bridge (ChatGPT / Claude sign-in), copied into the guest at
     # every engine start by runtime/AppAuthGuest.kt; tests in tool/engine_auth/.
     - assets/engine/auth/
+    # Prebuilt DSH plugins copied into the guest at every engine start by
+    # runtime/BuiltinPluginGuest.kt. Flutter does not recurse into asset
+    # subdirectories, so every level is listed.
+    - assets/engine/plugins/
+    - assets/engine/plugins/dsh-go-relationship/
+    - assets/engine/plugins/dsh-go-relationship/lib/
+    - assets/engine/plugins/dsh-go-relationship/lib/core/
+    - assets/engine/plugins/dsh-speak-up/
+    - assets/engine/plugins/dsh-speak-up/lib/
+    - assets/engine/plugins/dsh-feiyu-mood/
+    - assets/engine/plugins/dsh-feiyu-mood/lib/
+    - assets/engine/plugins/dsh-fish-strict/
+    - assets/engine/plugins/dsh-fish-strict/lib/
+    - assets/engine/plugins/dsh-go-memory/
+    - assets/engine/plugins/dsh-go-memory/lib/
+    - assets/engine/plugins/dsh-go-companion/
+    - assets/engine/plugins/dsh-go-companion/lib/
+    - assets/engine/plugins/dsh-go-companion/lib/protocols/
     # 社区 hub content shipped with the app (lib/state/community_state.dart),
     # shown until a newer community.json is fetched.
     - assets/community/
@@ -193,6 +211,7 @@ flutter:
     - assets/skills/dsh-go-support/
     - assets/skills/companion-adapt/
     - assets/skills/pet-theme/
+    - assets/skills/dsh-go-relationship/
 
 
   # To add assets to your application, add an assets section, like this:

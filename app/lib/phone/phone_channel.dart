@@ -172,18 +172,51 @@ class PhonePrivilegedStatus {
 }
 
 class PhoneA11yStatus {
-  const PhoneA11yStatus({this.enabled = false, this.serviceConnected = false});
+  const PhoneA11yStatus({
+    this.enabled = false,
+    this.serviceConnected = false,
+    this.alive = true,
+    this.healthy = true,
+    this.verdict = 'unknown',
+    this.lastEventAgeMs = -1,
+    this.lastProbeAgeMs = -1,
+    this.failures = 0,
+  });
 
-  factory PhoneA11yStatus.fromMap(Map<Object?, Object?> m) =>
-      PhoneA11yStatus(enabled: _flag(m['enabled']), serviceConnected: _flag(m['serviceConnected']));
+  factory PhoneA11yStatus.fromMap(Map<Object?, Object?> m) => PhoneA11yStatus(
+    enabled: _flag(m['enabled']),
+    serviceConnected: _flag(m['serviceConnected']),
+    // Older native modules don't send health; keep the old behaviour (connected == ok).
+    alive: _maybeFlag(m['alive']) ?? true,
+    healthy: _maybeFlag(m['healthy']) ?? true,
+    verdict: _text(m['verdict']) ?? 'unknown',
+    lastEventAgeMs: (m['lastEventAgeMs'] as num?)?.toInt() ?? -1,
+    lastProbeAgeMs: (m['lastProbeAgeMs'] as num?)?.toInt() ?? -1,
+    failures: (m['failures'] as num?)?.toInt() ?? 0,
+  );
 
   /// The user turned DSH on in the system accessibility settings.
   final bool enabled;
 
-  /// The service is bound and answering (false right after a force stop).
+  /// The service instance exists.
   final bool serviceConnected;
 
-  bool get ok => enabled && serviceConnected;
+  /// The service is not known-dead (it may be stale).
+  final bool alive;
+
+  /// Connected and answering right now. False while STALE/DEAD.
+  final bool healthy;
+
+  /// HEALTHY / UNKNOWN / STALE / DEAD from the native health probe.
+  final String verdict;
+  final int lastEventAgeMs;
+  final int lastProbeAgeMs;
+  final int failures;
+
+  bool get ok => enabled && serviceConnected && healthy;
+
+  /// Connected but not delivering: the iQOO force-freeze produces this.
+  bool get stale => enabled && serviceConnected && !healthy;
 }
 
 class ShizukuStatus {

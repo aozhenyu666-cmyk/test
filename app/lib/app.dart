@@ -6,6 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'companion/companion_initiative_owner.dart' show companionInitiativeProvider;
+import 'dafeiyu/channels/proactive_transport.dart';
 import 'l10n/l10n.dart';
 import 'performance/performance_state.dart';
 import 'performance/refresh_rate.dart';
@@ -80,6 +81,8 @@ class _DshAppState extends ConsumerState<DshApp> with WidgetsBindingObserver {
     // switch as an in-app setting; the app answers frames to run at the fastest rate
     // while it is actually drawing (see RefreshRateService).
     RefreshRateService.instance.start();
+    // Listen for the proactive kernel's Agent commands on the current host connection.
+    ref.read(proactiveTransportProvider).start();
     WidgetsBinding.instance.addObserver(this);
   }
 

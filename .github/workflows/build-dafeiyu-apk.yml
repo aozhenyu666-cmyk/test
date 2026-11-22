@@ -1,0 +1,260 @@
+name: Build 大肥鱼 Android APK (phone test)
+on:
+  push:
+    branches: [feat/dafeiyu-v3-on-1016, feat/dafeiyu-v3-on-130]
+    paths:
+      - ".github/workflows/build-dafeiyu-apk.yml"
+      - "app/**"
+      - "runtime/**"
+      - "tooling/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  NODE_VERSION: 24.22.1
+  GRADLE_VERSION: 9.3.1
+  PROOT_VERSION: 5.1.107.102
+  DSH_MAVEN_MIRRORS: 0
+  TZ: Asia/Shanghai
+  DSH_TEST_FONT_DIR: /usr/share/fonts/opentype/noto
+  NOTO_CJK_VERSION: 1:20230817+repack1-3
+
+jobs:
+  android-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            app/android/**/*.gradle.kts
+            app/android/gradle/wrapper/gradle-wrapper.properties
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Companion plugin & tooling tests (fail fast)
+        run: |
+          (cd app/assets/engine/plugins/dsh-go-companion && node --test test/*.test.mjs)
+          (cd app/assets/engine/plugins/dsh-go-memory && node --test test/*.test.mjs)
+          (cd tooling/pc-companion-sync && node --test test/*.test.mjs)
+          (cd tooling/gemini-bridge && node --test test/*.test.mjs)
+      - name: End-to-end on the real DSH engine (warm, cold, feature checks)
+        run: bash tooling/companion-e2e/run.sh
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Restore Noto CJK test fonts
+        id: fonts
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/test-fonts
+          key: test-fonts-${{ env.NOTO_CJK_VERSION }}
+      - name: Download Noto CJK test fonts
+        if: steps.fonts.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          sudo apt-get update -q
+          apt-get download fonts-noto-cjk="$NOTO_CJK_VERSION" fonts-noto-cjk-extra="$NOTO_CJK_VERSION"
+          for deb in fonts-noto-cjk*.deb; do dpkg-deb -x "$deb" unpacked; done
+          mkdir -p ~/test-fonts
+          cp unpacked/usr/share/fonts/opentype/noto/NotoSansCJK-{Regular,Bold,Light}.ttc ~/test-fonts/
+      - name: Save Noto CJK test fonts
+        if: steps.fonts.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/test-fonts
+          key: ${{ steps.fonts.outputs.cache-primary-key }}
+      - name: Install Noto CJK test fonts
+        run: |
+          sudo install -Dm644 -t "$DSH_TEST_FONT_DIR" ~/test-fonts/NotoSansCJK-*.ttc
+      - name: Verify l10n source sync & run Flutter analyze + Dafeiyu tests
+        working-directory: app
+        run: |
+          python3 tool/l10n_merge.py --check
+          flutter pub get --enforce-lockfile
+          flutter analyze --no-pub
+          flutter test --no-pub --concurrency=4 test/dafeiyu/
+      - name: Use the official Gradle distribution & Maven Central mirror on CI
+        run: |
+          f=app/android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's#^distributionUrl=.*/\(gradle-[0-9.]*-all\.zip\)$#distributionUrl=https\\://services.gradle.org/distributions/\1#' "$f"
+          grep -q '^distributionUrl=https\\://services.gradle.org/distributions/gradle-' "$f"
+          mkdir -p ~/.gradle/init.d
+          printf '%s\n' \
+            'systemProp.org.gradle.internal.repository.max.retries=10' \
+            'systemProp.org.gradle.internal.repository.initial.backoff=2000' >> ~/.gradle/gradle.properties
+          cat > ~/.gradle/init.d/ci-mirror.init.gradle.kts <<'EOF'
+          val ciMirror = "https://maven-central.storage-download.googleapis.com/maven2/"
+          fun RepositoryHandler.preferCiMirror() {
+              if (any { it is MavenArtifactRepository && it.url.toString() == ciMirror }) return
+              val repo = maven { url = uri(ciMirror); name = "ciMavenCentralMirror" }
+              remove(repo)
+              addFirst(repo)
+          }
+          beforeSettings {
+              pluginManagement.repositories.preferCiMirror()
+              pluginManagement.repositories.gradlePluginPortal()
+          }
+          settingsEvaluated {
+              val central = dependencyResolutionManagement.repositoriesMode.get() != RepositoriesMode.PREFER_PROJECT
+              gradle.extensions.extraProperties.set("ciMirrorCentral", central)
+              if (central) dependencyResolutionManagement.repositories.preferCiMirror()
+          }
+          allprojects {
+              buildscript.repositories.preferCiMirror()
+              val central = gradle.extensions.extraProperties.let { it.has("ciMirrorCentral") && it.get("ciMirrorCentral") == true }
+              if (!central) repositories.preferCiMirror()
+          }
+          EOF
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+      - name: Install required Linux packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gpgv zstd xz-utils unzip file
+      - name: Build arm64 Linux runtime
+        env:
+          NPM_REGISTRY: https://registry.npmjs.org
+          NODE_MIRROR: https://nodejs.org/dist
+        run: |
+          bash runtime/build-runtime.sh arm64-v8a
+          test -f runtime/out/arm64-v8a/assets/runtime/manifest.json
+          test -f runtime/out/arm64-v8a/assets/runtime/rootfs-arm64-v8a.tar.xz
+          strings "$(find runtime/out/arm64-v8a -name libproot.so | head -1)" | grep -m1 '5\.1\.107' | tee PROOT-VERSION.txt
+      - name: Kotlin unit tests (full suite)
+        run: |
+          cd app
+          printf 'sdk.dir=%s\nflutter.sdk=%s\n' "$ANDROID_HOME" "$FLUTTER_ROOT" > android/local.properties
+          cd android
+          gradle :app:testArm64DebugUnitTest --stacktrace --console=plain \
+            -Dorg.gradle.internal.repository.max.retries=10 \
+            -Dorg.gradle.internal.repository.initial.backoff=2000
+          python3 - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+          files = []
+          for root in ("../build", "../../build", "app/build"):
+              files += glob.glob(root + "/**/test-results/**/*.xml", recursive=True)
+          assert files, "missing Kotlin unit test XML reports"
+          total = fail = skip = 0
+          for f in files:
+              r = ET.parse(f).getroot()
+              total += int(r.get("tests", 0))
+              fail += int(r.get("failures", 0)) + int(r.get("errors", 0))
+              skip += int(r.get("skipped", 0))
+          print(f"Kotlin unit tests: {total} run, {fail} failed, {skip} skipped")
+          assert total >= 800, f"expected full Kotlin suite, got {total}"
+          assert fail == 0, f"Kotlin unit tests had {fail} failures"
+          PY
+      - name: Separate app ID and name so it installs next to other builds
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          gradle = Path("app/android/app/build.gradle.kts")
+          data = gradle.read_text(encoding="utf-8")
+          original = 'applicationId = "io.github.ccch1mneyyy.dsh_app"'
+          assert data.count(original) == 1, "Unexpected Gradle applicationId layout"
+          data = data.replace(original, 'applicationId = "io.github.ccch1mneyyy.dsh_app.fish"')
+          label_placeholder = 'manifestPlaceholders["appLabel"] = if (sideBuild) "DSH Go 测试" else "DSH Go"'
+          if label_placeholder in data:
+              assert data.count(label_placeholder) == 1, "Unexpected Gradle appLabel placeholder layout"
+              data = data.replace(label_placeholder, 'manifestPlaceholders["appLabel"] = "DSH Go 大肥鱼"')
+          else:
+              manifest = Path("app/android/app/src/main/AndroidManifest.xml")
+              mdata = manifest.read_text(encoding="utf-8")
+              morig = 'android:label="DSH Go"'
+              assert mdata.count(morig) == 1, "Unexpected AndroidManifest label"
+              manifest.write_text(mdata.replace(morig, 'android:label="DSH Go 大肥鱼"'), encoding="utf-8")
+          shortcuts = Path("app/android/app/src/main/res/xml/shortcuts.xml")
+          if shortcuts.exists():
+              sdata = shortcuts.read_text(encoding="utf-8")
+              sdata = sdata.replace('android:targetPackage="io.github.ccch1mneyyy.dsh_app"',
+                                    'android:targetPackage="io.github.ccch1mneyyy.dsh_app.fish"')
+              shortcuts.write_text(sdata, encoding="utf-8")
+          gradle.write_text(data + '''
+          android {
+              packaging {
+                  jniLibs {
+                      excludes += setOf("lib/armeabi-v7a/**", "lib/armeabi/**", "lib/x86/**", "lib/x86_64/**")
+                  }
+              }
+          }
+          ''', encoding="utf-8")
+          PY
+      - name: Build arm64 release APK
+        working-directory: app
+        run: |
+          flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.3.0 --build-number ${{ github.run_number }}0 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/test
+      - name: Sign release APK with persistent fish keystore (if configured)
+        env:
+          FISH_KEYSTORE_BASE64: ${{ secrets.FISH_KEYSTORE_BASE64 }}
+          FISH_KEYSTORE_PASS: ${{ secrets.FISH_KEYSTORE_PASS }}
+          FISH_KEY_ALIAS: ${{ secrets.FISH_KEY_ALIAS }}
+          FISH_KEY_PASS: ${{ secrets.FISH_KEY_PASS }}
+        run: |
+          APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          if [ -n "$FISH_KEYSTORE_BASE64" ] && [ -n "$FISH_KEYSTORE_PASS" ] && [ -n "$FISH_KEY_ALIAS" ]; then
+            python3 -c 'import base64,os,re; raw=re.sub(r"[^A-Za-z0-9+/=]","",os.environ["FISH_KEYSTORE_BASE64"]); open("/tmp/fish.jks","wb").write(base64.b64decode(raw))'
+            export EFFECTIVE_KEY_PASS="${FISH_KEY_PASS:-$FISH_KEYSTORE_PASS}"
+            BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+            "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" /tmp/app-aligned.apk
+            "$BUILD_TOOLS/apksigner" sign \
+              --ks /tmp/fish.jks \
+              --ks-pass "env:FISH_KEYSTORE_PASS" \
+              --ks-key-alias "$FISH_KEY_ALIAS" \
+              --key-pass "env:EFFECTIVE_KEY_PASS" \
+              --out "$APK" /tmp/app-aligned.apk
+            "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
+            rm -f /tmp/fish.jks /tmp/app-aligned.apk
+            echo "Signed with fixed persistent keystore."
+          else
+            echo "::notice::FISH_KEYSTORE_BASE64 not set; keeping default Gradle debug signature."
+          fi
+      - name: Verify bundled runtime and package
+        run: |
+          APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          test -s "$APK"
+          unzip -l "$APK" | awk '{print $4}' | grep '^lib/' | cut -d/ -f2 | sort | uniq -c
+          python3 tooling/verify_apk_runtime.py "$APK" --plugin runtime/proactive/dsh-go-proactive
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$AAPT" dump badging "$APK" | grep 'io.github.ccch1mneyyy.dsh_app.fish'
+          cp "$APK" dsh-go-fish-arm64.apk
+          sha256sum dsh-go-fish-arm64.apk | tee APK-SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-fish-arm64-apk
+          path: |
+            dsh-go-fish-arm64.apk
+            APK-SHA256.txt
+            PROOT-VERSION.txt
+          retention-days: 14
+      - name: Publish phone-downloadable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev=$(gh release list --limit 50 --json tagName \
+            --jq '[.[] | select(.tagName | startswith("fish-build-"))][0].tagName // ""' || true)
+          notes=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_SHA}" \
+            --jq '.commits[] | "- " + (.commit.message | split("\n")[0])' 2>/dev/null || true)
+          {
+            echo "## DSH Go 大肥鱼 (v1.3.0 底座)"
+            echo
+            echo "${notes:-（提交记录略）}"
+            echo
+            echo "独立包名 io.github.ccch1mneyyy.dsh_app.fish，可与其他版本并存。请核对 SHA256 后安装。"
+          } > NOTES.md
+          gh release create "fish-build-${{ github.run_number }}" \
+            dsh-go-fish-arm64.apk APK-SHA256.txt PROOT-VERSION.txt \
+            --target "${{ github.sha }}" \
+            --title "DSH Go 大肥鱼 v1.3.0 · arm64 #${{ github.run_number }}" \
+            --notes-file NOTES.md \
+            --prerelease
