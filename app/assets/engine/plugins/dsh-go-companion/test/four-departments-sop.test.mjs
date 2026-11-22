@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -8,6 +8,8 @@ import {
   COLLECT_QUESTION_MAX_CHARS,
   DISPATCH_WINDOW_MS,
   ERR_NO_RAW_FACTS,
+  JUDGE_ARCHIVE_DAYS,
+  archiveJudgeFile,
   collectDepartmentSop,
   dispatchDepartmentSop,
   governDepartmentSop,
@@ -223,5 +225,60 @@ test('D12 routeBoutDepartment 流转部门同时更新 SQLite bouts.department �
   } finally {
     db?.close?.()
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('D13 archiveJudgeFile / governDepartmentSop：判断.md 写入前按月归档超 30 天记录，保留核心规则与近 30 天记录', () => {
+  assert.equal(JUDGE_ARCHIVE_DAYS, 30)
+  const kb = mkdtempSync(join(tmpdir(), 'dafeiyu-judge-arch-'))
+  try {
+    const judgeFile = join(kb, JUDGE_FILE)
+    writeFileSync(judgeFile, [
+      '# 判断',
+      '',
+      '- 常驻判断：连续切换超过 5 次立刻拉回主线。',
+      '',
+      '<!-- govern-audit:2026-09-12 -->',
+      '### 2026-09-12 · 督办行为审计',
+      '- 计划局数：2 | 通过：1 | 未过：1 | 履约率：50%',
+      '',
+      '<!-- govern-audit:2026-11-10 -->',
+      '### 2026-11-10 · 督办行为审计',
+      '- 计划局数：3 | 通过：3 | 未过：0 | 履约率：100%',
+      '',
+    ].join('\n'), 'utf8')
+
+    const atNov22 = Date.parse('2026-11-22T21:30:00+08:00')
+    const archPre = archiveJudgeFile(kb, { now: atNov22 })
+    assert.equal(archPre.ok, true)
+    assert.equal(archPre.changed, true)
+    assert.equal(archPre.archivedCount, 1)
+
+    const active = readFileSync(judgeFile, 'utf8')
+    assert.match(active, /常驻判断：连续切换超过 5 次立刻拉回主线/)
+    assert.match(active, /2026-11-10 · 督办行为审计/)
+    assert.doesNotMatch(active, /2026-09-12 · 督办行为审计/)
+
+    const septArch = join(kb, '归档', '判断-2026-09.md')
+    assert.equal(existsSync(septArch), true)
+    assert.match(readFileSync(septArch, 'utf8'), /2026-09-12 · 督办行为审计/)
+
+    // 再写入 2026-11-22 审计并塞入一条 2026-10-01 历史审计验证 governDepartmentSop 自动裁剪
+    const cur = readFileSync(judgeFile, 'utf8')
+    writeFileSync(judgeFile, cur + '\n<!-- govern-audit:2026-10-01 -->\n### 2026-10-01 · 督办行为审计\n- 计划局数：1 | 通过：0 | 未过：1 | 履约率：0%\n', 'utf8')
+    const gRes = governDepartmentSop({
+      lockedQueue: [{ protocolId: 'study', order: 1 }],
+      verdicts: [{ pass: true }],
+      telemetry: { funMinutesToday: 10, workMinutesToday: 45 },
+      kb,
+      at: atNov22,
+    })
+    assert.equal(gRes.ok, true)
+    const activeAfter = readFileSync(judgeFile, 'utf8')
+    assert.doesNotMatch(activeAfter, /2026-10-01 · 督办行为审计/)
+    assert.match(activeAfter, /2026-11-22 · 督办行为审计/)
+    assert.match(readFileSync(join(kb, '归档', '判断-2026-10.md'), 'utf8'), /2026-10-01 · 督办行为审计/)
+  } finally {
+    rmSync(kb, { recursive: true, force: true })
   }
 })

@@ -89,8 +89,8 @@ test('进上下文的话：默认验收、恢复日、正在花余额', () => {
 })
 
 import {
-  DEFAULT_BASE_FUN_MIN, EVENING_CAP_DEFAULT,
-  applyNodCardOverrides, buildNodCard, eveningCapFor, eveningOf, eveningStep, setEveningCap,
+  DAYTIME_SPEND_CAP_MIN, DEFAULT_BASE_FUN_MIN, EVENING_CAP_DEFAULT, LUNCH_BREAK_WINDOW,
+  applyNodCardOverrides, buildNodCard, classifySpendWindow, eveningCapFor, eveningOf, eveningStep, setEveningCap,
 } from '../lib/verifier_mode.js'
 import { addSeals } from '../lib/seal.js'
 
@@ -168,4 +168,21 @@ test('4.9 早上点头卡：今天已有验收点则返回 needed:false；否则
   const added = addSeals(null, edited, { now: NOW, today, minuteOfDay: 8 * 60 + 30, by: 'template' })
   assert.equal(added.added.length, 1)
   assert.equal(added.skipped.length, 0)
+})
+
+test('分时花余额窗口 classifySpendWindow 与白天/午休常量', () => {
+  assert.equal(DAYTIME_SPEND_CAP_MIN, 30)
+  assert.deepEqual(LUNCH_BREAK_WINDOW, [12 * 60, 14 * 60])
+  assert.equal(classifySpendWindow(0), 'night')
+  assert.equal(classifySpendWindow(6 * 60 + 59), 'night')
+  assert.equal(classifySpendWindow(7 * 60), 'daytime')
+  assert.equal(classifySpendWindow(11 * 60 + 59), 'daytime')
+  assert.equal(classifySpendWindow(12 * 60), 'lunch')
+  assert.equal(classifySpendWindow(13 * 60 + 59), 'lunch')
+  assert.equal(classifySpendWindow(14 * 60), 'daytime')
+  assert.equal(classifySpendWindow(17 * 60 + 59), 'daytime')
+  assert.equal(classifySpendWindow(18 * 60), 'evening')
+  assert.equal(classifySpendWindow(22 * 60 + 59), 'evening')
+  assert.equal(classifySpendWindow(23 * 60), 'night')
+  assert.equal(classifySpendWindow(23 * 60 + 59), 'night')
 })
