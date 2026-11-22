@@ -1,7 +1,7 @@
 // 题库导入第二版：真机上导不进去的那几种写法，一种一条。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildImportPreview, normalizeAnswer, parseBankAny, parseDelimited, splitInlineOptions } from '../lib/bank_import.js'
+import { buildImportPreview, detectQuestionAnomalies, GEMINI_IMPORT_PROMPT_TEMPLATE, normalizeAnswer, parseBankAny, parseDelimited, splitInlineOptions } from '../lib/bank_import.js'
 
 const KEY_AT_END = `一、常识判断
 1. 下列属于扩张性财政政策的是：
@@ -167,4 +167,87 @@ test('buildImportPreview：生成逐题预览并标出题干过短、选项不�
 
   const outOfRange = buildImportPreview([{ 题干: '长度足够的测试题干在这里', 选项: ['甲', '乙'], 答案: 'D', 解析: '有解析' }])
   assert.ok(outOfRange.items[0].issues.some((x) => x.includes('答案不在现有选项字母范围内')))
+})
+
+test('混合形态（mcq + card + short_qa）与 Markdown/JSON 代码块及图片抽取', () => {
+  assert.match(GEMINI_IMPORT_PROMPT_TEMPLATE, /"mcq"/)
+  assert.match(GEMINI_IMPORT_PROMPT_TEMPLATE, /"card"/)
+  assert.match(GEMINI_IMPORT_PROMPT_TEMPLATE, /"short_qa"/)
+
+  // 1) Gemini 输出带 ```json 围栏与混合形态（card 允许无答案，short_qa 允许无选项）
+  const fencedJson = '已为你整理今天的收集内容：\n```json\n' + JSON.stringify({
+    名称: '今日思考沉淀',
+    题目: [
+      {
+        kind: 'card',
+        题干: '【核心规律】避免把手段当成目的，先看约束边界。',
+        images: [{ path: 'vault/assets/boundary.png', role: 'stem', caption: '边界图' }],
+      },
+      {
+        kind: 'short_qa',
+        题干: '总结：随机化抽题的关键在保存历史。\n小问题：如何避免只看本轮 seenIds？',
+        答案: '持久化 questionStats 并在解锁后不清空。',
+        解析: '解锁只清当轮进度，统计与最近题号长期保留。',
+      },
+      {
+        kind: 'mcq',
+        题干: '下列哪项属于代码可判题目？',
+        选项: ['主观感悟', '四选一客观题'],
+        答案: 'B',
+        解析: '有标准选项与字母答案时由代码直接判对错。',
+      },
+    ],
+  }) + '\n```'
+
+  const jRes = parseBankAny(fencedJson)
+  assert.equal(jRes.ok, true, JSON.stringify(jRes))
+  assert.equal(jRes.format, 'json')
+  assert.equal(jRes.questions.length, 3)
+  assert.equal(jRes.questions[0].kind, 'card')
+  assert.equal(jRes.questions[0].答案, '已阅读掌握')
+  assert.deepEqual(jRes.questions[0].images, [{ path: 'vault/assets/boundary.png', role: 'stem', caption: '边界图' }])
+  assert.equal(jRes.questions[1].kind, 'short_qa')
+  assert.equal(jRes.questions[1].选项, undefined)
+  assert.equal(jRes.questions[2].kind, 'mcq')
+
+  const jPrev = buildImportPreview(jRes)
+  assert.equal(jPrev.issueCount, 0, JSON.stringify(jPrev.items))
+
+  // 2) Markdown / 标签块混合导入 + ![caption](path) 图片解析
+  const mdBlocks = [
+    '【展示卡】一阶逻辑与因果链拆分 ![因果图](notes/causal.png)',
+    '【解析】先找触发场景，再写干预动作。',
+    '---',
+    '【小问题】为什么 0.7 权重能防止锁屏自评刷分？',
+    '【答案】因为只有代码判 4 选 1 才给满分 1 题进度。',
+    '【解析】保持验收公平。',
+    '---',
+    'kind: mcq',
+    '【题目】看图识趋势：下列判断正确的是？',
+    '【图片】![趋势图](companion/bank-assets/trend.jpg)',
+    'A. 持续上升',
+    'B. 先升后降',
+    '【答案】A',
+    '【解析】图中斜率为正。',
+  ].join('\n')
+
+  const mRes = parseBankAny(mdBlocks)
+  assert.equal(mRes.ok, true, JSON.stringify(mRes))
+  assert.equal(mRes.questions.length, 3)
+  assert.equal(mRes.questions[0].kind, 'card')
+  assert.equal(mRes.questions[0].images[0].path, 'notes/causal.png')
+  assert.equal(mRes.questions[0].images[0].caption, '因果图')
+  assert.equal(mRes.questions[1].kind, 'short_qa')
+  assert.equal(mRes.questions[2].kind, 'mcq')
+  assert.equal(mRes.questions[2].images[0].path, 'companion/bank-assets/trend.jpg')
+
+  // 3) 选项混进题干异常检测
+  const mixedUp = detectQuestionAnomalies({
+    kind: 'mcq',
+    题干: '以下说法正确的是？A. 第一项 B. 第二项 C. 第三项',
+    答案: 'A',
+    解析: '有解析',
+  })
+  assert.ok(mixedUp.some((x) => x.includes('疑似选项混入题干')))
+  assert.ok(mixedUp.some((x) => x.includes('选择题选项少于 2 个')))
 })

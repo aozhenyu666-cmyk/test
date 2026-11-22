@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
@@ -15,6 +17,59 @@ import '../../ui/theme/theme.dart';
 import '../bank/bank_text_extract.dart';
 import '../channels/proactive_state.dart';
 import 'review_page.dart';
+
+const String _fallbackGeminiTemplate = '''请把我今天收集的零散资料/笔记/错题/截图内容，整理加工成一份【混合知识卡与防遗忘题库 JSON】，方便我直接导入 DSH Go 题库中心并在锁屏刷题巩固。
+
+请严格按以下三种形态（kind）按内容特点混排：
+1. "mcq"（客观选择题，答对计 1 题进度）：必须包含 2~4 个 "选项"、"答案"（大写字母如 "B"）、"解析"。
+2. "card"（知识展示/规律卡，自评「我读懂了/还不熟」计 0.7 题进度）：无需选项，"题干" 写核心规律/触发场景/避坑边界，"答案" 可写记忆锚点或省略，"解析" 写补充说明。
+3. "short_qa"（总结+小问题卡，先思考后看答案再自评计 0.7 题进度）：无需选项，"题干" 上半段给精华总结、下半段提 1 个核心小问题，"答案" 给参考答案，"解析" 给延伸要点。
+
+只输出一个 ```json 代码块：
+```json
+{
+  "名称": "今日收集 · 主题",
+  "题目": [
+    {
+      "kind": "mcq",
+      "题型": "概念辨析",
+      "题干": "……",
+      "选项": ["选项A", "选项B", "选项C", "选项D"],
+      "答案": "B",
+      "解析": "……"
+    },
+    {
+      "kind": "card",
+      "题型": "知识卡",
+      "题干": "【核心结论】……\\n【触发场景】……",
+      "答案": "一句话记忆锚点",
+      "解析": "补充提醒"
+    },
+    {
+      "kind": "short_qa",
+      "题型": "小问题",
+      "题干": "【要点总结】……\\n\\n【思考小问题】为什么……？",
+      "答案": "参考答案……",
+      "解析": "评分要点……"
+    }
+  ]
+}
+```''';
+
+String _kindLabel(String? kind) => switch (kind) {
+  'card' => '展示卡',
+  'short_qa' => '小问题',
+  'review' => '复习卡',
+  _ => '选择',
+};
+
+String _formatImportedAt(Object? rawMs) {
+  final ms = rawMs is num ? rawMs.toInt() : 0;
+  if (ms <= 0) return '刚导入';
+  final dt = DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
+}
 
 /// 备考题库与锁屏刷题解锁中心（默认：答对 10 题解锁 5 分钟）。
 class BankManagerPage extends StatefulWidget {
@@ -37,9 +92,11 @@ class _BankManagerPageState extends State<BankManagerPage> {
 
   bool _loading = true;
   bool _busy = false;
-  bool _appendMode = true;
+  bool _appendMode = false;
   String? _banner;
   Map<String, dynamic> _bankData = const {};
+  List<Map<String, dynamic>> _banksOverride = const [];
+  bool _hasBanksOverride = false;
   Map<String, dynamic>? _review;
 
   @override
@@ -55,15 +112,98 @@ class _BankManagerPageState extends State<BankManagerPage> {
     super.dispose();
   }
 
+  List<Map<String, dynamic>> get _banks {
+    final raw = _hasBanksOverride ? _banksOverride : _bankData['banks'];
+    if (raw is! List) return const [];
+    return [for (final item in raw) if (item is Map) Map<String, dynamic>.from(item)];
+  }
+
   Future<void> _refresh() async {
     final both = await Future.wait([_channel.bankOp(), _channel.reviewOp({'action': 'summary'})]);
     final res = both[0];
     if (!mounted) return;
     setState(() {
       _loading = false;
-      if (res != null) _bankData = res;
+      if (res != null) {
+        _bankData = res;
+        _hasBanksOverride = false;
+      }
       _review = both[1];
     });
+  }
+
+  Future<void> _refreshCatalogOnly() async {
+    setState(() => _busy = true);
+    final res = await _channel.bankOp({'action': 'list_banks'});
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (res != null && res['ok'] == true) {
+        final raw = res['banks'];
+        if (raw is List) {
+          _banksOverride = [for (final item in raw) if (item is Map) Map<String, dynamic>.from(item)];
+          _hasBanksOverride = true;
+        }
+        _bankData = {
+          ..._bankData,
+          if (res['bankName'] != null) 'bankName': res['bankName'],
+          if (res['bankTotal'] != null) 'bankTotal': res['bankTotal'],
+          if (res['wrongCount'] != null) 'wrongCount': res['wrongCount'],
+        };
+      }
+    });
+  }
+
+  Future<void> _toggleBank(String bankId, bool enabled) async {
+    setState(() => _busy = true);
+    final res = await _channel.bankOp({'action': 'toggle_bank', 'bankId': bankId, 'enabled': enabled});
+    await _refresh();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (res != null && res['ok'] == true && res['banks'] is List) {
+        _banksOverride = [for (final item in res['banks'] as List) if (item is Map) Map<String, dynamic>.from(item)];
+        _hasBanksOverride = true;
+      }
+      _banner = res?['ok'] == true ? (enabled ? '已启用该套题库参与抽题' : '已停用该套题库') : '切换状态失败';
+    });
+  }
+
+  Future<void> _openBankDetail(Map<String, dynamic> bankSummary) async {
+    final bankId = '${bankSummary['id'] ?? ''}'.trim();
+    if (bankId.isEmpty) return;
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => _BankDetailPage(
+          channel: _channel,
+          bankId: bankId,
+          initialBank: bankSummary,
+        ),
+      ),
+    );
+    if (mounted) {
+      if (changed == true) {
+        setState(() => _banner = '题库目录已更新');
+      }
+      unawaited(_refresh());
+    }
+  }
+
+  Future<void> _copyGeminiTemplate() async {
+    setState(() => _busy = true);
+    final res = await _channel.bankOp({'action': 'gemini_template'});
+    final tpl = (res?['template'] is String && (res!['template'] as String).trim().isNotEmpty)
+        ? res['template'] as String
+        : _fallbackGeminiTemplate;
+    await Clipboard.setData(ClipboardData(text: tpl));
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _banner = '已复制给 Gemini 的混合知识卡/题库生成模板，去 Gemini 粘贴今日收集内容即可生成可导入 JSON';
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已复制 Gemini 混合知识卡/题库生成模板')),
+    );
   }
 
   Future<void> _updateConfig({int? requiredCount, int? unlockMinutes}) async {
@@ -311,15 +451,14 @@ C. 紧缩性货币政策
 D. 中性产业政策
 答案：B
 解析：增支减税会扩大社会总需求，属于典型的扩张性财政政策。
-
-2. 【言语理解】体系化思考与零散信息堆砌的根本区别在于是否提炼出什么？
-A. 更多字数摘要
-B. 可迁移的因果链与行动规则
-C. 复杂名词列表
-D. 个人主观情绪
-答案：B
-解析：信息只有压缩为“触发场景 → 底层因果机制 → 下次行动”才能产生决策复利。''';
-    setState(() => _banner = '已填入示例模板，可按此格式粘贴更多考公/专业题');
+---
+【展示卡】体系化思考卡：信息只有压缩为“触发场景 → 因果链 → 下次行动”才具备复利。
+【解析】阅读理解时先标出因果连词与主体动作。
+---
+【小问题】为什么知识卡与小问题自评只计 0.7 题解锁进度？
+【答案】因为无客观选项无法由代码验真，保留 0.7 权重防止纯点跳过。
+【解析】选择题答对计 1 题，知识卡/简答自评计 0.7 题。''';
+    setState(() => _banner = '已填入混合示例模板（含选择题、展示卡、小问题），可直接预览入库');
   }
 
   Future<void> _showPreviewErrorDialog({
@@ -441,220 +580,241 @@ D. 个人主观情绪
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '导入前预览',
-                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                      if (formats.isNotEmpty)
-                        StatusChip(tone: StatusTone.idle, label: formats.join(' / ')),
-                      IconButton(
-                        tooltip: '关闭',
-                        onPressed: () => Navigator.of(ctx).pop(false),
-                        icon: const Icon(AppIcons.close, size: 18),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    key: const ValueKey('bank-preview-summary'),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: suspectCount > 0
-                          ? colors.warningContainer.withValues(alpha: 0.55)
-                          : colors.successContainer.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: suspectCount > 0
-                            ? colors.warning.withValues(alpha: 0.5)
-                            : colors.success.withValues(alpha: 0.4),
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
                       children: [
-                        Text(
-                          '共 $totalCount 题 · 可疑 $suspectCount 题 · 跳过 $totalSkipped 题',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: suspectCount > 0 ? colors.onWarningContainer : colors.onSuccessContainer,
+                        Expanded(
+                          child: Text(
+                            '导入前预览',
+                            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                           ),
                         ),
-                        if (suspectCount > 0) ...[
-                          const SizedBox(height: 6),
-                          Wrap(
-                            spacing: 8,
-                            children: [
-                              ChoiceChip(
-                                key: const ValueKey('bank-preview-filter-all'),
-                                label: Text('全部 (${rows.length})'),
-                                selected: !onlySuspect,
-                                onSelected: (_) => setSheetState(() => onlySuspect = false),
-                              ),
-                              ChoiceChip(
-                                key: const ValueKey('bank-preview-filter-suspect'),
-                                label: Text('仅看可疑 ($suspectCount)'),
-                                selected: onlySuspect,
-                                onSelected: (_) => setSheetState(() => onlySuspect = true),
-                              ),
-                            ],
-                          ),
-                        ],
-                        if (preErrors.isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            preErrors.join('；'),
-                            style: theme.textTheme.bodySmall?.copyWith(color: colors.danger),
-                          ),
-                        ],
-                        if (skippedNotes.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            '跳过说明：${skippedNotes.join('；')}',
-                            style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
-                          ),
-                        ],
+                        if (formats.isNotEmpty)
+                          StatusChip(tone: StatusTone.idle, label: formats.join(' / ')),
+                        IconButton(
+                          tooltip: '关闭',
+                          onPressed: () => Navigator.of(ctx).pop(false),
+                          icon: const Icon(AppIcons.close, size: 18),
+                        ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  Expanded(
-                    child: shown.isEmpty
-                        ? Center(
-                            child: Text(
-                              '共识别出 $totalCount 题（后端未返回明细条目）',
-                              style: theme.textTheme.bodyMedium?.copyWith(color: colors.textTertiary),
+                    const SizedBox(height: 6),
+                    Container(
+                      key: const ValueKey('bank-preview-summary'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: suspectCount > 0
+                            ? colors.warningContainer.withValues(alpha: 0.55)
+                            : colors.successContainer.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: suspectCount > 0
+                              ? colors.warning.withValues(alpha: 0.5)
+                              : colors.success.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '共 $totalCount 题 · 可疑 $suspectCount 题 · 跳过 $totalSkipped 题',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: suspectCount > 0 ? colors.onWarningContainer : colors.onSuccessContainer,
                             ),
-                          )
-                        : ListView.separated(
-                            itemCount: shown.length,
-                            separatorBuilder: (_, _) => const SizedBox(height: 8),
-                            itemBuilder: (_, idx) {
-                              final row = shown[idx];
-                              final item = row.item;
-                              final issues = row.issues;
-                              final hasIssues = issues.isNotEmpty;
-                              final options = item['options'] is List ? item['options'] as List : const [];
-                              final ans = '${item['answer'] ?? ''}'.trim();
-                              final analysis = '${item['analysis'] ?? ''}'.trim();
-                              final qIndex = item['index'] ?? (idx + 1);
-                              final qType = '${item['type'] ?? '选择'}'.trim();
-                              return Container(
-                                key: ValueKey('bank-preview-item-$qIndex'),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: hasIssues
-                                      ? colors.dangerContainer.withValues(alpha: 0.42)
-                                      : theme.colorScheme.surfaceContainerLow,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: hasIssues
-                                        ? colors.danger.withValues(alpha: 0.7)
-                                        : theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
-                                  ),
+                          ),
+                          if (suspectCount > 0) ...[
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 8,
+                              children: [
+                                ChoiceChip(
+                                  key: const ValueKey('bank-preview-filter-all'),
+                                  label: Text('全部 (${rows.length})'),
+                                  selected: !onlySuspect,
+                                  onSelected: (_) => setSheetState(() => onlySuspect = false),
                                 ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        if (row.fileLabel.isNotEmpty) ...[
-                                          Text(
-                                            '「${row.fileLabel}」',
-                                            style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
-                                          ),
-                                          const SizedBox(width: 4),
-                                        ],
-                                        Text(
-                                          '第 $qIndex 题 · $qType',
-                                          style: theme.textTheme.labelMedium?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                            color: hasIssues ? colors.danger : theme.colorScheme.primary,
-                                          ),
-                                        ),
-                                        const Spacer(),
-                                        Text(
-                                          '选项 ${options.length} 个 · 答案 ${ans.isEmpty ? '缺失' : ans}'
-                                          '${analysis.isNotEmpty ? ' · 有解析' : ''}',
-                                          style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
-                                        ),
-                                      ],
+                                ChoiceChip(
+                                  key: const ValueKey('bank-preview-filter-suspect'),
+                                  label: Text('仅看可疑 ($suspectCount)'),
+                                  selected: onlySuspect,
+                                  onSelected: (_) => setSheetState(() => onlySuspect = true),
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (preErrors.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              preErrors.join('；'),
+                              style: theme.textTheme.bodySmall?.copyWith(color: colors.danger),
+                            ),
+                          ],
+                          if (skippedNotes.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '跳过说明：${skippedNotes.join('；')}',
+                              style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: shown.isEmpty
+                          ? Center(
+                              child: Text(
+                                '共识别出 $totalCount 题（后端未返回明细条目）',
+                                style: theme.textTheme.bodyMedium?.copyWith(color: colors.textTertiary),
+                              ),
+                            )
+                          : ListView.separated(
+                              itemCount: shown.length,
+                              separatorBuilder: (_, _) => const SizedBox(height: 8),
+                              itemBuilder: (_, idx) {
+                                final row = shown[idx];
+                                final item = row.item;
+                                final issues = row.issues;
+                                final hasIssues = issues.isNotEmpty;
+                                final options = item['options'] is List ? item['options'] as List : const [];
+                                final images = item['images'] is List ? item['images'] as List : const [];
+                                final ans = '${item['answer'] ?? ''}'.trim();
+                                final analysis = '${item['analysis'] ?? ''}'.trim();
+                                final qIndex = item['index'] ?? (idx + 1);
+                                final qKind = '${item['kind'] ?? ''}'.trim();
+                                final qType = '${item['type'] ?? _kindLabel(qKind)}'.trim();
+                                return Container(
+                                  key: ValueKey('bank-preview-item-$qIndex'),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: hasIssues
+                                        ? colors.dangerContainer.withValues(alpha: 0.42)
+                                        : theme.colorScheme.surfaceContainerLow,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: hasIssues
+                                          ? colors.danger.withValues(alpha: 0.7)
+                                          : theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
                                     ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      '${item['stem'] ?? ''}',
-                                      maxLines: 3,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: theme.textTheme.bodyMedium,
-                                    ),
-                                    if (hasIssues) ...[
-                                      const SizedBox(height: 8),
-                                      Wrap(
-                                        spacing: 6,
-                                        runSpacing: 6,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
                                         children: [
-                                          for (final issue in issues)
+                                          if (row.fileLabel.isNotEmpty) ...[
+                                            Text(
+                                              '「${row.fileLabel}」',
+                                              style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                                            ),
+                                            const SizedBox(width: 4),
+                                          ],
+                                          Text(
+                                            '第 $qIndex 题 · $qType',
+                                            style: theme.textTheme.labelMedium?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                              color: hasIssues ? colors.danger : theme.colorScheme.primary,
+                                            ),
+                                          ),
+                                          if (qKind.isNotEmpty) ...[
+                                            const SizedBox(width: 6),
                                             Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                               decoration: BoxDecoration(
-                                                color: colors.danger.withValues(alpha: 0.15),
+                                                color: theme.colorScheme.secondaryContainer,
                                                 borderRadius: BorderRadius.circular(999),
-                                                border: Border.all(color: colors.danger.withValues(alpha: 0.55)),
                                               ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Icon(AppIcons.warning, size: 13, color: colors.danger),
-                                                  const SizedBox(width: 4),
-                                                  Text(
-                                                    issue,
-                                                    style: theme.textTheme.labelSmall?.copyWith(
-                                                      color: colors.danger,
-                                                      fontWeight: FontWeight.w700,
-                                                    ),
-                                                  ),
-                                                ],
+                                              child: Text(
+                                                _kindLabel(qKind),
+                                                style: theme.textTheme.labelSmall?.copyWith(
+                                                  color: theme.colorScheme.onSecondaryContainer,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
                                               ),
                                             ),
+                                          ],
+                                          const Spacer(),
+                                          Text(
+                                            '${qKind == 'card' || qKind == 'short_qa' ? '自评 0.7 题' : '选项 ${options.length} 个'}'
+                                            ' · 答案 ${ans.isEmpty ? '缺失' : ans}'
+                                            '${images.isNotEmpty ? ' · 图 ${images.length}' : ''}'
+                                            '${analysis.isNotEmpty ? ' · 有解析' : ''}',
+                                            style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                                          ),
                                         ],
                                       ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '${item['stem'] ?? ''}',
+                                        maxLines: 3,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: theme.textTheme.bodyMedium,
+                                      ),
+                                      if (hasIssues) ...[
+                                        const SizedBox(height: 8),
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
+                                          children: [
+                                            for (final issue in issues)
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                decoration: BoxDecoration(
+                                                  color: colors.danger.withValues(alpha: 0.15),
+                                                  borderRadius: BorderRadius.circular(999),
+                                                  border: Border.all(color: colors.danger.withValues(alpha: 0.55)),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    Icon(AppIcons.warning, size: 13, color: colors.danger),
+                                                    const SizedBox(width: 4),
+                                                    Text(
+                                                      issue,
+                                                      style: theme.textTheme.labelSmall?.copyWith(
+                                                        color: colors.danger,
+                                                        fontWeight: FontWeight.w700,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ],
                                     ],
-                                  ],
-                                ),
-                              );
-                            },
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            key: const ValueKey('bank-preview-cancel'),
+                            onPressed: () => Navigator.of(ctx).pop(false),
+                            child: const Text('取消'),
                           ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          key: const ValueKey('bank-preview-cancel'),
-                          onPressed: () => Navigator.of(ctx).pop(false),
-                          child: const Text('取消'),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        flex: 2,
-                        child: FilledButton.icon(
-                          key: const ValueKey('bank-preview-confirm'),
-                          onPressed: () => Navigator.of(ctx).pop(true),
-                          icon: const Icon(AppIcons.success, size: 18),
-                          label: Text('确认入库（$totalCount 题）'),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          flex: 2,
+                          child: FilledButton.icon(
+                            key: const ValueKey('bank-preview-confirm'),
+                            onPressed: () => Navigator.of(ctx).pop(true),
+                            icon: const Icon(AppIcons.success, size: 18),
+                            label: Text('确认入库（$totalCount 题）'),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
             ),
           );
         },
@@ -665,7 +825,7 @@ D. 个人主观情绪
   Future<void> _submitImport() async {
     final raw = _rawCtrl.text.trim();
     if (raw.isEmpty) {
-      setState(() => _banner = '请先粘贴题目文本，或选文件（txt / docx / xlsx / csv / json，可多选）');
+      setState(() => _banner = '请先粘贴题目文本，或选文件（txt / md / docx / xlsx / csv / json，可多选）');
       return;
     }
     setState(() {
@@ -706,6 +866,188 @@ D. 个人主观情绪
     });
   }
 
+  Widget _buildCatalogSection(ThemeData theme, DshColors colors) {
+    final banks = _banks;
+    return GlassSurface(
+      key: const ValueKey('bank-catalog-section'),
+      tier: GlassTier.card,
+      borderRadius: AppShape.radiusLg,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '已导入题库列表（${banks.length} 套）',
+                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('bank-catalog-refresh'),
+                    tooltip: '刷新目录统计',
+                    onPressed: _busy ? null : _refreshCatalogOnly,
+                    icon: const Icon(AppIcons.refresh, size: 18),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              if (banks.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '暂无已建档套库。可在下方复制 Gemini 模板把今日收集整理成混合知识卡/题库导入。',
+                    style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                  ),
+                )
+              else
+                Column(
+                  children: [
+                    for (var i = 0; i < banks.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 10),
+                      _buildCatalogCard(theme, colors, banks[i]),
+                    ],
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCatalogCard(ThemeData theme, DshColors colors, Map<String, dynamic> bank) {
+    final bankId = '${bank['id'] ?? ''}';
+    final name = '${bank['name'] ?? '未命名题库'}';
+    final enabled = bank['enabled'] != false;
+    final total = (bank['total'] as num?)?.toInt() ?? 0;
+    final seenCount = (bank['seenCount'] as num?)?.toInt() ?? 0;
+    final coveragePct = (bank['coveragePct'] as num?)?.toInt() ?? 0;
+    final accuracyPct = (bank['accuracyPct'] as num?)?.toInt();
+    final anomalyCount = (bank['anomalyCount'] as num?)?.toInt() ?? 0;
+    final kc = bank['kindCounts'] is Map ? bank['kindCounts'] as Map : const {};
+    final mcqCount = (kc['mcq'] as num?)?.toInt() ?? 0;
+    final cardCount = (kc['card'] as num?)?.toInt() ?? 0;
+    final qaCount = (kc['short_qa'] as num?)?.toInt() ?? 0;
+    final fmt = '${bank['sourceFormat'] ?? ''}'.trim();
+
+    return InkWell(
+      key: ValueKey('bank-catalog-item-$bankId'),
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => unawaited(_openBankDetail(bank)),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: enabled
+              ? theme.colorScheme.surfaceContainerLow
+              : theme.colorScheme.surfaceContainerLowest.withValues(alpha: 0.65),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: anomalyCount > 0
+                ? colors.warning.withValues(alpha: 0.55)
+                : theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          StatusChip(
+                            tone: enabled ? StatusTone.ok : StatusTone.idle,
+                            label: enabled ? '启用中' : '已停用',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '${_formatImportedAt(bank['importedAt'])}${fmt.isEmpty ? '' : ' · $fmt'} · 共 $total 题',
+                        style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch.adaptive(
+                  key: ValueKey('bank-toggle-$bankId'),
+                  value: enabled,
+                  onChanged: _busy ? null : (v) => unawaited(_toggleBank(bankId, v)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _KindBadge(label: '选择 $mcqCount'),
+                _KindBadge(label: '展示卡 $cardCount'),
+                _KindBadge(label: '小问题 $qaCount'),
+                if (anomalyCount > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: colors.warningContainer.withValues(alpha: 0.65),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '⚠ 格式异常 $anomalyCount 题',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colors.onWarningContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '已刷覆盖 $coveragePct% ($seenCount/$total) · 正确率 ${accuracyPct == null ? '--' : '$accuracyPct%'}',
+                    style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                  ),
+                ),
+                Text(
+                  '点进看明细',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 2),
+                Icon(AppIcons.disclosure, size: 14, color: theme.colorScheme.primary),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -722,7 +1064,7 @@ D. 个人主观情绪
 
     return AppPage.list(
       title: '备考题库中心',
-      subtitle: const Text('导入真题后，触发锁屏即可做题换休息时长（再也不用按数字或走 150 步）'),
+      subtitle: const Text('支持多套题库分批管理、知识展示卡/小问题与真随机抽题（自评计 0.7 题进度）'),
       children: [
         if (_banner != null)
           Padding(
@@ -747,9 +1089,11 @@ D. 个人主观情绪
           ),
           footer: OverviewFooter(
             tone: StatusTone.idle,
-            text: _loading ? '读取中…' : '当前解锁规则：答对 $reqCount 题 → 临时放行 $unlockMin 分钟',
+            text: _loading ? '读取中…' : '解锁规则：答对 $reqCount 题 → 放行 $unlockMin 分钟（知识卡/简答自评计 0.7 题进度）',
           ),
         ),
+        _buildCatalogSection(theme, colors),
+        const SizedBox(height: 14),
         ListPageCard(
           key: const ValueKey('bank-review'),
           title: '个人复习卡（FSRS）',
@@ -827,7 +1171,7 @@ D. 个人主观情绪
                   Row(
                     children: [
                       Expanded(
-                        child: Text('导入题目（文本 / Word / Excel / CSV / JSON，可多选）', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                        child: Text('导入题目 / 混合知识卡', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
                       ),
                       TextButton.icon(
                         onPressed: _busy ? null : _fillSampleTemplate,
@@ -836,7 +1180,14 @@ D. 个人主观情绪
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
+                  OutlinedButton.icon(
+                    key: const ValueKey('bank-copy-gemini-template'),
+                    onPressed: _busy ? null : _copyGeminiTemplate,
+                    icon: const Icon(AppIcons.copy, size: 16),
+                    label: const Text('复制给 Gemini 的混合知识卡/题库生成模板'),
+                  ),
+                  const SizedBox(height: 10),
                   TextField(
                     key: const ValueKey('bank-name-input'),
                     controller: _nameCtrl,
@@ -853,7 +1204,7 @@ D. 个人主观情绪
                     minLines: 6,
                     maxLines: 12,
                     decoration: const InputDecoration(
-                      labelText: '粘贴题目（1. 题干 / A.B.C.D. / 答案：；也支持 --- 与 【题目】【答案】 标签块）',
+                      labelText: '粘贴 JSON / Markdown / 纯文本（支持 mcq、展示卡、小问题与 ![图](路径)）',
                       alignLabelWithHint: true,
                       border: OutlineInputBorder(),
                     ),
@@ -863,8 +1214,8 @@ D. 个人主观情绪
                     contentPadding: EdgeInsets.zero,
                     value: _appendMode,
                     onChanged: (v) => setState(() => _appendMode = v),
-                    title: const Text('追加到现有题库'),
-                    subtitle: Text(_appendMode ? '保留原有题目并在后面新增' : '用这次导入替换整份题库'),
+                    title: const Text('合并进同名/最近已有题库'),
+                    subtitle: Text(_appendMode ? '按题干去重并追加进同名题库' : '作为全新独立套库条目入库，按批次分开管理'),
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -895,6 +1246,409 @@ D. 个人主观情绪
           ),
         ),
       ],
+    );
+  }
+}
+
+class _KindBadge extends StatelessWidget {
+  const _KindBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.onSecondaryContainer,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+enum _DetailFilter { all, wrong, anomaly }
+
+class _BankDetailPage extends StatefulWidget {
+  const _BankDetailPage({
+    required this.channel,
+    required this.bankId,
+    required this.initialBank,
+  });
+
+  final ProactiveChannel channel;
+  final String bankId;
+  final Map<String, dynamic> initialBank;
+
+  @override
+  State<_BankDetailPage> createState() => _BankDetailPageState();
+}
+
+class _BankDetailPageState extends State<_BankDetailPage> {
+  bool _loading = true;
+  bool _busy = false;
+  bool _changed = false;
+  _DetailFilter _filter = _DetailFilter.all;
+  String? _error;
+  late Map<String, dynamic> _bank = Map<String, dynamic>.from(widget.initialBank);
+  List<Map<String, dynamic>> _questions = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final res = await widget.channel.bankOp({'action': 'get_bank', 'bankId': widget.bankId});
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      if (res == null || res['ok'] != true) {
+        _error = '${res?['error'] ?? '读取题库明细失败'}';
+      } else {
+        if (res['bank'] is Map) _bank = Map<String, dynamic>.from(res['bank'] as Map);
+        final rawQs = res['questions'];
+        _questions = rawQs is List
+            ? [for (final q in rawQs) if (q is Map) Map<String, dynamic>.from(q)]
+            : const [];
+      }
+    });
+  }
+
+  bool _isWrongQuestion(Map<String, dynamic> q) {
+    if (q['inWrongPool'] == true) return true;
+    final st = q['stats'] is Map ? q['stats'] as Map : const {};
+    final w = (st['wrongCount'] as num?)?.toInt() ?? 0;
+    final c = (st['correctCount'] as num?)?.toInt() ?? 0;
+    return w > c;
+  }
+
+  List<String> _anomalyReasons(Map<String, dynamic> q) {
+    final raw = q['anomalyReasons'];
+    if (raw is! List) return const [];
+    return [for (final x in raw) if ('$x'.trim().isNotEmpty) '$x'.trim()];
+  }
+
+  Future<void> _deleteBank() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除整套题库'),
+        content: Text('确定删除「${_bank['name'] ?? widget.bankId}」？删除后将不再参与锁屏抽题。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('取消')),
+          FilledButton(
+            key: const ValueKey('bank-detail-confirm-delete-bank'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('确认删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _busy = true);
+    final res = await widget.channel.bankOp({'action': 'delete_bank', 'bankId': widget.bankId});
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (res?['ok'] == true) {
+      Navigator.of(context).pop(true);
+    } else {
+      setState(() => _error = '${res?['error'] ?? '删除失败'}');
+    }
+  }
+
+  Future<void> _deleteQuestion(String questionId) async {
+    setState(() => _busy = true);
+    final res = await widget.channel.bankOp({
+      'action': 'delete_question',
+      'bankId': widget.bankId,
+      'questionId': questionId,
+    });
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (res?['ok'] == true) {
+        _changed = true;
+        _questions = _questions.where((q) => '${q['id']}' != questionId).toList();
+        if (res?['bank'] is Map) _bank = Map<String, dynamic>.from(res!['bank'] as Map);
+      } else {
+        _error = '${res?['error'] ?? '删除单题失败'}';
+      }
+    });
+  }
+
+  Widget _buildImagePreviewList(ThemeData theme, DshColors colors, List<dynamic> rawImages) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final item in rawImages)
+          if (item is Map || item is String) ...[
+            const SizedBox(height: 6),
+            Builder(
+              builder: (context) {
+                final path = item is String ? item : '${(item as Map)['path'] ?? ''}';
+                final caption = item is Map ? '${item['caption'] ?? ''}'.trim() : '';
+                final localFile = path.trim().isNotEmpty ? File(path) : null;
+                final exists = localFile != null && localFile.existsSync();
+                if (exists) {
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Image.file(
+                          localFile,
+                          height: 120,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, _, _) => _ImagePlaceholderBox(path: path, caption: caption),
+                        ),
+                        if (caption.isNotEmpty)
+                          Text(caption, style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary)),
+                      ],
+                    ),
+                  );
+                }
+                return _ImagePlaceholderBox(path: path, caption: caption);
+              },
+            ),
+          ],
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = DshColors.of(context);
+    final wrongQs = _questions.where(_isWrongQuestion).toList();
+    final anomalyQs = _questions.where((q) => _anomalyReasons(q).isNotEmpty).toList();
+    final shown = switch (_filter) {
+      _DetailFilter.all => _questions,
+      _DetailFilter.wrong => wrongQs,
+      _DetailFilter.anomaly => anomalyQs,
+    };
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) Navigator.of(context).pop(_changed);
+      },
+      child: AppPage.list(
+        title: '${_bank['name'] ?? '题库详情'}',
+        subtitle: Text('共 ${_questions.length} 题 · ${_formatImportedAt(_bank['importedAt'])}'),
+        actions: [
+          IconButton(
+            key: const ValueKey('bank-detail-delete-bank'),
+            tooltip: '删除整套题库',
+            onPressed: _busy ? null : _deleteBank,
+            icon: Icon(AppIcons.delete, color: colors.danger),
+          ),
+        ],
+        children: [
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(_error!, style: theme.textTheme.bodyMedium?.copyWith(color: colors.danger)),
+            ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ChoiceChip(
+                key: const ValueKey('bank-detail-filter-all'),
+                label: Text('全部 (${_questions.length})'),
+                selected: _filter == _DetailFilter.all,
+                onSelected: (_) => setState(() => _filter = _DetailFilter.all),
+              ),
+              ChoiceChip(
+                key: const ValueKey('bank-detail-filter-wrong'),
+                label: Text('错题 (${wrongQs.length})'),
+                selected: _filter == _DetailFilter.wrong,
+                onSelected: (_) => setState(() => _filter = _DetailFilter.wrong),
+              ),
+              ChoiceChip(
+                key: const ValueKey('bank-detail-filter-anomaly'),
+                label: Text('格式异常 (${anomalyQs.length})'),
+                selected: _filter == _DetailFilter.anomaly,
+                onSelected: (_) => setState(() => _filter = _DetailFilter.anomaly),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (shown.isEmpty)
+            GlassSurface(
+              tier: GlassTier.card,
+              borderRadius: AppShape.radiusMd,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('当前筛选条件下暂无题目', style: theme.textTheme.bodyMedium?.copyWith(color: colors.textTertiary)),
+              ),
+            )
+          else
+            for (final q in shown) ...[
+              _buildQuestionCard(theme, colors, q),
+              const SizedBox(height: 10),
+            ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuestionCard(ThemeData theme, DshColors colors, Map<String, dynamic> q) {
+    final qid = '${q['id'] ?? ''}';
+    final kind = '${q['kind'] ?? 'mcq'}';
+    final anomalies = _anomalyReasons(q);
+    final hasAnomaly = anomalies.isNotEmpty;
+    final st = q['stats'] is Map ? q['stats'] as Map : const {};
+    final seenCount = (st['seenCount'] as num?)?.toInt() ?? 0;
+    final correctCount = (st['correctCount'] as num?)?.toInt() ?? 0;
+    final wrongCount = (st['wrongCount'] as num?)?.toInt() ?? 0;
+    final options = q['options'] is List ? q['options'] as List : const [];
+    final images = q['images'] is List ? q['images'] as List : const [];
+    final isWrong = _isWrongQuestion(q);
+
+    return GlassSurface(
+      key: ValueKey('bank-detail-question-$qid'),
+      tier: GlassTier.card,
+      borderRadius: AppShape.radiusMd,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  '#${q['index'] ?? '-'} · ${_kindLabel(kind)}',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: hasAnomaly ? colors.danger : theme.colorScheme.primary,
+                  ),
+                ),
+                if ('${q['type'] ?? ''}'.trim().isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Text('· ${q['type']}', style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary)),
+                ],
+                const Spacer(),
+                if (isWrong)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: StatusChip(tone: StatusTone.error, label: '错题'),
+                  ),
+                IconButton(
+                  key: ValueKey('bank-detail-delete-q-$qid'),
+                  tooltip: '删除此题',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _busy ? null : () => unawaited(_deleteQuestion(qid)),
+                  icon: Icon(AppIcons.delete, size: 18, color: colors.textTertiary),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text('${q['stem'] ?? ''}', style: theme.textTheme.bodyMedium),
+            if (images.isNotEmpty) _buildImagePreviewList(theme, colors, images),
+            if (options.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              for (var i = 0; i < options.length; i++)
+                Text(
+                  '${String.fromCharCode(65 + i)}. ${options[i]}',
+                  style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                ),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              '答案：${q['answer'] ?? ''}  ·  刷过 $seenCount 次（对 $correctCount / 错 $wrongCount）',
+              style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+            ),
+            if ('${q['analysis'] ?? ''}'.trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                '解析：${q['analysis']}',
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+              ),
+            ],
+            if (hasAnomaly) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final reason in anomalies)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: colors.dangerContainer.withValues(alpha: 0.65),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        reason,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: colors.danger,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ImagePlaceholderBox extends StatelessWidget {
+  const _ImagePlaceholderBox({required this.path, required this.caption});
+
+  final String path;
+  final String caption;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = DshColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          Icon(AppIcons.image, size: 16, color: colors.textTertiary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '图片占位：${caption.isNotEmpty ? '$caption · ' : ''}$path',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

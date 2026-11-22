@@ -5,8 +5,11 @@ import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.DefiancePolicy
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.SessionArbiterPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
+import java.nio.file.Files
 
 class LockStabilizationTest {
     @Test
@@ -330,5 +333,54 @@ class LockStabilizationTest {
                 hasLegacyPass = false,
             ),
         )
+    }
+
+    @Test
+    fun quizCardDisplayPolicyHandlesMixedKindsAndSafeLocalImagePaths() {
+        // 1) Kind resolution & badge labels
+        assertEquals("card", QuizCardDisplayPolicy.resolveKind(mapOf("kind" to "card"), emptyList<Any>()))
+        assertEquals("short_qa", QuizCardDisplayPolicy.resolveKind(mapOf("kind" to "short_qa"), emptyList<Any>()))
+        assertEquals("short_qa", QuizCardDisplayPolicy.resolveKind(emptyMap<String, Any>(), emptyList<Any>()))
+        assertEquals("mcq", QuizCardDisplayPolicy.resolveKind(emptyMap<String, Any>(), listOf("甲", "乙")))
+
+        assertTrue(QuizCardDisplayPolicy.badgeLabel("card", "今日卡片").contains("0.7 题进度"))
+        assertTrue(QuizCardDisplayPolicy.badgeLabel("short_qa", null).contains("小问题卡"))
+
+        // 2) Feedback formatting for card & short_qa
+        val cardOk = QuizCardDisplayPolicy.formatAnswerFeedback(mapOf("correct" to true, "selfJudged" to true, "explain" to "记住了"), "card")
+        assertTrue(cardOk.first)
+        assertTrue(cardOk.second.contains("+0.7 题进度"))
+
+        val cardUnfamiliar = QuizCardDisplayPolicy.formatAnswerFeedback(mapOf("correct" to false, "selfJudged" to true, "correctAnswer" to "已阅读掌握"), "card")
+        assertFalse(cardUnfamiliar.first)
+        assertFalse(cardUnfamiliar.second.contains("正确答案"))
+        assertTrue(cardUnfamiliar.second.contains("待复习池"))
+
+        // 3) Image extraction & safe local file resolution (no crash on missing/traversal/URLs)
+        val specs = QuizCardDisplayPolicy.extractImageSpecs(
+            listOf(
+                mapOf("path" to "charts/q1.png", "role" to "stem", "caption" to "趋势图"),
+                mapOf("path" to "   "),
+                "assets/plain.jpg",
+            ),
+        )
+        assertEquals(2, specs.size)
+        assertEquals("charts/q1.png", specs[0].path)
+        assertEquals("趋势图", specs[0].caption)
+
+        val tempDir = Files.createTempDirectory("quiz-img-test").toFile()
+        try {
+            val imgFile = File(tempDir, "companion/bank-assets/charts/q1.png").apply {
+                parentFile.mkdirs()
+                writeBytes(byteArrayOf(1, 2, 3))
+            }
+            val resolved = QuizCardDisplayPolicy.resolveSafeLocalImageFile("charts/q1.png", listOf(tempDir))
+            assertEquals(imgFile.canonicalPath, resolved?.canonicalPath)
+            assertNull(QuizCardDisplayPolicy.resolveSafeLocalImageFile("../secret.png", listOf(tempDir)))
+            assertNull(QuizCardDisplayPolicy.resolveSafeLocalImageFile("https://example.com/a.png", listOf(tempDir)))
+            assertNull(QuizCardDisplayPolicy.resolveSafeLocalImageFile("nonexistent/missing.png", listOf(tempDir)))
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 }

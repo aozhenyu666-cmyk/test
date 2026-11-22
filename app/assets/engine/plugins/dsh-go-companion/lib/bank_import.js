@@ -15,8 +15,114 @@
 export const MAX_QUESTIONS = 5000
 const LETTERS = 'ABCDEFGH'
 
+// 图片相对路径解析约定：绝对路径（/ 或 Windows 盘符）直接使用；
+// 相对路径优先相对于 Obsidian Vault 根目录或 companion/bank-assets/ 解析。
+export const GEMINI_IMPORT_PROMPT_TEMPLATE = `请把我今天收集的零散资料/笔记/错题/截图内容，整理加工成一份【混合知识卡与防遗忘题库 JSON】，方便我直接导入 DSH Go 题库中心并在锁屏刷题巩固。
+
+请严格按以下三种形态（kind）按内容特点混排：
+1. "mcq"（客观选择题，适合概念辨析、计算、真题演练，答对计 1 题进度）：
+   - 必须包含 2~4 个 "选项"（纯选项正文，不要在每项里硬塞解析）
+   - "答案" 填大写字母（如 "B" 或多选 "BD"）
+   - "解析" 说明为什么选对及常见干扰项错因
+2. "card"（知识展示/规律卡，适合方法论、思维模型、金句总结，自评「我读懂了/还不熟」计 0.7 题进度）：
+   - 无需 "选项"
+   - "题干" 用结构化分段写出核心规律/触发条件/易错边界
+   - "答案" 可写一句核心记忆锚点（也可省略）
+   - "解析" 补充典型应用或反例提醒
+3. "short_qa"（总结+小问题卡，适合长材料理解与主动回忆，先想后看答案再自评，计 0.7 题进度）：
+   - 无需 "选项"
+   - "题干" 上半部分给精华总结，下半部分提 1 个直击本质的小问题
+   - "答案" 给出清晰参考答案，"解析" 补充延伸思路
+
+输出要求：只输出一个 \`\`\`json 代码块，格式如下（如有本地配图可加可选字段 "images"）：
+\`\`\`json
+{
+  "名称": "今日收集 · 主题名称",
+  "题目": [
+    {
+      "kind": "mcq",
+      "题型": "概念辨析",
+      "题干": "……",
+      "选项": ["选项A内容", "选项B内容", "选项C内容", "选项D内容"],
+      "答案": "B",
+      "解析": "……"
+    },
+    {
+      "kind": "card",
+      "题型": "知识卡",
+      "题干": "【核心结论】……\\n【触发场景】……\\n【避坑边界】……",
+      "答案": "一句话记忆锚点",
+      "解析": "补充案例或适用条件"
+    },
+    {
+      "kind": "short_qa",
+      "题型": "小问题",
+      "题干": "【要点总结】……\\n\\n【思考小问题】为什么……？",
+      "答案": "参考答案要点……",
+      "解析": "延伸思考与评分标准"
+    }
+  ]
+}
+\`\`\``
+
 const clean = (s) => String(s == null ? '' : s).replace(/　/g, ' ').replace(/[ \t]+/g, ' ').trim()
 const toHalf = (s) => String(s || '').replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+
+export function normalizeQuestionKind(rawKind, options = [], type = '', answer = '') {
+  const k = clean(rawKind).toLowerCase()
+  if (['card', 'knowledge_card', 'flashcard', '展示卡', '知识卡', '规律卡', '笔记卡', '概念卡', '卡片'].includes(k)) return 'card'
+  if (['short_qa', 'short-qa', 'shortqa', 'qa', 'short', '小问题', '简答', '简答题', '简答卡', '问答', '问答题', '思考题'].includes(k)) return 'short_qa'
+  if (['mcq', 'choice', 'single', 'multiple', '选择', '选择题', '单选', '单选题', '多选', '多选题', '判断', '判断题'].includes(k)) return 'mcq'
+  if (Array.isArray(options) && options.length >= 2) return 'mcq'
+  const t = clean(type)
+  if (/展示卡|知识卡|规律卡|笔记卡|卡片/.test(t)) return 'card'
+  if (/小问题|简答|问答|思考题/.test(t)) return 'short_qa'
+  if (/选择|单选|多选/.test(t)) return 'mcq'
+  const ans = clean(answer).toUpperCase()
+  if ((!Array.isArray(options) || options.length < 2) && /^[A-H]{1,4}$/.test(ans)) return 'mcq'
+  return 'short_qa'
+}
+
+export function normalizeImages(rawImages) {
+  if (!rawImages) return []
+  const arr = Array.isArray(rawImages) ? rawImages : [rawImages]
+  const out = []
+  const seen = new Set()
+  for (const item of arr) {
+    let path = ''
+    let role = 'stem'
+    let caption = ''
+    if (typeof item === 'string') {
+      path = item.trim()
+    } else if (item && typeof item === 'object') {
+      path = String(item.path ?? item.url ?? item.src ?? item.file ?? '').trim()
+      role = String(item.role || '').trim().toLowerCase() === 'option' ? 'option' : 'stem'
+      caption = clean(item.caption ?? item.alt ?? item.title ?? '')
+    }
+    path = path.replace(/^<|>$/g, '').trim()
+    if (!path) continue
+    const key = `${role}:${path}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ path, role, caption })
+  }
+  return out
+}
+
+export function extractMarkdownImages(rawText) {
+  const src = String(rawText ?? '')
+  const images = []
+  const cleaned = src.replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g, (_m, alt, rawPath) => {
+    const caption = clean(alt)
+    let path = String(rawPath || '').trim()
+    // 支持 ![alt](path "title") 语法中的标题剥离
+    const titleSplit = /^<([^>]+)>/.exec(path) || /^(\S+)(?:\s+["'][^"']*["'])?$/.exec(path)
+    if (titleSplit) path = titleSplit[1].trim()
+    if (path) images.push({ path, role: 'stem', caption })
+    return caption ? `[图：${caption}]` : '[附图]'
+  })
+  return { text: cleaned, images: normalizeImages(images) }
+}
 
 /** 答案规整：「B」「b」「BD」「B、D」「正确」「√」「1」（配合选项个数）。 */
 export function normalizeAnswer(raw, optionCount = 0, zeroBased = false) {
@@ -49,6 +155,8 @@ const OPT_KEYS = ['选项', 'options', 'choices', 'option', 'answers_list']
 const ANS_KEYS = ['答案', '正确答案', '参考答案', 'answer', 'correct', 'correct_answer', 'key', 'right', 'ans']
 const ANA_KEYS = ['解析', '答案解析', '解释', 'analysis', 'explanation', 'explain', 'solution', 'parse', 'note']
 const TYPE_KEYS = ['题型', '类型', 'type', 'category', '科目', 'subject']
+const KIND_KEYS = ['kind', '形态', '模式', 'cardType', 'questionKind']
+const IMG_KEYS = ['images', 'image', '图片', '配图', 'img']
 const MAT_KEYS = ['材料', 'material', 'passage', 'context']
 
 function optionsOf(o) {
@@ -72,7 +180,7 @@ function optionsOf(o) {
 }
 
 function looksLikeQuestion(o) {
-  return o && typeof o === 'object' && !Array.isArray(o) && pick(o, STEM_KEYS) !== undefined
+  return o && typeof o === 'object' && !Array.isArray(o) && typeof pick(o, STEM_KEYS) === 'string'
 }
 
 /** 从任意 JSON 里把「像题的对象」都找出来（{题目:[…]}、{data:{list:[…]}}、[{…}]、分节嵌套都行）。 */
@@ -86,7 +194,7 @@ function collectJsonQuestions(node, out, depth = 0) {
     return
   }
   if (typeof node === 'object') {
-    if (looksLikeQuestion(node) && (pick(node, ANS_KEYS) !== undefined || pick(node, OPT_KEYS) !== undefined)) {
+    if (looksLikeQuestion(node) && (pick(node, ANS_KEYS) !== undefined || pick(node, OPT_KEYS) !== undefined || pick(node, KIND_KEYS) !== undefined)) {
       out.push(node)
       return
     }
@@ -102,29 +210,48 @@ function fromJson(obj) {
   const questions = []
   const skipped = []
   raw.forEach((o, i) => {
-    const material = clean(pick(o, MAT_KEYS) ?? '')
-    const stem = clean(pick(o, STEM_KEYS) ?? '')
+    const material = String(pick(o, MAT_KEYS) ?? '').trim()
+    const stem = String(pick(o, STEM_KEYS) ?? '').trim()
     const options = optionsOf(o)
-    const answer = normalizeAnswer(pick(o, ANS_KEYS), options.length, zeroBased)
-    const analysis = clean(pick(o, ANA_KEYS) ?? '')
-    const why = !stem ? '缺题干' : !answer ? '缺答案' : ''
+    const type = clean(pick(o, TYPE_KEYS) ?? '')
+    const rawKind = pick(o, KIND_KEYS) ?? ''
+    const rawAns = pick(o, ANS_KEYS)
+    const preliminaryKind = normalizeQuestionKind(rawKind, options, type, typeof rawAns === 'string' ? rawAns : '')
+    const answer = preliminaryKind === 'mcq'
+      ? normalizeAnswer(rawAns, options.length, zeroBased)
+      : clean(rawAns ?? '')
+    const analysis = String(pick(o, ANA_KEYS) ?? '').trim()
+    const images = normalizeImages(pick(o, IMG_KEYS))
+    const why = !stem ? '缺题干' : (preliminaryKind !== 'card' && !answer ? '缺答案' : '')
     if (why) {
-      skipped.push({ n: i + 1, why, preview: stem.slice(0, 30) })
+      skipped.push({ n: i + 1, why, preview: clean(stem).slice(0, 30) })
       return
     }
-    questions.push(make(stem, options, answer, analysis, clean(pick(o, TYPE_KEYS) ?? ''), material))
+    questions.push(make(stem, options, answer, analysis, type, material, { kind: preliminaryKind, images }))
   })
   return { questions, skipped, format: 'json' }
 }
 
-function make(stem, options, answer, analysis, type = '', material = '') {
+function make(stem, options, answer, analysis, type = '', material = '', { kind = '', images = [] } = {}) {
+  const matImg = extractMarkdownImages(material)
+  const stemImg = extractMarkdownImages(stem)
+  const matClean = clean(matImg.text)
+  const stemClean = clean(stemImg.text)
+  const allImages = normalizeImages([...(Array.isArray(images) ? images : []), ...matImg.images, ...stemImg.images])
+  const resolvedKind = normalizeQuestionKind(kind, options, type, answer)
+  const finalAnswer = resolvedKind === 'card' ? (clean(answer) || '已阅读掌握') : clean(answer)
+  const finalAnalysis = resolvedKind === 'card'
+    ? (clean(analysis) || '（知识展示卡）巩固理解核心规律即可')
+    : (clean(analysis) || '（题库没给解析）参考答案：' + finalAnswer)
   const q = {
-    题干: (material ? '【材料】' + material.slice(0, 600) + '\n' : '') + stem,
+    题干: (matClean ? '【材料】' + matClean.slice(0, 600) + '\n' : '') + stemClean,
     ...(options.length >= 2 ? { 选项: options.slice(0, 8) } : {}),
-    答案: answer,
-    解析: analysis || '（题库没给解析）参考答案：' + answer,
+    答案: finalAnswer,
+    解析: finalAnalysis,
+    kind: resolvedKind,
   }
   if (type) q.题型 = type.slice(0, 20)
+  if (allImages.length) q.images = allImages
   return q
 }
 
@@ -170,10 +297,12 @@ function fromTable(rows) {
   const idx = (keys) => head.findIndex((h) => keys.some((k) => h.toLowerCase() === k.toLowerCase() || h.includes(k)))
   const iStem = idx(STEM_KEYS)
   const iAns = idx(ANS_KEYS)
-  if (iStem < 0 || iAns < 0) return null
+  const iKind = idx(KIND_KEYS)
+  if (iStem < 0 || (iAns < 0 && iKind < 0)) return null
   const iAna = idx(ANA_KEYS)
   const iType = idx(TYPE_KEYS)
   const iOpts = idx(OPT_KEYS)
+  const iImg = idx(IMG_KEYS)
   const letterCols = []
   for (const L of LETTERS) {
     const j = head.findIndex((h) => new RegExp('^(?:选项|option)?\\s*' + L + '$', 'i').test(h.replace(/[\s_]/g, '')))
@@ -186,12 +315,17 @@ function fromTable(rows) {
     const stem = clean(r[iStem])
     let options = letterCols.map((j) => clean(r[j])).filter(Boolean)
     if (!options.length && iOpts >= 0) options = splitInlineOptions(r[iOpts])
-    const answer = normalizeAnswer(r[iAns], options.length)
-    if (!stem || !answer) {
+    const type = iType >= 0 ? clean(r[iType]) : ''
+    const rawKind = iKind >= 0 ? clean(r[iKind]) : ''
+    const rawAns = iAns >= 0 ? r[iAns] : ''
+    const resolvedKind = normalizeQuestionKind(rawKind, options, type, clean(rawAns))
+    const answer = resolvedKind === 'mcq' ? normalizeAnswer(rawAns, options.length) : clean(rawAns)
+    const images = iImg >= 0 ? normalizeImages(r[iImg]) : []
+    if (!stem || (resolvedKind !== 'card' && !answer)) {
       skipped.push({ n: i + 2, why: !stem ? '缺题干' : '缺答案', preview: stem.slice(0, 30) })
       return
     }
-    questions.push(make(stem, options, answer, iAna >= 0 ? clean(r[iAna]) : '', iType >= 0 ? clean(r[iType]) : ''))
+    questions.push(make(stem, options, answer, iAna >= 0 ? clean(r[iAna]) : '', type, '', { kind: resolvedKind, images }))
   })
   return { questions, skipped, format: 'table' }
 }
@@ -397,6 +531,10 @@ function fromText(text) {
 
 const TAG_SEP = /^-{3,}$/
 const TAG_TYPE = /^【\s*(?:题型|类型)\s*】\s*[:：]?\s*(.*)$/
+const TAG_KIND = /^(?:【\s*(?:形态|模式|kind)\s*】|kind\s*[:：])\s*(.*)$/i
+const TAG_CARD = /^【\s*(?:展示卡|知识卡|规律卡|笔记卡)\s*】\s*[:：]?\s*(.*)$/
+const TAG_SHORT_QA = /^【\s*(?:小问题|简答卡|简答题|问答题)\s*】\s*[:：]?\s*(.*)$/
+const TAG_IMG = /^【\s*(?:图片|配图)\s*】\s*[:：]?\s*(.*)$/
 const TAG_MAT = /^【\s*材料\s*】\s*[:：]?\s*(.*)$/
 const TAG_STEM = /^【\s*(?:题目|题干)\s*】\s*[:：]?\s*(.*)$/
 const TAG_OPT = /^【\s*选项\s*】\s*[:：]?\s*(.*)$/
@@ -411,7 +549,7 @@ function fromTagBlocks(text) {
   const blocks = []
   let cur = null
   const ensure = () => {
-    if (!cur) cur = { section: 'stem', type: '', material: [], stem: [], options: [], answer: '', analysis: [] }
+    if (!cur) cur = { section: 'stem', kind: '', type: '', material: [], stem: [], options: [], answer: '', analysis: [], images: [] }
     return cur
   }
   const hasContent = (b) => Boolean(b && (b.stem.length || b.options.length || b.answer))
@@ -448,6 +586,37 @@ function fromTagBlocks(text) {
       continue
     }
     let m
+    if ((m = TAG_KIND.exec(line))) {
+      const b = ensure()
+      b.kind = clean(m[1])
+      continue
+    }
+    if ((m = TAG_CARD.exec(line))) {
+      if (hasContent(cur)) flush()
+      const b = ensure()
+      b.kind = 'card'
+      if (!b.type) b.type = '知识卡'
+      b.section = 'stem'
+      if (m[1]) b.stem.push(clean(m[1]))
+      continue
+    }
+    if ((m = TAG_SHORT_QA.exec(line))) {
+      if (hasContent(cur)) flush()
+      const b = ensure()
+      b.kind = 'short_qa'
+      if (!b.type) b.type = '小问题'
+      b.section = 'stem'
+      if (m[1]) b.stem.push(clean(m[1]))
+      continue
+    }
+    if ((m = TAG_IMG.exec(line))) {
+      const b = ensure()
+      const rawImg = clean(m[1])
+      const md = extractMarkdownImages(rawImg)
+      if (md.images.length) b.images.push(...md.images)
+      else if (rawImg) b.images.push({ path: rawImg, role: 'stem', caption: '' })
+      continue
+    }
     if ((m = TAG_TYPE.exec(line))) {
       if (hasContent(cur)) flush()
       const b = ensure()
@@ -481,7 +650,9 @@ function fromTagBlocks(text) {
       const anaSplit = rawAns.split(/【\s*(?:解析|答案解析|详解)\s*】\s*[:：]?\s*/)
       const ansPart = clean(anaSplit[0])
       const ansMatch = /^([A-Ha-h]{1,8}|[√×对错]|正确|错误)/.exec(ansPart)
-      b.answer = normalizeAnswer(ansMatch ? ansMatch[1] : ansPart, 0)
+      b.answer = b.kind === 'card' || b.kind === 'short_qa'
+        ? ansPart
+        : normalizeAnswer(ansMatch ? ansMatch[1] : ansPart, 0)
       if (anaSplit.length > 1) {
         const restAna = clean(anaSplit.slice(1).join(' '))
         if (restAna) b.analysis.push(restAna)
@@ -519,16 +690,18 @@ function fromTagBlocks(text) {
   const questions = []
   const skipped = []
   blocks.forEach((b, i) => {
-    const stem = clean(b.stem.join(' '))
+    const preliminaryKind = normalizeQuestionKind(b.kind, b.options, b.type, b.answer)
+    const joiner = preliminaryKind === 'card' || preliminaryKind === 'short_qa' ? '\n' : ' '
+    const stem = clean(b.stem.join(joiner))
     const material = clean(b.material.join(' '))
-    const answer = normalizeAnswer(b.answer, b.options.length)
-    const analysis = clean(b.analysis.join(' '))
-    const why = !stem ? '缺题干' : !answer ? '缺答案' : ''
+    const answer = preliminaryKind === 'mcq' ? normalizeAnswer(b.answer, b.options.length) : clean(b.answer)
+    const analysis = clean(b.analysis.join(joiner))
+    const why = !stem ? '缺题干' : (preliminaryKind !== 'card' && !answer ? '缺答案' : '')
     if (why) {
       skipped.push({ n: i + 1, why, preview: stem.slice(0, 30) })
       return
     }
-    questions.push(make(stem, b.options, answer, analysis, b.type, material))
+    questions.push(make(stem, b.options, answer, analysis, b.type, material, { kind: preliminaryKind, images: b.images }))
   })
   return { questions, skipped, format: 'tag-blocks' }
 }
@@ -536,15 +709,19 @@ function fromTagBlocks(text) {
 const IMPORT_FORMAT_GUIDE =
   '【标准文本样例 1（编号式）】\n' +
   '1. 下列属于扩张性财政政策的是：\nA. 提高税率\nB. 增加政府支出\nC. 减少转移支付\nD. 提高准备金率\n答案：B\n解析：增加政府支出属于扩张性财政政策。\n' +
-  '【标准文本样例 2（--- 标签块）】\n' +
-  '【题型】常识判断\n【材料】可选材料段落\n【题目】题干内容\nA. 选项一\nB. 选项二\n【答案】A\n【解析】解析内容\n---'
+  '【标准文本样例 2（--- 标签块，支持选择题 / 展示卡 / 小问题）】\n' +
+  '【题型】常识判断\n【材料】可选材料段落\n【题目】题干内容\nA. 选项一\nB. 选项二\n【答案】A\n【解析】解析内容\n---\n' +
+  '【展示卡】核心结论：触发场景 → 因果链 → 下次行动\n【解析】补充记忆点'
 
 /**
  * 认格式、解析、编号。
  * @returns {{ok:boolean, questions:object[], skipped:{n,why,preview}[], format:string, error?:string}}
  */
 export function parseBankAny(raw, { offset = 0 } = {}) {
-  const s = typeof raw === 'string' ? raw.replace(/^\uFEFF/, '').trim() : ''
+  const sRaw = typeof raw === 'string' ? raw.replace(/^\uFEFF/, '').trim() : ''
+  const fenceMatch = /^```(?:json|javascript|js|markdown|md|txt)?\s*\n([\s\S]*?)\n```\s*$/i.exec(sRaw)
+    || /```json\s*\n([\s\S]*?)\n```/i.exec(sRaw)
+  const s = fenceMatch ? fenceMatch[1].trim() : sRaw
   let res = null
   if (raw && typeof raw === 'object') res = fromJson(raw)
   else if (s.startsWith('{') || s.startsWith('[')) {
@@ -562,8 +739,8 @@ export function parseBankAny(raw, { offset = 0 } = {}) {
     }
   }
   const hasDashSep = /^\s*---+\s*$/m.test(s)
-  const hasStructTag = /【\s*(?:题目|题干|题型|材料|选项)\s*】/.test(s)
-  const hasAnyTag = /【\s*(?:题目|题干|题型|材料|选项|答案|参考答案|正确答案|解析|答案解析|详解)\s*】/.test(s)
+  const hasStructTag = /【\s*(?:题目|题干|题型|材料|选项|展示卡|知识卡|规律卡|笔记卡|小问题|简答卡|简答题|问答题|图片|配图|形态|模式|kind)\s*】|^\s*kind\s*[:：]/im.test(s)
+  const hasAnyTag = /【\s*(?:题目|题干|题型|材料|选项|答案|参考答案|正确答案|解析|答案解析|详解|展示卡|知识卡|规律卡|小问题|简答卡)\s*】/i.test(s)
   if ((!res || !res.questions.length) && (hasStructTag || (hasDashSep && hasAnyTag))) {
     const tb = fromTagBlocks(s)
     if (tb && tb.questions.length) res = tb
@@ -586,15 +763,65 @@ export function parseBankAny(raw, { offset = 0 } = {}) {
       sample: IMPORT_FORMAT_GUIDE,
       error: skipped.length
         ? '未能识别出题目格式：找到 ' + skipped.length + ' 道题，但都缺答案或题干（答案在别的文件里？把答案页一起导进来，或把答案贴在最后「参考答案 1.A 2.B…」）\n' + IMPORT_FORMAT_GUIDE
-        : '未能识别出题目格式：每题要有题号和答案，或使用 --- 分隔的标签块（【题目】【答案】）。\n' + IMPORT_FORMAT_GUIDE,
+        : '未能识别出题目格式：每题要有题号和答案，或使用 --- 分隔的标签块（【题目】【答案】或【展示卡】）。\n' + IMPORT_FORMAT_GUIDE,
     }
   }
   return { ok: true, questions, skipped: res.skipped || [], format: res.format }
 }
 
 /**
+ * 检测单道题的格式异常（用于导入前预览 & 已入库题库质检筛查）。
+ * @returns {string[]}
+ */
+export function detectQuestionAnomalies(q) {
+  const stem = String(q?.题干 ?? q?.stem ?? q?.question ?? '').trim()
+  const rawOpts = q?.选项 ?? q?.options
+  const options = Array.isArray(rawOpts) ? rawOpts.map((o) => String(o ?? '').trim()).filter(Boolean) : []
+  const answer = String(q?.答案 ?? q?.answer ?? '').trim()
+  const analysis = Array.isArray(q?.解析 ?? q?.analysis)
+    ? (q?.解析 ?? q?.analysis).join('\n').trim()
+    : String(q?.解析 ?? q?.analysis ?? '').trim()
+  const type = String(q?.题型 ?? q?.type ?? '').trim()
+  const images = normalizeImages(q?.images ?? q?.图片)
+  const kind = normalizeQuestionKind(q?.kind ?? q?.形态, options, type, answer)
+  const issues = []
+
+  const stemBody = stem.replace(/^【材料】[^\n]*\n?/, '').trim()
+  if (stem.length < 6 || (stemBody && stemBody.length < 6 && images.length === 0)) {
+    issues.push('题干过短（少于 6 字）')
+  }
+
+  const ansUpper = answer.toUpperCase()
+  const looksLikeChoice = kind === 'mcq' || options.length > 0 || /^[A-H]{1,4}$/.test(ansUpper) || /选择|单选|多选/.test(type)
+  if (kind !== 'card' && kind !== 'short_qa' && looksLikeChoice && options.length < 2) {
+    if (/(?:^|\s)[A-D][.、．)）]\s*\S+.*(?:^|\s)[B-D][.、．)）]\s*\S+/ms.test(stem)) {
+      issues.push('疑似选项混入题干')
+    }
+    issues.push('选择题选项少于 2 个')
+  }
+
+  if (!answer) {
+    issues.push('缺少答案')
+  } else if (options.length >= 2) {
+    const validLetters = LETTERS.slice(0, options.length)
+    if (/^[A-H]+$/.test(ansUpper)) {
+      const outOfRange = ansUpper.split('').some((ch) => !validLetters.includes(ch))
+      if (outOfRange) issues.push('答案不在现有选项字母范围内')
+    } else if (!options.some((o) => clean(o) === clean(answer))) {
+      issues.push('答案不在现有选项字母范围内')
+    }
+  }
+
+  if (kind !== 'card' && (!analysis || analysis.startsWith('（题库没给解析）') || /^本题参考答案为\s/.test(analysis))) {
+    issues.push('缺解析')
+  }
+
+  return issues
+}
+
+/**
  * 逐题导入预览（纯函数）：生成结构化预览列表并标出可疑问题 issues[]。
- * @returns {{ok:boolean, format:string, total:number, issueCount:number, skipped:object[], error:string, items:Array<{index:number, id:string, type:string, stem:string, options:string[], answer:string, analysis:string, issues:string[]}>}}
+ * @returns {{ok:boolean, format:string, total:number, issueCount:number, skipped:object[], error:string, items:Array<{index:number, id:string, kind:string, type:string, stem:string, options:string[], answer:string, analysis:string, images:object[], issues:string[]}>}}
  */
 export function buildImportPreview(parsedResult) {
   const list = Array.isArray(parsedResult)
@@ -609,45 +836,24 @@ export function buildImportPreview(parsedResult) {
     const rawOpts = q?.选项 ?? q?.options
     const options = Array.isArray(rawOpts) ? rawOpts.map((o) => String(o ?? '').trim()).filter(Boolean) : []
     const answer = String(q?.答案 ?? q?.answer ?? '').trim()
-    const analysis = String(q?.解析 ?? q?.analysis ?? '').trim()
+    const analysis = Array.isArray(q?.解析 ?? q?.analysis)
+      ? (q?.解析 ?? q?.analysis).join('\n').trim()
+      : String(q?.解析 ?? q?.analysis ?? '').trim()
     const type = String(q?.题型 ?? q?.type ?? '').trim()
-    const issues = []
-
-    const stemBody = stem.replace(/^【材料】[^\n]*\n?/, '').trim()
-    if (stem.length < 6 || (stemBody && stemBody.length < 6)) {
-      issues.push('题干过短（少于 6 字）')
-    }
-
-    const ansUpper = answer.toUpperCase()
-    const looksLikeChoice = options.length > 0 || /^[A-H]{1,4}$/.test(ansUpper) || /选择|单选|多选/.test(type)
-    if (looksLikeChoice && options.length < 2) {
-      issues.push('选择题选项少于 2 个')
-    }
-
-    if (!answer) {
-      issues.push('缺少答案')
-    } else if (options.length >= 2) {
-      const validLetters = LETTERS.slice(0, options.length)
-      if (/^[A-H]+$/.test(ansUpper)) {
-        const outOfRange = ansUpper.split('').some((ch) => !validLetters.includes(ch))
-        if (outOfRange) issues.push('答案不在现有选项字母范围内')
-      } else if (!options.some((o) => clean(o) === clean(answer))) {
-        issues.push('答案不在现有选项字母范围内')
-      }
-    }
-
-    if (!analysis || analysis.startsWith('（题库没给解析）') || /^本题参考答案为\s/.test(analysis)) {
-      issues.push('缺解析')
-    }
+    const images = normalizeImages(q?.images ?? q?.图片)
+    const kind = normalizeQuestionKind(q?.kind ?? q?.形态, options, type, answer)
+    const issues = detectQuestionAnomalies(q)
 
     return {
       index: i + 1,
       id: String(q?.id || `q-${i + 1}`),
+      kind,
       type,
       stem,
       options,
       answer,
       analysis,
+      ...(images.length ? { images } : {}),
       issues,
     }
   })
