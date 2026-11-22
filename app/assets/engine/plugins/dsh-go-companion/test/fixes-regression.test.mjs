@@ -622,11 +622,13 @@ test('Today 工作台接口（GET /today + POST /today/start 默认严格锁 + /
     const bAfterAllow = await call(h, 'GET', '/bouts')
     assert.ok(bAfterAllow.body.running.allow.includes('com.tencent.mm'))
 
+    // 2026-11-22：严格局中途不能改温和（到点 / 收局 / 破窗才解）；能延长不能缩短。
     const relaxRes = await call(h, 'POST', '/bouts', { action: 'relax' })
     assert.equal(relaxRes.status, 200)
-    assert.equal(relaxRes.body.strict, false)
+    assert.equal(relaxRes.body.ok, false)
+    assert.equal(relaxRes.body.strict, true)
     const bAfterRelax = await call(h, 'GET', '/bouts')
-    assert.equal(bAfterRelax.body.strict, false)
+    assert.equal(bAfterRelax.body.strict, true)
 
     // 5) 双时序 superseded_by：同主题 [日程·明早] 新安排自动作废旧条
     const m1 = await call(h, 'POST', '/memory/import', {

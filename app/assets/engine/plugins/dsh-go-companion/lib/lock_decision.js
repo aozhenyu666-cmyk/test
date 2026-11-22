@@ -31,7 +31,7 @@ const nonEmpty = (s, fallback) => (typeof s === 'string' && s.trim() ? s.trim() 
  * @param {number} p.neutralWorkQuotaMin 中立通讯 App 工作时段共享总量上限（默认 35 分钟）
  */
 export function buildLockDecision({ arbiter = null, work = null, installed = [], tierOf = () => 'other', quota = null,
-  lease = null, radarDeny = [], today = [], neutralWorkQuotaMin = DEFAULT_NEUTRAL_WORK_QUOTA_MIN, now = Date.now() } = {}) {
+  lease = null, radarDeny = [], today = [], neutralWorkQuotaMin = DEFAULT_NEUTRAL_WORK_QUOTA_MIN, geminiModeOnFunOut = false, now = Date.now() } = {}) {
   const a = arbiter || { priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自主推进态' }
   const pkgs = (Array.isArray(installed) ? installed : []).map((x) => ({ pkg: String(x?.pkg || ''), label: String(x?.label || '') })).filter((x) => x.pkg)
   const ofTier = (t) => pkgs.filter((x) => tierOf(x.pkg, x.label) === t).map((x) => x.pkg)
@@ -124,10 +124,10 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
     }
   }
 
-  // 干活态（契约柔性期、局、忙时、专时）：白名单 = 工作层 + 这一段声明的 App + 手上的通行证 + 未超额度的中立通讯 App。
+  // 干活态（契约柔性期、局、忙时、专时）：白名单 = 工作层 + 中间层（Gemini、NekoBox）+ 这一段声明的 App + 手上的通行证 + 未超额度的中立通讯 App。
   if (a.priority === 'P5' || work?.active) {
     const allow = uniq([
-      ...WORK_DEFAULT, ...ofTier('work'),
+      ...WORK_DEFAULT, ...ofTier('work'), ...GEMINI_PACKAGES, ...PROXY_PACKAGES,
       ...(Array.isArray(a.allow) && !a.allow.includes('*') ? a.allow : []),
       ...(Array.isArray(work?.allow) ? work.allow : []),
       ...(leaseApp ? [leaseApp] : []),
@@ -167,6 +167,24 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
   if (q.gameOut) for (const p of ofTier('game')) if (!safeBase(p)) deny.push({ app: p, until: 0, why: '今天的游戏额度用完了' })
   const seen = new Set()
   const denyUniq = deny.filter((d) => (seen.has(d.app) ? false : seen.add(d.app)))
+  // 2026-11-22 Gemini 模态：娱乐余额用完、又不在干活 / 默认验收 / 深夜——只剩学习 App、Gemini、NekoBox、通讯和手上的通行证。
+  // 挣到余额（刷题 / 过局 / 交验收点）就自己回到自由态。
+  if (geminiModeOnFunOut && q.funOut) {
+    const allow = uniq([
+      ...WORK_DEFAULT, ...ofTier('work'), ...GEMINI_PACKAGES, ...PROXY_PACKAGES, ...NEUTRAL_COMM_PACKAGES,
+      ...(leaseApp ? [leaseApp] : []),
+    ]).filter((p) => !denyUniq.some((d) => d.app === p))
+    return {
+      ...base,
+      mode: 'allowlist',
+      allow,
+      deny: [],
+      needPass: [],
+      geminiMode: true,
+      why: '娱乐余额用完了：Gemini 模态，只剩学习 App 和 Gemini',
+      unlockHow: '刷题、过一局或交验收点挣到余额就恢复；急事走紧急解除',
+    }
+  }
   const needPassFree = q.funOut ? ofTier('dual').filter((p) => p !== leaseApp && !safeBase(p)) : []
   return {
     ...base,

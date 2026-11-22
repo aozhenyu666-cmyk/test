@@ -107,7 +107,7 @@ export const BUILTINS = Object.freeze([
     动作: [{ 深夜锁: {} }],
     解除: ['到点', '破窗'],
     fixed: true,
-    说明: '0:30 到 7:00 娱乐锁着（由作息执行，这一轮不能在这里停用）。',
+    说明: '0:00 到 8:00 睡觉时间锁着（由作息执行，不能在这里停用）。',
   },
   {
     id: 'ladder-perfunctory',

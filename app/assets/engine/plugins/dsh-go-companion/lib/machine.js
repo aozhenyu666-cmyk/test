@@ -106,7 +106,7 @@ export function toolsElsewhere(state) {
 
 /** 锁层怎么说话：界面只显示最高那一项的理由。 */
 const LOCK_WHY = {
-  night: '深夜锁：现在是休息时间，娱乐锁到早上 7 点。',
+  night: '深夜锁：现在是睡觉时间，锁到早上 8 点。',
   plan: '计划模态：今天的局还没定下来，娱乐锁着。',
   evening: '晚间对账：把今天的账对完才解锁。',
   followup: '追问锁：把这一个问题说清楚。',

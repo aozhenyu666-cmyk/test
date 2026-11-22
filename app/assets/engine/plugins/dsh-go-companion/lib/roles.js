@@ -163,7 +163,7 @@ export function strategistBallFrame(owner, names, { reason, note, allowTools = f
     return lines
   }
   if (reason === 'night') {
-    lines.push('现在已经过了 0:30，他还拿着手机。娱乐已经锁到早上 7 点。你来收手机：一两句，短、硬、不聊别的，让他现在放下手机去睡。明天最要紧的那件事（如果你知道）提一句当理由。')
+    lines.push('现在已经过了 0 点，他还拿着手机。已经锁到早上 8 点。你来收手机：一两句，短、硬、不聊别的，让他现在放下手机去睡。明天最要紧的那件事（如果你知道）提一句当理由。')
     lines.push('这一次不要上网查资料。')
     return lines
   }

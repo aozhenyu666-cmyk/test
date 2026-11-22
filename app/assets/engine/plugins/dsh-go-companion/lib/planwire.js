@@ -214,6 +214,9 @@ export function tick(input) {
     // 第九轮第三项：到点自动开局也要把工作包带上（以前只带 apps，局官开局无从问起）。
     out.packet = next.packet || null
     out.item = next.title || ''
+    // 2026-11-22：计划条目可以带「严格」和时长；到点开的局按它锁（不写就是温和局、按 budget 分钟）。
+    out.strict = next.strict === true
+    out.minutes = Number(next.budget || next.minutes) || 0
     out.sentence = next.title + '，' + next.budget + ' 分钟，开始。'
     steps += 1
     break

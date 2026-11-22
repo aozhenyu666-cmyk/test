@@ -439,7 +439,9 @@ test('HTTP routes (/analytics, /storyline, /today, /plan geminiAutoPull) and V5 
     })
     assert.equal(planAfterTool.body.geminiAutoPull?.triggered, true)
     assert.equal(planAfterTool.body.geminiAutoPull?.reason, 'ai-tool')
-    assert.equal(planAfterTool.body.lockArbiter?.source, 'GEMINI_LIVE_CELL')
+    // 睡觉时间（北京 0–8 点）深夜锁排在连麦舱前面：那几个钟点核 NIGHT_CURFEW。
+    const bjMin = Math.floor(((Date.now() + 8 * 3_600_000) % 86_400_000) / 60_000)
+    assert.equal(planAfterTool.body.lockArbiter?.source, bjMin < 8 * 60 ? 'NIGHT_CURFEW' : 'GEMINI_LIVE_CELL')
     assert.equal(planAfterTool.body.activeSisterSkin, 'jinglan-girl')
   } finally {
     if (oldHome === undefined) delete process.env.DSH_HOME

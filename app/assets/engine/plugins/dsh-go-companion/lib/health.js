@@ -37,7 +37,7 @@ export function healthItems(f = {}) {
   if (!f.covenantRules) out.push(warn('covenant', '规矩', '公约没读到', '两条鱼没有成文规矩可照', 'covenant'))
   else out.push(ok('covenant', '规矩', '公约 ' + f.covenantRules + ' 条', f.covenantPending ? f.covenantPending + ' 条提议等你批' : ''))
   // ---- 娱乐
-  if (f.eveningHit) out.push(warn('evening', '娱乐', '今晚的娱乐用完了', '锁到明早 7 点'))
+  if (f.eveningHit) out.push(warn('evening', '娱乐', '今晚的娱乐用完了', '锁到明早 8 点'))
   else if (f.eveningActive) out.push(ok('evening', '娱乐', '今晚娱乐 ' + f.eveningUsed + '/' + f.eveningCap + ' 分钟'))
   out.push(ok('balance', '娱乐', '娱乐余额 ' + (f.balance ?? '—') + ' 分钟'))
   // ---- Gemini 桥（可选）

@@ -206,9 +206,9 @@ test('A2 排程：一件事排进第一个空档', () => {
   assert.equal(out.blocks[0].dept, '谋划思考')
 })
 
-test('A2 排程：避开早饭时段', () => {
+test('A2 排程：8 点前是睡觉时间不排（2026-11-22 他定 0–8 点睡觉），7 点排就从 8:00 开始', () => {
   const out = plan([t({ minutes: 30 })], at(7))
-  assert.deepEqual(out.blocks.map((b) => [b.start, b.end]), [[7 * 60 + 40, 8 * 60 + 10]])
+  assert.deepEqual(out.blocks.map((b) => [b.start, b.end]), [[8 * 60, 8 * 60 + 30]])
 })
 
 test('A2 排程：避开午饭时段（跨过它往后排，不切断任务）', () => {
@@ -225,10 +225,10 @@ test('A2 排程：不排进深夜（窗口到 23:30 为止）', () => {
   assert.match(out.overflow[0].why, /截止 23:30 前放不下 90 分钟/)
 })
 
-test('A2 排程：窗口起点是 7:00，凌晨排不出东西（深夜锁在窗口外）', () => {
-  assert.equal(SCHEDULE_FROM, 7 * 60)
+test('A2 排程：窗口起点是 8:00，凌晨排不出东西（睡觉时间在窗口外）', () => {
+  assert.equal(SCHEDULE_FROM, 8 * 60)
   const out = plan([t({ minutes: 30 })], at(3))
-  assert.equal(out.blocks[0].start, 7 * 60 + 40, '3 点排 ＝ 从早饭后的 7:40 开始')
+  assert.equal(out.blocks[0].start, 8 * 60, '3 点排 ＝ 从 8:00 开始')
 })
 
 test('A2 排程：截止时刻是硬约束，过了就说放不下', () => {

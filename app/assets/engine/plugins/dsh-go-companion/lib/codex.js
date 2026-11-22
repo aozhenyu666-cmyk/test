@@ -44,7 +44,7 @@ export function lawsOf(settings, wall = {}) {
     { id: 'L-01', name: '工作日工作时段', value: windowsText(w.workday) },
     { id: 'L-02', name: '休息日工作时段', value: windowsText(w.restday) },
     { id: 'L-03', name: '工作日最少局数', value: num(s.minBouts) + ' 局（其中思维局至少 ' + num(s.minThinking) + ' 个）' },
-    { id: 'L-04', name: '深夜锁', value: '00:30–07:00 娱乐锁着', fixed: true },
+    { id: 'L-04', name: '深夜锁', value: '00:00–08:00 睡觉，全锁（底座照常）', fixed: true },
     { id: 'L-05', name: '敷衍升级（E1）', value: Math.round(num(e.E1WindowMs) / 60_000) + ' 分钟内敷衍 ' + num(e.E1Count) + ' 次 → Gemini 审讯 ' + num(e.cellMin) + ' 分钟' },
     { id: 'L-06', name: '娱乐连续上限（L1）', value: '工作时段 ' + num(e.L1WorkMin) + ' 分钟、其他时段 ' + num(e.L1RestMin) + ' 分钟 → 直接锁' },
     { id: 'L-07', name: '局内没声明的应用（L2）', value: num(e.L2Min) + ' 分钟 → 核对，2 分钟不答锁' },

@@ -466,8 +466,17 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             "battery" to (pm?.isIgnoringBatteryOptimizations(context.packageName) == true),
             // 2026-11-21 体检：引擎保活想不想要（他点过「停止」就是 false，之后不会自动拉起）。
             "keeper" to io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.shouldKeep(context),
+            // 2026-11-22 使用情况访问：娱乐分钟按系统记录算（没有它就只能靠无障碍自己数，App 被杀就清零、少记）。
+            "usage" to usageAccessGranted(),
         )
     }
+
+    private fun usageAccessGranted(): Boolean = runCatching {
+        val ops = context.getSystemService(android.app.AppOpsManager::class.java) ?: return@runCatching false
+        @Suppress("DEPRECATION")
+        val mode = ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
+        mode == android.app.AppOpsManager.MODE_ALLOWED
+    }.getOrDefault(false)
 
     private fun openCapability(kind: String?) {
         val intent = when (kind) {
@@ -481,6 +490,7 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 Intent(Settings.ACTION_SETTINGS)
             }
             "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+            "usage" -> Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
             else -> return
         }
         runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }

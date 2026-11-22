@@ -273,7 +273,7 @@ export function verifyPromptLines({ verify, recovery, spend, untilHm }) {
 // 调上限：调低立即生效；调高从明天起（晚上 10 点说「今天好累多给点」不算数）。
 
 export const EVENING_FROM = 18 * 60
-export const EVENING_END = 7 * 60
+export const EVENING_END = 8 * 60
 export const EVENING_CAP_DEFAULT = 120
 export const DEFAULT_BASE_FUN_MIN = 30
 export const EVENING_CAP_MIN = 30
@@ -290,13 +290,16 @@ export function eveningOf(today, yesterday, minuteOfDay, from = EVENING_FROM) {
  * 每拍记一次今晚用了多少（funToday = 手机报的今天娱乐 + 游戏分钟，零点清零）。
  * @returns {{state, hit:boolean}} hit：这一拍刚好用完
  */
-export function eveningStep(prev, { key, beforeMidnight, funToday, cap, now }) {
+export function eveningStep(prev, { key, beforeMidnight, funToday, cap, now, slotUsed = null }) {
   const f = Math.max(0, Math.round(Number(funToday) || 0))
   let s = prev && prev.key === key ? { ...prev } : { key, base: beforeMidnight ? f : 0, usedBefore: 0, used: 0, capHitAt: 0 }
   if (beforeMidnight) {
     // 手机重启 / 跨天之类让今天的数变小：重新起算，不倒扣
     if (f < s.base) s.base = f
-    s.used = f - s.base
+    // 2026-11-22：起点是 18:00 后引擎第一次醒来时抓的；引擎晚醒，中间玩的就被当成「6 点前的」扣掉了。
+    // 系统使用记录按 2 小时一段给（18–20、20–22、22–24），有它就取两者里大的那个，只会多记不会少记。
+    const sl = Number.isFinite(Number(slotUsed)) && slotUsed !== null ? Math.max(0, Math.round(Number(slotUsed))) : 0
+    s.used = Math.max(f - s.base, sl)
     s.usedBefore = s.used
   } else {
     s.used = s.usedBefore + f

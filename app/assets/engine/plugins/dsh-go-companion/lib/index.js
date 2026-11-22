@@ -2085,8 +2085,9 @@ export function apply(ctx) {
       return null
     }
     if (!cur || cur.official.view().closed) return null
+    const bl = boutLockNow()
     return { id: String(cur.official.view().boutId || ''), kind: String(cur.protocol?.name || cur.protocol?.id || ''),
-      protocolId: String(cur.protocol?.id || ''), openedAt: cur.openedAt }
+      protocolId: String(cur.protocol?.id || ''), openedAt: cur.openedAt, mode: bl ? bl.mode : 'gentle' }
   }
   // 第九轮 A 组：预案运行时。落手机的几条路都复用阶梯已有的那几处（舱、封禁、墙收紧、计划模态）。
   const presetRt = createPresetRuntime({
@@ -2200,6 +2201,7 @@ export function apply(ctx) {
     sealSessionView(now) ||
     taskLeaseView(now) ||
     leaseSessionView(now) ||
+    boutLockSessionView(now) ||
     presetRt.sessionView(now) ||
     v4Hub?.contractSessionView(now, { escalatedOnly: false }) ||
     verifySessionView(now)
@@ -2308,7 +2310,7 @@ export function apply(ctx) {
     // 任务到点还没验收：继续锁（每次往后顺 10 分钟），直到交墙验收通过（submit_to_wall review）或者兜底两小时。
     const pending = aiTask(config, now) ? Math.max(Number(config.gearUntil) || 0, now + 10 * 60_000) : 0
     if (onBreak(now)) return 0
-    // 作息：早上没说今天的 3 件事、晚上没对完账——滚动锁；深夜锁到早上 7 点。
+    // 作息：早上没说今天的 3 件事、晚上没对完账——滚动锁；深夜锁到早上 8 点。
     const rh = lastRhythm
     const gate = rh && (rh.morningGate || rh.reviewGate) ? now + ROLL_MS : 0
     const night = rh && rh.night === 'lock' && Number(rh.nightUntil) > now ? Number(rh.nightUntil) : 0
@@ -2558,7 +2560,7 @@ export function apply(ctx) {
     // 2026-11-21 晚间娱乐上限用完：娱乐 / 游戏锁到明早 7:00（余额再多也不开；Gemini 常驻不锁）。
     try {
       const evUntil = eveningLockUntil(now, tz)
-      if (evUntil) push(WALL_KIND_DEFAULT, evUntil, '今晚的娱乐 ' + eveningNow(now, tz).cap + ' 分钟用完了：锁到明早 7 点。想说话就开 Gemini 聊聊今天、把明天封了。')
+      if (evUntil) push(WALL_KIND_DEFAULT, evUntil, '今晚的娱乐 ' + eveningNow(now, tz).cap + ' 分钟用完了：锁到明早 8 点。想说话就开 Gemini 聊聊今天、把明天封了。')
     } catch {}
     // 追问锁：门开着就不放——回复敷衍时窗口不消失，到点由插件自己结束。
     if (lockActive(config.followup, now)) push('followup', Number(config.followup.until), '追问锁：把这一个问题说清楚')
@@ -2574,7 +2576,7 @@ export function apply(ctx) {
       push('task', Number(config.gearUntil) > now ? Number(config.gearUntil) : now + 10 * 60_000, '任务模式' + goal + '：验收合格才解锁')
     }
     if (rh?.morningGate) push('morning', Number(st.morningSince) + MORNING_CAP_MS, '早上对线：先说出今天最重要的 3 件事')
-    if (rh?.night === 'lock') push('night', rh.nightUntil, '深夜锁：娱乐锁到早上 7 点')
+    if (rh?.night === 'lock') push('night', rh.nightUntil, '深夜锁：睡觉时间，锁到早上 8 点')
     if (Number(config.refuseUntil) > now) {
       const by = config.refuseBy
       if (by === 'ai' || (by === 'gear' && task)) push('task', config.refuseUntil, '她们立的任务：验收合格才解锁')
@@ -2795,7 +2797,8 @@ export function apply(ctx) {
     handoffRoute: (b) => handoffRoute(b),
     dayString,
     zoneOr,
-    presetRt,
+    // 裁决器的「专注严格局」一档：先看局锁（落盘的），再看预案严格 / 默认验收。
+    presetRt: { ...presetRt, sessionView: (now) => boutLockSessionView(now) || presetRt.sessionView(now) },
     grantTempPass: (until, reason) => {
       const cur = loadExternal()
       saveExternal({
@@ -2862,8 +2865,8 @@ export function apply(ctx) {
         })
         if (vv.evening?.active) {
           vLines.push(vv.evening.hit
-            ? '今晚的娱乐 ' + vv.evening.cap + ' 分钟用完了（锁到明早 7 点）：他求情不松，余额再多也不开；陪他聊、复盘今天、封明天，或者叫他开 Gemini。'
-            : '今晚娱乐已用 ' + vv.evening.used + '/' + vv.evening.cap + ' 分钟（18:00 起算，用完锁到明早 7 点）。')
+            ? '今晚的娱乐 ' + vv.evening.cap + ' 分钟用完了（锁到明早 8 点）：他求情不松，余额再多也不开；陪他聊、复盘今天、封明天，或者叫他开 Gemini。'
+            : '今晚娱乐已用 ' + vv.evening.used + '/' + vv.evening.cap + ' 分钟（18:00 起算，用完锁到明早 8 点）。')
         }
       } catch {}
       return [...vLines, ...sealPromptLines(loadSeals(now, tz), { today: dayString(now, tz), hm: sealHm }), ...reviewPromptLines(loadWeekReviews(), now), ...reviewQuizLines(now)]
@@ -4434,14 +4437,11 @@ export function apply(ctx) {
         if (!packet || probs.length) return { ok: false, text: '工作包还不行：' + (probs.join('、') || '是空的') + '。改了再开。' }
         const apps = appsFrom(args)
         if (!apps.need.length) return { ok: false, text: '要写必需应用的包名（need），严格模式靠它放行。不确定就先 mcp__phone__apps 查。' }
-        const r = startBout(id, { apps, packet, by: 'ai' })
-        if (r.ok && args.strict !== false && apps.allow.length) {
-          const until = Date.now() + Math.max(10, Math.min(180, Number(args.minutes) || 45)) * 60_000
-          commit({ aiWorkSession: { allow: apps.allow, until, strict: true, why: '本局专时 · ' + id, by: role } })
-        }
+        const r = startBout(id, { apps, packet, by: 'ai', strict: args.strict !== false, minutes: Math.max(10, Math.min(180, Number(args.minutes) || 45)) })
         record({ state: 'ai-open-bout', at: Date.now(), by: role, protocolId: id, ok: r.ok, why: String(args.why || '').slice(0, 80) })
         if (r.ok) refreshPanels()
-        return { ok: r.ok, text: r.toast + (r.ok ? '（已同步激活专时严格白名单；他要换就 /bouts 收局）' : '') }
+        const bl = r.ok ? boutLockNow() : null
+        return { ok: r.ok, text: r.toast + (bl ? '（' + (bl.mode === 'strict' ? '严格' : '温和') + '局，到 ' + boutLockHm(bl.until) + '；他要换就收局）' : '') }
       },
     }
   }
@@ -4688,6 +4688,7 @@ export function apply(ctx) {
           setGear({ gear: 'free' }, 'strategist')
           commit({ aiWorkSession: null, taskLease: null, refuseUntil: 0, refuseBy: undefined, blockExtra: [] })
           presetRt.strictOff(now, 'strategist')
+          clearBoutLock('strategist-unlock-focus', now)
           const g = loadGemini()
           if (g.session) saveGemini({ ...g, session: null })
           const ld = loadLadderDoc()
@@ -6214,6 +6215,7 @@ export function apply(ctx) {
         // 这一轮照样生效
       }
       presetRt.strictOff(now, 'breakglass')
+      clearBoutLock('breakglass', now)
       lockBus.revokeBySource('takeover', { now })
       lockBus.revokeBySource('contract', { now })
       lockBus.revokeBySource('radar', { now })
@@ -7549,7 +7551,7 @@ export function apply(ctx) {
     if (r.action === 'draft' || r.action === 'confirm') record({ state: 'plan-' + r.action, at: now, items: r.plan.items.length })
     if (r.action === 'skip') record({ state: 'plan-skip', at: now, why: r.why })
     if (!r.start) return r
-    const started = startBout(r.start, { apps: r.apps, packet: r.packet, by: 'plan' })
+    const started = startBout(r.start, { apps: r.apps, packet: r.packet, by: 'plan', strict: r.strict === true, minutes: r.minutes || undefined, goal: r.item || undefined })
     record({ state: 'plan-open', at: now, protocolId: r.start, ok: started.ok })
     // 局开了＝他已经回到轨道上：L1 压下来的计划模态到这里结束（施工书 P1「只能以一份计划生效结束」）。
     if (started.ok) {
@@ -8358,7 +8360,7 @@ export function apply(ctx) {
     const mine = ev.evening && st && st.key === ev.key ? st : null
     return { ...ev, cap, used: mine ? mine.used : 0, capHitAt: mine ? Number(mine.capHitAt) || 0 : 0 }
   }
-  /** 今晚的上限用完了：锁到明早 7:00（返回到点时刻，没锁就 0）。 */
+  /** 今晚的上限用完了：锁到明早 8:00（返回到点时刻，没锁就 0）。 */
   function eveningLockUntil(now = Date.now(), tz = zoneOr(config.timeZone)) {
     const e = eveningNow(now, tz)
     if (!e.evening || !e.capHitAt) return 0
@@ -8376,9 +8378,23 @@ export function apply(ctx) {
       const t = tf(String(r.app), String(r.label || ''))
       if (t === 'fun' || t === 'game') fun += Number(r.minutes) || 0
     }
+    // 系统使用记录的 2 小时段里，18:00 以后那几段的娱乐 / 游戏分钟（手机给了才有）。
+    let slotUsed = null
+    const slots = Array.isArray(phone?.timeSlots) ? phone.timeSlots : (Array.isArray(lastPhone?.timeSlots) ? lastPhone.timeSlots : [])
+    if (slots.length && ev.beforeMidnight) {
+      slotUsed = 0
+      for (const sl of slots) {
+        const h = Number(/^(\d{1,2})/.exec(String(sl?.slot || ''))?.[1])
+        if (!(h >= 18)) continue
+        for (const t of Array.isArray(sl?.top) ? sl.top : []) {
+          const k = tf(String(t?.app || ''), String(t?.label || ''))
+          if (k === 'fun' || k === 'game') slotUsed += Number(t?.minutes) || 0
+        }
+      }
+    }
     const v = loadVerify()
     const cap = eveningCapFor(config.eveningCap, ev.key)
-    const r = eveningStep(v.evening, { key: ev.key, beforeMidnight: ev.beforeMidnight, funToday: fun, cap, now })
+    const r = eveningStep(v.evening, { key: ev.key, beforeMidnight: ev.beforeMidnight, funToday: fun, cap, now, slotUsed })
     if (JSON.stringify(r.state) !== JSON.stringify(v.evening)) saveVerify({ ...loadVerify(), evening: r.state })
     if (r.hit) {
       record({ state: 'evening-cap-hit', at: now, used: r.state.used, cap })
@@ -8417,7 +8433,7 @@ export function apply(ctx) {
     try {
       balance = Number(timeLedgerNow(now, tz, lastPhone).funLeft) || 0
     } catch {}
-    if (eveningLockUntil(now, tz)) return { ok: false, error: 'evening-cap', text: '今晚的娱乐上限已经用完了，锁到明早 7 点。余额留着明天用。' }
+    if (eveningLockUntil(now, tz)) return { ok: false, error: 'evening-cap', text: '今晚的娱乐上限已经用完了，锁到明早 8 点。余额留着明天用。' }
     const c = checkSpend({ minutes, reason, balance })
     if (!c.ok) return c
     commit({ spendPass: { until: now + c.minutes * 60_000, minutes: c.minutes, reason: c.reason, at: now, by } })
@@ -10071,10 +10087,17 @@ export function apply(ctx) {
     const contract = v4Hub?.contractSessionView?.(now) || null
     const busy = effectiveGear(config, now) === 'busy'
     const run = runningBoutNow()
-    const boutApps = [...(Array.isArray(live?.apps?.need) ? live.apps.need : []), ...(Array.isArray(live?.apps?.allow) ? live.apps.allow : [])]
+    // 局锁是落盘的：引擎重启后 live 没了，局锁还在，照样算「在干活」。
+    const bl = boutLockNow(now)
+    const boutApps = [
+      ...(Array.isArray(live?.apps?.need) ? live.apps.need : []), ...(Array.isArray(live?.apps?.allow) ? live.apps.allow : []),
+      ...(bl && Array.isArray(bl.allow) ? bl.allow : []),
+    ]
     const agentLease = activeAppLease(extState, now)
-    const workActive = busy || Boolean(run) || Boolean(aiTask(config, now)) || Boolean(contract)
-    const why = run ? '局进行中：' + (run.kind || '这一局') : contract ? contract.why : busy ? '忙时：' + (config.gearWhat || '正事') : '专时进行中'
+    const workActive = busy || Boolean(run) || Boolean(bl) || Boolean(aiTask(config, now)) || Boolean(contract)
+    const why = bl
+      ? (bl.mode === 'strict' ? '严格局' : '温和局') + '「' + String(bl.goal || '这一局') + '」到 ' + boutLockHm(bl.until) + '：学习和 Gemini 能用，娱乐锁着'
+      : run ? '局进行中：' + (run.kind || '这一局') : contract ? contract.why : busy ? '忙时：' + (config.gearWhat || '正事') : '专时进行中'
     const taskLease = config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null
     const busDeny = []
     for (const r of lockBus.list(now)) {
@@ -10105,6 +10128,8 @@ export function apply(ctx) {
       radarDeny: [...extraDeny, ...busDeny],
       today: Array.isArray(phone?.today) && phone.today.length ? phone.today : (Array.isArray(lastPhone?.today) ? lastPhone.today : []),
       neutralWorkQuotaMin: DEFAULT_NEUTRAL_WORK_QUOTA_MIN,
+      // 2026-11-22 余额用完（且不在干活 / 默认验收 / 深夜）：进 Gemini 模态——只剩学习 App、Gemini、NekoBox、通讯。
+      geminiModeOnFunOut: config.geminiModeOnFunOut !== false,
       now,
     })
   }
@@ -11298,14 +11323,16 @@ export function apply(ctx) {
         }
       : null
     const verifySessNow = !emergencyActive ? verifySessionView(now) : null
+    // 2026-11-22 硬干预上限只管「系统主动打扰」（接管、雷达 / 姐妹力度、自动拉 Gemini）；
+    // 他自己选的锁——局（温和 / 严格）、深夜、默认验收、验收点保底、晚间上限、连麦舱——用满了也照锁。
+    // 以前用满后把墙（含深夜锁）和他自己开的严格局一起降成「只提醒」，晚上开局锁不住就是这个。
     let lockArbiter = v4Hub.computeLockArbiter(now, {
       autonomy: v4ContractTick.autonomy,
-      wall: { locked: (emergencyActive || hardCapDowngrade) ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
+      wall: { locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
       takeoverSession: takeoverActiveSession,
-      ...(hardCapDowngrade ? { aiWorkSession: null, presetStrict: verifySessNow, takeoverSession: null } : {}),
+      ...(hardCapDowngrade ? { takeoverSession: null, ...(config.aiWorkSession?.by === 'takeover' ? { aiWorkSession: null } : {}) } : {}),
     })
-    const isVerifyLock = lockArbiter?.source === 'BOUT_STRICT' && (verifySessNow?.by === 'verify' || verifyStateNow(now, tz).active)
-    const keepOnHardCap = ['P0', 'P1', 'P3'].includes(lockArbiter.priority) || isVerifyLock
+    const keepOnHardCap = lockArbiter?.source !== 'TAKEOVER_STRICT'
     if (hardCapDowngrade && !keepOnHardCap) {
       lockArbiter = {
         active: false,
@@ -11880,6 +11907,47 @@ export function apply(ctx) {
     })
   }
 
+  // ---------------------------------------------------------------- 2026-11-22 局锁（落盘，引擎重启也在）
+  // 以前局的锁靠内存里的 live 指针 + 预案严格（6 小时），引擎一重启局就被收成空局、锁跟着没了；
+  // 四条开局路各锁各的（面板走预案严格、鱼走 AI 专时、快捷开局又一套）。现在统一成这一份：
+  //   · 严格：只剩本局声明的 App（+ 底座 / 急事）；温和：学习 + 中间层（Gemini、NekoBox、通讯），娱乐锁、不自动升严格。
+  //   · 到点（开局时刻 + 选的分钟）自动解；局中只能延长，严格局不能中途改温和、不能缩短。
+  //   · 收局 / 破窗才提前解；硬干预上限不碰它（那是他自己选的锁）。
+  function loadBoutLock() {
+    const l = readState(stateFile('bout-lock.json'), null)
+    return l && typeof l === 'object' && l.mode ? l : null
+  }
+  function boutLockNow(now = Date.now()) {
+    const l = loadBoutLock()
+    return l && Number(l.until) > now ? l : null
+  }
+  function setBoutLock(l, now = Date.now()) {
+    writeJson(stateFile('bout-lock.json'), l)
+    record({ state: 'bout-lock', at: now, mode: l.mode, until: l.until, allow: l.allow, by: l.by || '' })
+  }
+  function clearBoutLock(why, now = Date.now()) {
+    if (!loadBoutLock()) return
+    writeJson(stateFile('bout-lock.json'), null)
+    record({ state: 'bout-lock-clear', at: now, why })
+  }
+  const boutLockHm = (t) => zoneHm(Number(t) || 0, zoneOr(config.timeZone))
+  /** 严格局的 session（和其它专注锁同一个槽）。温和局不发 session，靠锁决定里的「干活态白名单」。 */
+  function boutLockSessionView(now = Date.now()) {
+    const l = boutLockNow(now)
+    if (!l || l.mode !== 'strict' || !Array.isArray(l.allow) || !l.allow.length) return null
+    return {
+      allow: [...new Set([...l.allow, ...emergencyPackages(appsOf())])],
+      until: Number(l.until),
+      topic: String(l.goal || '严格局'),
+      why: '严格局「' + String(l.goal || '这一局') + '」到 ' + boutLockHm(l.until) + '：只剩本局应用。解除：到点 / 收局 / 破窗',
+      strict: true,
+      graceMs: 0,
+      mode: 'ai-work',
+      kind: 'strict',
+      by: 'bout',
+    }
+  }
+
   // ---------------------------------------------------------------- 局（W1/W3）
   // 本进程开的那一局。数据全在库里（bouts.js 是唯一写入方），这里只留一个指针：
   // 面板要显示「现在这一拍」，得问局官本人，不能从库里倒推。
@@ -12042,6 +12110,7 @@ export function apply(ctx) {
   function dropLive() {
     // 没走到验收那一步就收了（手动收工 / 别的路）：按「部分完成」记一笔。
     commitLiveNode('partial')
+    if (live) clearBoutLock('bout-closed')
     try {
       live?.db?.close?.()
     } catch {
@@ -12139,6 +12208,17 @@ export function apply(ctx) {
     live = {
       official, db, protocol, packet: pkt, department: dept, apps: resolvedApps, goal, budgetMin, openedAt: now, workId, parentHorizonId,
       sealId: boutSeal.sealId, sealTitle: boutSeal.sealTitle, scopeKey, scopeLabel,
+    }
+    {
+      const lockAllow = cleanAllowList([...(resolvedApps?.need || []), ...(resolvedApps?.allow || [])])
+      const lockMin = budgetMin || Number(protocol?.budget?.minutes) || 45
+      // 严格局没有一个放行 App 就退成温和（不锁成砖）。
+      const mode = opts.strict === true && lockAllow.length ? 'strict' : 'gentle'
+      setBoutLock({
+        boutId: String(started.boutId || official.view().boutId || ''), mode, allow: lockAllow,
+        goal: goal || pkt?.goal || protocol.name || protocol.id || '', openedAt: now, until: now + lockMin * 60_000, minutes: lockMin,
+        by: String(opts.by || 'panel'),
+      }, now)
     }
     try {
       const tzW = zoneOr(config.timeZone)
@@ -12284,7 +12364,14 @@ export function apply(ctx) {
   }
 
   function closeBoutNow() {
-    if (!live) return { ok: false, toast: '现在没有局。' }
+    if (!live) {
+      // 引擎重启过：局的记录已经中断，但局锁还在（落盘的）。收局 = 把锁也收了。
+      if (boutLockNow()) {
+        clearBoutLock('closed-after-restart')
+        return { ok: true, toast: '局的记录在引擎重启时中断了；局锁已经收了。' }
+      }
+      return { ok: false, toast: '现在没有局。' }
+    }
     live.official.close('abandoned')
     dropLive()
     return { ok: true, toast: '收局了，这局记成空局。' }
@@ -12321,7 +12408,8 @@ export function apply(ctx) {
   function boutsGetRoute() {
     const now = Date.now()
     const dayData = planDayRoute({ action: 'list' })
-    const strictInfo = presetRt.sessionView(now)
+    const bl = boutLockNow(now)
+    const strictInfo = boutLockSessionView(now) || presetRt.sessionView(now)
     const v = live && !live.official.view().closed ? live.official.view() : null
     const allow = strictInfo?.allow || [
       ...(Array.isArray(live?.apps?.need) ? live.apps.need : []),
@@ -12333,7 +12421,8 @@ export function apply(ctx) {
           protocol: live.protocol?.id || '',
           title: live.goal || live.packet?.goal || live.protocol?.name || live.protocol?.id || '专注进行中',
           strict: Boolean(strictInfo),
-          until: Number(strictInfo?.until) || (live.openedAt + (live.budgetMin || Number(live.protocol?.budget?.minutes) || 45) * 60_000),
+          mode: strictInfo ? 'strict' : 'gentle',
+          until: Number(bl?.until) || Number(strictInfo?.until) || (live.openedAt + (live.budgetMin || Number(live.protocol?.budget?.minutes) || 45) * 60_000),
           allow: [...new Set(allow)],
           startedAt: live.openedAt,
           minutes: live.budgetMin || Number(live.protocol?.budget?.minutes) || 45,
@@ -12345,7 +12434,14 @@ export function apply(ctx) {
           ...(live.contextBrief ? { nodeContext: live.contextBrief } : {}),
           ...(live.nodeLink ? { nodeLink: live.nodeLink } : {}),
         }
-      : null
+      : bl
+        // 引擎重启过：局的记录中断了，但局锁（落盘）还在，照样显示，到点自己解、收局也能收。
+        ? {
+            id: String(bl.boutId || ''), protocol: '', title: String(bl.goal || '这一局'), strict: bl.mode === 'strict', mode: bl.mode,
+            until: Number(bl.until), allow: Array.isArray(bl.allow) ? bl.allow : [], startedAt: Number(bl.openedAt), minutes: Number(bl.minutes) || 45,
+            interrupted: true,
+          }
+        : null
     const protocols = builtinProtocols()
       .filter((x) => x.ok)
       .map((x) => ({
@@ -12443,20 +12539,42 @@ export function apply(ctx) {
         sealId,
         scopeKey: scope.scopeKey,
         scopeLabel: scope.scopeLabel,
+        strict: body?.strict === true,
       })
-      if (r.ok && body?.strict === true && apps && ([...(apps.need || []), ...(apps.allow || [])].length > 0)) {
-        presetRt.strictNow(Date.now(), String(goal || '面板严格局'), 'panel')
-      }
-      return { v: 1, ...r }
+      return { v: 1, ...r, mode: boutLockNow()?.mode || 'gentle' }
     }
     if (action === 'strict') {
-      const r = presetRt.strictNow(Date.now(), String(body?.why || '面板切为严格模式'), 'panel')
+      const now = Date.now()
+      const l = boutLockNow(now)
+      if (l) {
+        if (!Array.isArray(l.allow) || !l.allow.length) return { v: 1, ok: false, toast: '这一局没有放行的 App，切严格会锁成砖：先加一个 App。' }
+        setBoutLock({ ...l, mode: 'strict' }, now)
+        return { v: 1, ok: true, strict: true, toast: '这一局改成严格：只剩本局应用，到 ' + boutLockHm(l.until) + '。' }
+      }
+      const r = presetRt.strictNow(now, String(body?.why || '面板切为严格模式'), 'panel')
       return { v: 1, ...r }
     }
     if (action === 'relax') {
-      if (!live) return { v: 1, ok: false, toast: '现在没有局。' }
-      presetRt.strictOff(Date.now(), 'panel')
-      return { v: 1, ok: true, strict: false, toast: '已切为温和守护（仅提醒不强锁）' }
+      const now = Date.now()
+      const l = boutLockNow(now)
+      if (!live && !l) return { v: 1, ok: false, toast: '现在没有局。' }
+      // 严格局中途不能放松：到点、收局或者破窗。
+      if (l?.mode === 'strict') return { v: 1, ok: false, strict: true, toast: '严格局中途不能改温和：到 ' + boutLockHm(l.until) + ' 自动解，或者收局 / 破窗。' }
+      presetRt.strictOff(now, 'panel')
+      return { v: 1, ok: true, strict: false, toast: '这一局是温和局：学习和 Gemini 能用，娱乐锁着。' }
+    }
+    if (action === 'adjust') {
+      // 调这一局的时长：随时能延长；温和局也能缩短，严格局不能缩短。最短到现在 + 5 分钟。
+      const now = Date.now()
+      const l = boutLockNow(now)
+      if (!l) return { v: 1, ok: false, toast: '现在没有局。' }
+      const minutes = Math.max(5, Math.min(240, Math.round(Number(body?.minutes) || 0)))
+      if (!Number(body?.minutes)) return { v: 1, ok: false, toast: '说个分钟数（5–240）。' }
+      const until = Math.max(now + 5 * 60_000, Number(l.openedAt) + minutes * 60_000)
+      if (l.mode === 'strict' && until < Number(l.until)) return { v: 1, ok: false, toast: '严格局只能延长，不能缩短（现在到 ' + boutLockHm(l.until) + '）。' }
+      setBoutLock({ ...l, until, minutes: Math.round((until - Number(l.openedAt)) / 60_000) }, now)
+      if (live) live.budgetMin = Math.round((until - Number(l.openedAt)) / 60_000)
+      return { v: 1, ok: true, until, minutes: Math.round((until - Number(l.openedAt)) / 60_000), toast: '这一局改到 ' + boutLockHm(until) + '。' }
     }
     if (action === 'allow') {
       if (!live) return { v: 1, ok: false, toast: '现在没有局。' }
@@ -12469,11 +12587,10 @@ export function apply(ctx) {
         config = { ...config, defaultAllow: allow }
         try { writeConfig(config) } catch {}
       }
-      const wasStrict = Boolean(presetRt.sessionView(now))
-      if (wasStrict || body?.strict === true) {
-        if (wasStrict) presetRt.strictOff(now, 'panel-allow')
-        presetRt.strictNow(now, String(body?.why || '更新本局白名单'), 'panel')
-      }
+      // 局锁跟着换白名单（严格局只剩这些 App；温和局多放这几个）。
+      const bl = boutLockNow(now)
+      if (bl) setBoutLock({ ...bl, allow, ...(body?.strict === true ? { mode: 'strict' } : {}) }, now)
+      else if (body?.strict === true) presetRt.strictNow(now, String(body?.why || '更新本局白名单'), 'panel')
       return { v: 1, ...r, allow }
     }
     if (action === 'close' || action === 'finish') {
@@ -12615,10 +12732,8 @@ export function apply(ctx) {
       scopeKey: scope.scopeKey,
       scopeLabel: scope.scopeLabel,
       by: String(body?.by || 'panel'),
+      strict,
     })
-    if (r.ok && strict && allow.length > 0) {
-      presetRt.strictNow(now, goal, String(body?.by || 'panel'))
-    }
     return { v: 1, ...r, strict, allow, minutes, goal, scopeKey: scope.scopeKey, scopeLabel: scope.scopeLabel }
   }
 

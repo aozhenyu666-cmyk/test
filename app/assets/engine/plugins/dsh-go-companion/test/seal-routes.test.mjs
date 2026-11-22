@@ -117,9 +117,11 @@ test('到点没过保底 → 严格锁；交够保底 → 解锁并按晚交发�
     assert.ok(r.locking && r.locking.id === 'seal-t1', '应该锁着')
     const plan = await call(h(), 'POST', '/plan', { roll: 0, timeZone: TZ, phone: { app: 'com.ss.android.ugc.aweme', fun: true, minutes: 0, screenOn: true } })
     assert.equal(plan.status, 200)
-    assert.equal(plan.body.lockArbiter?.source, 'CONTRACT_OVERDUE_STRICT', JSON.stringify(plan.body.lockArbiter).slice(0, 200))
-    assert.equal(plan.body.lockArbiter?.label, '封印没过保底')
-    assert.ok(plan.body.lockArbiter.allow.includes('md.obsidian'))
+    // 睡觉时间（0–8 点）深夜锁排在保底锁前面：那几个钟点只核「抖音锁着」。
+    const night = min < 8 * 60
+    assert.equal(plan.body.lockArbiter?.source, night ? 'NIGHT_CURFEW' : 'CONTRACT_OVERDUE_STRICT', JSON.stringify(plan.body.lockArbiter).slice(0, 200))
+    if (!night) assert.equal(plan.body.lockArbiter?.label, '封印没过保底')
+    if (!night) assert.ok(plan.body.lockArbiter.allow.includes('md.obsidian'))
     assert.ok(!plan.body.lockArbiter.allow.includes('com.ss.android.ugc.aweme'))
     // 题库答对数涨 12 → 过保底，锁解，晚交 ×0.5：round(60/3)=20 × 1 × 0.5 = 10
     writeFileSync(join(home, 'companion', 'bank-unlock.json'), JSON.stringify({ stats: { correct: 12 } }))

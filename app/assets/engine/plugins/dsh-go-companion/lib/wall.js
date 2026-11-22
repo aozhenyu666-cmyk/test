@@ -92,7 +92,7 @@ function normalizeMeals(raw) {
     .slice(0, 8)
 }
 
-/** 现在是不是深夜锁时段（0:30–7:00）。 */
+/** 现在是不是深夜锁时段（0:00–8:00，2026-11-22 他定的睡觉时间）。 */
 export function inNightLock(min) {
   return min >= NIGHT_LOCK_FROM && min < NIGHT_LOCK_TO
 }

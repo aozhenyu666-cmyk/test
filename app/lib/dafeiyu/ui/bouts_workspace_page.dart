@@ -327,6 +327,26 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     });
   }
 
+  /// 调这一局的时长（从开局算起一共多少分钟）：严格局只能延长，温和局可以缩短——规矩在引擎，这里只发。
+  Future<void> _adjustMinutes(bool strict) async {
+    final m = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(strict ? '这一局一共多久（严格局只能延长）' : '这一局一共多久'),
+        children: [
+          for (final v in const [25, 45, 60, 90, 120])
+            SimpleDialogOption(
+              key: ValueKey('bout-minutes-$v'),
+              onPressed: () => Navigator.of(ctx).pop(v),
+              child: Text('$v 分钟'),
+            ),
+        ],
+      ),
+    );
+    if (m == null || !mounted) return;
+    await _sendBoutCommand({'action': 'adjust', 'minutes': m});
+  }
+
   Future<void> _startOneLineFocus() async {
     final goal = _goalCtrl.text.trim().isEmpty ? '深度专注' : _goalCtrl.text.trim();
     final allow = _selectedAllow.isEmpty ? const ['md.obsidian', 'com.tencent.mm'] : _selectedAllow.toList();
@@ -934,6 +954,13 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     onSelected: _busy ? () {} : () => unawaited(_pickRunningAllowApps(allow)),
                   ),
                   CapsuleChoiceChip(
+                    key: const ValueKey('bout-adjust-minutes'),
+                    icon: AppIcons.time,
+                    label: '调时长',
+                    selected: false,
+                    onSelected: _busy ? () {} : () => unawaited(_adjustMinutes(strict)),
+                  ),
+                  CapsuleChoiceChip(
                     icon: AppIcons.unlock,
                     label: '紧急暂停 10m',
                     selected: false,
@@ -963,10 +990,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     style: OutlinedButton.styleFrom(shape: AppShape.card),
                     onPressed: _busy
                         ? null
-                        : () => unawaited(_sendBoutCommand(
-                              {'action': strict ? 'relax' : 'strict'},
-                              toast: strict ? '已切为温和守护' : '已升级为严格锁模式',
-                            )),
+                        : () => unawaited(_sendBoutCommand({'action': strict ? 'relax' : 'strict'})),
                     child: Text(strict ? '切温和' : '切严格'),
                   ),
                   const SizedBox(width: 8),
@@ -1652,10 +1676,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
             title: strict ? '切成温和局' : '升级为严格锁',
             onTap: _busy
                 ? null
-                : () => unawaited(_sendBoutCommand(
-                      {'action': strict ? 'relax' : 'strict'},
-                      toast: strict ? '已切为温和守护' : '已升级为严格锁模式',
-                    )),
+                : () => unawaited(_sendBoutCommand({'action': strict ? 'relax' : 'strict'})),
           ),
           ListPageRow(
             icon: AppIcons.warning,

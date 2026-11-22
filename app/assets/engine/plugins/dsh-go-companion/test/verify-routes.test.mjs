@@ -144,7 +144,7 @@ test('到点没定今天：自动套模板（大肥鱼/模板.md 他自己改的
 /** 挑一个此刻当地正好是晚上（18:00–22:30）的时区：晚间这条任何时候都真跑，不靠运气。 */
 const EVENING_TZ = ZONES.find((z) => { const m = minuteOfDay(Date.now(), z); return m >= 18 * 60 && m < 22 * 60 + 30 })
 
-test('晚间上限：18:00 后娱乐用够了，锁到明早 7 点、余额花不出去、约一次 Gemini', async () => {
+test('晚间上限：18:00 后娱乐用够了，锁到明早 8 点、余额花不出去、约一次 Gemini', async () => {
   assert.ok(EVENING_TZ, '总有一个时区此刻是晚上')
   await withHome(async ({ seals, home }) => {
     const row = (m) => ({ app: 'com.ss.android.ugc.aweme', label: '抖音', fun: true, minutes: m, screenOn: true, today: [{ app: 'com.ss.android.ugc.aweme', label: '抖音', minutes: m, fun: true }] })
@@ -161,7 +161,7 @@ test('晚间上限：18:00 后娱乐用够了，锁到明早 7 点、余额花�
     assert.ok(kinds.includes('default'), kinds.join(','))
     const rule = r.body.rules.rules.find((x) => x.kind === 'default' && /娱乐 30 分钟用完/.test(x.why))
     assert.ok(rule, '晚间上限那一条')
-    assert.equal(new Date(rule.until).toLocaleString('en-GB', { timeZone: EVENING_TZ, hour: '2-digit', minute: '2-digit', hour12: false }), '07:00', '锁到明早 7 点')
+    assert.equal(new Date(rule.until).toLocaleString('en-GB', { timeZone: EVENING_TZ, hour: '2-digit', minute: '2-digit', hour12: false }), '08:00', '锁到明早 8 点')
     const sp = await seals({ action: 'spend', minutes: 10, reason: '再看一会儿就睡' })
     assert.equal(sp.error, 'evening-cap')
     assert.equal(json(home, 'gemini-schedule.json').by, 'evening-cap')

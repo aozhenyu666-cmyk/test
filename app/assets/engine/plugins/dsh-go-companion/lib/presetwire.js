@@ -72,6 +72,11 @@ export function createPresetRuntime(deps) {
     const ops = plan(fire, { now, bout, apps, front: phone?.app || null })
     let d = doc
     for (const op of ops) {
+      // 2026-11-22 温和局不被预案自动升成严格 / 全锁 / 封 App（温和局本身已经锁着娱乐）；要严格他自己点或开局时选。
+      if (bout?.mode === 'gentle' && (op.op === 'strict' || op.op === 'all-lock' || op.op === 'block')) {
+        deps.record({ state: 'preset-gentle-skip', at: now, presetId: fire.presetId, op: op.op, boutId: bout.id })
+        continue
+      }
       try {
         if (op.op === 'strict') {
           if (Array.isArray(op.allow) && op.allow.length > 0) {

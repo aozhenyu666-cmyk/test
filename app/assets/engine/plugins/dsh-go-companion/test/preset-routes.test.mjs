@@ -88,7 +88,7 @@ function setup(home, { state = 'standby', ...rest } = {}) {
   const h = host({ [SIS]: sis, [BIG]: big }, state)
   const plan = (phone) => call(h(), 'POST', '/plan', { roll: 0, timeZone: 'Asia/Shanghai', phone })
   const presets = (body) => call(h(), 'POST', '/presets', body)
-  const open = (protocolId, apps) => call(h(), 'POST', '/bouts', { action: 'open', protocolId, apps })
+  const open = (protocolId, apps, extra = {}) => call(h(), 'POST', '/bouts', { action: 'open', protocolId, apps, ...extra })
   const event = (body) => call(h(), 'POST', '/event', { timeZone: 'Asia/Shanghai', ...body })
   const ledger = () => readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
   return { sis, big, plan, presets, open, event, ledger, h }
@@ -143,24 +143,39 @@ test('/bouts open：带上 App 要求开局；不认识的协议拒绝', async (
   })
 })
 
-test('局里在不允许的 App 待满 1 分钟：这一次 /plan 的回答里就是严格模式', async () => {
+test('温和局：在不允许的 App 待满 1 分钟不会被预案升成严格（记一笔跳过），但娱乐照样在锁决定里锁着', async () => {
   await withHome(async (home) => {
     const t = setup(home)
     await t.open('execute', { need: ['com.study'], allow: ['com.dict'] })
     await t.plan(at('com.study'))
     const r = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
-    const s = r.body.session
-    assert.ok(s, '应当有 session')
-    assert.deepEqual(s.allow.sort(), ['com.dict', 'com.study'])
-    assert.equal(s.graceMs, 0, '严格模式不给宽限')
-    assert.equal(s.kind, 'strict')
-    assert.match(s.why, /局内偏离停留/)
-    assert.match(s.why, /解除：本局结束 \/ 破窗/)
-    assert.ok(t.ledger().some((e) => e.state === 'preset-fire' && e.presetId === 'off-dwell'))
+    assert.notEqual(r.body.session?.kind, 'strict', '温和局不自动升严格')
+    assert.equal(r.body.lock?.mode, 'allowlist', '温和局：干活态白名单')
+    assert.ok(!r.body.lock.allow.includes('com.douyin'), '娱乐不在白名单里')
+    // 睡觉时间（0–8 点）深夜锁盖过局，本局 App 也锁；白天才核「本局 App 放行」。
+    const m = Math.floor(((Date.now() + 8 * 3_600_000) % 86_400_000) / 60_000)
+    if (m >= 8 * 60) assert.ok(r.body.lock.allow.includes('com.study'))
+    assert.ok(t.ledger().some((e) => e.state === 'preset-gentle-skip' && e.presetId === 'off-dwell'))
   })
 })
 
-test('局里 10 分钟切出 3 次：严格模式', async () => {
+test('严格局：开局就是严格模式，只剩本局应用（+ 急事），不给宽限', async () => {
+  await withHome(async (home) => {
+    const t = setup(home)
+    await t.open('execute', { need: ['com.study'], allow: ['com.dict'] }, { strict: true, minutes: 30 })
+    const r = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
+    const s = r.body.session
+    assert.ok(s, '应当有 session')
+    assert.ok(s.allow.includes('com.study') && s.allow.includes('com.dict'))
+    assert.ok(!s.allow.includes('com.douyin'))
+    assert.equal(s.graceMs, 0, '严格模式不给宽限')
+    assert.equal(s.kind, 'strict')
+    assert.match(s.why, /解除：到点 \/ 收局 \/ 破窗/)
+    assert.ok(s.until <= Date.now() + 30 * 60_000 + 5000, '到点（开局 + 30 分钟）自动解，不是 6 小时')
+  })
+})
+
+test('温和局里 10 分钟切出 3 次：预案也不升严格（只记跳过）', async () => {
   await withHome(async (home) => {
     const t = setup(home)
     await t.open('execute', { need: ['com.study'] })
@@ -169,9 +184,8 @@ test('局里 10 分钟切出 3 次：严格模式', async () => {
       await t.plan(at(i % 2 ? 'com.bili' : 'com.douyin', { fun: true }))
     }
     const r = await t.plan(at('com.study'))
-    assert.equal(r.body.session?.kind, 'strict')
-    assert.deepEqual(r.body.session.allow, ['com.study'])
-    assert.ok(t.ledger().some((e) => e.state === 'preset-fire' && e.presetId === 'switch-storm'))
+    assert.notEqual(r.body.session?.kind, 'strict')
+    assert.ok(t.ledger().some((e) => e.state === 'preset-gentle-skip' && e.presetId === 'switch-storm'))
   })
 })
 
@@ -187,7 +201,7 @@ test('没有局：在娱乐 App 里待着也不触发局内预案', async () => 
 test('严格模式期间：舱内放行的包不进封禁名单', async () => {
   await withHome(async (home) => {
     const t = setup(home, { apps: [{ pkg: 'com.study', fun: true }] })
-    await t.open('execute', { need: ['com.study'] })
+    await t.open('execute', { need: ['com.study'] }, { strict: true })
     const r = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
     assert.equal(r.body.session?.kind, 'strict')
     assert.equal(Object.hasOwn(r.body.rules?.block || {}, 'com.study'), false)
@@ -197,7 +211,7 @@ test('严格模式期间：舱内放行的包不进封禁名单', async () => {
 test('破窗是出口：严格模式一起收掉', async () => {
   await withHome(async (home) => {
     const t = setup(home)
-    await t.open('execute', { need: ['com.study'] })
+    await t.open('execute', { need: ['com.study'] }, { strict: true })
     const on = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
     assert.equal(on.body.session?.kind, 'strict')
     const b = await t.event({ type: 'breakglass', minutes: 10 })
@@ -331,11 +345,15 @@ test('/plan/day：都写清了就定下来，立刻生效（不用等 10 分钟�
       const apps = (await t.presets({ action: 'list' })).body.bout?.apps
       assert.deepEqual(apps.need, ['com.zhuoyin.tiku'])
       assert.deepEqual(apps.allow, ['com.zhuoyin.tiku', 'com.dict'])
-      // 而且这 App 要求是真在管：跑到没写允许的地方就是严格模式，允许名单就是这一局写的两个。
+      // 而且这 App 要求是真在管：计划没写严格 → 温和局，这一局的两个 App 和学习 / Gemini 能用，娱乐锁着；时长按 budget。
       await t.plan(at('com.zhuoyin.tiku'))
       const p = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
-      assert.equal(p.body.session?.kind, 'strict', '这一局一开就按自己的 App 管')
-      assert.deepEqual(p.body.session.allow.sort(), ['com.dict', 'com.zhuoyin.tiku'])
+      assert.equal(p.body.lock?.mode, 'allowlist', '这一局一开就按自己的 App 管')
+      assert.ok(p.body.lock.allow.includes('com.zhuoyin.tiku') && p.body.lock.allow.includes('com.dict'))
+      assert.ok(!p.body.lock.allow.includes('com.douyin'))
+      const bl = JSON.parse(readFileSync(join(home, 'companion', 'bout-lock.json'), 'utf8'))
+      assert.equal(bl.mode, 'gentle')
+      assert.equal(bl.minutes, 60)
     } finally {
       tc.mock.timers.reset()
     }

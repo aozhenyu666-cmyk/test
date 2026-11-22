@@ -410,6 +410,7 @@ class _ProactivePageState extends State<ProactivePage> {
       ('通知权限', caps['notifications'] ?? false, 'notifications'),
       ('精确闹钟', caps['exactAlarm'] ?? false, 'exactAlarm'),
       ('电池不限制', caps['battery'] ?? false, 'battery'),
+      ('使用情况访问（娱乐分钟按系统记录算）', caps['usage'] ?? false, 'usage'),
     ];
     final missing = items.where((i) => !i.$2).length;
     return ListPageCard(

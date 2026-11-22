@@ -7,12 +7,12 @@
 // 时间都按他手机的当地时间。
 
 // 早上：深夜锁一结束（7:00）后的第一次亮屏才开门；整夜锁着，早上不另开一扇窗。
-export const MORNING_FROM = 7 * 60
+export const MORNING_FROM = 8 * 60
 export const MORNING_TO = 12 * 60
 export const MORNING_CAP_MS = 30 * 60_000
 export const LATE_FROM = 23 * 60 + 30
-export const NIGHT_LOCK_FROM = 30
-export const NIGHT_LOCK_TO = 7 * 60
+export const NIGHT_LOCK_FROM = 0
+export const NIGHT_LOCK_TO = 8 * 60
 export const REVIEW_FROM = 21 * 60 + 30
 export const REVIEW_CAP_MS = 60 * 60_000
 /** 周末审这一周：周日晚 20:00 起，到深夜 23:30 前；当周只开一次（和晚间那次审今天分开）。 */
@@ -114,6 +114,6 @@ export function rhythmLines(r) {
   if (r.reviewGate) lines.push('现在是晚上对账时间：今天做了什么、手机时间花在哪、明天封什么。对完之前娱乐锁着。')
   if (r.weekReviewGate) lines.push('现在是周末审这一周：只看这一周的客观数字（审了几次、过了几次、缺席几回）说清这周到底做到了什么，然后把下周重心摆成两条让他拍板。不审今天，今天归晚上那次。')
   if (r.night === 'late') lines.push('已经过了 23:30：催他放下手机去睡，每句话都往"睡觉"上引，别跟他聊兴奋的话题。')
-  if (r.night === 'lock') lines.push('现在是深夜（0:30 以后）：娱乐锁到早上 7 点。他还醒着就让他交出手机去睡，短、硬、不聊别的。')
+  if (r.night === 'lock') lines.push('现在是睡觉时间（0 点以后）：锁到早上 8 点。他还醒着就让他交出手机去睡，短、硬、不聊别的。')
   return lines
 }

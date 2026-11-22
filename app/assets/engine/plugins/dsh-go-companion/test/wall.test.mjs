@@ -32,11 +32,11 @@ test('吃饭时段开放，开放到这段结束', () => {
   assert.equal(d.openUntil, at('12:30'))
 })
 
-test('深夜锁优先，锁到早上 7 点', () => {
+test('深夜锁优先，锁到早上 8 点', () => {
   const d = wallDecision({}, at('01:00'), TZ)
   assert.equal(d.locked, true)
   assert.equal(d.kind, WALL_KIND_NIGHT)
-  assert.equal(d.until, at('07:00'))
+  assert.equal(d.until, at('08:00'))
 })
 
 test('墙关掉：不加默认锁', () => {

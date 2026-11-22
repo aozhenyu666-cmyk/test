@@ -60,7 +60,7 @@ export function computeUnifiedLockArbiter({
       label: '深夜睡眠护栏',
       why: String(wall?.why || nightReq?.why || '已进入深夜催睡时段，娱乐类应用全面锁定'),
       allow: Array.isArray(wall?.allow) ? wall.allow : (Array.isArray(nightReq?.allow) ? nightReq.allow : []),
-      unlockHow: String(nightReq?.unlockHow || '次日晨间 07:00 自动解封（电话/短信/地图/支付始终放行）'),
+      unlockHow: String(nightReq?.unlockHow || '早上 08:00 自动解封（电话/短信/地图/支付始终放行）'),
     }
   }
 
