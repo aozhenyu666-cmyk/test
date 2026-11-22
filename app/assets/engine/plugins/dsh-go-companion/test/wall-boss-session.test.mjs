@@ -199,7 +199,14 @@ test('[Boss-Wall Path B] mounts isolated 3rd wallSessionId with read-only tools 
     assert.match(wbAgent.promptContexts[1].text(), /\[老板全局事实账本·实时只读\]/)
 
     const wbToolNames = wbAgent.registeredTools.map((t) => t.name)
-    assert.deepEqual(wbToolNames, ['wall_boss_brief', 'wall_locks_truth', 'wall_vault_search', 'wall_vault_recent'])
+    assert.deepEqual(wbToolNames, [
+      'wall_boss_brief',
+      'wall_locks_truth',
+      'wall_vault_search',
+      'wall_vault_recent',
+      'wall_issue_directive',
+      'wall_judge_delivery',
+    ])
     const briefToolRes = wbAgent.registeredTools[0].execute({})
     assert.equal(briefToolRes.ok, true)
     assert.match(briefToolRes.text, /老板全局账本/)
@@ -207,11 +214,31 @@ test('[Boss-Wall Path B] mounts isolated 3rd wallSessionId with read-only tools 
     assert.equal(locksToolRes.ok, true)
     assert.match(locksToolRes.text, /\[锁机实时真相·只读\]/)
 
-    // Sisters keep their original personas untouched
+    // Issue boss directive tool creates undeletable verify block; judge refuses empty pass
+    const issToolRes = wbAgent.registeredTools[4].execute({
+      title: '主管停损必交块',
+      deliverable: '交20题错因物理摘要',
+      durationMin: 45,
+    })
+    assert.equal(issToolRes.ok, true)
+    assert.match(issToolRes.text, /主管止损硬指令/)
+    const bossMatch = /\[(blk-boss-[^\]]+)\]/.exec(issToolRes.text)
+    assert.ok(bossMatch, 'directive text should include block id')
+    const judgeEmptyRes = wbAgent.registeredTools[5].execute({
+      blockId: bossMatch[1],
+      verdict: 'pass',
+      note: '试图空口过关',
+    })
+    assert.equal(judgeEmptyRes.ok, false)
+    assert.match(judgeEmptyRes.text, /≥12字|交付/)
+
+    // Sisters keep their original personas untouched and do not receive boss directive/judge tools
     assert.ok(agents['sis-1'].promptContexts.some((c) => c.name === 'dafeiyu-persona'))
     assert.ok(!agents['sis-1'].promptContexts.some((c) => c.name === 'dafeiyu-wall-boss'))
+    assert.ok(!agents['sis-1'].registeredTools.some((t) => t.name === 'wall_issue_directive' || t.name === 'wall_judge_delivery'))
     assert.ok(agents['strat-1'].promptContexts.some((c) => c.name === 'dafeiyu-strategist'))
     assert.ok(!agents['strat-1'].promptContexts.some((c) => c.name === 'dafeiyu-wall-boss'))
+    assert.ok(!agents['strat-1'].registeredTools.some((t) => t.name === 'wall_issue_directive' || t.name === 'wall_judge_delivery'))
 
     // 3. Trigger audit_now & verify turn lifecycle writes assistant reply
     const auditRes = await mockHttpCall(handler, 'POST', '/wall/boss-chat', { action: 'audit_now' })

@@ -44,12 +44,19 @@ import {
   cleanPlanContract,
   COMMON_PLAN_PRESETS,
   computeDayPlanStats,
+  DAYBLOCK_LOCK_CAP_MS,
   evaluateCheckpointSubmission,
   evaluateContractTick,
+  evaluateDayBlocksTick,
   inspectScenarioApps,
+  issueBossDirectiveBlock,
+  judgeDayBlockDelivery,
   OVERDUE_GRACE_MS,
   resolveContractSessionAllow,
+  submitDayBlockDelivery,
+  summarizeDayBlocksVerify,
 } from './plan_modality.js'
+import { minuteOfDay as tzMinuteOfDay, startOfDay as tzStartOfDay } from './tz.js'
 import { buildTodayCharts } from './telemetry_charts.js'
 import {
   buildSkillsPromptBlock,
@@ -146,6 +153,9 @@ export function createV4Hub(deps) {
     getTodayBrainStats = null,
     onContractClear = null,
     snoozeGeminiAutoNow = null,
+    onDayPlanMutated = null,
+    onDayBlockPassed = null,
+    getSealsNow = null,
   } = deps
 
   const tz = () => zoneOr(getConfig()?.timeZone)
@@ -441,7 +451,9 @@ export function createV4Hub(deps) {
     const brainView = typeof getTodayBrainStats === 'function' ? (getTodayBrainStats(now) || {}) : {}
     const digests = Array.isArray(brainView.digests) ? brainView.digests : []
     const contract = loadContract()
-    const overdueCheckpoints = (contract?.checkpoints || []).filter((c) => c.status === 'overdue_locked').length
+    const overdueContractCps = (contract?.checkpoints || []).filter((c) => c.status === 'overdue_locked').length
+    const overdueDayBlocks = (loadDayPlan(now)?.dayBlocks || []).filter((b) => b.verifyStatus === 'overdue_locked').length
+    const overdueCheckpoints = overdueContractCps + overdueDayBlocks
     return evaluateAutonomy14d({
       days: digests,
       reports,
@@ -452,6 +464,266 @@ export function createV4Hub(deps) {
       now,
       dayOf: (ms) => dayString(ms, tzName),
     })
+  }
+
+  function dayBlockTickNow(now = Date.now(), sealsOpt = null) {
+    const tzName = tz()
+    const dayStartMs = tzStartOfDay(now, tzName)
+    const min = tzMinuteOfDay(now, tzName)
+    const cur = loadDayPlan(now)
+    const seals = Array.isArray(sealsOpt) ? sealsOpt : (typeof getSealsNow === 'function' ? (getSealsNow(now) || []) : [])
+    const res = evaluateDayBlocksTick(cur, { now, dayStartMs, minuteOfDay: min, seals })
+    if (res.changed) {
+      saveDayPlan(res.state, now)
+    }
+    for (const blk of res.newlyEscalated) {
+      record({ state: 'dayblock-overdue-locked', at: now, blockId: blk.id, title: blk.title, lockedByBoss: Boolean(blk.lockedByBoss) })
+      recordStoryline({
+        kind: 'verify_overdue',
+        actor: blk.lockedByBoss ? 'wall_boss' : 'strategist',
+        summary: `验收锁触发：「${blk.title}」到点超 1m 未交货`,
+        at: now,
+      }, now)
+    }
+    for (const blk of res.newlyBreached) {
+      record({ state: 'breach', at: now, blockId: blk.id, title: blk.title, reason: '计划验收锁满 60 分钟仍未交付（封顶记违约）' })
+      recordStoryline({
+        kind: 'verify_breach',
+        actor: 'wall_boss',
+        summary: `违约记账：「${blk.title}」超 60m 未交货`,
+        at: now,
+      }, now)
+    }
+    for (const p of res.newlyPassed) {
+      record({ state: 'dayblock-auto-passed', at: now, blockId: p.block.id, title: p.block.title })
+      try {
+        markWorkStatusNow?.({ id: p.block.id, title: p.block.title, status: 'passed', now })
+      } catch {}
+    }
+    return res
+  }
+
+  function getDayVerifySummary(now = Date.now(), sealsOpt = null) {
+    const res = dayBlockTickNow(now, sealsOpt)
+    return {
+      ...res.verifySummary,
+      graceWarning: res.graceWarning,
+      activeVerifyBlock: res.activeVerifyBlock,
+      activeStrictBlock: res.activeStrictBlock,
+      overdueVerifyBlocks: res.overdueVerifyBlocks,
+      dayBlocks: res.state.dayBlocks,
+    }
+  }
+
+  function dayBlockOverdueSessionView(now = Date.now()) {
+    const tick = dayBlockTickNow(now)
+    const list = tick.overdueVerifyBlocks || []
+    if (!list.length) return null
+    const sorted = [...list].sort((a, b) => (Number(Boolean(b.lockedByBoss)) - Number(Boolean(a.lockedByBoss))) || (a.endMin - b.endMin))
+    const blk = sorted[0]
+    const funOrGame = new Set(
+      (appsOf() || [])
+        .filter((a) => a?.role === 'fun' || a?.role === 'game')
+        .map((a) => String(a.app || '')),
+    )
+    const blockAllow = (Array.isArray(blk.allowedApps) ? blk.allowedApps : []).filter((p) => p && !funOrGame.has(p))
+    const emerg = typeof emergencyPackages === 'function' ? emergencyPackages(appsOf()) : []
+    const allow = [...new Set(['md.obsidian', ...blockAllow, ...emerg])]
+    const statusNote = blk.verifyStatus === 'submitted'
+      ? '已提交待主管墙终审（PASS 前继续锁定）'
+      : (blk.verifyStatus === 'rejected'
+          ? `已被主管驳回（${blk.judgeNote || '请补充物理证据后重交'}）`
+          : '已超 1 分钟缓冲未提交交付')
+    return {
+      allow,
+      until: Number(blk.overdueLockUntil) > now ? Number(blk.overdueLockUntil) : (now + DAYBLOCK_LOCK_CAP_MS),
+      topic: blk.title,
+      blockId: blk.id,
+      why: `${blk.lockedByBoss ? '主管硬指令' : '验收块'}「${blk.title}」${statusNote}，仅保留工作工具交货`,
+      strict: true,
+      graceMs: 0,
+      mode: 'ai-work',
+      by: blk.lockedByBoss ? 'wall_boss' : 'dayblock',
+    }
+  }
+
+  function dayBlockActiveSessionView(now = Date.now()) {
+    const tick = dayBlockTickNow(now)
+    const blk = tick.activeVerifyBlock || tick.activeStrictBlock
+    if (!blk) return null
+    const tzName = tz()
+    const day0 = tzStartOfDay(now, tzName)
+    const dueAt = day0 + blk.endMin * 60_000
+    const isVerify = blk.lockMode === 'verify' || blk.lockedByBoss === true
+    const inGrace = isVerify && now >= dueAt && now < dueAt + OVERDUE_GRACE_MS
+    const until = inGrace ? (dueAt + OVERDUE_GRACE_MS) : dueAt
+    if (until <= now) return null
+    const gameSet = new Set(
+      (appsOf() || [])
+        .filter((a) => a?.role === 'game')
+        .map((a) => String(a.app || '')),
+    )
+    const blockAllow = (Array.isArray(blk.allowedApps) ? blk.allowedApps : []).filter((p) => p && !gameSet.has(p))
+    const emerg = typeof emergencyPackages === 'function' ? emergencyPackages(appsOf()) : []
+    const allow = [...new Set([...blockAllow, ...emerg])]
+    return {
+      allow,
+      until,
+      topic: blk.title,
+      blockId: blk.id,
+      verifyGuard: isVerify,
+      lockedByBoss: Boolean(blk.lockedByBoss),
+      why: isVerify
+        ? (inGrace
+            ? `验收块「${blk.title}」已到点，最后 1 分钟缓冲期请立即提交：${blk.deliverable}`
+            : `验收块「${blk.title}」到点自动护航中（结束未交转 P3 验收锁：${blk.deliverable}）`)
+        : `专注块「${blk.title}」到点自动接管中（放行本块声明白名单）`,
+      strict: true,
+      graceMs: 15_000,
+      mode: 'ai-work',
+      by: 'dayblock_active',
+    }
+  }
+
+  function submitDelivery(body = {}, now = Date.now()) {
+    const cur = loadDayPlan(now)
+    const res = submitDayBlockDelivery(cur, {
+      blockId: body?.blockId ?? body?.id ?? '',
+      summary: body?.summary ?? body?.submissionText ?? '',
+      evidenceUrl: body?.evidenceUrl ?? '',
+      now,
+    })
+    if (!res.ok) return { v: 1, ...res }
+    const saved = saveDayPlan(res.state, now)
+    record({ state: 'dayblock-delivery-submitted', at: now, blockId: res.block.id, title: res.block.title })
+    recordStoryline({
+      kind: 'delivery_submitted',
+      actor: 'user',
+      summary: `提交验收交付「${res.block.title}」`,
+      at: now,
+    }, now)
+    onDayPlanMutated?.(now)
+    const verifySummary = summarizeDayBlocksVerify(saved.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tz()) })
+    return {
+      v: 1,
+      ok: true,
+      block: res.block,
+      dayPlan: {
+        ...saved,
+        stats: computeDayPlanStats(saved.dayBlocks, { funBudgetMin: funBudgetMinNow(now), energyLevel: saved.energyLevel }),
+        verifySummary,
+      },
+      verifySummary,
+    }
+  }
+
+  function judgeDelivery(body = {}, now = Date.now()) {
+    const tzName = tz()
+    const cur = loadDayPlan(now)
+    const res = judgeDayBlockDelivery(cur, {
+      blockId: body?.blockId ?? body?.id ?? '',
+      verdict: body?.verdict ?? '',
+      note: body?.note ?? '',
+      judgedBy: body?.judgedBy || 'wall_boss',
+      now,
+      dayStartMs: tzStartOfDay(now, tzName),
+      allowAutoFromReceipt: Boolean(body?.allowAutoFromReceipt),
+    })
+    if (!res.ok) return { v: 1, ...res }
+    const saved = saveDayPlan(res.state, now)
+    if (res.verdict === 'pass') {
+      record({
+        state: 'dayblock-judged-pass',
+        at: now,
+        blockId: res.block.id,
+        title: res.block.title,
+        judgedBy: res.block.judgedBy,
+        rewardMin: res.rewardMin,
+      })
+      recordStoryline({
+        kind: 'delivery_passed',
+        actor: res.block.judgedBy === 'wall_boss' ? 'wall_boss' : 'strategist',
+        summary: `验收通过「${res.block.title}」${res.rewardMin > 0 ? `（+${res.rewardMin}m 余额）` : ''}`,
+        at: now,
+      }, now)
+      if (res.rewardMin > 0) {
+        try {
+          onDayBlockPassed?.({ block: res.block, rewardMin: res.rewardMin, now })
+        } catch {}
+      }
+      try {
+        markWorkStatusNow?.({ id: res.block.id, title: res.block.title, status: 'passed', now })
+      } catch {}
+    } else {
+      record({
+        state: 'dayblock-judged-reject',
+        at: now,
+        blockId: res.block.id,
+        title: res.block.title,
+        judgedBy: res.block.judgedBy,
+        note: res.block.judgeNote,
+      })
+      recordStoryline({
+        kind: 'delivery_rejected',
+        actor: 'wall_boss',
+        summary: `验收驳回「${res.block.title}」：${res.block.judgeNote}`,
+        at: now,
+      }, now)
+    }
+    onDayPlanMutated?.(now)
+    const verifySummary = summarizeDayBlocksVerify(saved.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tzName) })
+    return {
+      v: 1,
+      ...res,
+      dayPlan: {
+        ...saved,
+        stats: computeDayPlanStats(saved.dayBlocks, { funBudgetMin: funBudgetMinNow(now), energyLevel: saved.energyLevel }),
+        verifySummary,
+      },
+      verifySummary,
+    }
+  }
+
+  function issueDirective(body = {}, now = Date.now()) {
+    const tzName = tz()
+    const cur = loadDayPlan(now)
+    const res = issueBossDirectiveBlock(cur, {
+      title: body?.title ?? '',
+      deliverable: body?.deliverable ?? '',
+      startMin: body?.startMin,
+      endMin: body?.endMin,
+      durationMin: body?.durationMin,
+      allowedApps: body?.allowedApps,
+      now,
+      minuteOfDay: tzMinuteOfDay(now, tzName),
+    })
+    if (!res.ok) return { v: 1, ...res }
+    const saved = saveDayPlan(res.state, now)
+    record({
+      state: 'wall-boss-directive-issued',
+      at: now,
+      blockId: res.block.id,
+      title: res.block.title,
+      endMin: res.block.endMin,
+    })
+    recordStoryline({
+      kind: 'boss_directive',
+      actor: 'wall_boss',
+      summary: `主管下达止损硬指令「${res.block.title}」`,
+      at: now,
+    }, now)
+    onDayPlanMutated?.(now)
+    const verifySummary = summarizeDayBlocksVerify(saved.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tzName) })
+    return {
+      v: 1,
+      ...res,
+      dayPlan: {
+        ...saved,
+        stats: computeDayPlanStats(saved.dayBlocks, { funBudgetMin: funBudgetMinNow(now), energyLevel: saved.energyLevel }),
+        verifySummary,
+      },
+      verifySummary,
+    }
   }
 
   // ---- 预留时间节点（2026-11-20 · P0）----
@@ -1282,10 +1554,13 @@ export function createV4Hub(deps) {
       })
       if (res.ok && action !== 'get_day_plan') {
         saveDayPlan(res, now)
+        try { onDayPlanMutated?.(now) } catch {}
       }
+      const verifySummary = summarizeDayBlocksVerify(res.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tz()) })
       return {
         v: 1,
         ...res,
+        verifySummary,
         dayPlan: {
           v: 1,
           day: res.day,
@@ -1293,15 +1568,26 @@ export function createV4Hub(deps) {
           carryoverItems: res.carryoverItems,
           dayBlocks: res.dayBlocks,
           stats: res.stats,
+          verifySummary,
           updatedAt: res.updatedAt,
         },
       }
+    }
+    if (action === 'submit_delivery') {
+      return submitDelivery(body, now)
+    }
+    if (action === 'judge_delivery') {
+      return judgeDelivery(body, now)
+    }
+    if (action === 'issue_directive') {
+      return issueDirective(body, now)
     }
     if (action === 'status') {
       const cur = loadContract()
       const ticked = evaluateContractTick(cur, now)
       if (ticked.changed && ticked.contract) saveContract(ticked.contract)
-      const dayPlanCur = loadDayPlan(now)
+      const dayTick = dayBlockTickNow(now)
+      const dayPlanCur = dayTick.state
       const dayPlanStats = computeDayPlanStats(dayPlanCur.dayBlocks, {
         funBudgetMin: funBudgetMinNow(now),
         energyLevel: dayPlanCur.energyLevel,
@@ -1310,14 +1596,17 @@ export function createV4Hub(deps) {
         v: 1,
         ok: true,
         contract: ticked.contract,
-        graceWarning: ticked.graceWarning,
-        triggerStrictNow: ticked.triggerStrictNow,
+        graceWarning: ticked.graceWarning || dayTick.graceWarning,
+        blockGraceWarning: dayTick.graceWarning,
+        triggerStrictNow: Boolean(ticked.triggerStrictNow || (dayTick.overdueVerifyBlocks && dayTick.overdueVerifyBlocks.length)),
         graceSecDefault: Math.round(OVERDUE_GRACE_MS / 1000),
         presets: COMMON_PLAN_PRESETS,
         scripts: AI_PROMPT_SCRIPTS,
+        verifySummary: dayTick.verifySummary,
         dayPlan: {
           ...dayPlanCur,
           stats: dayPlanStats,
+          verifySummary: dayTick.verifySummary,
         },
       }
     }
@@ -1459,11 +1748,15 @@ export function createV4Hub(deps) {
     const emergencyPass = customEm || (isEmergencyPassActive(ext, now) ? ext.emergencyPass : null)
     const geminiSession = overrides.geminiSession !== undefined ? overrides.geminiSession : getGeminiSession?.(now)
     const aiWorkSession = overrides.aiWorkSession !== undefined ? overrides.aiWorkSession : getAiWorkSession?.(now)
-    // 封印到点没过保底的锁和契约逾期是同一类（同一档、同一条通道）。
-    const contractSession = overrides.contractSession !== undefined ? overrides.contractSession : (contractSessionView(now) || getSealSession(now))
+    // 计划验收块/主管硬指令逾期 + 封印到点没过保底 + 契约逾期 共走 P3 核心「验收锁」通道。
+    const contractSession = overrides.contractSession !== undefined
+      ? overrides.contractSession
+      : (dayBlockOverdueSessionView(now) || contractSessionView(now) || getSealSession(now))
     const taskLease = overrides.taskLease !== undefined ? overrides.taskLease : getTaskLease?.(now)
-    // 默认验收（工作时段里什么都没开时）和专注严格局同一档，排在它后面。
-    const presetStrict = overrides.presetStrict !== undefined ? overrides.presetStrict : (presetRt?.sessionView?.(now) || getVerifySession(now))
+    // 手动专注严格局 / 到点自动接管的时间块 / 默认工作时段防分心 共走 P4。
+    const presetStrict = overrides.presetStrict !== undefined
+      ? overrides.presetStrict
+      : (presetRt?.sessionView?.(now) || dayBlockActiveSessionView(now) || getVerifySession(now))
     const wall = overrides.wall !== undefined ? overrides.wall : getWallDecision?.(now)
     const autonomy = overrides.autonomy || computeAutonomy(now)
     const lockRequests = overrides.lockRequests !== undefined ? overrides.lockRequests : (getLockRequests?.(now) || [])
@@ -1756,10 +2049,14 @@ export function createV4Hub(deps) {
     } catch {
       // ignore report generation error
     }
+    const dayBlockTick = dayBlockTickNow(now)
     return {
       contract: ticked.contract,
-      graceWarning: ticked.graceWarning,
-      forceStrictByContract: ticked.triggerStrictNow,
+      graceWarning: ticked.graceWarning || dayBlockTick.graceWarning,
+      dayBlockGraceWarning: dayBlockTick.graceWarning,
+      forceStrictByContract: Boolean(ticked.triggerStrictNow || (dayBlockTick.overdueVerifyBlocks && dayBlockTick.overdueVerifyBlocks.length)),
+      forceStrictByDayBlock: Boolean(dayBlockTick.overdueVerifyBlocks && dayBlockTick.overdueVerifyBlocks.length),
+      verifySummary: dayBlockTick.verifySummary,
       autonomy: computeAutonomy(now),
       eveningReportGenerated,
     }
@@ -2104,6 +2401,13 @@ export function createV4Hub(deps) {
     bankRoute,
     planContractRoute,
     loadDayPlan,
+    dayBlockTickNow,
+    dayBlockOverdueSessionView,
+    dayBlockActiveSessionView,
+    submitDelivery,
+    judgeDelivery,
+    issueDirective,
+    getDayVerifySummary,
     skillsAuditRoute,
     analyticsRoute,
     storylineRoute,

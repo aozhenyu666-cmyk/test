@@ -215,6 +215,7 @@ void main() {
     // 3. 观看态：24h 时间轴 + 红线指示器 + 一键开干 / 叫 Gemini 拆第一步 / 提交验收过关
     await tester.tap(find.text('3. 观看'));
     await settlePhone(tester);
+    expect(find.byKey(const ValueKey('watch-lock-attribution-bar')), findsOneWidget);
     expect(find.byKey(const ValueKey('watch-active-block-card')), findsOneWidget);
     expect(find.byKey(const ValueKey('watch-24h-timeline'), skipOffstage: false), findsOneWidget);
     expect(find.byKey(const ValueKey('watch-now-redline'), skipOffstage: false), findsOneWidget);
@@ -230,10 +231,20 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('watch-verify-block')));
     await settlePhone(tester);
-    await tester.tap(find.text('确认验收过关'));
+    // verify 块禁止空口过关：少于12字拦截，>=12字走 submit_delivery 等待终审
+    await tester.tap(find.text('提交交付送审'));
+    await settlePhone(tester);
+    expect(find.textContaining('至少 12 个字'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('verify-delivery-input')),
+      '已完成60分钟行测资料分析真题并整理3条错因写进Obsidian',
+    );
+    await tester.tap(find.text('提交交付送审'));
     await settlePhone(tester);
     await tester.pump(const Duration(milliseconds: 700));
-    expect(ch.planOps.any((op) => op['action'] == 'set_block_status' && op['status'] == 'done'), isTrue);
+    expect(ch.planOps.any((op) => op['action'] == 'submit_delivery' && op['blockId'] == 'blk-1'), isTrue);
+    expect(ch.planOps.any((op) => op['action'] == 'set_block_status' && op['status'] == 'done'), isFalse);
   });
 
   testWidgets('PlanModalityPage 后端返回旧字段/空数据时本地兜底不崩溃', (tester) async {

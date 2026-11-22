@@ -10,6 +10,7 @@ import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../channels/proactive_state.dart';
+import 'plan_modality_page.dart';
 import 'usage_analytics_page.dart';
 
 /// 锁与余额总控页：
@@ -417,6 +418,66 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Future<void> _openSubmitDeliveryDialog(Map<String, dynamic> block) async {
+    if (_busy) return;
+    final id = '${block['id'] ?? ''}'.trim();
+    if (id.isEmpty) return;
+    final summary = await showDialog<String>(
+      context: context,
+      builder: (_) => _SubmitDeliveryDialog(
+        title: '${block['title'] ?? '验收时间块'}',
+        deliverable: '${block['deliverable'] ?? '真实产出或证据说明'}',
+        initialText: '${block['submissionText'] ?? ''}',
+      ),
+    );
+    if (summary == null || !mounted) return;
+    setState(() => _busy = true);
+    final res = await _channel.planContractOp({
+      'action': 'submit_delivery',
+      'blockId': id,
+      'summary': summary,
+    });
+    if (res != null && res['ok'] == true) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
+    await _refresh();
+    if (!mounted) return;
+    final ok = res != null && res['ok'] == true;
+    final msg = ok
+        ? '已提交「${block['title'] ?? id}」交付，可点击「通知主管终审」或切到 Gemini 完成验证解锁'
+        : '${res?['text'] ?? '提交交付失败，请确认引擎在线'}';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _requestBossJudge(Map<String, dynamic> block) async {
+    if (_busy) return;
+    final id = '${block['id'] ?? ''}'.trim();
+    if (id.isEmpty) return;
+    setState(() => _busy = true);
+    final res = await _channel.wallBossChat({
+      'action': 'request_judge',
+      'blockId': id,
+    });
+    if (res != null && res['ok'] != false) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
+    await _refresh();
+    if (!mounted) return;
+    final ok = res != null && res['ok'] != false;
+    final msg = ok
+        ? '${res['text'] ?? '已通知主管质询室开展冷血终审，结果将自动同步解锁'}'
+        : '${res?['text'] ?? '暂无法发起主管终审（请先在「墙/主管质询室」绑定第 3 独立会话）'}';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -516,6 +577,15 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
             overview: overview,
             activeLock: activeLock,
             verifyOverdue: verifyOverdue,
+          ),
+
+          // 板块 0.5 · 验收锁中枢（同步计划模态验收块 & 主管硬指令）
+          _buildVerifyCenterCard(
+            context,
+            theme: theme,
+            colors: colors,
+            scheme: scheme,
+            overview: overview,
           ),
 
           // 板块 1 · 当前生效锁与验收锁强度
@@ -816,6 +886,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
         'isWinner': isAct && src == 'EMERGENCY_SUSPEND',
         'remainingMin': 0,
         'canToggle': false,
+        'duty': '职责：突发急事 3 分钟全放行（扣每日额度）',
         'summary': '待命 · 急事时申请 3 分钟全放行',
       },
       {
@@ -826,6 +897,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
         'isWinner': isAct && src == 'NIGHT_CURFEW',
         'remainingMin': 0,
         'canToggle': false,
+        'duty': '职责：23:00–07:00 睡眠守护 & 晚间超限封禁',
         'summary': '00:30–07:00 深夜守护',
       },
       {
@@ -836,17 +908,19 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
         'isWinner': isAct && src == 'GEMINI_LIVE_CELL',
         'remainingMin': 0,
         'canToggle': false,
+        'duty': '职责：Gemini 连麦共脑白名单收拢',
         'summary': '仅连麦时收拢为连麦白名单',
       },
       {
         'id': 'CONTRACT_OVERDUE_STRICT',
-        'name': '契约/封印逾期与接管严锁',
+        'name': '验收锁（计划块/封印/主管指令）',
         'priority': 'P3',
         'active': isAct && (src == 'CONTRACT_OVERDUE_STRICT' || src == 'TAKEOVER_STRICT'),
         'isWinner': isAct && (src == 'CONTRACT_OVERDUE_STRICT' || src == 'TAKEOVER_STRICT'),
         'remainingMin': 0,
         'canToggle': false,
-        'summary': '含 TAKEOVER_STRICT 接管与逾期严锁',
+        'duty': '职责：计划验收块/封印/主管硬指令逾期 60s 严锁',
+        'summary': '含计划块逾期、封印未清与主管硬指令严锁',
       },
       {
         'id': 'BOUT_STRICT',
@@ -856,6 +930,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
         'isWinner': isAct && src == 'BOUT_STRICT',
         'remainingMin': 0,
         'canToggle': isAct && src == 'BOUT_STRICT',
+        'duty': '职责：手动严格局 & 计划块定时自动接管',
         'summary': '手动或预案专注严格局',
       },
       {
@@ -866,9 +941,260 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
         'isWinner': false,
         'remainingMin': 0,
         'canToggle': true,
+        'duty': '职责：07:00–23:00 工作窗默认防分心护栏',
         'summary': dayWorkWallEnabled ? '07:00–23:00 自动守护（午休放风）' : '已手动关闭',
       },
     ];
+  }
+
+  Widget _buildVerifyCenterCard(
+    BuildContext context, {
+    required ThemeData theme,
+    required DshColors colors,
+    required ColorScheme scheme,
+    required Map<String, dynamic> overview,
+  }) {
+    final center = _asMap(overview['verifyLockCenter']);
+    final totalVerify = _asInt(center['totalVerify'], 0);
+    final passedVerify = _asInt(center['passedVerify'], 0);
+    final overdueCount = _asInt(center['overdueCount'], 0);
+    final pendingReviewCount = _asInt(center['pendingReviewCount'], 0);
+    final clearedToday = center['clearedToday'] == true || overview['verifyClearedToday'] == true;
+
+    final overdueBlocks = _asListOfMaps(center['overdueBlocks']);
+    final pendingBlocks = _asListOfMaps(center['pendingReviewBlocks']);
+    final activeVerify = _asMap(center['activeVerifyBlock']);
+    final upcomingBlocks = _asListOfMaps(center['upcomingVerifyBlocks']);
+    final hasDetails = overdueBlocks.isNotEmpty ||
+        pendingBlocks.isNotEmpty ||
+        activeVerify.isNotEmpty ||
+        upcomingBlocks.isNotEmpty ||
+        totalVerify > 0;
+
+    if (!hasDetails) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: GlassSurface(
+          key: const ValueKey('locks-verify-center-card'),
+          tier: GlassTier.card,
+          borderRadius: AppShape.radiusLg,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                Icon(AppIcons.verified, size: 18, color: colors.textTertiary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '验收锁中枢 · 今日暂无验收块（可去计划模态设验收块）',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => unawaited(PlanModalityPage.open(context, channel: _channel)),
+                  child: const Text('计划模态'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final statusTone = overdueCount > 0
+        ? StatusTone.error
+        : (clearedToday ? StatusTone.ok : StatusTone.idle);
+    final statusLabel = overdueCount > 0
+        ? '逾期严锁 $overdueCount 项'
+        : (clearedToday ? '今日全部通关' : '已过 $passedVerify/$totalVerify');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: GlassSurface(
+        key: const ValueKey('locks-verify-center-card'),
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(AppIcons.verified, size: 18, color: overdueCount > 0 ? colors.danger : scheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '验收锁中枢${pendingReviewCount > 0 ? ' · 待终审 $pendingReviewCount' : ''}',
+                      style: theme.textTheme.titleSmall,
+                    ),
+                  ),
+                  StatusChip(tone: statusTone, label: statusLabel),
+                  const SizedBox(width: 4),
+                  TextButton(
+                    onPressed: () => unawaited(PlanModalityPage.open(context, channel: _channel)),
+                    child: const Text('计划模态'),
+                  ),
+                ],
+              ),
+              for (final b in overdueBlocks) ...[
+                const SizedBox(height: 8),
+                Container(
+                  key: ValueKey('locks-verify-overdue-${b['id'] ?? ''}'),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: colors.dangerContainer.withValues(alpha: 0.7),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${b['title'] ?? '验收块'}（截止 ${b['dueHm'] ?? ''} · 锁剩 ${_asInt(b['remainingLockMin'], 0)}m / 防死锁 60m 上限）',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: colors.onDangerContainer,
+                              ),
+                            ),
+                          ),
+                          if (b['lockedByBoss'] == true)
+                            const StatusChip(tone: StatusTone.error, label: '主管硬指令'),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '约定交付：${b['deliverable'] ?? '真实产出'}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(color: colors.onDangerContainer),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          FilledButton.tonalIcon(
+                            key: ValueKey('locks-verify-submit-${b['id'] ?? ''}'),
+                            onPressed: _busy ? null : () => unawaited(_openSubmitDeliveryDialog(b)),
+                            icon: const Icon(AppIcons.edit, size: 15),
+                            label: const Text('提交交付解锁'),
+                          ),
+                          if ('${b['verifyStatus'] ?? ''}' == 'submitted')
+                            OutlinedButton.icon(
+                              onPressed: _busy ? null : () => unawaited(_requestBossJudge(b)),
+                              icon: const Icon(AppIcons.lock, size: 15),
+                              label: const Text('通知主管终审'),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              for (final b in pendingBlocks)
+                if (!overdueBlocks.any((o) => '${o['id']}' == '${b['id']}')) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    key: ValueKey('locks-verify-pending-${b['id'] ?? ''}'),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${b['title'] ?? ''}',
+                                style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            StatusChip(
+                              tone: b['verifyStatus'] == 'rejected' ? StatusTone.error : StatusTone.warn,
+                              label: b['verifyStatus'] == 'rejected' ? '主管驳回' : '已交待终审',
+                            ),
+                          ],
+                        ),
+                        if ('${b['judgeNote'] ?? ''}'.trim().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '主管批注：${b['judgeNote']}',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(color: colors.danger),
+                            ),
+                          ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            OutlinedButton(
+                              onPressed: _busy ? null : () => unawaited(_openSubmitDeliveryDialog(b)),
+                              child: const Text('重新提交'),
+                            ),
+                            FilledButton.tonalIcon(
+                              key: ValueKey('locks-verify-judge-${b['id'] ?? ''}'),
+                              onPressed: _busy ? null : () => unawaited(_requestBossJudge(b)),
+                              icon: const Icon(AppIcons.verified, size: 15),
+                              label: const Text('通知主管终审'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              if (activeVerify.isNotEmpty &&
+                  !overdueBlocks.any((o) => '${o['id']}' == '${activeVerify['id']}') &&
+                  !pendingBlocks.any((p) => '${p['id']}' == '${activeVerify['id']}')) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '进行中验收块：${activeVerify['title'] ?? ''}（截止 ${activeVerify['dueHm'] ?? ''} · 余 ${_asInt(activeVerify['remainingMin'], 0)}m）',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: _busy ? null : () => unawaited(_openSubmitDeliveryDialog(activeVerify)),
+                        child: const Text('提前交卷'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              for (final b in upcomingBlocks.take(2)) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '待开干：${b['startHm'] ?? ''}–${b['dueHm'] ?? ''} · ${b['title'] ?? ''}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildLockProbeCard(
@@ -934,6 +1260,19 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
+                        if (winner != null && ('${winner['triggerTitle'] ?? ''}'.trim().isNotEmpty || '${winner['duty'] ?? ''}'.trim().isNotEmpty))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              [
+                                if ('${winner['triggerTitle'] ?? ''}'.trim().isNotEmpty) '触发源：${winner['triggerTitle']}',
+                                if ('${winner['duty'] ?? ''}'.trim().isNotEmpty) '${winner['duty']}',
+                              ].join(' · '),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -1026,6 +1365,13 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                                 overflow: TextOverflow.ellipsis,
                                 style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
                               ),
+                              if ('${h['duty'] ?? ''}'.trim().isNotEmpty)
+                                Text(
+                                  '${h['duty']}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                                ),
                             ],
                           ),
                         ),
@@ -1262,6 +1608,86 @@ class _SpendBalanceDialogState extends State<_SpendBalanceDialog> {
           key: const ValueKey('locks-spend-submit'),
           onPressed: _submit,
           child: const Text('确认花费'),
+        ),
+      ],
+    );
+  }
+}
+
+class _SubmitDeliveryDialog extends StatefulWidget {
+  const _SubmitDeliveryDialog({
+    required this.title,
+    required this.deliverable,
+    this.initialText = '',
+  });
+
+  final String title;
+  final String deliverable;
+  final String initialText;
+
+  @override
+  State<_SubmitDeliveryDialog> createState() => _SubmitDeliveryDialogState();
+}
+
+class _SubmitDeliveryDialogState extends State<_SubmitDeliveryDialog> {
+  late final TextEditingController _ctrl = TextEditingController(text: widget.initialText);
+  String? _error;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _ctrl.text.trim();
+    if (text.length < 12) {
+      setState(() => _error = '交付说明至少 12 个字（当前 ${text.length} 字），请写清物理产出或结论');
+      return;
+    }
+    Navigator.of(context).pop(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = DshColors.of(context);
+    return AlertDialog(
+      key: const ValueKey('locks-delivery-dialog'),
+      title: Text('提交交付 · ${widget.title}'),
+      content: SizedBox(
+        width: 380,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('约定交付：${widget.deliverable}', style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 10),
+              TextField(
+                key: const ValueKey('locks-delivery-input'),
+                controller: _ctrl,
+                autofocus: true,
+                minLines: 3,
+                maxLines: 6,
+                decoration: const InputDecoration(
+                  labelText: '真实交付内容 / 题量 / 文件增量（至少 12 字）',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 6),
+                Text(_error!, style: TextStyle(color: colors.danger, fontSize: 12)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
+        FilledButton(
+          key: const ValueKey('locks-delivery-submit'),
+          onPressed: _submit,
+          child: const Text('提交交付'),
         ),
       ],
     );

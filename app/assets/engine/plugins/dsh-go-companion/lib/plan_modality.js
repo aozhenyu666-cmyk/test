@@ -363,6 +363,10 @@ export const ENERGY_LEVELS = Object.freeze(['low', 'mid', 'high'])
 export const DAY_SLOTS = Object.freeze(['morning', 'lunch', 'afternoon', 'evening'])
 export const BLOCK_LOCK_MODES = Object.freeze(['gentle', 'strict', 'verify'])
 export const BLOCK_STATUSES = Object.freeze(['pending', 'running', 'done', 'skipped'])
+export const VERIFY_STATUSES = Object.freeze(['none', 'armed', 'grace_warning', 'overdue_locked', 'submitted', 'passed', 'rejected', 'expired_breach'])
+export const DAYBLOCK_SOURCES = Object.freeze(['user', 'carryover', 'wall_boss', 'gemini', 'template'])
+export const DAYBLOCK_EVIDENCE_KINDS = Object.freeze(['', 'subjective', 'quiz', 'bout_minutes', 'file', 'screenshots', 'gemini_receipt', 'app_minutes'])
+export const DAYBLOCK_LOCK_CAP_MS = 60 * 60_000
 export const LUNCH_BREAK_WINDOW = Object.freeze({ startMin: 12 * 60, endMin: 14 * 60 })
 
 export const ENERGY_PROFILES = Object.freeze({
@@ -477,10 +481,32 @@ export function cleanDayBlock(raw, idx = 0) {
     : Math.min(1440, startMin + 45)
   const endMin = clamp(intNum(raw.endMin, defaultEnd), startMin + 5, 1440)
   const slot = DAY_SLOTS.includes(raw.slot) ? raw.slot : slotFromMinute(startMin)
-  const isBreak = raw.isBreak === true || (slot === 'lunch' && /午休|放风|休息/.test(title))
-  const lockMode = BLOCK_LOCK_MODES.includes(raw.lockMode) ? raw.lockMode : (isBreak ? 'gentle' : 'strict')
+  const source = DAYBLOCK_SOURCES.includes(String(raw.source || '')) ? String(raw.source) : 'user'
+  const lockedByBoss = raw.lockedByBoss === true || source === 'wall_boss'
+  const isBreak = !lockedByBoss && (raw.isBreak === true || (slot === 'lunch' && /午休|放风|休息/.test(title)))
+  const lockMode = lockedByBoss
+    ? 'verify'
+    : (BLOCK_LOCK_MODES.includes(raw.lockMode) ? raw.lockMode : (isBreak ? 'gentle' : 'strict'))
   const status = BLOCK_STATUSES.includes(raw.status) ? raw.status : 'pending'
   const allowedApps = cleanAppsList(raw.allowedApps)
+  const rawVerify = String(raw.verifyStatus || '')
+  const verifyStatus = VERIFY_STATUSES.includes(rawVerify)
+    ? rawVerify
+    : (status === 'done'
+        ? 'passed'
+        : ((lockMode === 'verify' || lockedByBoss) && !isBreak ? 'armed' : 'none'))
+  const evidenceKind = DAYBLOCK_EVIDENCE_KINDS.includes(String(raw.evidenceKind || '')) ? String(raw.evidenceKind || '') : 'subjective'
+  const evidenceFloor = Math.max(0, intNum(raw.evidenceFloor, 0))
+  const sealId = String(raw.sealId || '').trim().slice(0, 64)
+  const submissionText = String(raw.submissionText || '').trim().slice(0, 1200)
+  const submittedAt = Math.max(0, Number(raw.submittedAt) || 0)
+  const judgeVerdict = raw.judgeVerdict === 'pass' ? 'pass' : (raw.judgeVerdict === 'reject' ? 'reject' : '')
+  const judgeNote = String(raw.judgeNote || '').trim().slice(0, 400)
+  const judgedBy = ['wall_boss', 'code', 'gemini', 'auto_seal', ''].includes(String(raw.judgedBy || '')) ? String(raw.judgedBy || '') : ''
+  const judgedAt = Math.max(0, Number(raw.judgedAt) || 0)
+  const overdueLockUntil = Math.max(0, Number(raw.overdueLockUntil) || 0)
+  const rewardPaidMin = Math.max(0, intNum(raw.rewardPaidMin, 0))
+
   return {
     id,
     slot,
@@ -492,6 +518,20 @@ export function cleanDayBlock(raw, idx = 0) {
     allowedApps,
     status,
     isBreak,
+    source,
+    lockedByBoss,
+    verifyStatus,
+    evidenceKind,
+    evidenceFloor,
+    sealId,
+    submissionText,
+    submittedAt,
+    judgeVerdict,
+    judgeNote,
+    judgedBy,
+    judgedAt,
+    overdueLockUntil,
+    rewardPaidMin,
     horizonId: String(raw.horizonId || '').slice(0, 64),
     checkpointId: String(raw.checkpointId || '').slice(0, 64),
     updatedAt: Number(raw.updatedAt) || 0,
@@ -675,6 +715,18 @@ export function upsertDayBlock(blocksRaw, input = {}, { now = Date.now() } = {})
     id: rawId || `blk-${now.toString(36).slice(-5)}-${existing.length + 1}`,
     updatedAt: now,
   }
+  if (prev?.lockedByBoss && prev.status !== 'done') {
+    base.lockedByBoss = true
+    base.source = prev.source || 'wall_boss'
+    base.lockMode = 'verify'
+    if (base.status === 'skipped') base.status = prev.status
+  }
+  if (base.lockMode === 'verify' && (!prev || prev.lockMode !== 'verify') && (!base.verifyStatus || base.verifyStatus === 'none')) {
+    base.verifyStatus = base.status === 'done' ? 'passed' : 'armed'
+  } else if (rawObj.lockMode && rawObj.lockMode !== 'verify' && !base.lockedByBoss) {
+    base.verifyStatus = 'none'
+    base.overdueLockUntil = 0
+  }
   if (!hasExplicitEnd && (hasExplicitDuration || (prev && rawObj.startMin != null))) {
     delete base.endMin
     if (!hasExplicitDuration && prev) {
@@ -693,15 +745,24 @@ export function upsertDayBlock(blocksRaw, input = {}, { now = Date.now() } = {})
   return { ok: true, block: dayBlocks.find((b) => b.id === merged.id) || merged, dayBlocks }
 }
 
-export function removeDayBlock(blocksRaw, blockId) {
+export function removeDayBlock(blocksRaw, blockId, { force = false } = {}) {
   const existing = cleanDayBlocks(blocksRaw)
   const id = String(blockId || '').trim()
   const removed = existing.find((b) => b.id === id) || null
   if (!removed) return { ok: false, error: '未找到指定时间块', removed: null, dayBlocks: existing }
+  if (removed.lockedByBoss && removed.status !== 'done' && !force) {
+    return {
+      ok: false,
+      error: 'boss-directive-locked',
+      text: '主管墙下达的止损硬指令不可直接删除，请交付验收过关',
+      removed: null,
+      dayBlocks: existing,
+    }
+  }
   return { ok: true, removed, dayBlocks: existing.filter((b) => b.id !== id) }
 }
 
-export function setDayBlockStatus(blocksRaw, blockId, status, { allowMultipleRunning = false, now = Date.now() } = {}) {
+export function setDayBlockStatus(blocksRaw, blockId, status, { allowMultipleRunning = false, force = false, fromJudge = false, now = Date.now() } = {}) {
   const existing = cleanDayBlocks(blocksRaw)
   const id = String(blockId || '').trim()
   const nextStatus = BLOCK_STATUSES.includes(status) ? status : ''
@@ -711,6 +772,24 @@ export function setDayBlockStatus(blocksRaw, blockId, status, { allowMultipleRun
   const target = existing.find((b) => b.id === id)
   if (!target) {
     return { ok: false, error: '未找到指定时间块', block: null, dayBlocks: existing }
+  }
+  if (target.lockedByBoss && nextStatus === 'skipped' && !force) {
+    return {
+      ok: false,
+      error: 'boss-directive-locked',
+      text: '主管墙下达的止损硬指令不可跳过，请交付验收过关',
+      block: null,
+      dayBlocks: existing,
+    }
+  }
+  if ((target.lockMode === 'verify' || target.lockedByBoss) && !target.isBreak && nextStatus === 'done' && !fromJudge && !force && target.verifyStatus !== 'passed') {
+    return {
+      ok: false,
+      error: 'needs-verification',
+      text: '验收块须提交真实交付物并经终审通过后才算完成',
+      block: null,
+      dayBlocks: existing,
+    }
   }
   const next = existing.map((b) => {
     if (b.id === id) return { ...b, status: nextStatus, updatedAt: now }
@@ -933,11 +1012,12 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
     }
   }
   if (action === 'delete_block') {
-    const del = removeDayBlock(cur.dayBlocks, body?.blockId ?? body?.id)
+    const del = removeDayBlock(cur.dayBlocks, body?.blockId ?? body?.id, { force: Boolean(body?.force) })
     const next = { ...cur, dayBlocks: del.dayBlocks, updatedAt: now }
     return {
       ok: del.ok,
       error: del.error,
+      ...(del.text ? { text: del.text } : {}),
       removed: del.removed,
       ...next,
       stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
@@ -946,12 +1026,14 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
   if (action === 'set_block_status') {
     const st = setDayBlockStatus(cur.dayBlocks, body?.blockId ?? body?.id, body?.status, {
       allowMultipleRunning: Boolean(body?.allowMultipleRunning),
+      force: Boolean(body?.force),
       now,
     })
     const next = { ...cur, dayBlocks: st.dayBlocks, updatedAt: now }
     return {
       ok: st.ok,
       error: st.error,
+      ...(st.text ? { text: st.text } : {}),
       block: st.block,
       ...next,
       stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
@@ -977,11 +1059,12 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
     }
   }
   if (action === 'set_day_plan') {
-    const next = cleanDayPlanState({
-      ...cur,
-      ...(body?.dayPlan && typeof body.dayPlan === 'object' ? body.dayPlan : body),
-      updatedAt: now,
-    }, { day: cur.day, now })
+    const rawIn = body?.dayPlan && typeof body.dayPlan === 'object' ? body.dayPlan : body
+    const parsedIn = cleanDayPlanState({ ...cur, ...rawIn, updatedAt: now }, { day: cur.day, now })
+    const incomingIds = new Set(parsedIn.dayBlocks.map((b) => b.id))
+    const preservedBoss = cur.dayBlocks.filter((b) => b.lockedByBoss && b.status !== 'done' && !incomingIds.has(b.id))
+    const mergedBlocks = preservedBoss.length ? cleanDayBlocks([...parsedIn.dayBlocks, ...preservedBoss]) : parsedIn.dayBlocks
+    const next = { ...parsedIn, dayBlocks: mergedBlocks }
     return {
       ok: true,
       ...next,
@@ -993,5 +1076,420 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
     error: `未知 dayPlan action: ${action}`,
     ...cur,
     stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+  }
+}
+
+/**
+ * 计算今日时间块中与「验收锁（verify / 主管指令）」相关的汇总指标。
+ */
+export function summarizeDayBlocksVerify(blocksRaw, { minuteOfDay = 0 } = {}) {
+  const blocks = cleanDayBlocks(blocksRaw)
+  const m = clamp(intNum(minuteOfDay, 0), 0, 1439)
+  const verifyBlocks = blocks.filter((b) => !b.isBreak && b.status !== 'skipped' && (b.lockMode === 'verify' || b.lockedByBoss === true))
+  const totalVerify = verifyBlocks.length
+  const passedVerify = verifyBlocks.filter((b) => b.status === 'done' || b.verifyStatus === 'passed').length
+  const overdueBlocks = verifyBlocks.filter((b) => b.status !== 'done' && (b.verifyStatus === 'overdue_locked' || (b.overdueLockUntil > 0 && b.verifyStatus !== 'expired_breach')))
+  const pendingReviewBlocks = verifyBlocks.filter((b) => b.status !== 'done' && (b.verifyStatus === 'submitted' || b.verifyStatus === 'rejected'))
+  const nextCandidate = verifyBlocks
+    .filter((b) => b.status !== 'done' && b.verifyStatus !== 'expired_breach')
+    .sort((a, b) => a.endMin - b.endMin)[0] || null
+  const nextDueBlock = nextCandidate
+    ? {
+        id: nextCandidate.id,
+        title: nextCandidate.title,
+        startMin: nextCandidate.startMin,
+        endMin: nextCandidate.endMin,
+        remainMin: Math.max(0, nextCandidate.endMin - m),
+        verifyStatus: nextCandidate.verifyStatus,
+        lockedByBoss: nextCandidate.lockedByBoss,
+      }
+    : null
+  return {
+    totalVerify,
+    passedVerify,
+    overdueCount: overdueBlocks.length,
+    pendingReviewCount: pendingReviewBlocks.length,
+    allVerifyCleared: totalVerify > 0 && passedVerify === totalVerify && overdueBlocks.length === 0,
+    nextDueBlock,
+  }
+}
+
+/**
+ * 心跳评估今日时间块（规则 1A + 2A）：
+ * - 绑定了 sealId 且对应封印已过保底 → 自动过关（不重复发奖）；
+ * - verify / 主管硬指令到 startMin 自动激活护航机位，到 endMin+60s 未通过验收 → 拉起 P3 验收锁（最长 60 分钟防死锁）；
+ * - strict 块只在 [startMin, endMin) 自动激活 P4 专注白名单，到点不升 P3。
+ */
+export function evaluateDayBlocksTick(rawState, {
+  now = Date.now(),
+  dayStartMs = 0,
+  minuteOfDay = 0,
+  seals = [],
+} = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  const m = clamp(intNum(minuteOfDay, 0), 0, 1439)
+  if (!cur.dayBlocks.length) {
+    return {
+      state: cur,
+      changed: false,
+      activeVerifyBlock: null,
+      activeStrictBlock: null,
+      overdueVerifyBlocks: [],
+      newlyEscalated: [],
+      newlyBreached: [],
+      newlyPassed: [],
+      graceWarning: null,
+      verifySummary: summarizeDayBlocksVerify([], { minuteOfDay: m }),
+    }
+  }
+
+  const day0 = dayStartMs > 0 ? dayStartMs : (now - m * 60_000)
+  const sealsMap = new Map()
+  for (const s of Array.isArray(seals) ? seals : []) {
+    if (s && s.id) sealsMap.set(String(s.id), s)
+  }
+
+  let changed = false
+  let activeVerifyBlock = null
+  let activeStrictBlock = null
+  let graceWarning = null
+  const overdueVerifyBlocks = []
+  const newlyEscalated = []
+  const newlyBreached = []
+  const newlyPassed = []
+
+  const nextBlocks = cur.dayBlocks.map((b) => {
+    if (b.isBreak || b.status === 'skipped') return b
+    let nb = { ...b }
+    let dirty = false
+
+    // 1. 绑定 sealId 且对应封印已过档/豁免时同步标为已过关
+    if (nb.sealId && nb.status !== 'done') {
+      const boundSeal = sealsMap.get(nb.sealId)
+      if (boundSeal && ['floor', 'stretch', 'waived'].includes(boundSeal.status)) {
+        nb = {
+          ...nb,
+          status: 'done',
+          verifyStatus: 'passed',
+          judgeVerdict: 'pass',
+          judgedBy: 'auto_seal',
+          judgedAt: now,
+          judgeNote: nb.judgeNote || '关联封印已达标自动通过',
+          overdueLockUntil: 0,
+          updatedAt: now,
+        }
+        dirty = true
+        changed = true
+        newlyPassed.push({ block: nb, skipReward: true })
+        return nb
+      }
+    }
+
+    if (nb.status === 'done') return nb
+
+    const startAt = day0 + nb.startMin * 60_000
+    const dueAt = day0 + nb.endMin * 60_000
+    const isVerify = nb.lockMode === 'verify' || nb.lockedByBoss === true
+
+    if (!isVerify) {
+      if (nb.lockMode === 'strict' && now >= startAt && now < dueAt) {
+        if (nb.status === 'pending') {
+          nb.status = 'running'
+          nb.updatedAt = now
+          dirty = true
+        }
+        if (!activeStrictBlock || nb.status === 'running') {
+          activeStrictBlock = nb
+        }
+      }
+      if (dirty) changed = true
+      return dirty ? nb : b
+    }
+
+    // verify 块 / 主管硬指令
+    if (now < startAt) {
+      if (!['armed', 'submitted', 'rejected', 'passed'].includes(nb.verifyStatus)) {
+        nb.verifyStatus = 'armed'
+        dirty = true
+      }
+    } else if (now >= startAt && now < dueAt) {
+      if (nb.status === 'pending') {
+        nb.status = 'running'
+        nb.updatedAt = now
+        dirty = true
+      }
+      if (!['armed', 'submitted', 'rejected'].includes(nb.verifyStatus)) {
+        nb.verifyStatus = 'armed'
+        dirty = true
+      }
+      if (!activeVerifyBlock || nb.status === 'running') {
+        activeVerifyBlock = nb
+      }
+    } else if (now >= dueAt && now < dueAt + OVERDUE_GRACE_MS) {
+      if (!['submitted', 'rejected', 'passed', 'expired_breach'].includes(nb.verifyStatus) && nb.verifyStatus !== 'grace_warning') {
+        nb.verifyStatus = 'grace_warning'
+        nb.updatedAt = now
+        dirty = true
+      }
+      const remainSec = Math.max(1, Math.ceil((dueAt + OVERDUE_GRACE_MS - now) / 1000))
+      if (!graceWarning || remainSec < graceWarning.remainSec) {
+        graceWarning = { blockId: nb.id, title: nb.title, remainSec, lockedByBoss: nb.lockedByBoss }
+      }
+      if (!activeVerifyBlock) {
+        activeVerifyBlock = nb
+      }
+    } else {
+      // 已超 endMin + 60s 缓冲
+      const capUntil = nb.overdueLockUntil > 0 ? nb.overdueLockUntil : (dueAt + OVERDUE_GRACE_MS + DAYBLOCK_LOCK_CAP_MS)
+      if (now < capUntil) {
+        const hadOverdueBefore = nb.overdueLockUntil > 0 || nb.verifyStatus === 'overdue_locked' || nb.verifyStatus === 'expired_breach'
+        if (nb.overdueLockUntil !== capUntil) {
+          nb.overdueLockUntil = capUntil
+          nb.updatedAt = now
+          dirty = true
+        }
+        if (!['submitted', 'rejected', 'overdue_locked'].includes(nb.verifyStatus)) {
+          nb.verifyStatus = 'overdue_locked'
+          nb.updatedAt = now
+          dirty = true
+        }
+        if (!hadOverdueBefore && nb.verifyStatus === 'overdue_locked') {
+          newlyEscalated.push(nb)
+        }
+        overdueVerifyBlocks.push(nb)
+      } else if (nb.verifyStatus !== 'expired_breach') {
+        nb.verifyStatus = 'expired_breach'
+        nb.updatedAt = now
+        dirty = true
+        newlyBreached.push(nb)
+      }
+    }
+
+    if (dirty) changed = true
+    return dirty ? nb : b
+  })
+
+  const nextState = changed ? { ...cur, dayBlocks: nextBlocks, updatedAt: now } : cur
+  return {
+    state: nextState,
+    changed,
+    activeVerifyBlock,
+    activeStrictBlock,
+    overdueVerifyBlocks,
+    newlyEscalated,
+    newlyBreached,
+    newlyPassed,
+    graceWarning,
+    verifySummary: summarizeDayBlocksVerify(nextBlocks, { minuteOfDay: m }),
+  }
+}
+
+/**
+ * 提交某条计划块的物理交付物/因果结论，进入待终审状态（不会直接松开 P3 验收锁，须经终审 PASS）。
+ */
+export function submitDayBlockDelivery(rawState, { blockId = '', summary = '', evidenceUrl = '', now = Date.now() } = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  const text = String(summary || '').trim()
+  const extra = String(evidenceUrl || '').trim()
+  const combined = extra ? `${text}\n[附件/路径] ${extra}`.trim() : text
+  if (combined.length < 12) {
+    return {
+      ok: false,
+      error: 'too-short',
+      text: '交付说明至少 12 个字，请写清真实产出、文件/题量或核心因果结论',
+      block: null,
+      state: cur,
+    }
+  }
+  const id = String(blockId || '').trim()
+  const target = id
+    ? cur.dayBlocks.find((b) => b.id === id)
+    : (cur.dayBlocks.find((b) => !b.isBreak && b.status !== 'done' && (b.verifyStatus === 'overdue_locked' || b.verifyStatus === 'rejected'))
+        || cur.dayBlocks.find((b) => !b.isBreak && b.status !== 'done' && (b.lockMode === 'verify' || b.lockedByBoss)))
+  if (!target) {
+    return { ok: false, error: 'no-block', text: '未找到待交付的验收时间块', block: null, state: cur }
+  }
+  const nextBlocks = cur.dayBlocks.map((b) => (
+    b.id === target.id
+      ? {
+          ...b,
+          submissionText: combined.slice(0, 1200),
+          submittedAt: now,
+          verifyStatus: 'submitted',
+          judgeVerdict: '',
+          updatedAt: now,
+        }
+      : b
+  ))
+  const updatedBlock = nextBlocks.find((b) => b.id === target.id)
+  return {
+    ok: true,
+    block: updatedBlock,
+    state: { ...cur, dayBlocks: nextBlocks, updatedAt: now },
+  }
+}
+
+/**
+ * 主管墙 / 冷代码 / Gemini 对时间块交付进行终审裁决：
+ * - pass：必须存在 ≥12 字真实交付或受信任的 code/auto_seal/gemini(2组问答以上) 来源，绝不允许空口放水；
+ * - reject：必须写明具体漏洞，块维持未完成，若已逾期则继续锁定 P3 验收锁。
+ */
+export function judgeDayBlockDelivery(rawState, {
+  blockId = '',
+  verdict = '',
+  note = '',
+  judgedBy = 'wall_boss',
+  now = Date.now(),
+  dayStartMs = 0,
+  allowAutoFromReceipt = false,
+} = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  const v = String(verdict || '').trim().toLowerCase()
+  if (!['pass', 'reject'].includes(v)) {
+    return { ok: false, error: 'bad-verdict', text: '终审裁决仅支持 pass 或 reject', block: null, rewardMin: 0, state: cur }
+  }
+  const id = String(blockId || '').trim()
+  const target = cur.dayBlocks.find((b) => b.id === id)
+  if (!target) {
+    return { ok: false, error: 'no-block', text: '未找到指定验收时间块', block: null, rewardMin: 0, state: cur }
+  }
+  const cleanNote = String(note || '').trim().slice(0, 400)
+  const by = ['wall_boss', 'code', 'gemini', 'auto_seal'].includes(String(judgedBy || '')) ? String(judgedBy) : 'wall_boss'
+
+  if (v === 'pass') {
+    const hasSubmission = Boolean(target.submissionText && target.submissionText.trim().length >= 12)
+    const trustedAuto = ['code', 'auto_seal'].includes(by) || (by === 'gemini' && allowAutoFromReceipt === true)
+    if (!hasSubmission && !trustedAuto) {
+      return {
+        ok: false,
+        error: 'no-delivery',
+        text: '该验收块尚无用户提交的真实交付物（≥12字），严禁空口判 PASS；请要求用户先提交交付',
+        block: null,
+        rewardMin: 0,
+        state: cur,
+      }
+    }
+    const dueAt = dayStartMs > 0 ? (dayStartMs + target.endMin * 60_000) : 0
+    const isLate = Boolean(
+      target.verifyStatus === 'overdue_locked' ||
+      target.overdueLockUntil > 0 ||
+      (dueAt > 0 && now > dueAt + OVERDUE_GRACE_MS),
+    )
+    const dur = Math.max(10, target.endMin - target.startMin)
+    const baseReward = clamp(Math.round(dur * 0.25), 5, 20)
+    const computedReward = Math.max(2, isLate ? Math.round(baseReward * 0.5) : baseReward)
+    const rewardMin = target.rewardPaidMin > 0 ? 0 : computedReward
+    const nextBlocks = cur.dayBlocks.map((b) => (
+      b.id === target.id
+        ? {
+            ...b,
+            status: 'done',
+            verifyStatus: 'passed',
+            judgeVerdict: 'pass',
+            judgeNote: cleanNote || '交付核验通过',
+            judgedBy: by,
+            judgedAt: now,
+            overdueLockUntil: 0,
+            rewardPaidMin: b.rewardPaidMin > 0 ? b.rewardPaidMin : rewardMin,
+            updatedAt: now,
+          }
+        : b
+    ))
+    return {
+      ok: true,
+      verdict: 'pass',
+      late: isLate,
+      rewardMin,
+      block: nextBlocks.find((b) => b.id === target.id),
+      state: { ...cur, dayBlocks: nextBlocks, updatedAt: now },
+    }
+  }
+
+  if (!cleanNote) {
+    return {
+      ok: false,
+      error: 'no-note',
+      text: '驳回（reject）必须明确指出具体漏洞或要求补交的物理证据',
+      block: null,
+      rewardMin: 0,
+      state: cur,
+    }
+  }
+  const nextBlocks = cur.dayBlocks.map((b) => (
+    b.id === target.id
+      ? {
+          ...b,
+          status: b.status === 'done' ? 'running' : b.status,
+          verifyStatus: 'rejected',
+          judgeVerdict: 'reject',
+          judgeNote: cleanNote,
+          judgedBy: by,
+          judgedAt: now,
+          updatedAt: now,
+        }
+      : b
+  ))
+  return {
+    ok: true,
+    verdict: 'reject',
+    late: false,
+    rewardMin: 0,
+    block: nextBlocks.find((b) => b.id === target.id),
+    state: { ...cur, dayBlocks: nextBlocks, updatedAt: now },
+  }
+}
+
+/**
+ * 主管墙下达止损硬验收指令：强制写入 verify + lockedByBoss，不可普通删除/跳过，到点必进 P3 验收锁。
+ */
+export function issueBossDirectiveBlock(rawState, {
+  title = '',
+  deliverable = '',
+  startMin,
+  endMin,
+  durationMin = 45,
+  allowedApps,
+  now = Date.now(),
+  minuteOfDay = 0,
+} = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  const cleanTitle = String(title || '').trim().slice(0, 100)
+  const cleanDeliv = String(deliverable || '').trim().slice(0, 180)
+  if (!cleanTitle || !cleanDeliv) {
+    return {
+      ok: false,
+      error: 'missing-fields',
+      text: '主管硬指令必须同时写清任务标题（title）和可验物理交付物（deliverable）',
+      block: null,
+      state: cur,
+    }
+  }
+  const start = startMin !== undefined && startMin !== null && Number.isFinite(Number(startMin))
+    ? clamp(Math.round(Number(startMin)), 0, 1425)
+    : clamp(intNum(minuteOfDay, 9 * 60), 0, 1425)
+  const dur = clamp(intNum(durationMin, 45), 15, 180)
+  const end = endMin !== undefined && endMin !== null && Number.isFinite(Number(endMin))
+    ? clamp(Math.round(Number(endMin)), start + 15, 1440)
+    : Math.min(1440, start + dur)
+  const id = `blk-boss-${now.toString(36).slice(-5)}-${cur.dayBlocks.length + 1}`
+  const up = upsertDayBlock(cur.dayBlocks, {
+    id,
+    startMin: start,
+    endMin: end,
+    title: cleanTitle,
+    deliverable: cleanDeliv,
+    lockMode: 'verify',
+    source: 'wall_boss',
+    lockedByBoss: true,
+    verifyStatus: 'armed',
+    status: 'pending',
+    isBreak: false,
+    allowedApps: Array.isArray(allowedApps) && allowedApps.length ? allowedApps : ['md.obsidian', 'com.tencent.mm'],
+  }, { now })
+  return {
+    ok: up.ok,
+    error: up.error,
+    block: up.block,
+    state: { ...cur, dayBlocks: up.dayBlocks, updatedAt: now },
   }
 }

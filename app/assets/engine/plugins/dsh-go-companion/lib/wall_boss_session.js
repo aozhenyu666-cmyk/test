@@ -2,8 +2,9 @@
 //
 // 设计原则：
 // 1. 与两条鱼（鱼丸 companion / 鲸澜 strategist）物理隔离：不共享人设、不触发伴随说话、不联动静音/拒绝/做题/判球；
-// 2. 只有 4 个只读审计工具（wall_boss_brief / wall_locks_truth / wall_vault_search / wall_vault_recent），
-//    零解锁、零加额度、零豁免、零放松权限；
+// 2. 拥有 4 个只读审计工具（wall_boss_brief / wall_locks_truth / wall_vault_search / wall_vault_recent）
+//    + 2 项受控只紧不松/验货执法工具（wall_issue_directive / wall_judge_delivery）：
+//    只允许下达带 P3 验收锁的硬指令，或基于真实提交交付物冷血判 PASS/REJECT；严禁零交付放水、加额度、豁免或关闭默认防分心锁；
 // 3. 如日后用户选定只留路径 A，可直接删除本文件并移除 index.js/runtime_io.js/UI 中标记 [Boss-Wall Path B] 的段落。
 
 export const MAX_WALL_BOSS_HISTORY = 60
@@ -13,16 +14,17 @@ export const WALL_BOSS_AUDIT_TRIGGER_TEXT =
 
 export const WALL_BOSS_PERSONA_TEXT = [
   '【身份设定：端内「主管/老板型墙」（第 3 独立审计会话 · 非伴侣 · 非谋士姐妹）】',
-  '你是用户的冷血直属主管与事实审计官。你独立于陪伴妹妹（鱼丸）与谋士姐姐（鲸澜）存在：',
+  '你是用户的冷血直属主管、事实审计官与验收终审官。你独立于陪伴妹妹（鱼丸）与谋士姐姐（鲸澜）存在：',
   '- 严禁寒暄、安慰、共情、画饼或喊「加油/你可以的/状态会好的」等虚词。',
-  '- 你没有任何解锁、加娱乐额度、豁免验收、减半保底或关闭默认防分心锁的权力；遇到求情直接指回手机正规交付/验收出口。',
+  '- 你拥有两项受控执法权柄：`wall_issue_directive`（把你的止损硬指令直接钉进今日计划并绑定 P3 验收锁，不可普通删除）和 `wall_judge_delivery`（对用户已提交交付物判 pass/reject）。',
+  '- 红线铁律：严禁在没有真实交付物时判 pass，严禁替用户加娱乐额度、豁免验收或关闭防分心锁；遇到求情直接驳回并指回交付物与验收出口。',
   '- 先核事实、再下定性、最后追问与下令。严禁只盯着单一微小时段打转，必须以全局 7 天兑现率、今日正事/娱乐/折腾工具耗时比、撞锁与紧急放行次数、跳票计划块和悬空承诺为依据。',
   '- 拒收「明天一定」「差不多」「太累了」「状态不好」等无验证标准借口；直接追问卡点动作与可验收物理证据。',
   '',
   '【标准输出结构】',
   '1. 全局定性（≤2 句，只讲事实数字与代价）；',
   '2. 3 个直击逃避模式的尖锐追问（承诺跳票 / 娱乐与工具折腾替代硬骨头 / 多次撞锁与应急绕过）；',
-  '3. 1 条未来 24 小时唯一可验、不可讨价还价的止损硬指令。',
+  '3. 1 条未来 24 小时唯一可验、不可讨价还价的止损硬指令（必要时可直接调 `wall_issue_directive` 落单上锁）。',
 ].join('\n')
 
 /**
@@ -67,13 +69,20 @@ export function buildWallBossLedgerText(bossBrief = null, locksOverview = null) 
   const hands = Array.isArray(ov.hands) ? ov.hands : []
   const winner = hands.find((h) => h && h.isWinner) || null
   const ed = ov.effectiveDecision && typeof ov.effectiveDecision === 'object' ? ov.effectiveDecision : {}
+  const dutySuffix = winner?.duty ? `｜职责：${winner.duty}` : ''
   const winnerLine = winner
-    ? `${winner.name}（${winner.id} / ${ed.mode || 'allowlist'} / 剩余 ${numOr(winner.remainingMin)}m）`
+    ? `${winner.name}（${winner.id} / ${ed.mode || 'allowlist'} / 剩余 ${numOr(winner.remainingMin)}m${dutySuffix}）`
     : (ov.activeLock?.active ? `${ov.activeLock.label || ov.activeLock.source}（${ed.mode || 'allowlist'}）` : '无严格锁发力（自由态）')
   const li = ov.lastIntercept && typeof ov.lastIntercept === 'object' ? ov.lastIntercept : null
   const lastInterceptLine = li
     ? `${li.label || li.pkg}（被 ${li.handName || li.handId} 拦截：${li.reason || '策略限制'}）`
     : '暂无最近拦截'
+
+  const vlc = ov.verifyLockCenter && typeof ov.verifyLockCenter === 'object' ? ov.verifyLockCenter : {}
+  const overdueBlocks = Array.isArray(vlc.overdueBlocks) ? vlc.overdueBlocks : []
+  const pendingReview = Array.isArray(vlc.pendingReviewBlocks) ? vlc.pendingReviewBlocks : []
+  const bossOpenCount = Number(vlc.bossDirectiveCount) || 0
+  const verifyLine = `逾期P3验收锁 ${overdueBlocks.length} 项（${overdueBlocks.map((x) => `${x.title}[${x.id}]`).slice(0, 2).join('、') || '无'}） | 待终审交付 ${pendingReview.length} 项（${pendingReview.map((x) => `${x.title}[${x.id}]`).slice(0, 2).join('、') || '无'}） | 主管硬指令 ${bossOpenCount} 条`
 
   const commitments = Array.isArray(snap.pendingCommitments) ? snap.pendingCommitments : []
   const gaps = Array.isArray(b.keyGaps) ? b.keyGaps : []
@@ -84,6 +93,7 @@ export function buildWallBossLedgerText(bossBrief = null, locksOverview = null) 
     `近 7 天兑现率：${rateTxt}（封印过 ${numOr(sealStats.done)}/${numOr(sealStats.total)}，未过保底 ${numOr(sealStats.missed)}，豁免 ${numOr(sealStats.waived)}）`,
     `今日时间投向：正事 ${numOr(snap.todayWorkMin)}m（主线 ${numOr(snap.todayMainlineMin)}m / 网课 ${numOr(snap.todayVideoStudyMin)}m / Gemini ${numOr(snap.todayGeminiMin)}m） | 纯娱乐 ${numOr(snap.todayFunMin)}m | 折腾工具 ${numOr(snap.todayTinkerMin)}m`,
     `计划块执行：今日完成 ${numOr(blockStats.todayDone)}/${numOr(blockStats.todayTotal)}（跳过 ${numOr(blockStats.todaySkipped)}），昨日遗留未完 ${numOr(blockStats.yesterdayUnfinished)} 块`,
+    `验收锁与待终审交付：${verifyLine}`,
     `门禁与破戒：近 7 日被拦 ${numOr(snap.blockedCount)} 次 | 紧急/破窗 ${numOr(snap.emergencyPassCount)} 次 | 违约 ${numOr(snap.breachCount)} 条`,
     `此刻锁机真相：主发力手 ${winnerLine} | 最近拦截：${lastInterceptLine}`,
     `悬空承诺（${numOr(snap.pendingCommitmentsCount)} 项）：${commitments.length ? commitments.map((c) => c.title).filter(Boolean).join('；') : '无'}`,

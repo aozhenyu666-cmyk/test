@@ -886,6 +886,17 @@ class _WallPageState extends ConsumerState<WallPage> {
     final headline = '${brief['headline'] ?? ''}'.trim();
     final gapsRaw = brief['keyGaps'];
     final gaps = gapsRaw is List ? [for (final g in gapsRaw) '$g'.trim()].where((s) => s.isNotEmpty).toList() : const <String>[];
+    final verifyCenter = chat?['verifyLockCenter'] is Map
+        ? Map<String, dynamic>.from(chat!['verifyLockCenter'] as Map)
+        : (brief['verifyLockCenter'] is Map ? Map<String, dynamic>.from(brief['verifyLockCenter'] as Map) : const <String, dynamic>{});
+    final overdueBlocks = verifyCenter['overdueBlocks'] is List
+        ? [for (final x in verifyCenter['overdueBlocks'] as List) if (x is Map) Map<String, dynamic>.from(x)]
+        : const <Map<String, dynamic>>[];
+    final pendingBlocks = verifyCenter['pendingReviewBlocks'] is List
+        ? [for (final x in verifyCenter['pendingReviewBlocks'] as List) if (x is Map) Map<String, dynamic>.from(x)]
+        : const <Map<String, dynamic>>[];
+    final totalVerify = verifyCenter['totalVerify'] is num ? (verifyCenter['totalVerify'] as num).toInt() : 0;
+    final passedVerify = verifyCenter['passedVerify'] is num ? (verifyCenter['passedVerify'] as num).toInt() : 0;
 
     return [
       Padding(
@@ -918,7 +929,7 @@ class _WallPageState extends ConsumerState<WallPage> {
                 const SizedBox(height: 6),
                 Text(
                   bound
-                      ? '已绑定独立会话 $sid：与鱼丸/鲸澜完全隔离，只挂载冷血主管人设、全局账本与 4 个只读审计工具（零解锁/豁免/减压权限）。'
+                      ? '已绑定独立会话 $sid：与鱼丸/鲸澜完全隔离，挂载冷血主管人设、全局账本、4 个只读审计工具 + 2 个可控验收工具（wall_issue_directive / wall_judge_delivery）。'
                       : '路径 B 将在端内新建或绑定第 3 个独立 AI 会话，与两条鱼人设/静音/主动插话物理隔离，专门盯防全局兑现率、娱乐时间比与跳票模式。',
                   style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
                 ),
@@ -1000,6 +1011,86 @@ class _WallPageState extends ConsumerState<WallPage> {
               ),
           ],
         ),
+      Padding(
+        key: const ValueKey('wall-boss-verify-card'),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: GlassSurface(
+          tier: GlassTier.card,
+          borderRadius: AppShape.radiusLg,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(AppIcons.verified, size: 18, color: overdueBlocks.isNotEmpty ? colors.danger : theme.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '验收终审与止损硬指令',
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    StatusChip(
+                      tone: overdueBlocks.isNotEmpty ? StatusTone.error : StatusTone.idle,
+                      label: '已过 $passedVerify/$totalVerify · 逾期 ${overdueBlocks.length} · 待审 ${pendingBlocks.length}',
+                    ),
+                  ],
+                ),
+                for (final b in [...overdueBlocks, ...pendingBlocks.where((p) => !overdueBlocks.any((o) => '${o['id']}' == '${p['id']}'))]) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerLow,
+                      borderRadius: AppShape.radiusMd,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '${b['title'] ?? ''}（${b['verifyStatus'] == 'overdue_locked' ? 'P3 逾期严锁' : (b['verifyStatus'] == 'rejected' ? '已驳回' : '待主管终审')} · 截止 ${b['dueHm'] ?? ''}）',
+                          style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        if ('${b['submissionText'] ?? ''}'.trim().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '提交交付：${b['submissionText']}',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                            ),
+                          ),
+                        const SizedBox(height: 6),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilledButton.tonalIcon(
+                            key: ValueKey('wall-boss-request-judge-${b['id'] ?? ''}'),
+                            onPressed: inFlight
+                                ? null
+                                : () => unawaited(_runBossChatOp({'action': 'request_judge', 'blockId': '${b['id'] ?? ''}'}, markSending: true)),
+                            icon: const Icon(AppIcons.askAi, size: 15),
+                            label: const Text('让主管冷血终审'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  key: const ValueKey('wall-boss-issue-directive-btn'),
+                  onPressed: inFlight ? null : () => unawaited(_openIssueDirectiveDialog()),
+                  icon: const Icon(AppIcons.add, size: 16),
+                  label: const Text('下达止损硬指令'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
       ListPageCard(
         title: '主管质询对话记录 · ${messages.length} 条',
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -1071,6 +1162,111 @@ class _WallPageState extends ConsumerState<WallPage> {
           ),
         ),
     ];
+  }
+
+  Future<void> _openIssueDirectiveDialog() async {
+    final out = await showDialog<(String, String, int)>(
+      context: context,
+      builder: (_) => const _IssueDirectiveDialog(),
+    );
+    if (out == null || !mounted) return;
+    await _runBossChatOp({
+      'action': 'issue_directive',
+      'title': out.$1,
+      'deliverable': out.$2,
+      'durationMin': out.$3,
+    });
+    unawaited(_channel.tickNow().catchError((_) => false));
+  }
+}
+
+class _IssueDirectiveDialog extends StatefulWidget {
+  const _IssueDirectiveDialog();
+
+  @override
+  State<_IssueDirectiveDialog> createState() => _IssueDirectiveDialogState();
+}
+
+class _IssueDirectiveDialogState extends State<_IssueDirectiveDialog> {
+  final _title = TextEditingController();
+  final _deliv = TextEditingController();
+  int _durationMin = 45;
+  String? _error;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _deliv.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final t = _title.text.trim();
+    final d = _deliv.text.trim();
+    if (t.isEmpty || d.isEmpty) {
+      setState(() => _error = '硬指令标题和可验物理交付物均不能为空');
+      return;
+    }
+    Navigator.pop(context, (t, d, _durationMin));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = DshColors.of(context);
+    return AlertDialog(
+      key: const ValueKey('wall-directive-dialog'),
+      shape: AppShape.dialog,
+      title: const Text('下达止损硬指令（绑定 P3 验收锁）'),
+      content: SizedBox(
+        width: 380,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                key: const ValueKey('wall-directive-title'),
+                controller: _title,
+                decoration: const InputDecoration(labelText: '硬指令任务标题', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                key: const ValueKey('wall-directive-deliverable'),
+                controller: _deliv,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: '可验物理交付物（文件增量/题量/截图）', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final d in const [30, 45, 60, 90])
+                    ChoiceChip(
+                      label: Text('${d}m'),
+                      selected: _durationMin == d,
+                      onSelected: (_) => setState(() => _durationMin = d),
+                    ),
+                ],
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 6),
+                Text(_error!, style: TextStyle(color: colors.danger, fontSize: 12)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        FilledButton(
+          key: const ValueKey('wall-directive-submit'),
+          onPressed: _submit,
+          child: const Text('钉入硬指令'),
+        ),
+      ],
+    );
   }
 }
 

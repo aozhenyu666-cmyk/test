@@ -63,6 +63,8 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
   Map<String, dynamic>? _graceWarning;
   Map<String, dynamic>? _appProbe;
   Map<String, dynamic>? _today;
+  Map<String, dynamic>? _locksOverview;
+  Map<String, dynamic>? _verifySummary;
   List<Map<String, dynamic>> _remotePresets = const [];
   List<LoopApp> _installedApps = const [];
 
@@ -163,6 +165,12 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       if (!mounted || t == null) return;
       setState(() => _today = t);
     }).catchError((_) {}));
+    unawaited(_channel.sealsOp(const {'action': 'locks_overview'}).then((ov) {
+      if (!mounted || ov == null) return;
+      final rawOv = ov['locksOverview'] is Map ? Map<String, dynamic>.from(ov['locksOverview'] as Map) : Map<String, dynamic>.from(ov);
+      if (rawOv.isEmpty) return;
+      setState(() => _locksOverview = rawOv);
+    }).catchError((_) {}));
 
     final res = await _channel.planContractOp();
     if (!mounted) return;
@@ -174,6 +182,10 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         _remotePresets = _mapList(res!['presets']);
       }
       final dayPlan = res?['dayPlan'] is Map ? Map<String, dynamic>.from(res!['dayPlan'] as Map) : null;
+      final rawVerify = res?['verifySummary'] ?? dayPlan?['verifySummary'];
+      if (rawVerify is Map) {
+        _verifySummary = Map<String, dynamic>.from(rawVerify);
+      }
       final serverEnergy = '${dayPlan?['energyLevel'] ?? res?['energyLevel'] ?? _contract?['energyLevel'] ?? ''}'.trim();
       if (const ['low', 'mid', 'high'].contains(serverEnergy) && !_hasLocalBlockEdits) {
         _energyLevel = serverEnergy;
@@ -413,6 +425,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       _hasLocalBlockEdits = true;
     });
     unawaited(_channel.planContractOp({'action': 'set_energy', 'energyLevel': level}).catchError((_) => null));
+    unawaited(_channel.tickNow().catchError((_) => false));
   }
 
   Future<void> _rebuildByEnergy() async {
@@ -427,6 +440,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       'energyLevel': _energyLevel,
       'dayBlocks': built,
     }).catchError((_) => null));
+    unawaited(_channel.tickNow().catchError((_) => false));
   }
 
   void _addCarryoverManual() {
@@ -481,6 +495,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       _banner = '✓ 已将「${item['title']}」移入 ${_hm(startMin)}–${_hm(_asInt(newBlock['endMin'], startMin + dur))}';
     });
     unawaited(_channel.planContractOp({'action': 'move_carryover', 'carryoverId': id}).catchError((_) => null));
+    unawaited(_channel.tickNow().catchError((_) => false));
   }
 
   String _buildHardTasksGeminiPrompt() {
@@ -530,6 +545,9 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       else ...['md.obsidian', 'com.tencent.mm'],
     };
     final isBreak = existing?['isBreak'] == true;
+    final isBossLocked = existing?['lockedByBoss'] == true || existing?['source'] == 'wall_boss';
+    final isDone = existing?['status'] == 'done';
+    if (isBossLocked && !isDone) lockMode = 'verify';
 
     final action = await showDialog<String>(
       context: context,
@@ -543,6 +561,23 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (isBossLocked) ...[
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      decoration: BoxDecoration(
+                        color: DshColors.of(ctx).dangerContainer,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '主管止损硬指令：不可删除、不可跳过，须交付过审解除验收锁',
+                        style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                              color: DshColors.of(ctx).onDangerContainer,
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                    ),
+                  ],
                   TextField(
                     key: const ValueKey('block-editor-title'),
                     controller: titleCtrl,
@@ -595,8 +630,18 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
                       PillSegment('verify', '验收锁'),
                     ],
                     selected: const ['gentle', 'strict', 'verify'].contains(lockMode) ? lockMode : 'strict',
-                    onChanged: (v) => setDialog(() => lockMode = v),
+                    onChanged: (v) {
+                      if (isBossLocked && !isDone && v != 'verify') return;
+                      setDialog(() => lockMode = v);
+                    },
                   ),
+                  if (lockMode == 'verify') ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      '验收锁规则：到开始时间自动 P4 接管；结束前未过审且超 60 秒宽限自动升级 P3 验收严锁（须交付过审解锁，不可花余额跳过）。',
+                      style: Theme.of(ctx).textTheme.labelSmall?.copyWith(color: DshColors.of(ctx).textTertiary),
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   TextField(
                     key: const ValueKey('block-editor-deliverable'),
@@ -629,7 +674,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
             ),
           ),
           actions: [
-            if (!isNew)
+            if (!isNew && !isBossLocked)
               TextButton(
                 onPressed: () => Navigator.pop(ctx, 'delete'),
                 child: Text('删除', style: TextStyle(color: DshColors.of(ctx).danger)),
@@ -662,6 +707,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         _banner = '✓ 已删除时间块「${existing['title']}」';
       });
       unawaited(_channel.planContractOp({'action': 'delete_block', 'blockId': delId}).catchError((_) => null));
+      unawaited(_channel.tickNow().catchError((_) => false));
       return;
     }
 
@@ -679,6 +725,11 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         'allowedApps': allow.isEmpty ? ['md.obsidian'] : allow.toList(),
         'status': '${existing?['status'] ?? 'pending'}',
         'isBreak': isBreak || (slot == 'lunch' && lockMode == 'gentle' && RegExp(r'午休|放风|休息').hasMatch(title)),
+        if (isBossLocked) 'lockedByBoss': true,
+        if ('${existing?['source'] ?? ''}'.isNotEmpty) 'source': existing!['source'],
+        if ('${existing?['verifyStatus'] ?? ''}'.isNotEmpty) 'verifyStatus': existing!['verifyStatus'],
+        if ('${existing?['sealId'] ?? ''}'.isNotEmpty) 'sealId': existing!['sealId'],
+        if ('${existing?['submissionText'] ?? ''}'.isNotEmpty) 'submissionText': existing!['submissionText'],
       };
       setState(() {
         _hasLocalBlockEdits = true;
@@ -687,6 +738,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         _banner = '✓ 已保存时间块「$title」（${_hm(startMin)}–${_hm(_asInt(updated['endMin'], startMin + durationMin))} · ${_lockModeLabel(lockMode)}）';
       });
       unawaited(_channel.planContractOp({'action': 'upsert_block', 'block': updated}).catchError((_) => null));
+      unawaited(_channel.tickNow().catchError((_) => false));
     }
   }
 
@@ -748,6 +800,98 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
   Future<void> _verifyBlockDone(Map<String, dynamic> block) async {
     final id = '${block['id']}';
     final title = '${block['title']}';
+    final needsHardVerify = block['lockMode'] == 'verify' || block['lockedByBoss'] == true || block['source'] == 'wall_boss';
+
+    if (needsHardVerify) {
+      final sumCtrl = TextEditingController(text: '${block['submissionText'] ?? ''}');
+      var notifyBoss = true;
+      String? errorText;
+      final result = await showDialog<(String, bool)>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialog) => AlertDialog(
+            title: Text('提交验收交付：$title'),
+            content: SizedBox(
+              width: 380,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text('约定交付：${block['deliverable'] ?? '可见产出'}', style: Theme.of(ctx).textTheme.bodySmall),
+                    const SizedBox(height: 10),
+                    TextField(
+                      key: const ValueKey('verify-delivery-input'),
+                      controller: sumCtrl,
+                      minLines: 3,
+                      maxLines: 6,
+                      decoration: const InputDecoration(
+                        labelText: '真实物理产出 / 题量 / 文件增量（至少 12 字）',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    if (errorText != null) ...[
+                      const SizedBox(height: 6),
+                      Text(errorText!, style: TextStyle(color: DshColors.of(ctx).danger, fontSize: 12)),
+                    ],
+                    const SizedBox(height: 6),
+                    CheckboxListTile(
+                      value: notifyBoss,
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text('提交后通知主管冷血终审'),
+                      onChanged: (v) => setDialog(() => notifyBoss = v ?? true),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+              FilledButton(
+                onPressed: () {
+                  final text = sumCtrl.text.trim();
+                  if (text.length < 12) {
+                    setDialog(() => errorText = '验收块交付至少 12 个字（当前 ${text.length} 字），严禁空口过关');
+                    return;
+                  }
+                  Navigator.pop(ctx, (text, notifyBoss));
+                },
+                child: const Text('提交交付送审'),
+              ),
+            ],
+          ),
+        ),
+      );
+      disposeAfterRoute(sumCtrl);
+      if (!mounted || result == null) return;
+
+      final submitted = result.$1;
+      final sendBoss = result.$2;
+      setState(() {
+        _hasLocalBlockEdits = true;
+        _dayBlocks = [
+          for (final b in _dayBlocks)
+            if ('${b['id']}' == id)
+              {...b, 'verifyStatus': 'submitted', 'submissionText': submitted}
+            else
+              b,
+        ];
+        _banner = '✓ 已提交「$title」交付，等待主管/Gemini 终审解锁';
+      });
+      await _channel.planContractOp({
+        'action': 'submit_delivery',
+        'blockId': id,
+        'summary': submitted,
+      });
+      if (sendBoss) {
+        unawaited(_channel.wallBossChat({'action': 'request_judge', 'blockId': id}).catchError((_) => null));
+      }
+      unawaited(_channel.tickNow().catchError((_) => false));
+      await _refresh(silent: true);
+      return;
+    }
+
     final sumCtrl = TextEditingController();
     final submitted = await showDialog<String>(
       context: context,
@@ -793,6 +937,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       _banner = '✓ 时间块「$title」已验收过关！';
     });
     unawaited(_channel.planContractOp({'action': 'set_block_status', 'blockId': id, 'status': 'done'}).catchError((_) => null));
+    unawaited(_channel.tickNow().catchError((_) => false));
     final cpId = '${block['checkpointId'] ?? ''}'.trim();
     if (cpId.isNotEmpty) {
       await _channel.planContractOp({
@@ -1498,6 +1643,24 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
                               ),
                           ],
                         ),
+                        if (blk['lockedByBoss'] == true ||
+                            const ['overdue_locked', 'submitted', 'rejected'].contains('${blk['verifyStatus'] ?? ''}')) ...[
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: [
+                              if (blk['lockedByBoss'] == true)
+                                const StatusChip(tone: StatusTone.error, label: '主管硬指令'),
+                              if (blk['verifyStatus'] == 'overdue_locked')
+                                const StatusChip(tone: StatusTone.error, label: '逾期严锁'),
+                              if (blk['verifyStatus'] == 'submitted')
+                                const StatusChip(tone: StatusTone.warn, label: '待终审'),
+                              if (blk['verifyStatus'] == 'rejected')
+                                const StatusChip(tone: StatusTone.error, label: '已驳回'),
+                            ],
+                          ),
+                        ],
                         const SizedBox(height: 6),
                         Text(
                           '交付：${blk['deliverable'] ?? '可见产出'} · 放行：${(blk['allowedApps'] is List ? (blk['allowedApps'] as List).map((e) => _appName('$e')).join('、') : '默认')}',
@@ -1683,6 +1846,71 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
     final redLineTop = ((nowMin / 1440.0) * timelineHeight).clamp(0.0, timelineHeight - 2);
 
     return [
+      () {
+        final ov = _locksOverview;
+        final winnerId = '${ov?['winnerId'] ?? ''}'.trim();
+        final hands = _mapList(ov?['hands']);
+        final winner = winnerId.isEmpty
+            ? null
+            : hands.cast<Map<String, dynamic>?>().firstWhere(
+                  (h) => h != null && ('${h['id'] ?? ''}' == winnerId || h['isWinner'] == true),
+                  orElse: () => null,
+                );
+        final vCenter = ov?['verifyLockCenter'] is Map ? Map<String, dynamic>.from(ov!['verifyLockCenter'] as Map) : _verifySummary;
+        final overdueCnt = _asInt(vCenter?['overdueCount'], 0);
+        final pendingCnt = _asInt(vCenter?['pendingReviewCount'], 0);
+        final passedCnt = _asInt(vCenter?['passedVerify'], 0);
+        final totalCnt = _asInt(vCenter?['totalVerify'], 0);
+        final headline = winner != null
+            ? '此刻锁源：${winner['priority'] ?? ''} · ${winner['name'] ?? winnerId}'
+            : '此刻锁源：${ov == null ? '同步锁机探针中…' : '自由推进中（P6）'}';
+        final subLine = [
+          if (winner != null && '${winner['duty'] ?? ''}'.trim().isNotEmpty) '${winner['duty']}',
+          if (totalCnt > 0 || overdueCnt > 0 || pendingCnt > 0)
+            '验收块 $passedCnt/$totalCnt 通关 · 逾期严锁 $overdueCnt · 待终审 $pendingCnt',
+        ].join(' · ');
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: GlassSurface(
+            key: const ValueKey('watch-lock-attribution-bar'),
+            tier: GlassTier.card,
+            borderRadius: AppShape.radiusMd,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(
+                    overdueCnt > 0 ? AppIcons.lockActive : AppIcons.lock,
+                    size: 18,
+                    color: overdueCnt > 0 ? colors.danger : (winner != null ? colors.warning : colors.success),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          headline,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        if (subLine.isNotEmpty)
+                          Text(
+                            subLine,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }(),
       if (_graceWarning != null)
         Padding(
           padding: const EdgeInsets.only(bottom: 12),

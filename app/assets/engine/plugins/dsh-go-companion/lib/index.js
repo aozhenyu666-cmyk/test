@@ -1937,6 +1937,7 @@ export function apply(ctx) {
   let lastRhythm = null
   // 2026-11-20 公约挑场景用：上一拍裁决器是不是在锁。
   let lastLockActive = false
+  let dayPlanWatchUntil = 0
   // 2026-11-22 P0 修复：伴侣力度锁边沿与裁决器锁边沿分离跟踪，避免默认验收工作窗激活时压死 graceUntil 放行边沿。
   let prevForceLocked = false
   let prevArbiterLocked = false
@@ -2312,9 +2313,14 @@ export function apply(ctx) {
     if (p === 'P0' || ctxInfo.emActive) return { id: 'EMERGENCY_SUSPEND', name: '急事 3 分钟通行证' }
     if (p === 'P1' || ctxInfo.nightLocked || ctxInfo.evLock) return { id: 'NIGHT_CURFEW', name: '深夜睡眠 & 晚间上限锁' }
     if (p === 'P2' || ctxInfo.gemSessionActive) return { id: 'GEMINI_LIVE_CELL', name: 'Gemini 连麦舱' }
-    if (p === 'P3' || p === 'P3.5' || ctxInfo.overdueOrTakeover) return { id: 'CONTRACT_OVERDUE_STRICT', name: '契约/封印逾期与接管严锁' }
+    if (p === 'P3' || p === 'P3.5' || ctxInfo.overdueOrTakeover) {
+      return { id: 'CONTRACT_OVERDUE_STRICT', name: '验收锁（计划块/封印/主管指令）' }
+    }
     if (p === 'P4') {
       if (ctxInfo.manualBoutStrict) return { id: 'BOUT_STRICT', name: '专注严格局' }
+      if (ctxInfo.dayBlockActive || arb?.by === 'dayblock_active') {
+        return { id: 'BOUT_STRICT', name: arb?.label || '计划时间块锁定中' }
+      }
       if (ctxInfo.dayWallActive) return { id: 'DAY_WORK_WALL', name: '工作时段默认防分心锁' }
       if (arb?.subSource === 'DAY_WORK_WALL') return { id: 'DAY_WORK_WALL', name: '工作时段默认防分心锁' }
       return { id: 'BOUT_STRICT', name: '专注严格局' }
@@ -2329,11 +2335,13 @@ export function apply(ctx) {
     if (prev && Number(prev.at) > at && raw.force !== true) return prev
     const arb = (() => { try { return v4Hub?.computeLockArbiter?.(now) } catch { return null } })()
     const presetSess = (() => { try { return presetRt.sessionView(now) } catch { return null } })()
+    const dayBlockAct = (() => { try { return v4Hub?.dayBlockActiveSessionView?.(now) } catch { return null } })()
     const dayWallOn = config.dayWorkWallEnabled !== false
     const vsNow = dayWallOn ? (() => { try { return verifySessionView(now) } catch { return null } })() : null
     const winner = resolveWinnerHandMeta({
       lockArbiter: arb,
       manualBoutStrict: Boolean(presetSess && presetSess.by !== 'verify'),
+      dayBlockActive: Boolean(dayBlockAct),
       dayWallActive: Boolean(vsNow),
     })
     const handId = String(raw.handId || winner.id || arb?.source || 'RULE_LOCK').slice(0, 48)
@@ -2390,11 +2398,13 @@ export function apply(ctx) {
   const sessionNow = (now) =>
     geminiSessionView(now) ||
     aiWorkSessionView(now) ||
+    v4Hub?.dayBlockOverdueSessionView?.(now) ||
     v4Hub?.contractSessionView(now, { escalatedOnly: true }) ||
     sealSessionView(now) ||
     taskLeaseView(now) ||
     leaseSessionView(now) ||
     presetRt.sessionView(now) ||
+    v4Hub?.dayBlockActiveSessionView?.(now) ||
     v4Hub?.contractSessionView(now, { escalatedOnly: false }) ||
     verifySessionView(now)
   // 行为大脑：片段与日摘要、模式卡。只看见、只记住；不自动立规则（K4 以后再接）。
@@ -3084,6 +3094,30 @@ export function apply(ctx) {
     getLockRequests: (now = Date.now()) => lockBus.list(now),
     getTodayBrainStats: (now = Date.now()) => brainRt.view(now),
     onContractClear: (now = Date.now()) => { lockBus.revokeBySource('contract', { now }) },
+    getSealsNow: (now = Date.now()) => {
+      try {
+        return loadSeals(now, zoneOr(config.timeZone))?.items || []
+      } catch {
+        return []
+      }
+    },
+    onDayPlanMutated: (now = Date.now()) => {
+      dayPlanWatchUntil = Math.max(dayPlanWatchUntil, Number(now) + 120_000)
+    },
+    onDayBlockPassed: ({ block, rewardMin, now = Date.now() } = {}) => {
+      const tzNow = zoneOr(config.timeZone)
+      const mins = Math.max(0, Math.round(Number(rewardMin) || 0))
+      if (mins > 0) {
+        recordTimeEntryNow({
+          kind: 'earned_seal',
+          minutes: mins,
+          reason: `计划验收通过「${block?.title || '验收块'}」`,
+          at: now,
+          tz: tzNow,
+        })
+      }
+      record({ state: 'dayblock-passed', at: now, id: block?.id || '', title: block?.title || '', minutes: mins })
+    },
     onBankUnlock: ({ minutes, solved, until, now = Date.now() } = {}) => {
       const BANK_EARN_DAILY_CAP = 60
       const tz = zoneOr(config.timeZone)
@@ -6021,9 +6055,11 @@ export function apply(ctx) {
         planBlocks,
         recentBreaches,
       }),
+      verifyLockCenter: locksOverview?.verifyLockCenter || null,
+      winnerHand: (Array.isArray(locksOverview?.hands) ? locksOverview.hands : []).find((h) => h && h.isWinner) || null,
     }
   }
-  // [Boss-Wall Path B] 端内第 3 独立主管质询室路由（status/bind/unbind/clear/audit_now/send）
+  // [Boss-Wall Path B] 端内第 3 独立主管质询室路由（status/bind/unbind/clear/audit_now/send/issue_directive/judge_delivery/request_judge）
   function wallBossStatusSnapshot(tzBody = {}) {
     const rawSid = String(config.wallSessionId || '').trim()
     const valid = Boolean(
@@ -6044,6 +6080,7 @@ export function apply(ctx) {
       inFlight: wallBossDesk.inFlight(),
       messages: loadWallBossHistory(),
       bossBrief,
+      verifyLockCenter: bossBrief?.verifyLockCenter || null,
     }
   }
   async function wallBossChatRoute(body = {}, method = 'GET') {
@@ -6076,14 +6113,78 @@ export function apply(ctx) {
       record({ state: 'wall-boss-clear', at: Date.now() })
       return { ...wallBossStatusSnapshot(b), text: '已清空主管质询室记录。' }
     }
-    if (action === 'send' || action === 'audit_now') {
+    if (action === 'issue_directive') {
+      const now = Date.now()
+      const iss = v4Hub?.issueDirective?.(b, now)
+      if (!iss || !iss.ok) {
+        return { ...wallBossStatusSnapshot(b), ok: false, error: iss?.error || 'issue-failed', text: iss?.text || '下达主管硬指令失败' }
+      }
+      appendWallBossEntry({
+        id: 'dir-' + now.toString(36),
+        role: 'system',
+        text: `已钉入主管止损硬指令 [${iss.block.id}]「${iss.block.title}」（截止 ${sealHm(iss.block.endMin)} · 交付：${iss.block.deliverable} · 绑定 P3 验收锁）`,
+        at: now,
+      })
+      return {
+        ...wallBossStatusSnapshot(b),
+        ok: true,
+        block: iss.block,
+        text: `已下达止损硬指令「${iss.block.title}」，到点未交自动触发 P3 验收锁。`,
+      }
+    }
+    if (action === 'judge_delivery') {
+      const now = Date.now()
+      const res = v4Hub?.judgeDelivery?.({
+        blockId: b.blockId ?? b.id,
+        verdict: b.verdict,
+        note: b.note,
+        judgedBy: 'wall_boss',
+      }, now)
+      if (!res || !res.ok) {
+        return { ...wallBossStatusSnapshot(b), ok: false, error: res?.error || 'judge-failed', text: res?.text || '终审裁决失败' }
+      }
+      appendWallBossEntry({
+        id: 'jdg-' + now.toString(36),
+        role: 'system',
+        text: res.verdict === 'pass'
+          ? `主管终审 PASS「${res.block.title}」：已解锁${res.rewardMin > 0 ? `并入账 +${res.rewardMin}m 余额` : ''}（${res.block.judgeNote}）`
+          : `主管终审 REJECT「${res.block.title}」：驳回（${res.block.judgeNote}），继续维持 P3 验收锁`,
+        at: now,
+      })
+      return {
+        ...wallBossStatusSnapshot(b),
+        ok: true,
+        verdict: res.verdict,
+        block: res.block,
+        rewardMin: res.rewardMin || 0,
+        text: res.verdict === 'pass' ? `终审 PASS：「${res.block.title}」已放行并解除验收锁` : `终审 REJECT：「${res.block.title}」已被驳回`,
+      }
+    }
+    if (action === 'send' || action === 'audit_now' || action === 'request_judge') {
       const st = wallBossStatusSnapshot(b)
       if (!st.bound) {
         return { ...st, ok: false, error: 'no-wall-session', text: '尚未绑定主管墙独立会话（wallSessionId），请先一键新建或选择已有会话。' }
       }
-      const rawText = action === 'audit_now'
-        ? (String(b.text || '').trim() || WALL_BOSS_AUDIT_TRIGGER_TEXT)
-        : String(b.text || '').trim()
+      let rawText = ''
+      if (action === 'audit_now') {
+        rawText = String(b.text || '').trim() || WALL_BOSS_AUDIT_TRIGGER_TEXT
+      } else if (action === 'request_judge') {
+        const dp = v4Hub?.loadDayPlan?.(Date.now())
+        const targetId = String(b.blockId ?? b.id ?? '').trim()
+        const blk = (dp?.dayBlocks || []).find((x) => x.id === targetId) || null
+        if (!blk) {
+          return { ...st, ok: false, error: 'no-block', text: '未找到要终审的验收时间块' }
+        }
+        rawText = [
+          `请对以下待终审验收块执行冷血终审，核实交付是否真实充足后调用 \`wall_judge_delivery(blockId="${blk.id}", verdict="pass"|"reject", note)\`：`,
+          `- 块 ID：${blk.id} | 标题：${blk.title}（${sealHm(blk.startMin)}–${sealHm(blk.endMin)}）`,
+          `- 约定物理交付：${blk.deliverable}`,
+          `- 用户本次提交的交付内容：${blk.submissionText || '（用户尚未提交具体交付文本！）'}`,
+          '要求：如无真产出、只有口号/凑字数或未对上约定交付，严禁放水，直接 verdict="reject" 并写明缺什么；若真实过关再 verdict="pass"。',
+        ].join('\n')
+      } else {
+        rawText = String(b.text || '').trim()
+      }
       if (!rawText) {
         return { ...st, ok: false, error: 'empty', text: '请输入要质询或回答的内容。' }
       }
@@ -7403,11 +7504,18 @@ export function apply(ctx) {
     const allowText = allowList.length ? allowList.join('、') : (ed.mode === 'open' || ed.mode === 'free' ? '全部工作与常用应用' : '急事底线')
     const li = ov.lastIntercept
     const interceptText = li ? `${li.label || li.pkg}（被 ${li.handName || li.handId} 拦截：${li.reason || '限制'}）` : '暂无拦截'
+    const vlc = ov.verifyLockCenter || {}
+    const verifyText = vlc.overdueBlocks?.length
+      ? `P3验收锁拦截 ${vlc.overdueBlocks.length} 项（${vlc.overdueBlocks.map((b) => b.title).slice(0, 2).join('、')}）`
+      : (vlc.activeVerifyBlock
+          ? `护航中「${vlc.activeVerifyBlock.title}」（余${vlc.activeVerifyBlock.remainingMin ?? 0}m）`
+          : (vlc.clearedToday ? '今日验收已清关' : `今日已过${vlc.passedVerify ?? 0}/${vlc.totalVerify ?? 0}（待审${vlc.pendingReviewBlocks?.length ?? 0}）`))
+    const dutyText = winner?.duty ? ` | 职责：${winner.duty}` : ''
     return [
       '[锁机实时真相·只读]',
-      `主发力手：${winnerText} | 优先级：${ed.priority || 'P6'} | 模式：${ed.mode || 'free'}`,
+      `主发力手：${winnerText} | 优先级：${ed.priority || 'P6'} | 模式：${ed.mode || 'free'}${dutyText}`,
       `剩余时长：${remText} | 依据：${ed.why || '无锁定'}`,
-      `默认防分心锁：${dayWallText}`,
+      `验收锁与计划机位：${verifyText} | 默认防分心：${dayWallText}`,
       `放行工作App：${allowText}`,
       `最近拦截：${interceptText}`,
     ].join('\n')
@@ -7532,6 +7640,64 @@ export function apply(ctx) {
       execute: () => ({ ok: true, text: buildLockTruthContext() }),
     }
   }
+  function wallIssueDirectiveTool() {
+    return {
+      name: 'wall_issue_directive',
+      description: '主管墙止损硬指令：直接钉进今日计划并绑定 P3 验收锁（不可普通删除或跳过；到点缓冲 1 分钟未过验收即锁机）。严禁用于放水。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '硬指令任务名称（如：完成 30 道资料分析并复盘错因）' },
+          deliverable: { type: 'string', description: '到点必须提交的可验物理证据/结论' },
+          durationMin: { type: 'integer', minimum: 15, maximum: 180, description: '限定时长（分钟，默认 45）' },
+          startMin: { type: 'integer', minimum: 0, maximum: 1425, description: '可选开始分钟（0–1425）；不传则从当前时刻起算' },
+          allowedApps: { type: 'array', items: { type: 'string' }, description: '本硬指令允许放行的工作应用包名' },
+        },
+        required: ['title', 'deliverable'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const res = v4Hub?.issueDirective?.(args, Date.now())
+        if (!res || !res.ok) return { ok: false, text: res?.text || res?.error || '下达硬指令失败' }
+        return {
+          ok: true,
+          text: `✓ 已钉入主管止损硬指令 [${res.block.id}]「${res.block.title}」（${sealHm(res.block.startMin)}–${sealHm(res.block.endMin)}，绑定 P3 验收锁 · 交付：${res.block.deliverable}）。`,
+        }
+      },
+    }
+  }
+  function wallJudgeDeliveryTool() {
+    return {
+      name: 'wall_judge_delivery',
+      description: '主管墙冷血终审：对用户已提交的验收块交付物裁定 pass 或 reject。红线：用户未提交真实有效交付物时代码会自动拒绝 pass；禁止放水、禁止加额度。',
+      parameters: {
+        type: 'object',
+        properties: {
+          blockId: { type: 'string', description: '待终审的时间块 ID（可从账本「验收锁与待终审交付」行查看）' },
+          verdict: { type: 'string', enum: ['pass', 'reject'], description: '终审裁定：pass=真过关解锁发余额；reject=驳回并继续锁死' },
+          note: { type: 'string', description: '冷血裁定依据（reject 时必填具体缺口/要求补交物）' },
+        },
+        required: ['blockId', 'verdict', 'note'],
+        additionalProperties: false,
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const res = v4Hub?.judgeDelivery?.({ ...args, judgedBy: 'wall_boss' }, Date.now())
+        if (!res || !res.ok) return { ok: false, text: res?.text || res?.error || '终审裁决失败' }
+        if (res.verdict === 'pass') {
+          return {
+            ok: true,
+            text: `✓ 终审 PASS [${res.block.id}]「${res.block.title}」：已标为完成并立即解除 P3 验收锁${res.rewardMin > 0 ? `，入账 +${res.rewardMin}m 娱乐余额` : ''}。评语：${res.block.judgeNote}`,
+          }
+        }
+        return {
+          ok: true,
+          text: `✗ 终审 REJECT [${res.block.id}]「${res.block.title}」：驳回（${res.block.judgeNote}），继续维持 P3 验收锁直至补充真交付。`,
+        }
+      },
+    }
+  }
   function mountWallBoss(rawSid) {
     let sid = typeof rawSid === 'string' ? rawSid.trim() : ''
     if (sid && (sid === String(config.sessionId || '') || (config.dual !== false && sid === String(config.strategistSessionId || '')))) {
@@ -7550,6 +7716,8 @@ export function apply(ctx) {
         wallLocksTruthTool(),
         { ...vaultSearchTool(), name: 'wall_vault_search' },
         { ...vaultRecentTool(), name: 'wall_vault_recent' },
+        wallIssueDirectiveTool(),
+        wallJudgeDeliveryTool(),
       ]
       for (const tool of roTools) {
         try {
@@ -9009,12 +9177,13 @@ export function apply(ctx) {
     const sealsState = loadSeals(now, tz)
     const overdueSeal = lockingSeal(sealsState, { now, today })
     const overdueContract = Boolean((() => { try { return v4Hub?.contractSessionView?.(now, { escalatedOnly: true }) } catch { return null } })())
+    const overdueDayBlock = Boolean((() => { try { return v4Hub?.dayBlockOverdueSessionView?.(now) } catch { return null } })())
     const arbiterNow = (() => { try { return v4Hub?.computeLockArbiter?.(now) } catch { return null } })()
-    if (overdueSeal || overdueContract || arbiterNow?.priority === 'P3' || arbiterNow?.source === 'CONTRACT_OVERDUE_STRICT') {
+    if (overdueSeal || overdueContract || overdueDayBlock || arbiterNow?.priority === 'P3' || arbiterNow?.source === 'CONTRACT_OVERDUE_STRICT') {
       return {
         ok: false,
         error: 'verify-overdue',
-        text: '当前有已到点未过保底的验收点（严锁中），请先交付验收或保底再解锁，不可用零散余额绕过。紧急情况请走 3 分钟应急通行。',
+        text: '当前有已到点未过保底的验收点或计划验收锁生效中，请先交付验收或保底再解锁，不可用零散余额绕过。紧急情况请走 3 分钟应急通行。',
       }
     }
     if (eveningLockUntil(now, tz)) return { ok: false, error: 'evening-cap', text: '今晚的娱乐上限已经用完了，锁到明早 7 点。余额留着明天用。' }
@@ -9024,7 +9193,8 @@ export function apply(ctx) {
       return { ok: false, error: 'night-lock', text: '已进入深夜睡眠护栏（锁到明早 7 点），余额留着明天用。' }
     }
     const todaySeals = sealsState.items.filter((x) => x.day === today)
-    const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch')
+    const dayVerify = (() => { try { return v4Hub?.getDayVerifySummary?.(now, sealsState.items) } catch { return null } })()
+    const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch') || Boolean(dayVerify?.allVerifyCleared)
     const daytimeSpentMin = daytimeSpentMinToday(now, tz)
     const daytimeRem = Math.max(0, DAYTIME_SPEND_CAP_MIN - daytimeSpentMin)
     if (window === 'daytime' && !floorPassed && daytimeRem < SPEND_MIN) {
@@ -9515,6 +9685,8 @@ export function apply(ctx) {
             keyGaps: b.keyGaps,
             snapshot: b.snapshot,
             bossPrompt: b.bossPrompt,
+            winnerHand: b.winnerHand || null,
+            verifyLockCenter: b.verifyLockCenter || null,
           }
         } catch {
           return null
@@ -9533,9 +9705,25 @@ export function apply(ctx) {
       const word = { pass: '过', partial: '半过', fail: '没过' }[it.verdict]
       const tz = zoneOr(config.timeZone)
       const seal = it.sealId ? loadSeals(now, tz).items.find((x) => x.id === it.sealId) : null
+      let blockNote = ''
+      const targetBlockId = String(p.blockId || p.checkpointId || '').trim()
+      if (!seal && it.verdict === 'pass' && targetBlockId) {
+        try {
+          const jr = v4Hub?.judgeDelivery?.({
+            blockId: targetBlockId,
+            verdict: 'pass',
+            note: it.did || it.topic || 'Gemini 问答回执验收通过',
+            judgedBy: 'gemini',
+            allowAutoFromReceipt: true,
+          }, now)
+          if (jr?.ok && jr.block) {
+            blockNote = `；计划验收块「${jr.block.title}」已同步解锁` + (jr.rewardMin > 0 ? `（+${jr.rewardMin}m 余额）` : '')
+          }
+        } catch {}
+      }
       return { ok: true, text: '回执收到：「' + (it.topic || '回执') + '」' + word +
         (p.verdict === 'pass' && it.verdict !== 'pass' ? '（「过」要 2 组像样的问答，这条按半过记）' : '') +
-        (seal ? '；验收点「' + seal.title + '」现在 ' + seal.actual + '/' + seal.stretch + (SEAL_KINDS[seal.kind]?.unit || '') : (p.checkpointId ? '；没找到这个验收点，只记了回执' : '')) +
+        (seal ? '；验收点「' + seal.title + '」现在 ' + seal.actual + '/' + seal.stretch + (SEAL_KINDS[seal.kind]?.unit || '') : (blockNote || (p.checkpointId ? '；没找到这个验收点，只记了回执' : ''))) +
         (r.cards ? '；问答收成 ' + r.cards + ' 张复习卡' : '') + (rated.text ? '；' + rated.text : '') + '。' }
     }
     if (cmd?.type === 'push_review_cards') {
@@ -10473,10 +10661,23 @@ export function apply(ctx) {
     const todaySeals = (Array.isArray(sealsState?.items) ? sealsState.items : []).filter((x) => x.day === today)
     const overdueSeal = lockingSeal(sealsState, { now, today })
     const overdueContract = Boolean((() => { try { return v4Hub?.contractSessionView?.(now, { escalatedOnly: true }) } catch { return null } })())
+    const dayBlockOverdue = (() => { try { return v4Hub?.dayBlockOverdueSessionView?.(now) } catch { return null } })()
+    const dayBlockActive = (() => { try { return v4Hub?.dayBlockActiveSessionView?.(now) } catch { return null } })()
+    const dayVerify = (() => {
+      try {
+        return v4Hub?.getDayVerifySummary?.(now, sealsState.items)
+      } catch {
+        return null
+      }
+    })() || {
+      totalVerify: 0, passedVerify: 0, overdueCount: 0, pendingReviewCount: 0,
+      allVerifyCleared: false, nextDueBlock: null, activeVerifyBlock: null, activeStrictBlock: null,
+      overdueVerifyBlocks: [], dayBlocks: [],
+    }
     const lockArbiter = (() => { try { return v4Hub?.computeLockArbiter?.(now) } catch { return null } })() || {
       active: false, priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自主推进态', why: '', unlockHow: '',
     }
-    const verifyOverdue = Boolean(overdueSeal || overdueContract || lockArbiter?.priority === 'P3' || lockArbiter?.source === 'CONTRACT_OVERDUE_STRICT')
+    const verifyOverdue = Boolean(overdueSeal || overdueContract || dayBlockOverdue || lockArbiter?.priority === 'P3' || lockArbiter?.source === 'CONTRACT_OVERDUE_STRICT')
 
     const activeLock = {
       active: Boolean(lockArbiter?.active),
@@ -10486,6 +10687,7 @@ export function apply(ctx) {
       why: String(lockArbiter?.why || ''),
       unlockHow: String(lockArbiter?.unlockHow || ''),
       verifyOverdue,
+      triggerTitle: String(lockArbiter?.triggerTitle || dayBlockOverdue?.topic || dayBlockActive?.topic || ''),
     }
 
     const ext = loadExternal()
@@ -10521,7 +10723,7 @@ export function apply(ctx) {
     })()
     const manualBoutStrict = Boolean(presetSess && presetSess.by !== 'verify')
     const dayWallActive = Boolean(dayWorkWallEnabled && (verifySess || dayWallLocked))
-    const overdueOrTakeover = Boolean(overdueSeal || overdueContract || aiWorkStrict || tkActive || ['P3', 'P3.5'].includes(lockArbiter.priority))
+    const overdueOrTakeover = Boolean(overdueSeal || overdueContract || dayBlockOverdue || aiWorkStrict || tkActive || ['P3', 'P3.5'].includes(lockArbiter.priority))
     const winnerMeta = resolveWinnerHandMeta({
       lockArbiter,
       emActive,
@@ -10529,6 +10731,7 @@ export function apply(ctx) {
       gemSessionActive,
       overdueOrTakeover,
       manualBoutStrict,
+      dayBlockActive: Boolean(dayBlockActive),
       dayWallActive,
     })
     const winnerId = winnerMeta.id
@@ -10577,16 +10780,20 @@ export function apply(ctx) {
       {
         id: 'CONTRACT_OVERDUE_STRICT',
         priority: 'P3',
-        name: '计划/封印逾期验收严锁',
-        active: Boolean(overdueSeal || overdueContract || aiWorkStrict || lockArbiter.priority === 'P3'),
-        summary: overdueSeal
-          ? `封印「${overdueSeal.title}」逾期未过保底（${overdueSeal.actual}/${overdueSeal.floor}），严锁不可用零散余额绕过`
-          : (overdueContract
-              ? '计划契约检查点逾期未交付，已进入严格锁定'
-              : (aiWorkStrict ? String(config.aiWorkSession?.why || '专时严格锁定中') : '未触发 · 验收点到点未过保底或契约逾期时触发')),
-        unlockHow: overdueSeal
-          ? '交付证据达到保底线立即解封（或写理由豁免占 1 次紧急解除）'
-          : '交付验收达标或完成本轮专时后立即解封',
+        name: '验收锁（计划块/封印/主管指令）',
+        active: Boolean(overdueSeal || overdueContract || dayBlockOverdue || aiWorkStrict || lockArbiter.priority === 'P3'),
+        summary: dayBlockOverdue
+          ? String(dayBlockOverdue.why)
+          : (overdueSeal
+              ? `封印「${overdueSeal.title}」逾期未过保底（${overdueSeal.actual}/${overdueSeal.floor}），严锁不可用零散余额绕过`
+              : (overdueContract
+                  ? '计划契约检查点逾期未交付，已进入严格锁定'
+                  : (aiWorkStrict ? String(config.aiWorkSession?.why || '专时严格锁定中') : '未触发 · 验收块 / 封印 / 主管指令到点超 1m 未交货即严锁'))),
+        unlockHow: dayBlockOverdue
+          ? '提交真实交付物并通过主管墙 / 客观验收立即解封（最长 60m 封顶）'
+          : (overdueSeal
+              ? '交付证据达到保底线立即解封（或写理由豁免占 1 次紧急解除）'
+              : '交付验收达标或完成本轮专时后立即解封'),
       },
       {
         id: 'TAKEOVER_STRICT',
@@ -10601,16 +10808,20 @@ export function apply(ctx) {
       {
         id: 'BOUT_STRICT',
         priority: 'P4',
-        name: '专心局 / 默认工作窗验收锁',
-        active: Boolean(manualBoutStrict || dayWallActive || lockArbiter.priority === 'P4'),
+        name: '专心局 / 计划时间块 & 防分心锁',
+        active: Boolean(manualBoutStrict || dayBlockActive || dayWallActive || lockArbiter.priority === 'P4'),
         summary: manualBoutStrict
           ? String(presetSess.why || '专注严格局进行中，仅放行工作白名单')
-          : (verifySess
-              ? '工作时段防分心锁生效中（放行全部工作 App，拦截 fun/game）'
-              : (dayWallLocked ? String(wdRaw.why || '防分心时段护栏生效中') : '未触发 · 工作时段或开启专注局时自动守护')),
+          : (dayBlockActive
+              ? String(dayBlockActive.why)
+              : (verifySess
+                  ? '工作时段防分心锁生效中（放行全部工作 App，拦截 fun/game）'
+                  : (dayWallLocked ? String(wdRaw.why || '防分心时段护栏生效中') : '未触发 · 到计划块时自动接管，或工作时段默认守护'))),
         unlockHow: manualBoutStrict
           ? '完成本局收工验收，或撤回手动严格锁 / 花可用余额'
-          : '12:00–14:00 午休 / 饭点自动放风 / 一键关闭默认防分心锁',
+          : (dayBlockActive
+              ? '提交当前时间块交付物过关，或等待本块到达结束时刻'
+              : '12:00–14:00 午休 / 饭点自动放风 / 一键关闭默认防分心锁'),
       },
       {
         id: 'CONTRACT_FLEX',
@@ -10638,6 +10849,10 @@ export function apply(ctx) {
       },
     ]
 
+    const boutOrBlockActive = Boolean(manualBoutStrict || dayBlockActive)
+    const p3UntilMs = Number(dayBlockOverdue?.until || overdueSeal?.lockUntil || config.aiWorkSession?.until || drive?.takeover?.until || 0)
+    const p4UntilMs = Number(manualBoutStrict ? presetSess?.until : (dayBlockActive ? dayBlockActive.until : 0)) || 0
+
     const hands = [
       {
         id: 'EMERGENCY_SUSPEND',
@@ -10649,6 +10864,8 @@ export function apply(ctx) {
         until: Number(emInfo?.until) || 0,
         remainingMin: remMinOf(emInfo?.until),
         canToggle: false,
+        duty: '只管突发急事 3 分钟全放行；每日限次，不管常规解锁',
+        triggerTitle: emActive ? String(emInfo?.reason || '急事通行') : '',
         summary: emActive ? `放行中：${emInfo?.reason || '急事通行'}` : '待命 · 急事时申请 3 分钟全放行',
       },
       {
@@ -10661,6 +10878,8 @@ export function apply(ctx) {
         until: nightUntilFallback,
         remainingMin: remMinOf(nightUntilFallback),
         canToggle: false,
+        duty: '只管 00:30–07:00 防熬夜与 18:00 后晚间娱乐封顶',
+        triggerTitle: nightLocked ? '深夜睡眠保护' : (evLock ? `晚间 ${ev.cap}m 上限耗尽` : ''),
         summary: nightLocked
           ? '深夜睡眠锁生效中（00:30–07:00 锁定娱乐）'
           : (evLock ? `晚间娱乐上限（${ev.cap}m）已用完，锁至明早 07:00` : `未触发 · 00:30–07:00 深夜锁 / 晚间上限 ${ev.cap}m`),
@@ -10675,35 +10894,47 @@ export function apply(ctx) {
         until: Number(gem?.session?.until) || 0,
         remainingMin: remMinOf(gem?.session?.until),
         canToggle: false,
+        duty: '只管 Gemini 连麦思考期间白名单收拢，结束即松',
+        triggerTitle: gemSessionActive ? String(gem?.session?.topic || 'Gemini 连麦') : '',
         summary: gemSessionActive ? `连麦进行中${gem?.session?.topic ? '（' + gem.session.topic + '）' : ''}` : '未开启 · 仅连麦时收拢为连麦白名单',
       },
       {
         id: 'CONTRACT_OVERDUE_STRICT',
-        name: '契约/封印逾期与接管严锁',
-        priority: tkActive && !overdueSeal && !overdueContract && !aiWorkStrict ? 'P3.5' : 'P3',
+        name: '验收锁（计划块/封印/主管指令）',
+        priority: tkActive && !overdueSeal && !overdueContract && !dayBlockOverdue && !aiWorkStrict ? 'P3.5' : 'P3',
         active: overdueOrTakeover,
         isWinner: winnerId === 'CONTRACT_OVERDUE_STRICT',
-        by: overdueSeal ? 'seal' : (tkActive ? 'takeover' : 'contract'),
-        until: Number(overdueSeal?.lockUntil || config.aiWorkSession?.until || drive?.takeover?.until || 0),
-        remainingMin: remMinOf(overdueSeal?.lockUntil || config.aiWorkSession?.until || drive?.takeover?.until),
+        by: dayBlockOverdue ? dayBlockOverdue.by : (overdueSeal ? 'seal' : (tkActive ? 'takeover' : 'contract')),
+        until: p3UntilMs,
+        remainingMin: remMinOf(p3UntilMs),
         canToggle: false,
-        summary: overdueSeal
-          ? `封印「${overdueSeal.title}」逾期未过保底${tkActive ? ' · TAKEOVER_STRICT 接管生效中' : ' · TAKEOVER_STRICT 待命'}`
-          : (tkActive
-              ? `TAKEOVER_STRICT 强制接管回位生效中（${drive?.takeover?.reason || '请回到正事'}）`
-              : (overdueContract ? '契约逾期严格锁生效中（TAKEOVER_STRICT 待命）' : '未触发 · 含 TAKEOVER_STRICT 接管与逾期严锁')),
+        duty: '自律核心 · 只管计划验收块 / 封印 / 主管指令到点交货与逾期严锁',
+        triggerTitle: String(dayBlockOverdue?.topic || overdueSeal?.title || contractView?.topic || drive?.takeover?.reason || ''),
+        summary: dayBlockOverdue
+          ? String(dayBlockOverdue.why)
+          : (overdueSeal
+              ? `封印「${overdueSeal.title}」逾期未过保底${tkActive ? ' · TAKEOVER_STRICT 接管生效中' : ' · TAKEOVER_STRICT 待命'}`
+              : (tkActive
+                  ? `TAKEOVER_STRICT 强制接管回位生效中（${drive?.takeover?.reason || '请回到正事'}）`
+                  : (overdueContract ? '契约逾期严格锁生效中（TAKEOVER_STRICT 待命）' : '未触发 · 计划验收块 / 封印 / 主管指令到点未交即锁'))),
       },
       {
         id: 'BOUT_STRICT',
-        name: '专注严格局（手动/预案）',
+        name: '专注严格局（手动/计划块自动接管）',
         priority: 'P4',
-        active: manualBoutStrict,
+        active: boutOrBlockActive,
         isWinner: winnerId === 'BOUT_STRICT',
-        by: String(presetSess?.by || 'panel'),
-        until: Number(presetSess?.until) || 0,
-        remainingMin: remMinOf(presetSess?.until),
+        by: manualBoutStrict ? String(presetSess?.by || 'panel') : (dayBlockActive ? 'dayblock_active' : 'panel'),
+        until: p4UntilMs,
+        remainingMin: remMinOf(p4UntilMs),
         canToggle: Boolean(manualBoutStrict && !verifyOverdue && !(nightLocked || evLock)),
-        summary: manualBoutStrict ? String(presetSess?.why || '手动/预案严格局锁定中') : '未开启 · 可在专注舱或本页按自定义时长启动',
+        duty: '只管当前进行中的专注块或手动专注局（到点即结束）',
+        triggerTitle: String((manualBoutStrict ? presetSess?.topic : dayBlockActive?.topic) || ''),
+        summary: manualBoutStrict
+          ? String(presetSess?.why || '手动/预案严格局锁定中')
+          : (dayBlockActive
+              ? String(dayBlockActive.why)
+              : '未开启 · 到计划时间块开始时刻自动接管，或在专注舱手动启动'),
       },
       {
         id: 'DAY_WORK_WALL',
@@ -10715,6 +10946,8 @@ export function apply(ctx) {
         until: Number(verifySess?.until) || (dayWallLocked ? Number(wdRaw.until) || 0 : 0),
         remainingMin: remMinOf(Number(verifySess?.until) || (dayWallLocked ? Number(wdRaw.until) || 0 : 0)),
         canToggle: true,
+        duty: '底网 · 仅在无计划块且非午休工作时段拦纯娱乐，不抢专时与验收锁',
+        triggerTitle: dayWallActive ? '工作时段自动防分心' : '',
         summary: !dayWorkWallEnabled
           ? '已手动关闭 · 放行自由推进'
           : (dayWallActive
@@ -10760,7 +10993,7 @@ export function apply(ctx) {
     }
     const lastIntercept = loadLastIntercept()
 
-    const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch')
+    const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch') || Boolean(dayVerify?.allVerifyCleared)
     const daytimeSpentMin = daytimeSpentMinToday(now, tz)
     const daytimeRemainingMin = Math.max(0, DAYTIME_SPEND_CAP_MIN - daytimeSpentMin)
     const eveningRemainingMin = Math.max(0, ev.cap - ev.used)
@@ -10882,15 +11115,57 @@ export function apply(ctx) {
       .slice(-20)
       .reverse()
 
+    const allDayBlocks = Array.isArray(dayVerify?.dayBlocks) ? dayVerify.dayBlocks : []
+    const formatBlockCard = (b) => ({
+      id: b.id,
+      title: b.title,
+      deliverable: b.deliverable,
+      startMin: b.startMin,
+      endMin: b.endMin,
+      startHm: sealHm(b.startMin),
+      dueHm: sealHm(b.endMin),
+      lockMode: b.lockMode,
+      lockedByBoss: Boolean(b.lockedByBoss),
+      source: b.source || 'user',
+      status: b.status,
+      verifyStatus: b.verifyStatus || 'none',
+      submissionText: b.submissionText || '',
+      judgeVerdict: b.judgeVerdict || '',
+      judgeNote: b.judgeNote || '',
+      judgedBy: b.judgedBy || '',
+      overdueLockUntil: Number(b.overdueLockUntil) || 0,
+      remainingLockMin: remMinOf(b.overdueLockUntil),
+      remainingMin: Math.max(0, b.endMin - min),
+    })
+    const verifyCandidates = allDayBlocks.filter((b) => !b.isBreak && b.status !== 'skipped' && (b.lockMode === 'verify' || b.lockedByBoss))
+    const verifyLockCenter = {
+      totalVerify: Number(dayVerify?.totalVerify) || 0,
+      passedVerify: Number(dayVerify?.passedVerify) || 0,
+      overdueCount: (dayVerify?.overdueVerifyBlocks || []).length,
+      pendingReviewCount: Number(dayVerify?.pendingReviewCount) || 0,
+      clearedToday: Boolean(dayVerify?.allVerifyCleared),
+      bossDirectiveCount: verifyCandidates.filter((b) => b.lockedByBoss && b.status !== 'done').length,
+      overdueBlocks: (dayVerify?.overdueVerifyBlocks || []).map(formatBlockCard),
+      activeVerifyBlock: dayVerify?.activeVerifyBlock ? formatBlockCard(dayVerify.activeVerifyBlock) : null,
+      pendingReviewBlocks: verifyCandidates
+        .filter((b) => b.status !== 'done' && (b.verifyStatus === 'submitted' || b.verifyStatus === 'rejected'))
+        .map(formatBlockCard),
+      upcomingVerifyBlocks: verifyCandidates
+        .filter((b) => b.status === 'pending' && b.startMin > min && !['overdue_locked', 'submitted', 'rejected', 'expired_breach'].includes(b.verifyStatus))
+        .map(formatBlockCard),
+    }
+
     return {
       winnerId,
       dayWorkWallEnabled,
+      verifyClearedToday: Boolean(dayVerify?.allVerifyCleared),
       effectiveDecision,
       hands,
       lastIntercept,
       activeLock,
       allLocks,
       wallet,
+      verifyLockCenter,
       scheduleSlots,
       recentActions,
     }
@@ -10933,6 +11208,9 @@ export function apply(ctx) {
     if (action === 'locks_overview') {
       try {
         sealTick(now, tz, lastPhone)
+      } catch {}
+      try {
+        v4Hub?.dayBlockTickNow?.(now)
       } catch {}
       return { v: 1, ok: true, locksOverview: buildLocksOverview(now, tz) }
     }
@@ -10993,7 +11271,15 @@ export function apply(ctx) {
           ...view(state),
           ok: false,
           error: 'hard-lock',
-          text: '当前有逾期封印、接管或深夜睡眠护栏生效，无法直接撤回；请先完成交付验收或走应急通道。',
+          text: '当前有逾期验收锁、封印、接管或深夜睡眠护栏生效，无法直接撤回；请先交付验收通过或走应急通道。',
+        }
+      }
+      if (ovNow.winnerId === 'BOUT_STRICT' && !presetRt.sessionView(now)) {
+        return {
+          ...view(state),
+          ok: false,
+          error: 'dayblock-active',
+          text: '当前正由今日计划时间块自动接管中，非手动严格局；请完成该块或提交交付验收。',
         }
       }
       presetRt.strictOff(now, String(b.by || 'panel-probe'))
@@ -11350,12 +11636,18 @@ export function apply(ctx) {
     const quota = quotaNow(now, tz, phone)
     lastQuota = quota
     const contract = v4Hub?.contractSessionView?.(now) || null
+    const dayBlockOverdue = v4Hub?.dayBlockOverdueSessionView?.(now) || null
+    const dayBlockActive = v4Hub?.dayBlockActiveSessionView?.(now) || null
     const busy = effectiveGear(config, now) === 'busy'
     const run = runningBoutNow()
     const boutApps = [...(Array.isArray(live?.apps?.need) ? live.apps.need : []), ...(Array.isArray(live?.apps?.allow) ? live.apps.allow : [])]
     const agentLease = activeAppLease(extState, now)
-    const workActive = busy || Boolean(run) || Boolean(aiTask(config, now)) || Boolean(contract)
-    const why = run ? '局进行中：' + (run.kind || '这一局') : contract ? contract.why : busy ? '忙时：' + (config.gearWhat || '正事') : '专时进行中'
+    const workActive = busy || Boolean(run) || Boolean(aiTask(config, now)) || Boolean(contract) || Boolean(dayBlockOverdue) || Boolean(dayBlockActive)
+    const why = dayBlockOverdue
+      ? dayBlockOverdue.why
+      : (dayBlockActive
+          ? dayBlockActive.why
+          : (run ? '局进行中：' + (run.kind || '这一局') : contract ? contract.why : busy ? '忙时：' + (config.gearWhat || '正事') : '专时进行中'))
     const taskLease = config.taskLease && Number(config.taskLease.until) > now ? config.taskLease : null
     const busDeny = []
     for (const r of lockBus.list(now)) {
@@ -11373,6 +11665,8 @@ export function apply(ctx) {
         active: workActive,
         why,
         allow: [
+          ...(Array.isArray(dayBlockOverdue?.allow) ? dayBlockOverdue.allow : []),
+          ...(Array.isArray(dayBlockActive?.allow) ? dayBlockActive.allow : []),
           ...(Array.isArray(contract?.allow) ? contract.allow : []),
           ...(Array.isArray(config.defaultAllow) ? config.defaultAllow : []),
           ...boutApps,
@@ -12544,9 +12838,9 @@ export function apply(ctx) {
     if (Number(config.standbySince) && !backoff) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || Infinity, Number(config.standbySince) + STANDBY_LOCK_MS)
     // 力度到了"锁 / 赶"：不管这一球说不说，手机都要执行（说到做到）。
     if (force.level >= 3 && !hardCapped) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now, now + 60_000)
-    // A5 热生效：插件推不动手机（手机是拉的一方）。改过预案的两分钟内让它 5 秒回来问一次，
+    // A5 热生效：插件推不动手机（手机是拉的一方）。改过预案或计划验收块的两分钟内让它 5 秒回来问一次，
     // 下一次问就拿到新的严格模式 / 锁 / 放行名单，不用等他退出重进，也不用等下一次定时醒。
-    if (presetWatchUntil > now) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now + 5000, now + 5000)
+    if (presetWatchUntil > now || dayPlanWatchUntil > now) out.nextCheckAt = Math.min(Number(out.nextCheckAt) || now + 5000, now + 5000)
     // 6.1：改过预案的这两分钟里手机 5 秒回来一次（上一行）；其余时候哪怕没什么可说，也得在
     // IDLE_POLL_MS 内回来看一眼预案——不然"改完等它下次醒"就是拿小时算。
     // 退避的四种理由（别烦我 / 安静时段 / 关掉 / 三球没接）照旧不抢：那是他明说别叫。

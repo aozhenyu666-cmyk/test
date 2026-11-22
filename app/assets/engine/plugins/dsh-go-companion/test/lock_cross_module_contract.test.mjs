@@ -493,3 +493,168 @@ test('Contract 7 (Merged HTTP): /plan-contract 日计划时间盒 + /plan 主动
     tc.mock.timers.reset()
   }
 })
+
+test('Contract 8 (Closed-Loop 1A+2A+3A + 过量法则): verify块到点自动接管→逾期60s升P3验收锁→防空过→主管终审解锁与双鱼6只手职责边界', async (tc) => {
+  // 2026-11-23 09:30 Asia/Shanghai = 01:30 UTC (minuteOfDay = 570)
+  const T_0930 = Date.UTC(2026, 10, 23, 1, 30, 0)
+  tc.mock.timers.enable({ apis: ['Date'], now: T_0930 })
+  try {
+    await withHome(async () => {
+      const sis = agentOf(SIS)
+      const big = agentOf(BIG)
+      const h = host({ [SIS]: sis, [BIG]: big })
+      const personaBefore = sis.contexts[0].text()
+      const sisTruth = sis.contexts.find((c) => c.name === 'dafeiyu-lock-truth')
+
+      // 关掉白天工作墙以隔离测试计划时间块自身的 P4 自动接管与 P3 验收锁
+      await call(h(), 'POST', '/seals', { action: 'toggle_day_wall', enabled: false })
+      await call(h(), 'POST', '/config', { control: true, minGapMs: 0 })
+
+      // 1A 验证：已过点的普通 strict 块不得误触发 P3 验收锁
+      await call(h(), 'POST', '/plan-contract', {
+        action: 'upsert_block',
+        block: { id: 'blk-strict-past', startMin: 550, endMin: 565, title: '已结束普通严格块', lockMode: 'strict', allowedApps: ['md.obsidian'] },
+      })
+      const pStrictPast = (await call(h(), 'POST', '/plan', {
+        roll: 0,
+        timeZone: TZ,
+        phone: { app: 'com.ss.android.ugc.aweme', label: '抖音', fun: true, minutes: 1, screenOn: true },
+      })).body
+      assert.notEqual(pStrictPast.lockArbiter.priority, 'P3', 'strict 块过期绝不能触发 P3 验收锁')
+
+      // 建立一个即将开始的 verify 块 (09:40-10:00 = 580-600)
+      await call(h(), 'POST', '/plan-contract', {
+        action: 'upsert_block',
+        block: { id: 'blk-verify-1', startMin: 580, endMin: 600, title: '资料分析20题硬验收', deliverable: '交20题正确率与3条错因', lockMode: 'verify', allowedApps: ['md.obsidian'] },
+      })
+
+      // 2A 验证：09:45 未手动点开干，发动机心跳自动激活 P4 白名单接管
+      tc.mock.timers.setTime(T_0930 + 15 * 60_000) // 09:45 (585m)
+      const pActive = (await call(h(), 'POST', '/plan', {
+        roll: 0,
+        timeZone: TZ,
+        phone: { app: 'com.ss.android.ugc.aweme', label: '抖音', fun: true, minutes: 1, screenOn: true },
+      })).body
+      assert.equal(pActive.lockArbiter.priority, 'P4')
+      assert.equal(pActive.lock.mode, 'allowlist')
+      assert.ok(pActive.lock.allow.includes('md.obsidian'))
+
+      const ovActive = (await call(h(), 'POST', '/seals', { action: 'locks_overview' })).body.locksOverview
+      assert.equal(ovActive.hands.length, 6)
+      assert.equal(ovActive.winnerId, 'BOUT_STRICT')
+      for (const hand of ovActive.hands) {
+        assert.ok(String(hand.duty || '').trim().length > 0, `hand ${hand.id} 必须声明清晰 duty`)
+      }
+
+      // 禁止 verify 块直接用 set_block_status=done 伪过关
+      const fakeDone = await call(h(), 'POST', '/plan-contract', { action: 'set_block_status', blockId: 'blk-verify-1', status: 'done' })
+      assert.equal(fakeDone.body.ok, false)
+
+      // 1A 逾期 60s 升级 P3：10:02 (endMin + 2m) 触发 CONTRACT_OVERDUE_STRICT，禁止 strict_off 与 spend
+      tc.mock.timers.setTime(T_0930 + 32 * 60_000) // 10:02 (602m)
+      const pOverdue = (await call(h(), 'POST', '/plan', {
+        roll: 0,
+        timeZone: TZ,
+        phone: { app: 'com.ss.android.ugc.aweme', label: '抖音', fun: true, minutes: 1, screenOn: true },
+      })).body
+      assert.equal(pOverdue.lockArbiter.priority, 'P3')
+      assert.equal(pOverdue.lockArbiter.source, 'CONTRACT_OVERDUE_STRICT')
+      assert.ok(pOverdue.lock.allow.includes('md.obsidian'))
+
+      const ovOverdue = (await call(h(), 'POST', '/seals', { action: 'locks_overview' })).body.locksOverview
+      assert.equal(ovOverdue.winnerId, 'CONTRACT_OVERDUE_STRICT')
+      assert.equal(ovOverdue.verifyLockCenter.overdueCount, 1)
+      assert.equal(ovOverdue.verifyLockCenter.overdueBlocks[0].id, 'blk-verify-1')
+
+      const strictOffBlocked = await call(h(), 'POST', '/seals', { action: 'strict_off' })
+      assert.equal(strictOffBlocked.body.ok, false)
+
+      const spendBlocked = await call(h(), 'POST', '/seals', { action: 'spend', minutes: 10, reason: '我想摸鱼刷一下视频休息' })
+      assert.equal(spendBlocked.body.ok, false)
+
+      // 主管通过路由下达硬指令 → 不可删除/不可跳过
+      const dirRes = await call(h(), 'POST', '/wall/boss-chat', {
+        action: 'issue_directive',
+        title: '主管追问错题归纳',
+        deliverable: '提交不少于12字错因条文',
+        durationMin: 45,
+      })
+      assert.equal(dirRes.body.ok, true)
+      const bossBlockId = dirRes.body.block.id
+      assert.equal(dirRes.body.block.lockedByBoss, true)
+      assert.equal((await call(h(), 'POST', '/plan-contract', { action: 'delete_block', blockId: bossBlockId })).body.ok, false)
+      assert.equal((await call(h(), 'POST', '/plan-contract', { action: 'set_block_status', blockId: bossBlockId, status: 'skipped' })).body.ok, false)
+
+      // 3A 防空过：无交付时 pass 被拒；提交 <12 字被拒
+      const passEmpty = await call(h(), 'POST', '/wall/boss-chat', { action: 'judge_delivery', blockId: 'blk-verify-1', verdict: 'pass', note: '空口过' })
+      assert.equal(passEmpty.body.ok, false)
+      assert.equal(passEmpty.body.error, 'no-delivery')
+
+      const subShort = await call(h(), 'POST', '/plan-contract', { action: 'submit_delivery', blockId: 'blk-verify-1', summary: '太短了' })
+      assert.equal(subShort.body.ok, false)
+
+      // 提交 >=12 字真实交付 → 仍保持 P3 直到终审；reject 仍维持 P3
+      const subOk = await call(h(), 'POST', '/plan-contract', {
+        action: 'submit_delivery',
+        blockId: 'blk-verify-1',
+        summary: '已完成20道资料分析真题正确率80%并附3条速算误差复盘',
+      })
+      assert.equal(subOk.body.ok, true)
+      assert.equal(subOk.body.block.verifyStatus, 'submitted')
+
+      const rejRes = await call(h(), 'POST', '/wall/boss-chat', {
+        action: 'judge_delivery',
+        blockId: 'blk-verify-1',
+        verdict: 'reject',
+        note: '请补全3条具体错题编号',
+      })
+      assert.equal(rejRes.body.ok, true)
+      assert.equal(rejRes.body.verdict, 'reject')
+      assert.equal((await call(h(), 'POST', '/seals', { action: 'locks_overview' })).body.locksOverview.winnerId, 'CONTRACT_OVERDUE_STRICT')
+
+      // 重交并通过两块验收（普通验收块 + 主管硬指令）→ P3 解除 + 入账奖励 + verifyClearedToday=true
+      await call(h(), 'POST', '/plan-contract', {
+        action: 'submit_delivery',
+        blockId: 'blk-verify-1',
+        summary: '第3/8/15题基期量错算已按截位规则重算并写入错题本完毕',
+      })
+      const pass1 = await call(h(), 'POST', '/wall/boss-chat', {
+        action: 'judge_delivery',
+        blockId: 'blk-verify-1',
+        verdict: 'pass',
+        note: '物理定位到具体题号，放行',
+      })
+      assert.equal(pass1.body.ok, true)
+      assert.ok(pass1.body.rewardMin > 0)
+
+      await call(h(), 'POST', '/plan-contract', {
+        action: 'submit_delivery',
+        blockId: bossBlockId,
+        summary: '已完成主管硬指令全部错因归纳并附带Obsidian笔记增量',
+      })
+      const pass2 = await call(h(), 'POST', '/wall/boss-chat', {
+        action: 'judge_delivery',
+        blockId: bossBlockId,
+        verdict: 'pass',
+        note: '双块均已核验通过',
+      })
+      assert.equal(pass2.body.ok, true)
+
+      const ovCleared = (await call(h(), 'POST', '/seals', { action: 'locks_overview' })).body.locksOverview
+      assert.equal(ovCleared.verifyClearedToday, true)
+      assert.equal(ovCleared.verifyLockCenter.clearedToday, true)
+      assert.notEqual(ovCleared.winnerId, 'CONTRACT_OVERDUE_STRICT')
+
+      // 验证双鱼真相上下文 <= 6 行且原人设主干/权限隔离未被篡改或污染
+      const truthLines = sisTruth.text().split('\n')
+      assert.ok(truthLines.length <= 6, `真相上下文不得超6行，实际 ${truthLines.length}`)
+      assert.equal(sis.contexts.filter((c) => c.name === 'dafeiyu-lock-truth').length, 1)
+      const curPersonaText = sis.contexts[0].text()
+      assert.ok(curPersonaText.startsWith('你是鱼丸，主人的好朋友（他姐姐鲸澜的妹妹）'))
+      assert.doesNotMatch(curPersonaText, /冷血直属主管|dafeiyu-wall-boss/)
+      assert.ok(personaBefore.startsWith('你是鱼丸'))
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
+})

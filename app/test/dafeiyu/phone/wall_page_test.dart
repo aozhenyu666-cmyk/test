@@ -41,6 +41,13 @@ class FakeWall extends ProactiveChannel {
   final appeals = <({int at, String evidence, String? task})>[];
   final geminiLaunches = <({String topic, String brief})>[];
   final bossChatCalls = <Map<String, Object?>>[];
+  int tickCalls = 0;
+
+  @override
+  Future<bool> tickNow() async {
+    tickCalls++;
+    return true;
+  }
 
   @override
   Future<WallThread?> wallThread() async {
@@ -404,5 +411,65 @@ void main() {
       wall.bossChatCalls.any((c) => c['action'] == 'send' && c['text'] == '刚交完 20 道资料分析截图'),
       isTrue,
     );
+  });
+
+  testWidgets('W24 路径 B 主管质询室：展示验收终审与止损硬指令卡片，支持发起冷血终审与钉入硬指令', (tester) async {
+    final wall = FakeWall(
+      thread: threeBubbles(),
+      statusBody: {'locked': true, 'why': '逾期未交'},
+      wallBossChatData: {
+        'ok': true,
+        'bound': true,
+        'wallSessionId': 'wall-boss-3',
+        'agentOnline': true,
+        'inFlight': false,
+        'verifyLockCenter': {
+          'totalVerify': 1,
+          'passedVerify': 0,
+          'overdueCount': 1,
+          'pendingReviewCount': 1,
+          'overdueBlocks': [
+            {
+              'id': 'blk-w24',
+              'title': '资料分析30题',
+              'dueHm': '10:00',
+              'verifyStatus': 'overdue_locked',
+              'submissionText': '已完成30道真题且错因已总结进笔记',
+            },
+          ],
+          'pendingReviewBlocks': const <Object?>[],
+        },
+        'messages': const <Object?>[],
+      },
+    );
+    await pumpWall(tester, wall);
+    await frames(tester);
+
+    await tester.tap(find.text('主管质询室'));
+    await frames(tester);
+
+    expect(find.byKey(const ValueKey('wall-boss-verify-card')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('wall-boss-request-judge-blk-w24')));
+    await tester.tap(find.byKey(const ValueKey('wall-boss-request-judge-blk-w24')));
+    await frames(tester);
+    expect(
+      wall.bossChatCalls.any((c) => c['action'] == 'request_judge' && c['blockId'] == 'blk-w24'),
+      isTrue,
+    );
+
+    await tester.ensureVisible(find.byKey(const ValueKey('wall-boss-issue-directive-btn')));
+    await tester.tap(find.byKey(const ValueKey('wall-boss-issue-directive-btn')));
+    await frames(tester);
+    expect(find.byKey(const ValueKey('wall-directive-dialog')), findsOneWidget);
+
+    await tester.enterText(find.byKey(const ValueKey('wall-directive-title')), '主管止损硬指令：补做20题');
+    await tester.enterText(find.byKey(const ValueKey('wall-directive-deliverable')), '交20题错因条文与Obsidian摘要');
+    await tester.tap(find.byKey(const ValueKey('wall-directive-submit')));
+    await frames(tester);
+    expect(
+      wall.bossChatCalls.any((c) => c['action'] == 'issue_directive' && c['title'] == '主管止损硬指令：补做20题'),
+      isTrue,
+    );
+    expect(wall.tickCalls, greaterThanOrEqualTo(1));
   });
 }

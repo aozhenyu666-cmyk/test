@@ -89,18 +89,34 @@ export function computeUnifiedLockArbiter({
   const contractReq = reqOf('contract')
   if (contractStrictActive || aiWorkStrictActive || contractReq?.kind === 'allowlist') {
     const src = contractStrictActive ? contractSession : (aiWorkStrictActive ? aiWorkSession : contractReq)
-    // 封印到点没过保底走同一档（P3），只是说法不同：解法是把保底交上。
-    const bySeal = contractStrictActive && contractSession?.by === 'seal'
+    // 计划验收块、封印到点没过保底、主管硬指令与契约逾期共走 P3 核心「验收锁」通道。
+    const by = String(contractStrictActive ? (contractSession?.by || '') : '')
+    const bySeal = by === 'seal'
+    const byBoss = by === 'wall_boss'
+    const byDayBlock = by === 'dayblock'
+    const label = byBoss
+      ? '验收锁 · 主管硬指令逾期'
+      : byDayBlock
+        ? '验收锁 · 计划块未交货'
+        : bySeal
+          ? '封印没过保底'
+          : (contractStrictActive ? '验收锁 · 契约逾期严锁' : '专时严格锁定')
+    const unlockHow = (byBoss || byDayBlock)
+      ? '提交真实交付物并通过主管墙 / 客观验收立即解封（最长 60 分钟封顶并记违约）'
+      : bySeal
+        ? '把保底交上就解（最长 60 分钟）；真有事可以写理由豁免，占一次紧急解除'
+        : String(contractReq?.unlockHow || '提交结构化因果提炼并通过高强度验收即可立即解封')
     return {
       active: true,
       priority: 'P3',
       source: 'CONTRACT_OVERDUE_STRICT',
-      label: bySeal ? '封印没过保底' : (contractStrictActive ? '契约逾期严格锁定' : '专时严格锁定'),
+      by,
+      triggerTitle: String(src?.topic || ''),
+      blockId: String(src?.blockId || ''),
+      label,
       why: String(src?.why || '计划验收点已超 1 分钟缓冲未交付，已自动剥离娱乐/视频仅保留工作工具'),
       allow: Array.isArray(src?.allow) ? src.allow : [],
-      unlockHow: bySeal
-        ? '把保底交上就解（最长 60 分钟）；真有事可以写理由豁免，占一次紧急解除'
-        : String(contractReq?.unlockHow || '提交结构化因果提炼并通过高强度验收即可立即解封'),
+      unlockHow,
     }
   }
 
@@ -130,19 +146,30 @@ export function computeUnifiedLockArbiter({
   if (presetActive || dayWallLocked) {
     const pSrc = rawPresetStrict || presetReq
     const byVerify = presetActive && rawPresetStrict?.by === 'verify'
+    const byDayBlockActive = presetActive && rawPresetStrict?.by === 'dayblock_active'
+    const label = byVerify
+      ? '工作时段防分心（Option A）'
+      : byDayBlockActive
+        ? (rawPresetStrict?.verifyGuard ? '计划验收块护航中' : '计划专注块锁定中')
+        : presetActive ? '专注严格局护栏' : '时段防分心护栏'
     return {
       active: true,
       priority: 'P4',
       source: 'BOUT_STRICT',
       subSource: (byVerify || (!presetActive && dayWallLocked)) ? 'DAY_WORK_WALL' : 'BOUT_STRICT',
-      label: byVerify ? '工作时段防分心（Option A）' : presetActive ? '专注严格局护栏' : '时段防分心护栏',
+      by: byDayBlockActive ? 'dayblock_active' : (byVerify ? 'verify' : (presetActive ? 'preset' : 'wall')),
+      triggerTitle: String(pSrc?.topic || ''),
+      blockId: String(pSrc?.blockId || ''),
+      label,
       why: String(pSrc?.why || wall?.why || wallReq?.why || '当前处于严格专注锁定，仅放行声明白名单与急事底线'),
       allow: Array.isArray(pSrc?.allow) ? pSrc.allow : (Array.isArray(wallReq?.allow) ? wallReq.allow : []),
       unlockHow: byVerify
         ? '12:00–14:00 午休/饭点自动放风，或使用娱乐余额/一键切换关闭防分心锁'
-        : presetActive
-        ? '完成本局收工验收，或撤回手动严格锁 / 在锁屏答对真题换取通行'
-        : '开启契约护航局或进入约定放风时段后自动解锁',
+        : byDayBlockActive
+          ? '提交当前时间块交付物过关，或等待本块到达结束时刻'
+          : presetActive
+            ? '完成本局收工验收，或撤回手动严格锁 / 在锁屏答对真题换取通行'
+            : '开启契约护航局或进入约定放风时段后自动解锁',
     }
   }
 

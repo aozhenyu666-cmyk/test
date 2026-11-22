@@ -12,6 +12,7 @@ class _FakeLocksChannel extends ProactiveChannel {
     this.withOverview = true,
     this.emptyFallback = false,
     this.manualBoutStrict = false,
+    this.withVerifyCenter = false,
   });
 
   final bool verifyOverdue;
@@ -19,12 +20,15 @@ class _FakeLocksChannel extends ProactiveChannel {
   final int availableMin = 45;
   final bool emptyFallback;
   final bool manualBoutStrict;
+  final bool withVerifyCenter;
 
   bool dayWorkWallEnabled = true;
   bool boutStrictActive = false;
   int tickCalls = 0;
   final List<String> launchedPkgs = [];
   final List<Map<String, Object?>> sealsCalls = [];
+  final List<Map<String, Object?>> planContractCalls = [];
+  final List<Map<String, Object?>> wallBossCalls = [];
   final List<int> emergencyMinutes = [];
 
   Map<String, dynamic> _overview() {
@@ -54,13 +58,41 @@ class _FakeLocksChannel extends ProactiveChannel {
           'deny': [],
         },
         'hands': [
-          {'id': 'EMERGENCY_SUSPEND', 'name': '急事 3 分钟通行证', 'priority': 'P0', 'active': false, 'isWinner': false, 'by': 'user', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'summary': '待命'},
-          {'id': 'NIGHT_CURFEW', 'name': '深夜睡眠 & 晚间上限锁', 'priority': 'P1', 'active': false, 'isWinner': false, 'by': 'rhythm', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'summary': '00:30-07:00'},
-          {'id': 'GEMINI_LIVE_CELL', 'name': 'Gemini 连麦舱', 'priority': 'P2', 'active': false, 'isWinner': false, 'by': 'gemini', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'summary': '待命'},
-          {'id': 'CONTRACT_OVERDUE_STRICT', 'name': '契约/封印逾期与接管严锁', 'priority': 'P3', 'active': verifyOverdue, 'isWinner': winnerId == 'CONTRACT_OVERDUE_STRICT', 'by': 'seal', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'summary': '含 TAKEOVER_STRICT 状态'},
-          {'id': 'BOUT_STRICT', 'name': '专注严格局（手动/预案）', 'priority': 'P4', 'active': isManualStrict, 'isWinner': winnerId == 'BOUT_STRICT', 'by': 'panel', 'until': 0, 'remainingMin': isManualStrict ? 30 : 0, 'canToggle': isManualStrict && !verifyOverdue, 'summary': isManualStrict ? '手动严格局锁定中' : '未开启'},
-          {'id': 'DAY_WORK_WALL', 'name': '工作时段默认防分心锁（Option A）', 'priority': 'P4', 'active': dayWorkWallEnabled && !verifyOverdue, 'isWinner': winnerId == 'DAY_WORK_WALL', 'by': 'option-a', 'until': 0, 'remainingMin': dayWorkWallEnabled ? 60 : 0, 'canToggle': true, 'summary': dayWorkWallEnabled ? '生效中' : '已关闭'},
+          {'id': 'EMERGENCY_SUSPEND', 'name': '急事 3 分钟通行证', 'priority': 'P0', 'active': false, 'isWinner': false, 'by': 'user', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'duty': '职责：突发急事 3 分钟全放行', 'summary': '待命'},
+          {'id': 'NIGHT_CURFEW', 'name': '深夜睡眠 & 晚间上限锁', 'priority': 'P1', 'active': false, 'isWinner': false, 'by': 'rhythm', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'duty': '职责：23:00–07:00 睡眠守护', 'summary': '00:30-07:00'},
+          {'id': 'GEMINI_LIVE_CELL', 'name': 'Gemini 连麦舱', 'priority': 'P2', 'active': false, 'isWinner': false, 'by': 'gemini', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'duty': '职责：连麦白名单收拢', 'summary': '待命'},
+          {'id': 'CONTRACT_OVERDUE_STRICT', 'name': '验收锁（计划块/封印/主管指令）', 'priority': 'P3', 'active': verifyOverdue, 'isWinner': winnerId == 'CONTRACT_OVERDUE_STRICT', 'by': 'dayblock', 'triggerTitle': verifyOverdue ? '行测 20 题' : '', 'until': 0, 'remainingMin': verifyOverdue ? 45 : 0, 'canToggle': false, 'duty': '职责：计划验收块/封印/主管硬指令逾期 60s 严锁', 'summary': '含计划块/封印/主管硬指令逾期严锁'},
+          {'id': 'BOUT_STRICT', 'name': '专注严格局（手动/预案）', 'priority': 'P4', 'active': isManualStrict, 'isWinner': winnerId == 'BOUT_STRICT', 'by': 'panel', 'until': 0, 'remainingMin': isManualStrict ? 30 : 0, 'canToggle': isManualStrict && !verifyOverdue, 'duty': '职责：手动严格局 & 计划块定时自动接管', 'summary': isManualStrict ? '手动严格局锁定中' : '未开启'},
+          {'id': 'DAY_WORK_WALL', 'name': '工作时段默认防分心锁（Option A）', 'priority': 'P4', 'active': dayWorkWallEnabled && !verifyOverdue, 'isWinner': winnerId == 'DAY_WORK_WALL', 'by': 'option-a', 'until': 0, 'remainingMin': dayWorkWallEnabled ? 60 : 0, 'canToggle': true, 'duty': '职责：07:00–23:00 默认防分心护栏', 'summary': dayWorkWallEnabled ? '生效中' : '已关闭'},
         ],
+        if (withVerifyCenter)
+          'verifyLockCenter': {
+            'totalVerify': 2,
+            'passedVerify': 0,
+            'overdueCount': 1,
+            'pendingReviewCount': 1,
+            'clearedToday': false,
+            'overdueBlocks': [
+              {
+                'id': 'blk-overdue-1',
+                'title': '资料分析 20 题硬验收',
+                'deliverable': '交20题正确率与3条错因',
+                'dueHm': '10:00',
+                'remainingLockMin': 45,
+                'lockedByBoss': true,
+                'verifyStatus': 'overdue_locked',
+              },
+            ],
+            'pendingReviewBlocks': [
+              {
+                'id': 'blk-pending-1',
+                'title': '申论小作文提纲',
+                'deliverable': '提交结构提纲与论点',
+                'dueHm': '11:30',
+                'verifyStatus': 'submitted',
+              },
+            ],
+          },
         'lastIntercept': {
           'pkg': 'com.ss.android.ugc.aweme',
           'label': '抖音',
@@ -145,6 +177,18 @@ class _FakeLocksChannel extends ProactiveChannel {
   Future<bool> launchApp(String packageName) async {
     launchedPkgs.add(packageName);
     return true;
+  }
+
+  @override
+  Future<Map<String, dynamic>?> planContractOp([Map<String, Object?>? body]) async {
+    if (body != null) planContractCalls.add(Map<String, Object?>.from(body));
+    return {'ok': true};
+  }
+
+  @override
+  Future<Map<String, dynamic>?> wallBossChat([Map<String, Object?>? body]) async {
+    if (body != null) wallBossCalls.add(Map<String, Object?>.from(body));
+    return {'ok': true, 'text': '已通知主管质询室开展冷血终审'};
   }
 
   @override
@@ -274,7 +318,11 @@ void main() {
     expect(ch.emergencyMinutes, [3]);
 
     // 跳转 App 使用时长统计独立页
-    await tester.ensureVisible(find.byKey(const ValueKey('locks-open-analytics-row')));
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('locks-open-analytics-row')),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
     await tester.tap(find.byKey(const ValueKey('locks-open-analytics-row')));
     await settlePhone(tester);
     expect(find.byType(UsageAnalyticsPage), findsOneWidget);
@@ -341,5 +389,47 @@ void main() {
     expect(ch.sealsCalls.any((c) => c['action'] == 'toggle_day_wall' && c['enabled'] == false), isTrue);
     expect(ch.dayWorkWallEnabled, isFalse);
     expect(ch.tickCalls, 2);
+  });
+
+  testWidgets('LocksBalancePage 展示验收锁中枢、6只手职责，支持提交交付与通知主管终审', (tester) async {
+    final ch = _FakeLocksChannel(verifyOverdue: true, withVerifyCenter: true);
+    await pumpPhone(tester, LocksBalancePage(channel: ch));
+    await settlePhone(tester);
+
+    expect(find.byKey(const ValueKey('locks-verify-center-card')), findsOneWidget);
+    expect(find.byKey(const ValueKey('locks-verify-overdue-blk-overdue-1')), findsOneWidget);
+    expect(find.textContaining('职责：计划验收块/封印/主管硬指令逾期 60s 严锁'), findsWidgets);
+
+    // 点击提交交付解锁 → 先验 <12 字拦截，再提真交付
+    await tester.ensureVisible(find.byKey(const ValueKey('locks-verify-submit-blk-overdue-1')));
+    await tester.tap(find.byKey(const ValueKey('locks-verify-submit-blk-overdue-1')));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('locks-delivery-dialog')), findsOneWidget);
+
+    await tester.enterText(find.byKey(const ValueKey('locks-delivery-input')), '太短');
+    await tester.tap(find.byKey(const ValueKey('locks-delivery-submit')));
+    await settlePhone(tester);
+    expect(find.textContaining('至少 12 个字'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('locks-delivery-input')),
+      '已完成20道资料分析真题并整理3条错因写进Obsidian笔记',
+    );
+    await tester.tap(find.byKey(const ValueKey('locks-delivery-submit')));
+    await settlePhone(tester);
+    expect(
+      ch.planContractCalls.any((c) => c['action'] == 'submit_delivery' && c['blockId'] == 'blk-overdue-1'),
+      isTrue,
+    );
+    expect(ch.tickCalls, greaterThanOrEqualTo(1));
+
+    // 点击待审块通知主管终审
+    await tester.ensureVisible(find.byKey(const ValueKey('locks-verify-judge-blk-pending-1')));
+    await tester.tap(find.byKey(const ValueKey('locks-verify-judge-blk-pending-1')));
+    await settlePhone(tester);
+    expect(
+      ch.wallBossCalls.any((c) => c['action'] == 'request_judge' && c['blockId'] == 'blk-pending-1'),
+      isTrue,
+    );
   });
 }
