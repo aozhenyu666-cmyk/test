@@ -15,13 +15,16 @@ import '../../ui/common/segmented_pill.dart';
 import '../../ui/common/status_chip.dart';
 import '../../ui/pets/pet_settings_page.dart';
 import 'app_tiers_page.dart';
+import 'bank_manager_page.dart';
 import 'covenant_page.dart';
 import 'gemini_bridge_page.dart';
 import 'health_page.dart';
+import 'locks_balance_page.dart';
 import 'records_page.dart';
 import 'today_cards.dart';
 import 'proactive_page.dart';
 import 'sisters_page.dart';
+import 'strategy_horizons_page.dart';
 import 'usage_analytics_page.dart';
 import 'wall_page.dart';
 import '../../ui/shell/page_frame.dart';
@@ -48,6 +51,8 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
 
   bool _loading = true;
   bool _actionBusy = false;
+  bool _lowFreqHubExpanded = false;
+  bool _lowFreqFishExpanded = false;
   Map<String, Object?>? _wallStatus;
   ProactiveStatus? _proactive;
   DepositView? _deposit;
@@ -620,10 +625,6 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
             chevron: true,
             onTap: () => _openPage(const CovenantPage()),
           ),
-          if (_rotate != null) ...[
-            _rotateRow('companion', '鱼丸'),
-            _rotateRow('strategist', '鲸澜'),
-          ],
         ],
       ),
       ListPageCard(
@@ -666,7 +667,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
         ],
       ),
       ListPageCard(
-        title: '声音、形象与骰子',
+        title: '声音与形象',
         margin: _groupMargin,
         children: [
           ListPageRow(
@@ -684,15 +685,36 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
             chevron: true,
             onTap: () => _openPage(const PetSettingsPage()),
           ),
+        ],
+      ),
+      ListPageCard(
+        title: '低频工程维护',
+        margin: _groupMargin,
+        children: [
           ListPageRow(
-            icon: AppIcons.overlayBall,
-            iconColor: shakeOn ? colors.success : null,
-            title: '摇一摇弹六骰',
-            subtitle: '亮屏时轻晃两下手机弹出六骰卡片；局页「摇一骰」随时可点',
+            key: const ValueKey('hub-fish-lowfreq-toggle'),
+            icon: AppIcons.configure,
+            title: '会话换班与摇骰配置',
+            subtitle: _lowFreqFishExpanded ? '点击收起低频配置' : '点击展开：鱼丸/鲸澜对话换班 · 摇一摇弹六骰监听开关',
             subtitleMaxLines: 2,
-            badge: StatusChip(tone: shakeOn ? StatusTone.ok : StatusTone.idle, label: shakeOn ? '监听中' : '已暂停'),
-            onTap: _actionBusy ? null : () => unawaited(_toggleShakeDice()),
+            trailing: Icon(_lowFreqFishExpanded ? AppIcons.collapse : AppIcons.expand, size: 18, color: colors.textTertiary),
+            onTap: () => setState(() => _lowFreqFishExpanded = !_lowFreqFishExpanded),
           ),
+          if (_lowFreqFishExpanded) ...[
+            if (_rotate != null) ...[
+              _rotateRow('companion', '鱼丸'),
+              _rotateRow('strategist', '鲸澜'),
+            ],
+            ListPageRow(
+              icon: AppIcons.overlayBall,
+              iconColor: shakeOn ? colors.success : null,
+              title: '摇一摇弹六骰',
+              subtitle: '亮屏时轻晃两下手机弹出六骰卡片；局页「摇一骰」随时可点',
+              subtitleMaxLines: 2,
+              badge: StatusChip(tone: shakeOn ? StatusTone.ok : StatusTone.idle, label: shakeOn ? '监听中' : '已暂停'),
+              onTap: _actionBusy ? null : () => unawaited(_toggleShakeDice()),
+            ),
+          ],
         ],
       ),
     ];
@@ -894,15 +916,62 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
           onFooterTap: () => _openPage(const WallPage()),
         ),
         ListPageCard(
+          key: const ValueKey('hub-quick-entries'),
+          title: '高频总控入口',
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            ListPageRow(
+              key: const ValueKey('hub-entry-locks'),
+              icon: AppIcons.balance,
+              iconColor: colors.warning,
+              title: '锁与余额总控台',
+              subtitle: '8 道锁实时裁决 · 手机可用余额大盘 · 分时花余额 · 双鱼轨迹',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => _openPage(LocksBalancePage(channel: _channel)),
+            ),
+            ListPageRow(
+              key: const ValueKey('hub-entry-strategy'),
+              icon: AppIcons.planMode,
+              iconColor: Theme.of(context).colorScheme.primary,
+              title: '三层战略作战室（长期/中期/今日验收锁）',
+              subtitle: '长期北极星 · 中期战役 · 今日时间轴与验收锁 · Gemini 联调',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => _openPage(StrategyHorizonsPage(channel: _channel)),
+            ),
+            ListPageRow(
+              key: const ValueKey('hub-entry-bank'),
+              icon: AppIcons.skill,
+              iconColor: colors.info,
+              title: '题库中心',
+              subtitle: '导入真题/知识卡 · 刷题挣余额与锁屏解锁设置',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => _openPage(BankManagerPage(channel: _channel)),
+            ),
+            ListPageRow(
+              key: const ValueKey('hub-entry-analytics'),
+              icon: AppIcons.chart,
+              iconColor: colors.success,
+              title: '每日使用时长统计',
+              subtitle: '24h 时间切片 · 90 天趋势 · Gemini 共脑 · 晚间 AI 总报',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => _openPage(UsageAnalyticsPage(channel: _channel)),
+            ),
+          ],
+        ),
+        ListPageCard(
           title: '设置',
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
           children: [
             ListPageRow(
               key: const ValueKey('hub-group-fish'),
               icon: AppIcons.team,
               iconColor: colors.info,
               title: '两条鱼',
-              subtitle: '姐妹与记忆 · 会话换班 · 主动搭话 · Gemini · 声线 · 桌宠 · 摇一摇',
+              subtitle: '姐妹与记忆 · 主动搭话 · Gemini · 声线 · 桌宠',
               subtitleMaxLines: 2,
               value: _proactive == null ? null : (_proactive!.config.enabled ? '主动开' : '主动关'),
               chevron: true,
@@ -919,6 +988,13 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               chevron: true,
               onTap: () => _openGroup('锁', '落不落得下来、落多重、锁谁放谁', _lockGroup),
             ),
+          ],
+        ),
+        ListPageCard(
+          key: const ValueKey('hub-low-freq-card'),
+          title: '低频维护与底层工具',
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          children: [
             ListPageRow(
               key: const ValueKey('hub-group-data'),
               icon: AppIcons.files,
@@ -937,6 +1013,41 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               chevron: true,
               onTap: () => _openGroup('诊断', '卡住了怎么办、出过什么事', _diagGroup),
             ),
+            ListPageRow(
+              key: const ValueKey('hub-low-freq-toggle'),
+              icon: AppIcons.diagnostics,
+              title: '更多低频维护项（底层诊断 / 摇骰 / 时钟）',
+              subtitle: _lowFreqHubExpanded ? '点击收起' : '点击展开快捷工程维护入口',
+              trailing: Icon(_lowFreqHubExpanded ? AppIcons.collapse : AppIcons.expand, size: 18, color: colors.textTertiary),
+              onTap: () => setState(() => _lowFreqHubExpanded = !_lowFreqHubExpanded),
+            ),
+            if (_lowFreqHubExpanded) ...[
+              ListPageRow(
+                icon: AppIcons.diagnostics,
+                title: '底层存储与权限体检',
+                subtitle: '逐项排查无障碍、悬浮窗、通知、笔记库与引擎连接',
+                chevron: true,
+                onTap: () => _openPage(HealthPage(channel: _channel)),
+              ),
+              ListPageRow(
+                icon: AppIcons.overlayBall,
+                title: '摇一摇弹六骰监听',
+                subtitle: '微干预悬浮骰子开关',
+                badge: StatusChip(
+                  tone: (_shakeDice?['enabled'] != false) ? StatusTone.ok : StatusTone.idle,
+                  label: (_shakeDice?['enabled'] != false) ? '监听中' : '已暂停',
+                ),
+                onTap: _actionBusy ? null : () => unawaited(_toggleShakeDice()),
+              ),
+              ListPageRow(
+                icon: AppIcons.queued,
+                title: '底层时钟与队列',
+                subtitle: 'Cron / 高频 / 番茄闹钟',
+                value: _clockCount > 0 ? '$_clockCount 个' : null,
+                chevron: true,
+                onTap: () => _openPage(BoutsWorkspacePage(channel: _channel)),
+              ),
+            ],
           ],
         ),
       ],

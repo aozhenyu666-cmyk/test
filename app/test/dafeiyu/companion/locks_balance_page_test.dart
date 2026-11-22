@@ -1,0 +1,232 @@
+import 'package:dsh_app/dafeiyu/channels/proactive_state.dart';
+import 'package:dsh_app/dafeiyu/ui/locks_balance_page.dart';
+import 'package:dsh_app/dafeiyu/ui/usage_analytics_page.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import '../../phone/harness.dart';
+
+class _FakeLocksChannel extends ProactiveChannel {
+  _FakeLocksChannel({
+    this.verifyOverdue = false,
+    this.withOverview = true,
+    this.emptyFallback = false,
+  });
+
+  final bool verifyOverdue;
+  final bool withOverview;
+  final int availableMin = 45;
+  final bool emptyFallback;
+
+  final List<Map<String, Object?>> sealsCalls = [];
+  final List<int> emergencyMinutes = [];
+
+  Map<String, dynamic> _overview() => {
+        'activeLock': verifyOverdue
+            ? {
+                'active': true,
+                'priority': 'P3',
+                'source': 'CONTRACT_OVERDUE_STRICT',
+                'label': '契约/封印逾期严锁',
+                'why': '「行测 20 题」已到截止时刻仍未过保底',
+                'unlockHow': '交付验收过保底，或写理由豁免',
+                'verifyOverdue': true,
+              }
+            : {
+                'active': true,
+                'priority': 'P4',
+                'source': 'BOUT_STRICT',
+                'label': '专心局护航中',
+                'why': '当前处于上午工作默认验收时段',
+                'unlockHow': '完成本局验收 / 花余额 / 刷题临放',
+                'verifyOverdue': false,
+              },
+        'allLocks': [
+          {'id': 'EMERGENCY_SUSPEND', 'priority': 'P0', 'name': '急事 3 分钟通行证', 'active': false, 'summary': '突发急事通道', 'unlockHow': '到时自动回位'},
+          {'id': 'NIGHT_CURFEW', 'priority': 'P1', 'name': '深夜睡眠 & 晚间上限锁', 'active': false, 'summary': '23:00–07:00 睡眠守护', 'unlockHow': '07:00 解除'},
+          {'id': 'GEMINI_LIVE_CELL', 'priority': 'P2', 'name': 'Gemini 连麦舱', 'active': false, 'summary': '语音共脑舱', 'unlockHow': '结束连麦'},
+          {'id': 'CONTRACT_OVERDUE_STRICT', 'priority': 'P3', 'name': '计划/封印逾期验收严锁', 'active': verifyOverdue, 'summary': '到点未过保底', 'unlockHow': '交付验收'},
+          {'id': 'TAKEOVER_STRICT', 'priority': 'P3.5', 'name': '强制接管回位锁', 'active': false, 'summary': '强接管拉回', 'unlockHow': '完成回位动作'},
+          {'id': 'BOUT_STRICT', 'priority': 'P4', 'name': '专心局 / 默认工作窗验收锁', 'active': !verifyOverdue, 'summary': '工作窗默认验收', 'unlockHow': '过验收或花余额'},
+          {'id': 'CONTRACT_FLEX', 'priority': 'P5', 'name': '契约柔性护航', 'active': false, 'summary': '柔性护航', 'unlockHow': '通过检查点'},
+          {'id': 'AUTONOMY_RELAXED', 'priority': 'P6', 'name': '余额门槛 & 行为雷达 / 双鱼封禁', 'active': false, 'summary': '余额与双鱼守护', 'unlockHow': '刷题挣余额'},
+        ],
+        'wallet': {
+          'availableMin': availableMin,
+          'carryInMin': 30,
+          'earnedBankMin': 15,
+          'earnedBankCap': 60,
+          'earnedWorkMin': 0,
+          'earnedTotalMin': 15,
+          'penaltyMin': 0,
+          'daytimeSpentMin': 10,
+          'daytimeCapMin': 30,
+          'daytimeRemainingMin': 20,
+          'eveningSpentMin': 0,
+          'eveningCapMin': 120,
+          'eveningRemainingMin': 120,
+          'currentWindow': 'daytime',
+          'currentWindowLabel': '白天工作时段（零散上限 30m）',
+          'floorPassed': false,
+          'canSpendNow': !verifyOverdue && availableMin >= 5,
+          'spendBlockReason': verifyOverdue ? '逾期严锁中，须先交付验收' : '',
+          'nextFreeWindowText': '12:00–14:00 午休或 18:00 后',
+          'activeSpendPass': null,
+          'lockShadow': false,
+        },
+        'scheduleSlots': const [],
+        'recentActions': [
+          {
+            'at': 1700000000000,
+            'hm': '10:15',
+            'actor': '鲸澜',
+            'action': '临时封禁',
+            'target': '拼多多',
+            'reason': '工作时段高频误触，临时限制 45 分钟',
+          },
+        ],
+      };
+
+  @override
+  Future<Map<String, dynamic>?> sealsOp(Map<String, Object?> body) async {
+    sealsCalls.add(body);
+    if (body['action'] == 'spend') {
+      return {'ok': true, 'text': '已批准 ${body['minutes']} 分钟放松窗口'};
+    }
+    if (!withOverview) {
+      return {'ok': true, 'items': const <Object>[]};
+    }
+    return {
+      'ok': true,
+      'locksOverview': _overview(),
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>?> todayStatus() async {
+    if (emptyFallback) return const {'tasks': <Object>[], 'horizons': {'long': <Object>[], 'medium': <Object>[]}};
+    if (!withOverview) {
+      return {
+        'tasks': const <Object>[],
+        'lockArbiter': {
+          'active': true,
+          'priority': 'P4',
+          'source': 'BOUT_STRICT',
+          'label': '旧版兼容默认局',
+          'why': '来自旧版 lockArbiter 降级字段',
+          'unlockHow': '完成本局验收',
+        },
+        'timeLedger': {
+          'funLeft': 28,
+          'carry': 10,
+          'earnedBank': 18,
+          'earnedBout': 0,
+          'earned': 18,
+          'penalty': 0,
+          'funUsed': 0,
+          'gameLeft': 60,
+        },
+      };
+    }
+    return {
+      'tasks': const <Object>[],
+      'locksOverview': _overview(),
+    };
+  }
+
+  @override
+  Future<Map<String, Object?>?> wallStatus() async => const {'locked': true, 'why': '墙护航中'};
+
+  @override
+  Future<bool?> lockShadow() async => false;
+
+  @override
+  Future<bool> emergencySuspendStrict({int minutes = 10}) async {
+    emergencyMinutes.add(minutes);
+    return true;
+  }
+
+  @override
+  Future<Map<String, dynamic>?> analyticsOp([Map<String, Object?>? body]) async => const {
+        'ok': true,
+        'buckets': {'mainlineMin': 30, 'videoStudyMin': 0, 'geminiMin': 10, 'toolTinkerMin': 0, 'funMin': 5, 'totalMin': 45},
+      };
+
+  @override
+  Future<Map<String, dynamic>?> storylineOp([Map<String, Object?>? body]) async => const {'ok': true, 'entries': []};
+}
+
+void main() {
+  testWidgets('LocksBalancePage 展示 8 道锁、分时余额大盘、轨迹，并支持花余额与 3 分钟急事通道', (tester) async {
+    final ch = _FakeLocksChannel();
+    await pumpPhone(tester, LocksBalancePage(channel: ch));
+    await settlePhone(tester);
+
+    expect(find.text('锁与余额总控'), findsWidgets);
+    expect(find.text('P4 · 专心局护航中'), findsOneWidget);
+    expect(find.text('45 分钟'), findsOneWidget);
+    expect(find.text('10 / 30m'), findsOneWidget);
+    expect(find.text('0 / 120m'), findsOneWidget);
+    expect(find.text('鲸澜 · 临时封禁（拼多多）'), findsOneWidget);
+    for (final prio in ['P0', 'P1', 'P2', 'P3', 'P3.5', 'P4', 'P5', 'P6']) {
+      expect(find.byKey(ValueKey('lock-item-$prio')), findsOneWidget);
+    }
+
+    // 花余额放松弹窗 -> 发 spend
+    await tester.tap(find.byKey(const ValueKey('locks-spend-btn')));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('locks-spend-dialog')), findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('locks-spend-minutes')), '15');
+    await tester.enterText(find.byKey(const ValueKey('locks-spend-reason')), '刚做完一套行测休息一会儿');
+    await tester.tap(find.byKey(const ValueKey('locks-spend-submit')));
+    await settlePhone(tester);
+    expect(
+      ch.sealsCalls.any((c) => c['action'] == 'spend' && c['minutes'] == 15 && c['reason'] == '刚做完一套行测休息一会儿'),
+      isTrue,
+    );
+
+    // 急事 3 分钟通道
+    await tester.tap(find.byKey(const ValueKey('locks-emergency-btn')));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('locks-emergency-dialog')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('locks-emergency-confirm')));
+    await settlePhone(tester);
+    expect(ch.emergencyMinutes, [3]);
+
+    // 跳转 App 使用时长统计独立页
+    await tester.ensureVisible(find.byKey(const ValueKey('locks-open-analytics-row')));
+    await tester.tap(find.byKey(const ValueKey('locks-open-analytics-row')));
+    await settlePhone(tester);
+    expect(find.byType(UsageAnalyticsPage), findsOneWidget);
+  });
+
+  testWidgets('LocksBalancePage 逾期严锁时醒目警示并拦截花零散余额', (tester) async {
+    final ch = _FakeLocksChannel(verifyOverdue: true);
+    await pumpPhone(tester, LocksBalancePage(channel: ch));
+    await settlePhone(tester);
+
+    expect(find.byKey(const ValueKey('locks-overdue-warning')), findsOneWidget);
+    expect(find.text('逾期严锁：不可花零散余额绕过，须先交付'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('locks-spend-btn')));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('locks-spend-dialog')), findsNothing);
+    expect(ch.sealsCalls.any((c) => c['action'] == 'spend'), isFalse);
+  });
+
+  testWidgets('LocksBalancePage 在无 locksOverview 时优雅降级为 timeLedger / lockArbiter 与空壳兜底', (tester) async {
+    final legacy = _FakeLocksChannel(withOverview: false);
+    await pumpPhone(tester, LocksBalancePage(channel: legacy));
+    await settlePhone(tester);
+
+    expect(find.text('P4 · 旧版兼容默认局'), findsOneWidget);
+    expect(find.text('28 分钟'), findsOneWidget);
+    expect(find.byKey(const ValueKey('lock-item-P0')), findsOneWidget);
+
+    final bare = _FakeLocksChannel(withOverview: false, emptyFallback: true);
+    await pumpPhone(tester, LocksBalancePage(key: const ValueKey('bare-fallback'), channel: bare));
+    await settlePhone(tester);
+    expect(find.text('0 分钟'), findsOneWidget);
+    expect(find.byKey(const ValueKey('lock-item-P6')), findsOneWidget);
+  });
+}
