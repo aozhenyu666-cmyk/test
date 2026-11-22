@@ -316,15 +316,114 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       _banner = null;
     });
     final res = await _channel.boutsCommand(body);
+    final ok = res != null && res['ok'] != false;
+    if (ok) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
     await _refresh(silent: true);
     if (!mounted) return;
-    final ok = res != null && res['ok'] != false;
     setState(() {
       _busy = false;
       _banner = ok
           ? (toast ?? '${res['say'] ?? res['toast'] ?? res['text'] ?? '已执行'}')
           : '操作未成功：${res?['error'] ?? res?['toast'] ?? res?['say'] ?? '引擎暂未就绪'}';
     });
+  }
+
+  Future<int?> _pickCustomMinutesDialog({
+    required String title,
+    int initialMinutes = 45,
+    bool showPresets = false,
+  }) async {
+    final ctrl = TextEditingController(text: '$initialMinutes');
+    var selected = initialMinutes.clamp(10, 360);
+    String? error;
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          key: const ValueKey('bout-duration-dialog'),
+          title: Text(title),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (showPresets) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final m in const [25, 45, 90])
+                      ChoiceChip(
+                        label: Text('${m}m'),
+                        selected: selected == m,
+                        onSelected: (_) {
+                          ctrl.text = '$m';
+                          setLocal(() {
+                            selected = m;
+                            error = null;
+                          });
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
+              TextField(
+                key: const ValueKey('bout-duration-custom-input'),
+                controller: ctrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                  labelText: '自定义时长（10–360 分钟）',
+                  suffixText: '分钟',
+                ),
+                onChanged: (raw) {
+                  final v = int.tryParse(raw.trim());
+                  if (v != null) selected = v;
+                  if (error != null) setLocal(() => error = null);
+                },
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 6),
+                Text(error!, style: TextStyle(color: Theme.of(ctx).colorScheme.error, fontSize: 12)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
+            FilledButton(
+              key: const ValueKey('bout-duration-confirm'),
+              onPressed: () {
+                final v = int.tryParse(ctrl.text.trim()) ?? selected;
+                if (v < 10 || v > 360) {
+                  setLocal(() => error = '时长需在 10–360 分钟之间');
+                  return;
+                }
+                Navigator.of(ctx).pop(v);
+              },
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      ),
+    );
+    disposeAfterRoute(ctrl);
+    return picked;
+  }
+
+  Future<void> _upgradeToStrictWithDuration() async {
+    final mins = await _pickCustomMinutesDialog(
+      title: '选择严格锁时长',
+      initialMinutes: _selectedMinutes,
+      showPresets: true,
+    );
+    if (mins == null || !mounted) return;
+    setState(() => _selectedMinutes = mins);
+    await _sendBoutCommand(
+      {'action': 'strict', 'minutes': mins},
+      toast: '已升级为严格锁模式（$mins 分钟）',
+    );
   }
 
   Future<void> _startOneLineFocus() async {
@@ -350,9 +449,12 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       'apps': {'need': allow, 'allow': allow},
       'strict': _strictMode,
     });
+    final ok = res != null && res['ok'] != false;
+    if (ok) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
     await _refresh(silent: true);
     if (!mounted) return;
-    final ok = res != null && res['ok'] != false;
     if (ok) _goalCtrl.clear();
     setState(() {
       _busy = false;
@@ -940,7 +1042,10 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                     onSelected: _busy
                         ? () {}
                         : () async {
-                            await _channel.emergencySuspendStrict(minutes: 10);
+                            final ok = await _channel.emergencySuspendStrict(minutes: 10);
+                            if (ok) {
+                              unawaited(_channel.tickNow().catchError((_) => false));
+                            }
                             await _refresh(silent: true);
                             if (mounted) setState(() => _banner = '已紧急挂起严格锁 10 分钟，可安心调整设置或切换应用');
                           },
@@ -960,13 +1065,17 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                   ),
                   const SizedBox(width: 8),
                   OutlinedButton(
+                    key: const ValueKey('today-bout-strict-toggle'),
                     style: OutlinedButton.styleFrom(shape: AppShape.card),
                     onPressed: _busy
                         ? null
-                        : () => unawaited(_sendBoutCommand(
-                              {'action': strict ? 'relax' : 'strict'},
-                              toast: strict ? '已切为温和守护' : '已升级为严格锁模式',
-                            )),
+                        : () {
+                            if (strict) {
+                              unawaited(_sendBoutCommand({'action': 'relax'}, toast: '已切为温和守护'));
+                            } else {
+                              unawaited(_upgradeToStrictWithDuration());
+                            }
+                          },
                     child: Text(strict ? '切温和' : '切严格'),
                   ),
                   const SizedBox(width: 8),
@@ -1084,16 +1193,34 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
               ),
             ),
             const SizedBox(height: 10),
-            SegmentedPill<int>(
-              height: 34,
-              segments: const [
-                PillSegment(25, '25 分钟'),
-                PillSegment(45, '45 分钟'),
-                PillSegment(60, '60 分钟'),
-                PillSegment(90, '90 分钟'),
+            Wrap(
+              key: const ValueKey('today-duration-capsules'),
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final m in const [25, 45, 90])
+                  CapsuleChoiceChip(
+                    key: ValueKey('today-duration-${m}m'),
+                    label: '${m}m',
+                    selected: _selectedMinutes == m,
+                    onSelected: () => setState(() => _selectedMinutes = m),
+                  ),
+                CapsuleChoiceChip(
+                  key: const ValueKey('today-duration-custom'),
+                  icon: AppIcons.queued,
+                  label: const [25, 45, 90].contains(_selectedMinutes) ? '自定义' : '自定义 ${_selectedMinutes}m',
+                  selected: !const [25, 45, 90].contains(_selectedMinutes),
+                  onSelected: () async {
+                    final custom = await _pickCustomMinutesDialog(
+                      title: '自定义专注时长',
+                      initialMinutes: _selectedMinutes,
+                    );
+                    if (custom != null && mounted) {
+                      setState(() => _selectedMinutes = custom);
+                    }
+                  },
+                ),
               ],
-              selected: const [25, 45, 60, 90].contains(_selectedMinutes) ? _selectedMinutes : 45,
-              onChanged: (m) => setState(() => _selectedMinutes = m),
             ),
             const SizedBox(height: 10),
             Wrap(
@@ -1652,10 +1779,13 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
             title: strict ? '切成温和局' : '升级为严格锁',
             onTap: _busy
                 ? null
-                : () => unawaited(_sendBoutCommand(
-                      {'action': strict ? 'relax' : 'strict'},
-                      toast: strict ? '已切为温和守护' : '已升级为严格锁模式',
-                    )),
+                : () {
+                    if (strict) {
+                      unawaited(_sendBoutCommand({'action': 'relax'}, toast: '已切为温和守护'));
+                    } else {
+                      unawaited(_upgradeToStrictWithDuration());
+                    }
+                  },
           ),
           ListPageRow(
             icon: AppIcons.warning,
@@ -1665,7 +1795,10 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
             onTap: _busy
                 ? null
                 : () async {
-                    await _channel.emergencySuspendStrict(minutes: 10);
+                    final ok = await _channel.emergencySuspendStrict(minutes: 10);
+                    if (ok) {
+                      unawaited(_channel.tickNow().catchError((_) => false));
+                    }
                     await _refresh(silent: true);
                     if (mounted) setState(() => _banner = '已紧急挂起严格锁 10 分钟，可安心调整设置或切换应用');
                   },

@@ -190,34 +190,57 @@ jobs:
           }
           ''', encoding="utf-8")
           PY
-      - name: Build arm64 release APK
-        working-directory: app
-        run: |
-          flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.3.0 --build-number ${{ github.run_number }}0 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/test
-      - name: Sign release APK with persistent fish keystore (if configured)
+      - name: Prepare persistent fish signing config (if configured)
         env:
           FISH_KEYSTORE_BASE64: ${{ secrets.FISH_KEYSTORE_BASE64 }}
           FISH_KEYSTORE_PASS: ${{ secrets.FISH_KEYSTORE_PASS }}
           FISH_KEY_ALIAS: ${{ secrets.FISH_KEY_ALIAS }}
           FISH_KEY_PASS: ${{ secrets.FISH_KEY_PASS }}
         run: |
-          APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
           if [ -n "$FISH_KEYSTORE_BASE64" ] && [ -n "$FISH_KEYSTORE_PASS" ] && [ -n "$FISH_KEY_ALIAS" ]; then
-            python3 -c 'import base64,os,re; raw=re.sub(r"[^A-Za-z0-9+/=]","",os.environ["FISH_KEYSTORE_BASE64"]); open("/tmp/fish.jks","wb").write(base64.b64decode(raw))'
-            export EFFECTIVE_KEY_PASS="${FISH_KEY_PASS:-$FISH_KEYSTORE_PASS}"
-            BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
-            "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" /tmp/app-aligned.apk
-            "$BUILD_TOOLS/apksigner" sign \
-              --ks /tmp/fish.jks \
-              --ks-pass "env:FISH_KEYSTORE_PASS" \
-              --ks-key-alias "$FISH_KEY_ALIAS" \
-              --key-pass "env:EFFECTIVE_KEY_PASS" \
-              --out "$APK" /tmp/app-aligned.apk
-            "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
-            rm -f /tmp/fish.jks /tmp/app-aligned.apk
-            echo "Signed with fixed persistent keystore."
+            python3 - <<'PY'
+          import base64, os, re
+          from pathlib import Path
+          raw = re.sub(r"[^A-Za-z0-9+/=]", "", os.environ["FISH_KEYSTORE_BASE64"])
+          Path("/tmp/fish.jks").write_bytes(base64.b64decode(raw))
+          store_pass = os.environ["FISH_KEYSTORE_PASS"]
+          key_pass = os.environ.get("FISH_KEY_PASS") or store_pass
+          key_alias = os.environ["FISH_KEY_ALIAS"]
+          def esc(v: str) -> str:
+              return v.replace("\\", "\\\\").replace("\r", "").replace("\n", "")
+          Path("app/android/key.properties").write_text(
+              f"storeFile=/tmp/fish.jks\n"
+              f"storePassword={esc(store_pass)}\n"
+              f"keyAlias={esc(key_alias)}\n"
+              f"keyPassword={esc(key_pass)}\n",
+              encoding="utf-8",
+          )
+          PY
+            echo "Prepared native Gradle release signing via app/android/key.properties."
           else
+            rm -f /tmp/fish.jks app/android/key.properties
             echo "::notice::FISH_KEYSTORE_BASE64 not set; keeping default Gradle debug signature."
+          fi
+      - name: Build arm64 release APK
+        working-directory: app
+        run: |
+          flutter build apk --release --flavor arm64 --target-platform android-arm64 --build-name 1.3.0 --build-number ${{ github.run_number }}0 --dart-define=DSH_UPDATE_REPO=aozhenyu666-cmyk/test
+      - name: Cleanup signing secrets
+        if: always()
+        run: rm -f /tmp/fish.jks app/android/key.properties
+      - name: Verify APK signing certificate
+        env:
+          FISH_KEYSTORE_BASE64: ${{ secrets.FISH_KEYSTORE_BASE64 }}
+          FISH_KEYSTORE_PASS: ${{ secrets.FISH_KEYSTORE_PASS }}
+          FISH_KEY_ALIAS: ${{ secrets.FISH_KEY_ALIAS }}
+        run: |
+          APK=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
+          if [ -n "$FISH_KEYSTORE_BASE64" ] && [ -n "$FISH_KEYSTORE_PASS" ] && [ -n "$FISH_KEY_ALIAS" ]; then
+            echo "Verified native Gradle release signature (v1/v2/v3)."
+          else
+            echo "::notice::Verified APK built without FISH_KEYSTORE_BASE64 secret."
           fi
       - name: Verify bundled runtime and package
         run: |

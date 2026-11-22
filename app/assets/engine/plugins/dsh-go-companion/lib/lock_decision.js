@@ -93,9 +93,10 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
           : a.priority === 'P3' ? 'CONTRACT_OVERDUE_STRICT'
             : a.priority === 'P3.5' ? 'TAKEOVER_STRICT'
               : a.priority === 'P4' ? 'BOUT_STRICT' : '')
+    const strictWorkAllow = [...WORK_DEFAULT, ...ofTier('work'), ...GEMINI_PACKAGES, ...PROXY_PACKAGES]
     const extra = role === 'GEMINI_LIVE_CELL'
       ? [...GEMINI_PACKAGES, ...PROXY_PACKAGES]
-      : (role === 'TAKEOVER_STRICT' ? [...WORK_DEFAULT, ...ofTier('work'), ...GEMINI_PACKAGES, ...PROXY_PACKAGES] : [])
+      : (['CONTRACT_OVERDUE_STRICT', 'TAKEOVER_STRICT', 'BOUT_STRICT'].includes(role) ? strictWorkAllow : [])
     const withLease = (role === 'BOUT_STRICT' || role === 'TAKEOVER_STRICT') && leaseApp ? [leaseApp] : []
     const commForBout = role === 'BOUT_STRICT' ? commAutoAllow : []
     const allow = Array.isArray(a.allow) && !a.allow.includes('*') ? a.allow : []

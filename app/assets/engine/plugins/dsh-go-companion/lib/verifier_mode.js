@@ -18,6 +18,8 @@ export const SPEND_MAX = 60
 export const START_MAX_HOURS = 6
 export const RECOVERY_FAIL_DAYS = 2
 export const RECOVERY_EXIT_DAYS = 2
+/** Option A：白天工作时段默认防分心窗（07:00–23:00，排除 12:00–14:00 午休；饭点由 wall.meals 排除）。 */
+export const DEFAULT_DAY_WORK_WALL_WINDOWS = Object.freeze([[7 * 60, 12 * 60], [14 * 60, 23 * 60]])
 
 const hm = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')
 const toMin = (s) => {

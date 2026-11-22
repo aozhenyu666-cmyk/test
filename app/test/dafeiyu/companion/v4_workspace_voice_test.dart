@@ -44,10 +44,17 @@ class _FakeV4Channel extends ProactiveChannel {
   };
   bool storageGranted = false;
   int restartCalls = 0;
+  int tickCalls = 0;
   final List<String> controlOps = [];
   final List<Map<String, Object?>> boutCommands = [];
   final List<Map<String, Object?>> todayStarts = [];
   final List<Map<String, Object?>> todayTasks = [];
+
+  @override
+  Future<bool> tickNow() async {
+    tickCalls++;
+    return true;
+  }
 
   @override
   Future<List<Map<String, dynamic>>> clockList() async => clocks;
@@ -315,6 +322,45 @@ void main() {
     expect(row, findsOneWidget);
     expect(find.text('下一个：14:00–15:30「资料分析 30 题」', skipOffstage: false), findsOneWidget);
     expect(find.textContaining('4/30题 · 保底 15 · 今天 1/2 过了', skipOffstage: false), findsOneWidget);
+  });
+
+  testWidgets('Today 时长胶囊自定义 30m 开局 + 温和局升严格选 35m，均立即触发 tickNow', (tester) async {
+    final ch = _FakeV4Channel();
+    ch.bouts = {'running': null, 'queue': []};
+    await pumpPhone(tester, BoutsWorkspacePage(asTab: true, channel: ch, loopChannel: _FakeLoopChannel()));
+    await settlePhone(tester);
+
+    expect(find.byKey(const ValueKey('today-duration-25m')), findsOneWidget);
+    expect(find.byKey(const ValueKey('today-duration-45m')), findsOneWidget);
+    expect(find.byKey(const ValueKey('today-duration-90m')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('today-duration-custom')));
+    await settlePhone(tester);
+    await tester.enterText(find.byKey(const ValueKey('bout-duration-custom-input')), '30');
+    await tester.tap(find.byKey(const ValueKey('bout-duration-confirm')));
+    await settlePhone(tester);
+
+    await tester.tap(find.byKey(const ValueKey('today-start-btn')));
+    await settlePhone(tester);
+    expect(ch.todayStarts.single['minutes'], 30);
+    expect(ch.tickCalls, 1);
+
+    // 切温和局再升严格并选自定义 35m
+    ch.bouts = {
+      'running': {'title': '温和推进中', 'strict': false, 'until': DateTime.now().millisecondsSinceEpoch + 900000, 'allow': ['md.obsidian']},
+      'queue': [],
+    };
+    await pumpPhone(tester, BoutsWorkspacePage(key: const ValueKey('mild-to-strict'), asTab: true, channel: ch, loopChannel: _FakeLoopChannel()));
+    await settlePhone(tester);
+    await tester.tap(find.byKey(const ValueKey('today-bout-strict-toggle')));
+    await settlePhone(tester);
+    await tester.enterText(find.byKey(const ValueKey('bout-duration-custom-input')), '35');
+    await tester.tap(find.byKey(const ValueKey('bout-duration-confirm')));
+    await settlePhone(tester);
+
+    expect(ch.boutCommands.last['action'], 'strict');
+    expect(ch.boutCommands.last['minutes'], 35);
+    expect(ch.tickCalls, 2);
+    await tester.pump(const Duration(seconds: 1));
   });
 }
 

@@ -114,9 +114,11 @@ test('两个会话各挂各的人设；/say 带 role=strategist 就发给姐姐'
     const sis = agentOf('session-sis')
     const big = agentOf('session-big')
     const h = host({ 'session-sis': sis, 'session-big': big })
-    // 启动时就挂上
-    assert.equal(sis.contexts.length, 1)
-    assert.equal(big.contexts.length, 1)
+    // 启动时就挂上（人设 order:850 + 只读锁机真相 order:860）
+    assert.equal(sis.contexts.length, 2)
+    assert.equal(big.contexts.length, 2)
+    assert.equal(sis.contexts[1].name, 'dafeiyu-lock-truth')
+    assert.equal(big.contexts[1].name, 'dafeiyu-lock-truth')
     assert.match(sis.contexts[0].text(), /你是鱼丸/)
     assert.match(big.contexts[0].text(), /你是鲸澜，.*谋士/)
     const a = await call(h.handler(), 'POST', '/dsh-go-companion/v1/say', { v: 1, requestId: 'say-to-sister-1', text: '在吗' })

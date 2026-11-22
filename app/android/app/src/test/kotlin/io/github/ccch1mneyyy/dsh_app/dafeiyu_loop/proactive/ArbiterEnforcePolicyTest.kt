@@ -213,4 +213,54 @@ class ArbiterEnforcePolicyTest {
         assertEquals("denied app must lock with arbiter reason", true, bili.shouldLock)
         assertEquals("今日娱乐额度已用完", bili.why)
     }
+
+    @Test
+    fun focusAllowResolverMergesFreshArbiterAllowlistAheadOfLegacySessionAllow() {
+        val arbiterP4 = ArbiterDecision.fromWire(
+            mapOf(
+                "mode" to "allowlist",
+                "allow" to listOf("md.obsidian", "com.google.android.apps.bard", "moe.nb4a"),
+                "why" to "P4 专注严格局",
+                "unlockHow" to "完成局",
+                "priority" to "P4",
+            ),
+        )!!
+        val merged = FocusAllowResolver.mergePackages(
+            arbiter = arbiterP4,
+            sessionAllow = listOf("com.legacy.study"),
+            sessionPkg = "com.legacy.task",
+            focusTaskPkg = "com.focus.doc",
+            focusAllowed = listOf("md.obsidian", "com.focus.extra"),
+        ).toList()
+
+        assertEquals(
+            "ArbiterShadow work packages must appear first and merge without duplicates",
+            listOf(
+                "md.obsidian",
+                "com.google.android.apps.bard",
+                "moe.nb4a",
+                "com.legacy.study",
+                "com.legacy.task",
+                "com.focus.doc",
+                "com.focus.extra",
+            ),
+            merged,
+        )
+
+        val openDecision = ArbiterDecision.fromWire(
+            mapOf(
+                "mode" to "open",
+                "allow" to listOf("*"),
+                "priority" to "P0",
+            ),
+        )!!
+        val mergedOpen = FocusAllowResolver.mergePackages(
+            arbiter = openDecision,
+            sessionAllow = emptyList(),
+            sessionPkg = null,
+            focusTaskPkg = null,
+            focusAllowed = listOf("md.obsidian"),
+        ).toList()
+        assertEquals("Wildcard '*' in open mode must not leak into focus package list", listOf("md.obsidian"), mergedOpen)
+    }
 }

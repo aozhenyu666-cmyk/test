@@ -324,10 +324,56 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
       'minutes': out.$1,
       'reason': out.$2,
     });
+    if (res?['ok'] == true) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
     await _refresh();
     if (!mounted) return;
     final ok = res?['ok'] == true;
     final msg = '${res?['text'] ?? (res == null ? '暂未连上伴侣引擎，无法花费余额' : (ok ? '已扣减 ${out.$1} 分钟娱乐余额' : '未通过：${res['error'] ?? '不符合花费条件'}'))}';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _handleToggleDayWall(bool enabled) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final res = await _channel.sealsOp({
+      'action': 'toggle_day_wall',
+      'enabled': enabled,
+    });
+    if (res != null && res['ok'] != false) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
+    await _refresh();
+    if (!mounted) return;
+    final ok = res != null && res['ok'] != false;
+    final msg = ok
+        ? '${res['text'] ?? (enabled ? '已开启工作时段默认防分心锁' : '已关闭工作时段默认防分心锁')}'
+        : '${res?['text'] ?? '切换默认防分心锁失败，请确认引擎在线'}';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _handleStrictOff() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final res = await _channel.sealsOp({'action': 'strict_off'});
+    if (res != null && res['ok'] != false) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
+    await _refresh();
+    if (!mounted) return;
+    final ok = res != null && res['ok'] != false;
+    final msg = ok
+        ? '${res['text'] ?? '已撤回当前手动严格锁'}'
+        : '${res?['text'] ?? '当前存在硬规则锁，无法直接撤回'}';
     setState(() {
       _busy = false;
       _banner = msg;
@@ -358,6 +404,9 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
     if (confirmed != true || !mounted) return;
     setState(() => _busy = true);
     final ok = await _channel.emergencySuspendStrict(minutes: 3);
+    if (ok) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
     await _refresh();
     if (!mounted) return;
     final msg = ok ? '⚡ 已启用 3 分钟急事应急通道，请处理完后尽快回位' : '未能启用应急通道（请检查引擎是否在线）';
@@ -458,6 +507,17 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
             child: Center(child: CircularProgressIndicator()),
           )
         else ...[
+          // 板块 0 · 此刻哪只手在发力 · 锁机探针
+          _buildLockProbeCard(
+            context,
+            theme: theme,
+            colors: colors,
+            scheme: scheme,
+            overview: overview,
+            activeLock: activeLock,
+            verifyOverdue: verifyOverdue,
+          ),
+
           // 板块 1 · 当前生效锁与验收锁强度
           OverviewCard(
             key: const ValueKey('locks-active-card'),
@@ -735,6 +795,299 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
           ),
         ],
       ],
+    );
+  }
+
+  List<Map<String, dynamic>> _resolveSixHands(
+    Map<String, dynamic> overview,
+    Map<String, dynamic> activeLock,
+    bool dayWorkWallEnabled,
+  ) {
+    final raw = _asListOfMaps(overview['hands']);
+    if (raw.isNotEmpty) return raw;
+    final src = '${activeLock['source'] ?? 'AUTONOMY_RELAXED'}';
+    final isAct = activeLock['active'] == true;
+    return [
+      {
+        'id': 'EMERGENCY_SUSPEND',
+        'name': '急事 3 分钟通行证',
+        'priority': 'P0',
+        'active': isAct && src == 'EMERGENCY_SUSPEND',
+        'isWinner': isAct && src == 'EMERGENCY_SUSPEND',
+        'remainingMin': 0,
+        'canToggle': false,
+        'summary': '待命 · 急事时申请 3 分钟全放行',
+      },
+      {
+        'id': 'NIGHT_CURFEW',
+        'name': '深夜睡眠 & 晚间上限锁',
+        'priority': 'P1',
+        'active': isAct && src == 'NIGHT_CURFEW',
+        'isWinner': isAct && src == 'NIGHT_CURFEW',
+        'remainingMin': 0,
+        'canToggle': false,
+        'summary': '00:30–07:00 深夜守护',
+      },
+      {
+        'id': 'GEMINI_LIVE_CELL',
+        'name': 'Gemini 连麦舱',
+        'priority': 'P2',
+        'active': isAct && src == 'GEMINI_LIVE_CELL',
+        'isWinner': isAct && src == 'GEMINI_LIVE_CELL',
+        'remainingMin': 0,
+        'canToggle': false,
+        'summary': '仅连麦时收拢为连麦白名单',
+      },
+      {
+        'id': 'CONTRACT_OVERDUE_STRICT',
+        'name': '契约/封印逾期与接管严锁',
+        'priority': 'P3',
+        'active': isAct && (src == 'CONTRACT_OVERDUE_STRICT' || src == 'TAKEOVER_STRICT'),
+        'isWinner': isAct && (src == 'CONTRACT_OVERDUE_STRICT' || src == 'TAKEOVER_STRICT'),
+        'remainingMin': 0,
+        'canToggle': false,
+        'summary': '含 TAKEOVER_STRICT 接管与逾期严锁',
+      },
+      {
+        'id': 'BOUT_STRICT',
+        'name': '专注严格局（手动/预案）',
+        'priority': 'P4',
+        'active': isAct && src == 'BOUT_STRICT',
+        'isWinner': isAct && src == 'BOUT_STRICT',
+        'remainingMin': 0,
+        'canToggle': isAct && src == 'BOUT_STRICT',
+        'summary': '手动或预案专注严格局',
+      },
+      {
+        'id': 'DAY_WORK_WALL',
+        'name': '工作时段默认防分心锁（Option A）',
+        'priority': 'P4',
+        'active': dayWorkWallEnabled && !isAct,
+        'isWinner': false,
+        'remainingMin': 0,
+        'canToggle': true,
+        'summary': dayWorkWallEnabled ? '07:00–23:00 自动守护（午休放风）' : '已手动关闭',
+      },
+    ];
+  }
+
+  Widget _buildLockProbeCard(
+    BuildContext context, {
+    required ThemeData theme,
+    required DshColors colors,
+    required ColorScheme scheme,
+    required Map<String, dynamic> overview,
+    required Map<String, dynamic> activeLock,
+    required bool verifyOverdue,
+  }) {
+    final dayWorkWallEnabled = overview['dayWorkWallEnabled'] != false;
+    final hands = _resolveSixHands(overview, activeLock, dayWorkWallEnabled);
+    final winnerIdRaw = '${overview['winnerId'] ?? ''}'.trim();
+    final winner = hands.cast<Map<String, dynamic>?>().firstWhere(
+          (h) => h?['isWinner'] == true || (winnerIdRaw.isNotEmpty && h?['id'] == winnerIdRaw),
+          orElse: () => null,
+        );
+    final eff = _asMap(overview['effectiveDecision']);
+    final allowList = _asListOfMaps(eff['allow']);
+    final effMode = '${eff['mode'] ?? (activeLock['active'] == true ? 'allowlist' : 'free')}';
+    final remMin = _asInt(winner?['remainingMin'] ?? eff['remainingMin']);
+    final lastIntercept = overview['lastIntercept'] is Map ? _asMap(overview['lastIntercept']) : null;
+    final boutHand = hands.cast<Map<String, dynamic>?>().firstWhere(
+          (h) => h?['id'] == 'BOUT_STRICT',
+          orElse: () => null,
+        );
+    final canRevokeBout = boutHand?['active'] == true &&
+        boutHand?['canToggle'] != false &&
+        !verifyOverdue &&
+        winner?['id'] != 'NIGHT_CURFEW' &&
+        winner?['id'] != 'CONTRACT_OVERDUE_STRICT';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: GlassSurface(
+        key: const ValueKey('locks-probe-card'),
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const OverviewGlyph(AppIcons.verified, tint: 2, size: 38),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('此刻哪只手在发力 · 锁机探针', style: theme.textTheme.titleSmall),
+                        const SizedBox(height: 2),
+                        Text(
+                          winner != null
+                              ? '${winner['name']}（${winner['priority']} · ${effMode == 'allowlist' ? '白名单拦截' : effMode}）'
+                              : '自由推进中 · 暂无严格锁发力（$effMode）',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: winner != null ? colors.danger : colors.success,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  StatusChip(
+                    tone: winner != null ? StatusTone.error : StatusTone.ok,
+                    label: remMin > 0 ? '余 ${remMin}m' : (winner != null ? '持续生效' : '自由'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('工作时段默认防分心锁（Option A）', style: theme.textTheme.labelLarge),
+                          const SizedBox(height: 2),
+                          Text(
+                            dayWorkWallEnabled
+                                ? '已启用（07:00–23:00 拦娱乐放工作；12:00–14:00 午休放风）'
+                                : '已停用 · 白天不再自动拦娱乐',
+                            style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch.adaptive(
+                      key: const ValueKey('locks-day-wall-switch'),
+                      value: dayWorkWallEnabled,
+                      onChanged: _busy ? null : (v) => unawaited(_handleToggleDayWall(v)),
+                    ),
+                  ],
+                ),
+              ),
+              if (boutHand?['active'] == true) ...[
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  key: const ValueKey('locks-strict-off-btn'),
+                  style: OutlinedButton.styleFrom(shape: AppShape.card),
+                  onPressed: (_busy || !canRevokeBout) ? null : () => unawaited(_handleStrictOff()),
+                  icon: const Icon(AppIcons.unlock, size: 17),
+                  label: Text(canRevokeBout ? '撤回当前手动严格锁' : '逾期/夜间硬锁生效中（不可撤回）'),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Text('6 只控制手实时状态', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
+              const SizedBox(height: 6),
+              for (final h in hands)
+                () {
+                  final hId = '${h['id'] ?? ''}';
+                  final isWinner = h['isWinner'] == true;
+                  final isOn = h['active'] == true;
+                  final hRem = _asInt(h['remainingMin']);
+                  return Padding(
+                    key: ValueKey('locks-probe-hand-$hId'),
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 5),
+                          child: AnimatedStatusDot(
+                            tone: isWinner ? StatusTone.error : (isOn ? StatusTone.warn : StatusTone.idle),
+                            size: 7,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${h['priority'] ?? ''} · ${h['name'] ?? hId}${hRem > 0 ? '（剩 ${hRem}m）' : ''}',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  fontWeight: isWinner ? FontWeight.w700 : FontWeight.w500,
+                                  color: isWinner ? colors.danger : scheme.onSurface,
+                                ),
+                              ),
+                              Text(
+                                '${h['summary'] ?? ''}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        StatusChip(
+                          tone: isWinner ? StatusTone.error : (isOn ? StatusTone.warn : StatusTone.idle),
+                          label: isWinner ? '主发力' : (isOn ? '在位' : '未触发'),
+                        ),
+                      ],
+                    ),
+                  );
+                }(),
+              if (allowList.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text('当前放行工作应用（点按可拉起）', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final item in allowList.take(8))
+                      ActionChip(
+                        key: ValueKey('locks-probe-allow-chip-${item['pkg'] ?? ''}'),
+                        avatar: const Icon(AppIcons.play, size: 14),
+                        label: Text('${item['label'] ?? item['pkg'] ?? ''}', style: theme.textTheme.labelSmall),
+                        onPressed: () {
+                          final pkg = '${item['pkg'] ?? ''}'.trim();
+                          if (pkg.isNotEmpty) unawaited(_channel.launchApp(pkg));
+                        },
+                      ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 10),
+              Container(
+                key: const ValueKey('locks-probe-last-intercept'),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(AppIcons.history, size: 15, color: colors.textTertiary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        lastIntercept != null && '${lastIntercept['pkg'] ?? ''}'.isNotEmpty
+                            ? '最近拦截：${lastIntercept['label'] ?? lastIntercept['pkg']} · 被 ${lastIntercept['handName'] ?? lastIntercept['handId'] ?? '规则'} 拦下（${lastIntercept['reason'] ?? '限制中'}）'
+                            : '最近拦截：暂无手机拦截记录',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
