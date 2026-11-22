@@ -24,6 +24,7 @@ import android.widget.Toast
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.LoopRuntime
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.AgentReply
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.AgentWire
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ArbiterDecision
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.AtomicJsonFile
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.BackgroundCaps
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.BeijingClock
@@ -180,6 +181,41 @@ object DefiancePolicy {
         if (!screenOn || unifiedRelease) return false
         if (arbiterShouldLock != null) return arbiterShouldLock
         return legacyListed && !hasLegacyPass
+    }
+}
+
+/**
+ * Pure JVM helper merging fresh arbiter allowlist (under allowlist or strict priorities)
+ * ahead of legacy session/focus allowlists so work apps remain visible and launchable.
+ */
+object FocusAllowResolver {
+    private val STRICT_PRIORITIES = setOf("P1", "P2", "P3", "P3.5", "P4", "P5")
+
+    fun mergePackages(
+        arbiter: ArbiterDecision?,
+        sessionAllow: Collection<String>,
+        sessionPkg: String?,
+        focusTaskPkg: String?,
+        focusAllowed: Collection<String>?,
+    ): LinkedHashSet<String> {
+        val raw = LinkedHashSet<String>()
+        if (arbiter != null && (arbiter.mode == ArbiterDecision.MODE_ALLOWLIST || arbiter.priority in STRICT_PRIORITIES)) {
+            arbiter.allow.forEach { pkg ->
+                val clean = pkg.trim()
+                if (clean.isNotEmpty() && clean != "*") raw.add(clean)
+            }
+        }
+        sessionAllow.forEach { pkg ->
+            val clean = pkg.trim()
+            if (clean.isNotEmpty()) raw.add(clean)
+        }
+        sessionPkg?.trim()?.takeIf { it.isNotEmpty() }?.let(raw::add)
+        focusTaskPkg?.trim()?.takeIf { it.isNotEmpty() }?.let(raw::add)
+        focusAllowed?.forEach { pkg ->
+            val clean = pkg.trim()
+            if (clean.isNotEmpty()) raw.add(clean)
+        }
+        return raw
     }
 }
 
@@ -1060,16 +1096,19 @@ object ProactiveRuntime {
         }
     }
 
-    /** 专注舱 / 锁屏页可用 App 直达清单（聚合 sessionAllow + Focus 允许列表 + taskPackage），去重后返回 (pkg, label)。 */
+    /** 专注舱 / 锁屏页可用 App 直达清单（优先合并新鲜裁决器白名单 + sessionAllow + Focus 允许列表），去重后返回 (pkg, label)。 */
     fun allowedAppsForFocus(): List<Pair<String, String>> {
         if (!::app.isInitialized) return emptyList()
         loadSession()
         val fState = runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime.state() }.getOrNull()
-        val raw = LinkedHashSet<String>()
-        raw.addAll(sessionAllow)
-        sessionPkg?.takeIf { it.isNotBlank() }?.let(raw::add)
-        fState?.taskPackage?.takeIf { it.isNotBlank() }?.let(raw::add)
-        fState?.allowed?.let(raw::addAll)
+        val arbiter = runCatching { ArbiterShadow.currentFresh() }.getOrNull()
+        val raw = FocusAllowResolver.mergePackages(
+            arbiter = arbiter,
+            sessionAllow = sessionAllow,
+            sessionPkg = sessionPkg,
+            focusTaskPkg = fState?.taskPackage,
+            focusAllowed = fState?.allowed,
+        )
         val pm = app.packageManager
         return raw.filter { pkg ->
             pkg.isNotBlank() &&
@@ -1437,12 +1476,67 @@ object ProactiveRuntime {
         consultPlanSoon(minGapMs = 0L)
     }
 
+    @Volatile private var lastInterceptInfo: Map<String, Any?>? = null
+
+    private fun resolveAppLabel(pkg: String): String {
+        if (!::app.isInitialized || pkg.isBlank()) return pkg
+        return runCatching {
+            val pm = app.packageManager
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: pkg
+    }
+
+    private fun recordInterceptInfo(pkg: String, label: String?, reason: String?, priority: String?): Map<String, Any?> {
+        val now = System.currentTimeMillis()
+        val fresh = runCatching { ArbiterShadow.currentFresh(now) }.getOrNull()
+        val resolvedLabel = label?.takeIf { it.isNotBlank() } ?: resolveAppLabel(pkg)
+        val resolvedReason = reason?.takeIf { it.isNotBlank() }
+            ?: fresh?.why?.takeIf { it.isNotBlank() }
+            ?: "专注护栏拦截"
+        val resolvedPriority = priority?.takeIf { it.isNotBlank() } ?: fresh?.priority.orEmpty()
+        return linkedMapOf<String, Any?>(
+            "pkg" to pkg,
+            "label" to resolvedLabel,
+            "reason" to resolvedReason,
+            "priority" to resolvedPriority,
+            "at" to now,
+        ).also { lastInterceptInfo = it }
+    }
+
+    /** 手机端真实触发拦截/锁屏时同步记录并上报给伴侣诊断探针（带 2 秒防重防抖）。 */
+    fun onInterceptHit(pkg: String, label: String?, reason: String?, priority: String? = null) {
+        if (!::app.isInitialized || pkg.isBlank()) return
+        val now = System.currentTimeMillis()
+        val prev = lastInterceptInfo
+        val prevAt = (prev?.get("at") as? Number)?.toLong() ?: 0L
+        val info = recordInterceptInfo(pkg, label, reason, priority)
+        if (prev?.get("pkg") == pkg && now - prevAt < 2_000L) return
+        postEvent(
+            "intercept-hit",
+            "app" to pkg,
+            "label" to info["label"],
+            "reason" to info["reason"],
+            "priority" to info["priority"],
+            "at" to info["at"],
+        )
+    }
+
     /**
      * 他打开了被拦的 App：挂着的义务按这次动作再问一次（插件只问一次，做过 `askedAt`）。
      * `followup` 非空说明插件开了追问锁，界面要靠下一次 `/plan` 才拿到，所以立刻问。
      */
-    fun onBlockedOpen(pkg: String) = postEvent("blocked-open", "app" to pkg) { m ->
-        if (m["followup"] != null) consultPlanSoon(minGapMs = 0L)
+    fun onBlockedOpen(pkg: String, label: String? = null, reason: String? = null, priority: String? = null) {
+        val info = recordInterceptInfo(pkg, label, reason, priority)
+        postEvent(
+            "blocked-open",
+            "app" to pkg,
+            "label" to info["label"],
+            "reason" to info["reason"],
+            "priority" to info["priority"],
+            "at" to info["at"],
+        ) { m ->
+            if (m["followup"] != null) consultPlanSoon(minGapMs = 0L)
+        }
     }
 
     /** 微信里误入视频号 / 朋友圈 / 小说页：只记账，**不升级成违抗**。 */
@@ -1730,7 +1824,7 @@ object ProactiveRuntime {
         if (defiance.isOpen) main.postDelayed(defianceTick, DEFIANCE_SAMPLE_MS)
     }
 
-    private val LOCK_EVENTS = setOf("blocked-open", "emergency-exit", "followup-timeout")
+    private val LOCK_EVENTS = setOf("blocked-open", "intercept-hit", "emergency-exit", "followup-timeout")
 
     private fun reportDefiance(front: String, source: String) {
         // 违抗复查是锁的一部分（关掉锁页 15 秒又回娱乐 = 升级拒绝模式），同样不看「主动陪伴」开关。
@@ -2657,7 +2751,9 @@ object ProactiveRuntime {
                     "recent60m" to stream60,
                 )
             },
-        )
+        ).also { ctxMap ->
+            lastInterceptInfo?.let { ctxMap["lastIntercept"] = it }
+        }
     }.getOrNull()
 
     /** 每小时缓存一次本机可启动应用目录，供插件 JS 0ms 把中文应用名解析成包名。 */

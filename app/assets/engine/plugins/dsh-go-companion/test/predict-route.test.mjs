@@ -87,7 +87,7 @@ function setup(home) {
     .filter(Boolean).map((l) => JSON.parse(l))
   /** 人设文本：取最后一次挂上去的那份（惰性函数，要真的调一次）。 */
   const persona = (agent) => {
-    const def = agent.contexts.filter((d) => !d.removed).pop()
+    const def = agent.contexts.filter((d) => !d.removed && d.name !== 'dafeiyu-lock-truth').pop()
     return def ? def.text() : ''
   }
   return { sis, big, plan, predict, ledger, persona }

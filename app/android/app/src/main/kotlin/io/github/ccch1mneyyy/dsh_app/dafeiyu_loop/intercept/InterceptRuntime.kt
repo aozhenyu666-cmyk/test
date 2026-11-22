@@ -324,7 +324,10 @@ object InterceptRuntime {
             }
             InterceptConvergencePolicy.ForegroundAction.ARBITER_LOCK -> {
                 val out = arbiterOutcome!!
-                if (resurface(packageName, out.why, now, out.unlockHow, arbiterShouldLock = true)) return
+                if (resurface(packageName, out.why, now, out.unlockHow, arbiterShouldLock = true)) {
+                    runCatching { ProactiveRuntime.onInterceptHit(packageName, openLabel, out.why, out.priority) }
+                    return
+                }
                 if (screenBusy()) {
                     Log.i(TAG, "surface busy (" + VisibleSurface.holder() + "); no arbiter lock for " + packageName)
                     return
@@ -332,6 +335,7 @@ object InterceptRuntime {
                 val d = g.force(packageName, null, env(now), now, strict = true)
                 if (d is InterceptDecision.Block) {
                     show(d, now, out.why, out.unlockHow)
+                    runCatching { ProactiveRuntime.onInterceptHit(packageName, d.target.label, out.why, out.priority) }
                 }
                 return
             }
@@ -386,7 +390,10 @@ object InterceptRuntime {
         val effectiveStrict = if (arbiterOutcome != null) true else strict
         // A lock already in force: show it again if its page is not on screen (or let a superseded
         // one go and decide this app afresh).
-        if (resurface(packageName, effectiveWhy, now, effectiveUnlockHow, arbiterShouldLock = arbiterOutcome?.shouldLock)) return true
+        if (resurface(packageName, effectiveWhy, now, effectiveUnlockHow, arbiterShouldLock = arbiterOutcome?.shouldLock)) {
+            runCatching { ProactiveRuntime.onInterceptHit(packageName, openLabel ?: label, effectiveWhy, arbiterOutcome?.priority) }
+            return true
+        }
         if (screenBusy()) return false
         val d = g.force(packageName, label, env(now), now, effectiveStrict)
         if (d !is InterceptDecision.Block) {
@@ -394,6 +401,7 @@ object InterceptRuntime {
             return false
         }
         show(d, now, effectiveWhy, effectiveUnlockHow)
+        runCatching { ProactiveRuntime.onInterceptHit(packageName, d.target.label, effectiveWhy, arbiterOutcome?.priority) }
         return true
     }
 

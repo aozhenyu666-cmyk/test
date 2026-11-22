@@ -167,9 +167,9 @@ import { addCards, cleanPool, dueCards, rateCard, deleteCard, delayedRecall, def
 import { previewIntervals } from './fsrs.js'
 import { addReview, cleanReview, decideReview, parseWeekReview, reviewMarkdown, reviewPromptLines } from './week_review.js'
 import {
-  DAYTIME_SPEND_CAP_MIN, DEFAULT_BASE_FUN_MIN, DEFAULT_TEMPLATES, SPEND_MIN, applyNodCardOverrides, buildNodCard, checkSpend, checkStart,
-  classifySpendWindow, dayOutcomes, defaultVerify, parseTemplates, recoveryStep, renderTemplates, shouldApplyTemplate, templateSeals,
-  verifyPromptLines, eveningOf, eveningStep, eveningCapFor, setEveningCap, EVENING_END,
+  DAYTIME_SPEND_CAP_MIN, DEFAULT_BASE_FUN_MIN, DEFAULT_DAY_WORK_WALL_WINDOWS, DEFAULT_TEMPLATES, SPEND_MIN, applyNodCardOverrides,
+  buildNodCard, checkSpend, checkStart, classifySpendWindow, dayOutcomes, defaultVerify, parseTemplates, recoveryStep, renderTemplates,
+  shouldApplyTemplate, templateSeals, verifyPromptLines, eveningOf, eveningStep, eveningCapFor, setEveningCap, EVENING_END,
 } from './verifier_mode.js'
 import { appendInboxEntry, buildStrategizeBundle, compactInbox, readInboxEntries } from './inbox_dept.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
@@ -2143,9 +2143,14 @@ export function apply(ctx) {
       tighten: (why) => tightenNow(Date.now(), zoneOr(config.timeZone), { reason: String(why || '预案').slice(0, 100), by: 'preset' }),
     },
   })
+  const clampStrictMinutes = (m, dflt = 45) => {
+    const n = Number(m)
+    return Number.isFinite(n) && n > 0 ? Math.max(10, Math.min(360, Math.round(n))) : dflt
+  }
   const _presetStrictNow = presetRt.strictNow
-  presetRt.strictNow = (now = Date.now(), why = '', by = 'user') => {
-    const r = _presetStrictNow(now, why, by)
+  presetRt.strictNow = (now = Date.now(), why = '', by = 'user', minutes = 45) => {
+    const clampedMin = clampStrictMinutes(minutes, 45)
+    const r = _presetStrictNow(now, why, by, clampedMin)
     if (r?.ok) {
       const sv = presetRt.sessionView(now)
       lockBus.upsert({
@@ -2153,7 +2158,7 @@ export function apply(ctx) {
         source: 'preset',
         kind: 'allowlist',
         allow: sv?.allow || r.allow || [],
-        until: sv?.until || (now + 6 * 3_600_000),
+        until: sv?.until || (now + clampedMin * 60_000),
         why: sv?.why || why || '严格模式锁定中',
         unlockHow: '完成本局收工验收，或在锁屏答对 10 道真题换取 5 分钟通行',
         priority: 'P3',
@@ -2168,8 +2173,61 @@ export function apply(ctx) {
     lockBus.revokeBySource('preset', { now })
     return r
   }
-  /** 墙的默认锁归「全天默认锁」这条预案管：它没生效，墙就不上默认锁（收紧、深夜锁照旧）。 */
-  const wallCfgNow = () => (presetRt.isActive('default-lock') ? config : { ...config, wall: { ...(config.wall || {}), defaultLock: false } })
+  /** 墙的默认锁受 Option A 开关与「全天默认锁」预案控制；停用时不落默认锁（收紧、深夜锁照旧）。 */
+  const wallCfgNow = () => (
+    (config.dayWorkWallEnabled !== false && presetRt.isActive('default-lock'))
+      ? config
+      : { ...config, wall: { ...(config.wall || {}), defaultLock: false } }
+  )
+  let lastInterceptCache = null
+  function loadLastIntercept() {
+    if (lastInterceptCache && typeof lastInterceptCache === 'object') return lastInterceptCache
+    const st = readState(stateFile('last-intercept.json'), null)
+    if (st && typeof st === 'object' && st.pkg) {
+      lastInterceptCache = st
+      return st
+    }
+    return null
+  }
+  function resolveWinnerHandMeta(ctxInfo = {}) {
+    const arb = ctxInfo.lockArbiter || null
+    const p = String(arb?.priority || 'P6')
+    if (p === 'P0' || ctxInfo.emActive) return { id: 'EMERGENCY_SUSPEND', name: '急事 3 分钟通行证' }
+    if (p === 'P1' || ctxInfo.nightLocked || ctxInfo.evLock) return { id: 'NIGHT_CURFEW', name: '深夜睡眠 & 晚间上限锁' }
+    if (p === 'P2' || ctxInfo.gemSessionActive) return { id: 'GEMINI_LIVE_CELL', name: 'Gemini 连麦舱' }
+    if (p === 'P3' || p === 'P3.5' || ctxInfo.overdueOrTakeover) return { id: 'CONTRACT_OVERDUE_STRICT', name: '契约/封印逾期与接管严锁' }
+    if (p === 'P4') {
+      if (ctxInfo.manualBoutStrict) return { id: 'BOUT_STRICT', name: '专注严格局' }
+      if (ctxInfo.dayWallActive) return { id: 'DAY_WORK_WALL', name: '工作时段默认防分心锁' }
+      if (arb?.subSource === 'DAY_WORK_WALL') return { id: 'DAY_WORK_WALL', name: '工作时段默认防分心锁' }
+      return { id: 'BOUT_STRICT', name: '专注严格局' }
+    }
+    return { id: '', name: '' }
+  }
+  function recordLastIntercept(raw = {}, now = Date.now()) {
+    const pkg = String(raw.pkg || raw.app || '').trim().slice(0, 140)
+    if (!pkg) return null
+    const at = Number(raw.at) > 0 ? Number(raw.at) : now
+    const prev = loadLastIntercept()
+    if (prev && Number(prev.at) > at && raw.force !== true) return prev
+    const arb = (() => { try { return v4Hub?.computeLockArbiter?.(now) } catch { return null } })()
+    const presetSess = (() => { try { return presetRt.sessionView(now) } catch { return null } })()
+    const dayWallOn = config.dayWorkWallEnabled !== false
+    const vsNow = dayWallOn ? (() => { try { return verifySessionView(now) } catch { return null } })() : null
+    const winner = resolveWinnerHandMeta({
+      lockArbiter: arb,
+      manualBoutStrict: Boolean(presetSess && presetSess.by !== 'verify'),
+      dayWallActive: Boolean(vsNow),
+    })
+    const handId = String(raw.handId || winner.id || arb?.source || 'RULE_LOCK').slice(0, 48)
+    const handName = String(raw.handName || winner.name || arb?.label || '专注护栏').slice(0, 60)
+    const label = String(raw.label || appDisplayLabel(pkg) || pkg).slice(0, 60)
+    const reason = String(raw.reason || arb?.why || '当前策略拦截该娱乐或分心应用').slice(0, 180)
+    const entry = { pkg, label, at, handId, handName, reason }
+    lastInterceptCache = entry
+    try { writeJson(stateFile('last-intercept.json'), entry) } catch {}
+    return entry
+  }
   const leaseSessionView = (now) => {
     const l = activeAppLease(loadExternal(), now)
     if (!l) return null
@@ -3040,7 +3098,7 @@ export function apply(ctx) {
           config = { ...config, lockShadow: false }
           text = '测试模式已结束：从现在起锁会真的落下。想回测试模式只能在伴侣中枢里手动开。'
         } else if (args.action === 'strict_bout') {
-          const r = presetRt.strictNow(now, String(args.what || ''), 'tool')
+          const r = presetRt.strictNow(now, String(args.what || ''), 'tool', args.minutes)
           if (!r.ok) return { ok: false, text: r.text }
           text = r.text
         } else {
@@ -4124,7 +4182,7 @@ export function apply(ctx) {
     if (action === 'set') return { v: 1, ...presetRt.propose(body.preset, 'user', now) }
     if (action === 'cancel') return { v: 1, ...presetRt.cancel(String(body.pendingId || ''), now, 'user') }
     if (action === 'apps') return { v: 1, ...presetRt.setApps(String(body.boutId || 'current'), { need: body.need, allow: body.allow }, now, 'user') }
-    if (action === 'strict') return { v: 1, ...presetRt.strictNow(now, String(body.why || ''), 'user') }
+    if (action === 'strict') return { v: 1, ...presetRt.strictNow(now, String(body.why || ''), 'user', body.minutes) }
     if (action === 'history') return { v: 1, ok: true, history: presetRt.history(String(body.id || '')) }
     if (action === 'renew') return { v: 1, ...presetRt.renew(String(body.id || ''), now, 'user') }
     return { v: 1, ok: true, ...presetRt.list(now) }
@@ -6316,7 +6374,20 @@ export function apply(ctx) {
       record({ state: 'wechat-hit', at: now, page: String(body?.page || '').slice(0, 60), dwellMs: Math.max(0, Math.round(Number(body?.dwellMs) || 0)) })
       return { v: 1, ok: true }
     }
-    if (type === 'blocked-open') {
+    if (type === 'blocked-open' || type === 'intercept-hit') {
+      const appPkg = String(body?.app || body?.pkg || '').trim()
+      if (appPkg) {
+        recordLastIntercept({
+          pkg: appPkg,
+          label: body?.label,
+          reason: body?.reason,
+          handId: body?.handId,
+          handName: body?.handName,
+          at: body?.at,
+        }, now)
+        record({ state: 'intercept-hit', at: now, app: appPkg.slice(0, 120), reason: String(body?.reason || '').slice(0, 120) })
+      }
+      if (type === 'intercept-hit') return { v: 1, ok: true, recorded: Boolean(appPkg) }
       // 他打开被拦的 App：挂着的义务按用户的动作再问一次（不定时自动弹）。
       const r = takeReask(config.obligations, 'locked-app', now)
       if (!r.ask) return { v: 1, ok: true, ask: false }
@@ -7045,6 +7116,28 @@ export function apply(ctx) {
   const personaMounts = new Map()
   /** role -> {sid, all}：本次挂载构造出来的全部工具（全集），状态一变就按新子集重挂。 */
   const toolBag = new Map()
+  function buildLockTruthContext(now = Date.now()) {
+    const ov = buildLocksOverview(now, zoneOr(config.timeZone))
+    const winner = (Array.isArray(ov.hands) ? ov.hands : []).find((h) => h.isWinner) || null
+    const ed = ov.effectiveDecision || {}
+    const winnerText = winner ? `${winner.name}（${winner.id}）` : '无严格锁发力（自由态）'
+    const remText = winner && Number(winner.remainingMin) > 0
+      ? `${winner.remainingMin}分钟`
+      : (winner ? '持续至条件解除' : '0分钟')
+    const dayWallText = ov.dayWorkWallEnabled ? '开启（07:00–23:00，12:00–14:00 午休放风）' : '关闭'
+    const allowList = (Array.isArray(ed.allow) ? ed.allow : []).slice(0, 6).map((a) => a.label || a.pkg).filter(Boolean)
+    const allowText = allowList.length ? allowList.join('、') : (ed.mode === 'open' || ed.mode === 'free' ? '全部工作与常用应用' : '急事底线')
+    const li = ov.lastIntercept
+    const interceptText = li ? `${li.label || li.pkg}（被 ${li.handName || li.handId} 拦截：${li.reason || '限制'}）` : '暂无拦截'
+    return [
+      '[锁机实时真相·只读]',
+      `主发力手：${winnerText} | 优先级：${ed.priority || 'P6'} | 模式：${ed.mode || 'free'}`,
+      `剩余时长：${remText} | 依据：${ed.why || '无锁定'}`,
+      `默认防分心锁：${dayWallText}`,
+      `放行工作App：${allowText}`,
+      `最近拦截：${interceptText}`,
+    ].join('\n')
+  }
   function mountOne(role, sid) {
     const cur = personaMounts.get(role) || { sid: '', agent: null, off: null }
     const agent = sid ? liveAgent(ctx, sid) : null
@@ -7099,16 +7192,37 @@ export function apply(ctx) {
       if (offs.length) next.toolOff = () => offs.forEach((f) => f())
     }
     if (!agent?.ctx?.systemPrompt?.context) return
+    const ctxOffs = []
     try {
-      const off = agent.ctx.systemPrompt.context({
+      const offPersona = agent.ctx.systemPrompt.context({
         name: role === 'strategist' ? 'dafeiyu-strategist' : 'dafeiyu-persona',
         order: 850,
         interpolate: false,
         text: () => chatPersonaText(role),
       })
-      if (typeof off === 'function') next.off = off
+      if (typeof offPersona === 'function') ctxOffs.push(offPersona)
     } catch (error) {
       console.error('[companion] 人格挂不上（' + role + '）：' + String((error && error.message) || error))
+    }
+    try {
+      const offTruth = agent.ctx.systemPrompt.context({
+        name: 'dafeiyu-lock-truth',
+        order: 860,
+        interpolate: false,
+        text: () => buildLockTruthContext(),
+      })
+      if (typeof offTruth === 'function') ctxOffs.push(offTruth)
+    } catch (error) {
+      console.error('[companion] 锁机真相上下文挂不上（' + role + '）：' + String((error && error.message) || error))
+    }
+    if (ctxOffs.length) {
+      next.off = () => {
+        for (const fn of ctxOffs) {
+          try {
+            fn()
+          } catch {}
+        }
+      }
     }
   }
   function mountPersona() {
@@ -8087,6 +8201,7 @@ export function apply(ctx) {
       refuseUntil: Number(config.refuseUntil) > Date.now() ? Number(config.refuseUntil) : 0,
       lockShadow: config.lockShadow !== false,
       arbiterEnforce: config.arbiterEnforce !== false,
+      dayWorkWallEnabled: config.dayWorkWallEnabled !== false,
       sessionId: config.sessionId ?? null,
       quietStart: config.quietStart,
       quietEnd: config.quietEnd,
@@ -8314,8 +8429,9 @@ export function apply(ctx) {
     saveVerify({ ...loadVerify(), templates: t, templatesDay: today })
     return t
   }
-  /** 关默认验收是放松：明天才生效（今天的照旧）。开是收紧：立即。 */
+  /** 关默认验收/防分心锁：遵循 Option A (dayWorkWallEnabled) 与明日生效开关。 */
   function verifyEnabled(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    if (config.dayWorkWallEnabled === false) return false
     const vm = config.verifyMode && typeof config.verifyMode === 'object' ? config.verifyMode : {}
     // 配置文件里显式写了 enabled:false（测试 / adb）就关；手机上的关闭按钮走 offFrom（明天起）。
     if (vm.enabled === false) return false
@@ -8329,9 +8445,13 @@ export function apply(ctx) {
       const relax = activeRelax(config, now, tz)
       relaxOpen = Boolean(relax?.segments?.some((s) => min >= s.from && min < s.to))
     } catch {}
+    const hasCustomWindows = Boolean(config.day?.windows && typeof config.day.windows === 'object')
+    const windows = hasCustomWindows
+      ? windowsOf(settingsOf(config), kind).map((w) => [w.from, w.to])
+      : (kind === 'outing' ? [] : DEFAULT_DAY_WORK_WALL_WINDOWS.map(([f, t]) => [f, t]))
     return defaultVerify({
       now, enabled: verifyEnabled(now, tz),
-      windows: windowsOf(settingsOf(config), kind).map((w) => [w.from, w.to]),
+      windows,
       minuteOfDay: min,
       night: Boolean(lastRhythm?.night),
       emergency: isEmergencyPassOrDisarmActive(now, tz),
@@ -8342,18 +8462,33 @@ export function apply(ctx) {
       startUntil: Number(config.verifyStartUntil) || 0,
     })
   }
-  /** 默认验收放行的：局的默认白名单 + 分类表里的「工作」+ 正在跑的那一局要的 + 常驻（Gemini / NekoBox）+ 急事底线。 */
+  /** 默认验收/防分心放行：WORK_DEFAULT + 默认白名单 + 分类表及已安装的所有「work」类 + 当前局应用 + Gemini/Proxy + 急事底线。 */
   function verifyAllow() {
     const tf = tierFnNow()
     const work = []
-    try {
-      for (const a of appsOf()) {
-        const pkg = String(a?.package || a?.pkg || a || '')
-        if (pkg && tf(pkg) === 'work') work.push(pkg)
+    const seen = new Set()
+    const collectWork = (list) => {
+      for (const a of Array.isArray(list) ? list : []) {
+        const pkg = String(a?.package || a?.pkg || a || '').trim()
+        if (!pkg || seen.has(pkg)) continue
+        seen.add(pkg)
+        if (tf(pkg, String(a?.label || '')) === 'work') work.push(pkg)
       }
-    } catch {}
+    }
+    try { collectWork(appsOf()) } catch {}
+    try { collectWork(lastInstalled) } catch {}
+    try { collectWork(lastPhone?.installedApps) } catch {}
     const boutApps = live?.apps ? [...(live.apps.need || []), ...(live.apps.allow || [])] : []
-    return [...new Set([...defaultAllowApps(), ...work, ...boutApps, ...RESIDENT_PACKAGES, ...emergencyPackages(appsOf())])].filter(Boolean)
+    return [...new Set([
+      ...WORK_DEFAULT,
+      ...defaultAllowApps(),
+      ...work,
+      ...boutApps,
+      ...geminiPackages(),
+      ...PROXY_PACKAGES,
+      ...RESIDENT_PACKAGES,
+      ...emergencyPackages(appsOf()),
+    ])].filter(Boolean)
   }
   function verifySessionView(now = Date.now()) {
     const tz = zoneOr(config.timeZone)
@@ -9970,13 +10105,36 @@ export function apply(ctx) {
     const drive = readState(stateFile('drive.json'), {}) || {}
     const tkActive = Boolean(drive?.takeover?.active || (config.aiWorkSession?.by === 'takeover' && (!config.aiWorkSession.until || Number(config.aiWorkSession.until) > now)) || lockArbiter.priority === 'P3.5')
     const presetSess = presetRt.sessionView(now)
-    const verifySess = verifySessionView(now)
-    const dayWallLocked = Boolean(wdRaw.locked && wdRaw.kind !== 'night')
+    const dayWorkWallEnabled = config.dayWorkWallEnabled !== false && config.verifyMode?.enabled !== false
+    const verifySess = dayWorkWallEnabled ? verifySessionView(now) : null
+    const dayWallLocked = Boolean(dayWorkWallEnabled && wdRaw.locked && wdRaw.kind !== 'night')
     const contractView = (() => { try { return v4Hub?.contractSessionView?.(now) } catch { return null } })()
     const flexContract = Boolean(contractView && !contractView.strict)
     const taskLeaseActive = Boolean(config.taskLease && Number(config.taskLease.until) > now)
     const extLease = activeAppLease(ext, now)
     const flexAiWork = Boolean(config.aiWorkSession && config.aiWorkSession.strict === false && (!config.aiWorkSession.until || Number(config.aiWorkSession.until) > now))
+    const remMinOf = (untilMs) => (Number(untilMs) > now ? Math.max(1, Math.ceil((Number(untilMs) - now) / 60_000)) : 0)
+    const nightUntilFallback = (() => {
+      if (!nightLocked && !evLock) return 0
+      if (Number(lastRhythm?.nightUntil) > now) return Number(lastRhythm.nightUntil)
+      if (Number(evLockUntil) > now) return Number(evLockUntil)
+      const day0 = startOfDay(now, tz)
+      const target = day0 + NIGHT_LOCK_TO * 60_000
+      return target > now ? target : target + 86_400_000
+    })()
+    const manualBoutStrict = Boolean(presetSess && presetSess.by !== 'verify')
+    const dayWallActive = Boolean(dayWorkWallEnabled && (verifySess || dayWallLocked))
+    const overdueOrTakeover = Boolean(overdueSeal || overdueContract || aiWorkStrict || tkActive || ['P3', 'P3.5'].includes(lockArbiter.priority))
+    const winnerMeta = resolveWinnerHandMeta({
+      lockArbiter,
+      emActive,
+      nightLocked: nightLocked || evLock,
+      gemSessionActive,
+      overdueOrTakeover,
+      manualBoutStrict,
+      dayWallActive,
+    })
+    const winnerId = winnerMeta.id
     const tl = (() => {
       try {
         return timeLedgerNow(now, tz, lastPhone)
@@ -10047,15 +10205,15 @@ export function apply(ctx) {
         id: 'BOUT_STRICT',
         priority: 'P4',
         name: '专心局 / 默认工作窗验收锁',
-        active: Boolean(presetSess || verifySess || dayWallLocked || lockArbiter.priority === 'P4'),
-        summary: presetSess
+        active: Boolean(manualBoutStrict || dayWallActive || lockArbiter.priority === 'P4'),
+        summary: manualBoutStrict
           ? String(presetSess.why || '专注严格局进行中，仅放行工作白名单')
           : (verifySess
-              ? '工作时段默认验收中（仅放行常用工作 App，微信/QQ 共享 35m 额度）'
+              ? '工作时段防分心锁生效中（放行全部工作 App，拦截 fun/game）'
               : (dayWallLocked ? String(wdRaw.why || '防分心时段护栏生效中') : '未触发 · 工作时段或开启专注局时自动守护')),
-        unlockHow: presetSess
-          ? '完成本局收工验收，或切出缓冲/花可用余额'
-          : '工作时段结束 / 午休 / 花挣来的余额可临时放风',
+        unlockHow: manualBoutStrict
+          ? '完成本局收工验收，或撤回手动严格锁 / 花可用余额'
+          : '12:00–14:00 午休 / 饭点自动放风 / 一键关闭默认防分心锁',
       },
       {
         id: 'CONTRACT_FLEX',
@@ -10082,6 +10240,128 @@ export function apply(ctx) {
         unlockHow: '过一局/验收/刷题挣余额，或待临时封禁倒计时到期',
       },
     ]
+
+    const hands = [
+      {
+        id: 'EMERGENCY_SUSPEND',
+        name: '急事 3 分钟通行证',
+        priority: 'P0',
+        active: emActive,
+        isWinner: winnerId === 'EMERGENCY_SUSPEND',
+        by: String(emInfo?.by || 'user'),
+        until: Number(emInfo?.until) || 0,
+        remainingMin: remMinOf(emInfo?.until),
+        canToggle: false,
+        summary: emActive ? `放行中：${emInfo?.reason || '急事通行'}` : '待命 · 急事时申请 3 分钟全放行',
+      },
+      {
+        id: 'NIGHT_CURFEW',
+        name: '深夜睡眠 & 晚间上限锁',
+        priority: 'P1',
+        active: Boolean(nightLocked || evLock || lockArbiter.priority === 'P1'),
+        isWinner: winnerId === 'NIGHT_CURFEW',
+        by: evLock ? 'evening-cap' : 'rhythm',
+        until: nightUntilFallback,
+        remainingMin: remMinOf(nightUntilFallback),
+        canToggle: false,
+        summary: nightLocked
+          ? '深夜睡眠锁生效中（00:30–07:00 锁定娱乐）'
+          : (evLock ? `晚间娱乐上限（${ev.cap}m）已用完，锁至明早 07:00` : `未触发 · 00:30–07:00 深夜锁 / 晚间上限 ${ev.cap}m`),
+      },
+      {
+        id: 'GEMINI_LIVE_CELL',
+        name: 'Gemini 连麦舱',
+        priority: 'P2',
+        active: gemSessionActive,
+        isWinner: winnerId === 'GEMINI_LIVE_CELL',
+        by: String(gem?.session?.by || 'gemini'),
+        until: Number(gem?.session?.until) || 0,
+        remainingMin: remMinOf(gem?.session?.until),
+        canToggle: false,
+        summary: gemSessionActive ? `连麦进行中${gem?.session?.topic ? '（' + gem.session.topic + '）' : ''}` : '未开启 · 仅连麦时收拢为连麦白名单',
+      },
+      {
+        id: 'CONTRACT_OVERDUE_STRICT',
+        name: '契约/封印逾期与接管严锁',
+        priority: tkActive && !overdueSeal && !overdueContract && !aiWorkStrict ? 'P3.5' : 'P3',
+        active: overdueOrTakeover,
+        isWinner: winnerId === 'CONTRACT_OVERDUE_STRICT',
+        by: overdueSeal ? 'seal' : (tkActive ? 'takeover' : 'contract'),
+        until: Number(overdueSeal?.lockUntil || config.aiWorkSession?.until || drive?.takeover?.until || 0),
+        remainingMin: remMinOf(overdueSeal?.lockUntil || config.aiWorkSession?.until || drive?.takeover?.until),
+        canToggle: false,
+        summary: overdueSeal
+          ? `封印「${overdueSeal.title}」逾期未过保底${tkActive ? ' · TAKEOVER_STRICT 接管生效中' : ' · TAKEOVER_STRICT 待命'}`
+          : (tkActive
+              ? `TAKEOVER_STRICT 强制接管回位生效中（${drive?.takeover?.reason || '请回到正事'}）`
+              : (overdueContract ? '契约逾期严格锁生效中（TAKEOVER_STRICT 待命）' : '未触发 · 含 TAKEOVER_STRICT 接管与逾期严锁')),
+      },
+      {
+        id: 'BOUT_STRICT',
+        name: '专注严格局（手动/预案）',
+        priority: 'P4',
+        active: manualBoutStrict,
+        isWinner: winnerId === 'BOUT_STRICT',
+        by: String(presetSess?.by || 'panel'),
+        until: Number(presetSess?.until) || 0,
+        remainingMin: remMinOf(presetSess?.until),
+        canToggle: Boolean(manualBoutStrict && !verifyOverdue && !(nightLocked || evLock)),
+        summary: manualBoutStrict ? String(presetSess?.why || '手动/预案严格局锁定中') : '未开启 · 可在专注舱或本页按自定义时长启动',
+      },
+      {
+        id: 'DAY_WORK_WALL',
+        name: '工作时段默认防分心锁（Option A）',
+        priority: 'P4',
+        active: dayWallActive,
+        isWinner: winnerId === 'DAY_WORK_WALL',
+        by: 'option-a',
+        until: Number(verifySess?.until) || (dayWallLocked ? Number(wdRaw.until) || 0 : 0),
+        remainingMin: remMinOf(Number(verifySess?.until) || (dayWallLocked ? Number(wdRaw.until) || 0 : 0)),
+        canToggle: true,
+        summary: !dayWorkWallEnabled
+          ? '已手动关闭 · 放行自由推进'
+          : (dayWallActive
+              ? '生效中（07:00–23:00，12:00–14:00 午休放风）：放行全部工作 App，仅拦截 fun/game'
+              : '已开启（当前处于午休 / 饭点 / 花余额或夜间窗口，自动休眠）'),
+      },
+    ]
+
+    const effArb = emActive
+      ? { priority: 'P0', source: 'EMERGENCY_SUSPEND', label: '紧急放行中', why: emInfo?.reason || '紧急放行中', unlockHow: '倒计时结束后恢复' }
+      : (!dayWorkWallEnabled && lockArbiter.subSource === 'DAY_WORK_WALL'
+          ? { priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自主推进态', why: '工作时段默认防分心锁已关闭', allow: ['*'], unlockHow: '当前无拦截' }
+          : lockArbiter)
+    const effRaw = (() => {
+      try {
+        return lockDecisionNow(now, tz, lastPhone, effArb, ext)
+      } catch {
+        return { priority: effArb.priority || 'P6', source: effArb.source || 'AUTONOMY_RELAXED', mode: 'free', allow: [], deny: [], why: effArb.why || '', unlockHow: effArb.unlockHow || '' }
+      }
+    })()
+    const winnerHandObj = hands.find((h) => h.isWinner) || null
+    const effUntil = Number(winnerHandObj?.until) || 0
+    const effectiveDecision = {
+      priority: String(effRaw?.priority || effArb?.priority || 'P6'),
+      source: String(effRaw?.source || effArb?.source || 'AUTONOMY_RELAXED'),
+      mode: String(effRaw?.mode || 'free'),
+      why: String(effRaw?.why || effArb?.why || ''),
+      unlockHow: String(effRaw?.unlockHow || effArb?.unlockHow || ''),
+      until: effUntil,
+      remainingMin: remMinOf(effUntil),
+      allow: (Array.isArray(effRaw?.allow) ? effRaw.allow : []).map((pkg) => ({
+        pkg: String(pkg),
+        label: appDisplayLabel(String(pkg)),
+      })),
+      deny: (Array.isArray(effRaw?.deny) ? effRaw.deny : []).map((d) => {
+        const pkg = String(d?.app || d?.pkg || d || '')
+        return {
+          pkg,
+          label: appDisplayLabel(pkg),
+          why: String(d?.why || ''),
+        }
+      }).filter((d) => d.pkg),
+    }
+    const lastIntercept = loadLastIntercept()
 
     const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch')
     const daytimeSpentMin = daytimeSpentMinToday(now, tz)
@@ -10205,7 +10485,18 @@ export function apply(ctx) {
       .slice(-20)
       .reverse()
 
-    return { activeLock, allLocks, wallet, scheduleSlots, recentActions }
+    return {
+      winnerId,
+      dayWorkWallEnabled,
+      effectiveDecision,
+      hands,
+      lastIntercept,
+      activeLock,
+      allLocks,
+      wallet,
+      scheduleSlots,
+      recentActions,
+    }
   }
 
   /**
@@ -10281,6 +10572,35 @@ export function apply(ctx) {
       commit({ eveningCap: r.value })
       record({ state: 'evening-cap-set', at: now, by: 'panel', minutes: Number(b.minutes), immediate: r.immediate })
       return { ...view(state), text: r.text }
+    }
+    if (action === 'toggle_day_wall') {
+      const curEnabled = config.dayWorkWallEnabled !== false && config.verifyMode?.enabled !== false
+      const nextEnabled = b.enabled === undefined
+        ? !curEnabled
+        : !(b.enabled === false || b.enabled === 'false' || b.enabled === 0)
+      const nextVerifyMode = nextEnabled
+        ? { ...(config.verifyMode || {}), enabled: true, offFrom: '' }
+        : { ...(config.verifyMode || {}), offFrom: '' }
+      commit({ dayWorkWallEnabled: nextEnabled, verifyMode: nextVerifyMode })
+      record({ state: 'toggle-day-wall', at: now, enabled: nextEnabled, by: String(b.by || 'panel') })
+      return {
+        ...view(state),
+        dayWorkWallEnabled: nextEnabled,
+        text: nextEnabled ? '已开启「工作时段默认防分心锁（Option A）」。' : '已关闭「工作时段默认防分心锁（Option A）」。',
+      }
+    }
+    if (action === 'strict_off') {
+      const ovNow = buildLocksOverview(now, tz, state)
+      if (ovNow.activeLock?.verifyOverdue || ovNow.winnerId === 'NIGHT_CURFEW' || ovNow.winnerId === 'CONTRACT_OVERDUE_STRICT') {
+        return {
+          ...view(state),
+          ok: false,
+          error: 'hard-lock',
+          text: '当前有逾期封印、接管或深夜睡眠护栏生效，无法直接撤回；请先完成交付验收或走应急通道。',
+        }
+      }
+      presetRt.strictOff(now, String(b.by || 'panel-probe'))
+      return { ...view(state), text: '已撤回当前手动严格锁。' }
     }
     if (action === 'verify-off') {
       // 关默认验收是放松：明天起才不默认验收（今天照旧）。
@@ -11414,8 +11734,12 @@ export function apply(ctx) {
       console.error('[companion] 自建工作流到期处理失败：' + String((error && error.message) || error))
     }
     const mind = sense(phone, ledger, sessionId, now)
-    if (phone) lastPhone = phone
-    else if (body?.phone && Number.isFinite(Number(body.phone.geminiMinutesToday))) {
+    if (phone) {
+      lastPhone = phone
+      if (phone.lastIntercept && typeof phone.lastIntercept === 'object' && (phone.lastIntercept.pkg || phone.lastIntercept.app)) {
+        recordLastIntercept(phone.lastIntercept, now)
+      }
+    } else if (body?.phone && Number.isFinite(Number(body.phone.geminiMinutesToday))) {
       lastPhone = { ...(lastPhone || { today: [] }), geminiMinutesToday: Math.max(0, Math.round(Number(body.phone.geminiMinutesToday))) }
     }
     // 第九轮：预案。手机一切 App 就会来问一次 /plan，所以严格模式能在这一问的回答里就落下去。
@@ -11835,12 +12159,13 @@ export function apply(ctx) {
 
     const epUntil = emergencyActive ? activeEmergency.until : 0
     const v4ContractTick = v4Hub.onPlanTick(now)
+    const dayWorkWallEnabled = config.dayWorkWallEnabled !== false && config.verifyMode?.enabled !== false
     const wdRaw = wallDecision(wallCfgNow(), now, tz)
     const nightLocked = Boolean(wdRaw.locked && wdRaw.kind === 'night')
     const contractOverdue = Boolean(v4ContractTick.forceStrictByContract)
     const spendPassActive = Boolean(config.spendPass && Number(config.spendPass.until) > now)
-    const wd = (spendPassActive && !nightLocked && !contractOverdue && wdRaw.kind !== 'night')
-      ? { ...wdRaw, locked: false, kind: null, openUntil: Math.max(Number(wdRaw.openUntil) || 0, Number(config.spendPass.until) || 0) }
+    const wd = ((!dayWorkWallEnabled || spendPassActive) && !nightLocked && !contractOverdue && wdRaw.kind !== 'night')
+      ? { ...wdRaw, locked: false, kind: null, openUntil: Math.max(Number(wdRaw.openUntil) || 0, Number(config.spendPass?.until) || 0) }
       : wdRaw
     const hardCapDowngrade = hardCapped && !nightLocked && !contractOverdue
 
@@ -12828,6 +13153,7 @@ export function apply(ctx) {
       } else {
         commitNode('partial')
       }
+      presetRt.strictOff(now, 'close-bout')
       dropLive()
       return {
         ok: true, state: r.state, accepted: r.accepted !== false, say: '', earned: earnt,
@@ -12852,6 +13178,7 @@ export function apply(ctx) {
   }
 
   function closeBoutNow() {
+    presetRt.strictOff(Date.now(), 'close-bout')
     if (!live) return { ok: false, toast: '现在没有局。' }
     live.official.close('abandoned')
     dropLive()
@@ -13013,18 +13340,20 @@ export function apply(ctx) {
         scopeLabel: scope.scopeLabel,
       })
       if (r.ok && body?.strict === true && apps && ([...(apps.need || []), ...(apps.allow || [])].length > 0)) {
-        presetRt.strictNow(Date.now(), String(goal || '面板严格局'), 'panel')
+        presetRt.strictNow(Date.now(), String(goal || '面板严格局'), 'panel', body?.minutes)
       }
       return { v: 1, ...r }
     }
     if (action === 'strict') {
-      const r = presetRt.strictNow(Date.now(), String(body?.why || '面板切为严格模式'), 'panel')
+      const r = presetRt.strictNow(Date.now(), String(body?.why || '面板切为严格模式'), 'panel', body?.minutes)
       return { v: 1, ...r }
     }
     if (action === 'relax') {
-      if (!live) return { v: 1, ok: false, toast: '现在没有局。' }
-      presetRt.strictOff(Date.now(), 'panel')
-      return { v: 1, ok: true, strict: false, toast: '已切为温和守护（仅提醒不强锁）' }
+      const now = Date.now()
+      const hasStrict = Boolean(presetRt.sessionView(now))
+      if (!live && !hasStrict) return { v: 1, ok: false, toast: '现在没有局。' }
+      presetRt.strictOff(now, 'panel')
+      return { v: 1, ok: true, strict: false, toast: live ? '已切为温和守护（仅提醒不强锁）' : '已撤回残留严格锁' }
     }
     if (action === 'allow') {
       if (!live) return { v: 1, ok: false, toast: '现在没有局。' }
@@ -13040,7 +13369,7 @@ export function apply(ctx) {
       const wasStrict = Boolean(presetRt.sessionView(now))
       if (wasStrict || body?.strict === true) {
         if (wasStrict) presetRt.strictOff(now, 'panel-allow')
-        presetRt.strictNow(now, String(body?.why || '更新本局白名单'), 'panel')
+        presetRt.strictNow(now, String(body?.why || '更新本局白名单'), 'panel', body?.minutes)
       }
       return { v: 1, ...r, allow }
     }
@@ -13185,7 +13514,7 @@ export function apply(ctx) {
       by: String(body?.by || 'panel'),
     })
     if (r.ok && strict && allow.length > 0) {
-      presetRt.strictNow(now, goal, String(body?.by || 'panel'))
+      presetRt.strictNow(now, goal, String(body?.by || 'panel'), minutes)
     }
     return { v: 1, ...r, strict, allow, minutes, goal, scopeKey: scope.scopeKey, scopeLabel: scope.scopeLabel }
   }
@@ -13325,22 +13654,26 @@ export function apply(ctx) {
               return { toast }
             },
             // 面板只能收紧，不能放松：没有"关拒绝模式""结束任务"的按钮。
-            'sisters.busy': (scope) => {
-              setGear({ gear: 'busy', until: Date.now() + BUSY_DEFAULT_MIN * 60_000, what: '正事' }, 'panel')
+            'sisters.busy': (scope, event) => {
+              const v = values(event)
+              const mins = clampStrictMinutes(v.minutes ?? v['data.form.minutes'], BUSY_DEFAULT_MIN)
+              setGear({ gear: 'busy', until: Date.now() + mins * 60_000, what: String(v.what || v['data.form.what'] || '正事').slice(0, 20) }, 'panel')
               d.refresh('sisters', scope)
-              return { toast: '忙时 ' + BUSY_DEFAULT_MIN + ' 分钟：不闲聊、娱乐一开就锁，到点只让你报到一次。' }
+              return { toast: '忙时 ' + mins + ' 分钟：不闲聊、娱乐一开就锁，到点只让你报到一次。' }
             },
-            'sisters.refuse': (scope) => {
-              const until = Math.max(Date.now() + 30 * 60_000, Number(config.refuseUntil) || 0)
+            'sisters.refuse': (scope, event) => {
+              const v = values(event)
+              const mins = clampStrictMinutes(v.minutes ?? v['data.form.minutes'], 30)
+              const until = Math.max(Date.now() + mins * 60_000, Number(config.refuseUntil) || 0)
               config = { ...config, refuseUntil: until, refuseBy: config.refuseBy || 'panel' }
               try {
                 writeConfig(config)
               } catch {
                 // 这一轮照样生效
               }
-              record({ state: 'control', at: Date.now(), action: 'refuse', minutes: 30, by: 'panel' })
+              record({ state: 'control', at: Date.now(), action: 'refuse', minutes: mins, by: 'panel' })
               d.refresh('sisters', scope)
-              return { toast: '拒绝模式 30 分钟。' }
+              return { toast: '拒绝模式 ' + mins + ' 分钟。' }
             },
           },
         })

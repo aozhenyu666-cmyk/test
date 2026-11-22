@@ -11,17 +11,64 @@ class _FakeLocksChannel extends ProactiveChannel {
     this.verifyOverdue = false,
     this.withOverview = true,
     this.emptyFallback = false,
+    this.manualBoutStrict = false,
   });
 
   final bool verifyOverdue;
   final bool withOverview;
   final int availableMin = 45;
   final bool emptyFallback;
+  final bool manualBoutStrict;
 
+  bool dayWorkWallEnabled = true;
+  bool boutStrictActive = false;
+  int tickCalls = 0;
+  final List<String> launchedPkgs = [];
   final List<Map<String, Object?>> sealsCalls = [];
   final List<int> emergencyMinutes = [];
 
-  Map<String, dynamic> _overview() => {
+  Map<String, dynamic> _overview() {
+    final isManualStrict = manualBoutStrict && !boutStrictActive ? true : boutStrictActive;
+    final winnerId = verifyOverdue
+        ? 'CONTRACT_OVERDUE_STRICT'
+        : (isManualStrict
+            ? 'BOUT_STRICT'
+            : (dayWorkWallEnabled ? 'DAY_WORK_WALL' : ''));
+    return {
+        'winnerId': winnerId,
+        'dayWorkWallEnabled': dayWorkWallEnabled,
+        'effectiveDecision': {
+          'priority': verifyOverdue ? 'P3' : (winnerId.isEmpty ? 'P6' : 'P4'),
+          'source': verifyOverdue
+              ? 'CONTRACT_OVERDUE_STRICT'
+              : (winnerId.isEmpty ? 'AUTONOMY_RELAXED' : 'BOUT_STRICT'),
+          'mode': winnerId.isEmpty ? 'free' : 'allowlist',
+          'why': verifyOverdue ? '「行测 20 题」逾期未过保底' : '工作时段仅放行工作应用',
+          'unlockHow': '交付验收或切换关闭',
+          'until': DateTime.now().millisecondsSinceEpoch + 30 * 60000,
+          'remainingMin': winnerId.isEmpty ? 0 : 30,
+          'allow': [
+            {'pkg': 'md.obsidian', 'label': 'Obsidian'},
+            {'pkg': 'com.google.android.apps.bard', 'label': 'Gemini'},
+          ],
+          'deny': [],
+        },
+        'hands': [
+          {'id': 'EMERGENCY_SUSPEND', 'name': '急事 3 分钟通行证', 'priority': 'P0', 'active': false, 'isWinner': false, 'by': 'user', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'summary': '待命'},
+          {'id': 'NIGHT_CURFEW', 'name': '深夜睡眠 & 晚间上限锁', 'priority': 'P1', 'active': false, 'isWinner': false, 'by': 'rhythm', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'summary': '00:30-07:00'},
+          {'id': 'GEMINI_LIVE_CELL', 'name': 'Gemini 连麦舱', 'priority': 'P2', 'active': false, 'isWinner': false, 'by': 'gemini', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'summary': '待命'},
+          {'id': 'CONTRACT_OVERDUE_STRICT', 'name': '契约/封印逾期与接管严锁', 'priority': 'P3', 'active': verifyOverdue, 'isWinner': winnerId == 'CONTRACT_OVERDUE_STRICT', 'by': 'seal', 'until': 0, 'remainingMin': 0, 'canToggle': false, 'summary': '含 TAKEOVER_STRICT 状态'},
+          {'id': 'BOUT_STRICT', 'name': '专注严格局（手动/预案）', 'priority': 'P4', 'active': isManualStrict, 'isWinner': winnerId == 'BOUT_STRICT', 'by': 'panel', 'until': 0, 'remainingMin': isManualStrict ? 30 : 0, 'canToggle': isManualStrict && !verifyOverdue, 'summary': isManualStrict ? '手动严格局锁定中' : '未开启'},
+          {'id': 'DAY_WORK_WALL', 'name': '工作时段默认防分心锁（Option A）', 'priority': 'P4', 'active': dayWorkWallEnabled && !verifyOverdue, 'isWinner': winnerId == 'DAY_WORK_WALL', 'by': 'option-a', 'until': 0, 'remainingMin': dayWorkWallEnabled ? 60 : 0, 'canToggle': true, 'summary': dayWorkWallEnabled ? '生效中' : '已关闭'},
+        ],
+        'lastIntercept': {
+          'pkg': 'com.ss.android.ugc.aweme',
+          'label': '抖音',
+          'at': 1700000100000,
+          'handId': 'DAY_WORK_WALL',
+          'handName': '工作时段默认防分心锁',
+          'reason': '工作时段拦截娱乐应用',
+        },
         'activeLock': verifyOverdue
             ? {
                 'active': true,
@@ -86,12 +133,45 @@ class _FakeLocksChannel extends ProactiveChannel {
           },
         ],
       };
+  }
+
+  @override
+  Future<bool> tickNow() async {
+    tickCalls++;
+    return true;
+  }
+
+  @override
+  Future<bool> launchApp(String packageName) async {
+    launchedPkgs.add(packageName);
+    return true;
+  }
 
   @override
   Future<Map<String, dynamic>?> sealsOp(Map<String, Object?> body) async {
     sealsCalls.add(body);
     if (body['action'] == 'spend') {
       return {'ok': true, 'text': '已批准 ${body['minutes']} 分钟放松窗口'};
+    }
+    if (body['action'] == 'toggle_day_wall') {
+      dayWorkWallEnabled = body['enabled'] == true;
+      return {
+        'ok': true,
+        'dayWorkWallEnabled': dayWorkWallEnabled,
+        'text': dayWorkWallEnabled ? '已开启工作时段默认防分心锁' : '已关闭工作时段默认防分心锁',
+        'locksOverview': _overview(),
+      };
+    }
+    if (body['action'] == 'strict_off') {
+      if (verifyOverdue) {
+        return {'ok': false, 'error': 'hard-lock', 'text': '当前存在硬规则锁，不可直接撤回'};
+      }
+      boutStrictActive = false;
+      return {
+        'ok': true,
+        'text': '已撤回当前手动严格锁',
+        'locksOverview': _overview(),
+      };
     }
     if (!withOverview) {
       return {'ok': true, 'items': const <Object>[]};
@@ -228,5 +308,38 @@ void main() {
     await settlePhone(tester);
     expect(find.text('0 分钟'), findsOneWidget);
     expect(find.byKey(const ValueKey('lock-item-P6')), findsOneWidget);
+  });
+
+  testWidgets('LocksBalancePage 探针展示 6 只手、放行工作App与最近拦截，支持一键开关 Option A、撤回严格锁并立即 tickNow', (tester) async {
+    final ch = _FakeLocksChannel(manualBoutStrict: true);
+    ch.boutStrictActive = true;
+    await pumpPhone(tester, LocksBalancePage(channel: ch));
+    await settlePhone(tester);
+
+    expect(find.byKey(const ValueKey('locks-probe-card')), findsOneWidget);
+    expect(find.text('此刻哪只手在发力 · 锁机探针'), findsOneWidget);
+    for (final id in ['EMERGENCY_SUSPEND', 'NIGHT_CURFEW', 'GEMINI_LIVE_CELL', 'CONTRACT_OVERDUE_STRICT', 'BOUT_STRICT', 'DAY_WORK_WALL']) {
+      expect(find.byKey(ValueKey('locks-probe-hand-$id')), findsOneWidget);
+    }
+    expect(find.byKey(const ValueKey('locks-probe-last-intercept')), findsOneWidget);
+    expect(find.textContaining('最近拦截：抖音'), findsOneWidget);
+
+    // 点击放行工作 App 芯片拉起 Obsidian
+    await tester.tap(find.byKey(const ValueKey('locks-probe-allow-chip-md.obsidian')));
+    await settlePhone(tester);
+    expect(ch.launchedPkgs, ['md.obsidian']);
+
+    // 一键撤回手动严格锁 -> sealsOp(strict_off) + tickNow()
+    await tester.tap(find.byKey(const ValueKey('locks-strict-off-btn')));
+    await settlePhone(tester);
+    expect(ch.sealsCalls.any((c) => c['action'] == 'strict_off'), isTrue);
+    expect(ch.tickCalls, 1);
+
+    // 一键开关 Option A -> sealsOp(toggle_day_wall) + tickNow()
+    await tester.tap(find.byKey(const ValueKey('locks-day-wall-switch')));
+    await settlePhone(tester);
+    expect(ch.sealsCalls.any((c) => c['action'] == 'toggle_day_wall' && c['enabled'] == false), isTrue);
+    expect(ch.dayWorkWallEnabled, isFalse);
+    expect(ch.tickCalls, 2);
   });
 }

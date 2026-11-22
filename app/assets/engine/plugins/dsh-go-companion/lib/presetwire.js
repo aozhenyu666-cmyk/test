@@ -159,7 +159,7 @@ export function createPresetRuntime(deps) {
   }
 
   /** AI 或他把这一局直接切进严格模式（不等预案触发）。只会更严。 */
-  function strictNow(now, why, by) {
+  function strictNow(now, why, by, minutes = 45) {
     const bout = deps.runningBout()
     if (!bout) return { ok: false, text: '现在没有局，严格模式要绑在一局上。' }
     const apps = boutAppsOf(load(), bout.id)
@@ -167,14 +167,23 @@ export function createPresetRuntime(deps) {
     if (!allow.length) {
       return { ok: false, text: '当前局尚未绑定允许的应用；为避免误锁全机，请先为本局指定至少一个允许使用的 App。' }
     }
+    const rawMin = Number(minutes)
+    const clampedMin = Number.isFinite(rawMin) && rawMin > 0 ? Math.max(10, Math.min(360, Math.round(rawMin))) : 45
+    const until = now + clampedMin * 60_000
     const text = String(why || '').trim().slice(0, 40)
     const d = enterStrict(load(), {
-      allow, until: now + 6 * 3_600_000, boutId: bout.id, presetId: 'manual',
-      why: (text ? text + ' ' : '') + '严格模式：只剩本局应用。解除：本局结束 / 破窗',
+      allow, until, boutId: bout.id, presetId: 'manual', minutes: clampedMin,
+      why: (text ? text + ' ' : '') + `严格模式（${clampedMin}m）：只剩本局应用。解除：本局结束 / 破窗`,
     }, now)
     saveNow(d, now)
-    deps.record({ state: 'strict-on', at: now, by, boutId: bout.id, allow })
-    return { ok: true, text: allow.length ? '这一局进严格模式：只剩 ' + allow.join('、') + '。' : '这一局进严格模式：本局没声明 App，只剩局页。', allow }
+    deps.record({ state: 'strict-on', at: now, by, boutId: bout.id, allow, minutes: clampedMin })
+    return {
+      ok: true,
+      minutes: clampedMin,
+      until,
+      text: allow.length ? `这一局进严格模式（${clampedMin} 分钟）：只剩 ${allow.join('、')}。` : `这一局进严格模式（${clampedMin} 分钟）：本局没声明 App，只剩局页。`,
+      allow,
+    }
   }
 
   /** 破窗等出口：收掉严格模式。 */
