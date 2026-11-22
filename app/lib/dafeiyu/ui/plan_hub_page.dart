@@ -10,11 +10,13 @@ import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
+import 'locks_balance_page.dart';
 import 'plan_modality_page.dart';
 import 'plan_page.dart';
 import 'seal_page.dart';
 import 'strategy_horizons_page.dart';
 import 'today_cards.dart';
+import 'usage_analytics_page.dart';
 
 /// 计划：原来散在三处的「今日计划（时间块）」「计划模态 / 契约台」「三层战略」收成一个入口。
 ///
@@ -105,6 +107,18 @@ class _PlanHubPageState extends State<PlanHubPage> {
     final arbiterEnforce = arbiterRaw is bool ? arbiterRaw : true;
     final gaRaw = _seals?['geminiAccounting'] ?? _today['geminiAccounting'];
     final geminiSummary = gaRaw is Map ? '${gaRaw['summaryLine'] ?? ''}'.trim() : '';
+    final locksRaw = _seals?['locksOverview'] ?? _today['locksOverview'];
+    final locksMap = locksRaw is Map ? Map<String, dynamic>.from(locksRaw) : const <String, dynamic>{};
+    final walletMap = locksMap['wallet'] is Map ? Map<String, dynamic>.from(locksMap['wallet'] as Map) : const <String, dynamic>{};
+    final activeLockMap = locksMap['activeLock'] is Map ? Map<String, dynamic>.from(locksMap['activeLock'] as Map) : const <String, dynamic>{};
+    final ledgerFallback = TimeLedgerView.fromWire(_today['timeLedger']);
+    final availMin = walletMap['availableMin'] is num
+        ? (walletMap['availableMin'] as num).round()
+        : ledgerFallback?.funLeft;
+    final activeLockLabel = '${activeLockMap['label'] ?? ''}'.trim();
+    final locksSubtitle = availMin != null
+        ? '可用余额 ${availMin}m${activeLockLabel.isNotEmpty ? ' · $activeLockLabel' : ''} · 分时花余额与 8 道锁裁决'
+        : '8 道锁实时裁决 · 手机可用余额大盘 · 急事 3 分钟通道';
 
     return AppPage.list(
       title: '计划',
@@ -162,7 +176,45 @@ class _PlanHubPageState extends State<PlanHubPage> {
           onLocked: () => unawaited(_refresh()),
         ),
         ListPageCard(
-          title: '从近到远',
+          title: '作战与总控入口',
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            ListPageRow(
+              key: const ValueKey('plan-hub-horizons'),
+              icon: AppIcons.planMode,
+              iconColor: Theme.of(context).colorScheme.primary,
+              title: '三层战略作战室（含今日验收锁）',
+              subtitle: '长期北极星 · 中期战役 · 今日时间轴与验收锁 · Gemini 联调',
+              subtitleMaxLines: 2,
+              value: '${long.length} 长 · ${med.length} 中',
+              chevron: true,
+              onTap: () => unawaited(_go(StrategyHorizonsPage(channel: _channel))),
+            ),
+            ListPageRow(
+              key: const ValueKey('plan-hub-locks'),
+              icon: AppIcons.balance,
+              iconColor: colors.warning,
+              title: '锁与余额总控台',
+              subtitle: locksSubtitle,
+              subtitleMaxLines: 2,
+              value: availMin != null ? '${availMin}m' : null,
+              chevron: true,
+              onTap: () => unawaited(_go(LocksBalancePage(channel: _channel))),
+            ),
+            ListPageRow(
+              key: const ValueKey('plan-hub-analytics'),
+              icon: AppIcons.chart,
+              iconColor: colors.info,
+              title: 'App 使用时长统计',
+              subtitle: '24h 时间切片 · 90 天趋势 · Gemini 共脑 · 晚间 AI 总报',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => unawaited(_go(UsageAnalyticsPage(channel: _channel))),
+            ),
+          ],
+        ),
+        ListPageCard(
+          title: '时间块、验收点与契约细节（辅助）',
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
           children: [
             ListPageRow(
@@ -195,17 +247,6 @@ class _PlanHubPageState extends State<PlanHubPage> {
               subtitleMaxLines: 2,
               chevron: true,
               onTap: () => unawaited(_go(PlanModalityPage(channel: _channel, loopChannel: widget.loopChannel))),
-            ),
-            ListPageRow(
-              key: const ValueKey('plan-hub-horizons'),
-              icon: AppIcons.planMode,
-              iconColor: Theme.of(context).colorScheme.primary,
-              title: '长期：三层战略主线',
-              subtitle: '长期方向 · 中期战役 · 截止日；一键拆进今天',
-              subtitleMaxLines: 2,
-              value: '${long.length} 长 · ${med.length} 中',
-              chevron: true,
-              onTap: () => unawaited(_go(StrategyHorizonsPage(channel: _channel))),
             ),
           ],
         ),
