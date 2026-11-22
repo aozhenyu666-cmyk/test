@@ -360,3 +360,136 @@ test('Contract 4 & 5: 双鱼真相上下文与探针 winnerId/lastIntercept 完�
     tc.mock.timers.reset()
   }
 })
+
+test('Contract 6 (Merged HTTP): /bank 专练抽取去重、错题连对 2 次毕业、星标收藏与 7 日统计端到端闭环', async (tc) => {
+  const WORK_10AM = Date.UTC(2026, 10, 23, 2, 0, 0)
+  tc.mock.timers.enable({ apis: ['Date'], now: WORK_10AM })
+  try {
+    await withHome(async () => {
+      const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
+      const imp = await call(h(), 'POST', '/bank', {
+        action: 'import',
+        name: '行测混合题库',
+        raw: JSON.stringify({
+          题库版本: 1,
+          id: 'xingce-mix',
+          名称: '行测混合题库',
+          题目: [
+            { id: 'q1', kind: 'mcq', 题型: '常识', 题干: '第一题题干', 选项: ['选A', '选B', '选C', '选D'], 答案: 'B', 解析: '解析1' },
+            { id: 'q2', kind: 'mcq', 题型: '言语', 题干: '第二题题干', 选项: ['选A', '选B', '选C', '选D'], 答案: 'C', 解析: '解析2' },
+            { id: 'q3', kind: 'card', 题型: '知识卡', 题干: '核心规律展示卡', 答案: '记住边界条件', 解析: '解析3' },
+            { id: 'q4', kind: 'short_qa', 题型: '小问题', 题干: '为什么需要先抓关键变量？', 答案: '反事实剃刀原则', 解析: '解析4' },
+          ],
+        }),
+      })
+      assert.equal(imp.body.ok, true)
+      assert.equal(imp.body.importedCount, 4)
+
+      const s1 = await call(h(), 'POST', '/bank', { action: 'practice_session', bankId: imp.body.bankId, limit: 10 })
+      assert.equal(s1.body.ok, true)
+      assert.equal(s1.body.questions.length, 4)
+      const qIds = s1.body.questions.map((x) => x.id)
+      assert.equal(new Set(qIds).size, 4, 'practice_session 返回题单不得重复')
+
+      const q1Id = s1.body.questions.find((x) => x.stem.includes('第一题题干')).id
+      const q3Id = s1.body.questions.find((x) => x.stem.includes('核心规律展示卡')).id
+
+      // 收藏 q3 并筛选 starred
+      const stStar = await call(h(), 'POST', '/bank', { action: 'toggle_star', questionId: q3Id, starred: true })
+      assert.equal(stStar.body.ok, true)
+      assert.equal(stStar.body.starred, true)
+      const starredSess = await call(h(), 'POST', '/bank', { action: 'practice_session', scope: 'starred', limit: 10 })
+      assert.equal(starredSess.body.questions.length, 1)
+      assert.equal(starredSess.body.questions[0].id, q3Id)
+
+      // 答错 q1 → 自动进入错题本
+      const wrongRes = await call(h(), 'POST', '/bank', { action: 'submit_practice_answer', questionId: q1Id, answer: 'A', elapsedMs: 3200 })
+      assert.equal(wrongRes.body.ok, true)
+      assert.equal(wrongRes.body.correct, false)
+      assert.equal(wrongRes.body.inWrongBook, true)
+      const wb1 = await call(h(), 'POST', '/bank', { action: 'wrong_book_list' })
+      assert.equal(wb1.body.items.some((q) => q.id === q1Id), true)
+
+      // 连续答对第 1 次 → 仍保留在错题本（streak=1）
+      const pass1 = await call(h(), 'POST', '/bank', { action: 'submit_practice_answer', questionId: q1Id, answer: 'B', elapsedMs: 2100 })
+      assert.equal(pass1.body.correct, true)
+      assert.equal(pass1.body.streakCorrect, 1)
+      assert.equal(pass1.body.inWrongBook, true)
+
+      // 连续答对第 2 次 → 自动毕业移出错题本
+      const pass2 = await call(h(), 'POST', '/bank', { action: 'submit_practice_answer', questionId: q1Id, answer: 'B', elapsedMs: 1800 })
+      assert.equal(pass2.body.correct, true)
+      assert.equal(pass2.body.streakCorrect, 2)
+      assert.equal(pass2.body.graduatedFromWrongBook, true)
+      assert.equal(pass2.body.inWrongBook, false)
+
+      const stats = await call(h(), 'POST', '/bank', { action: 'stats_7d' })
+      assert.equal(stats.body.ok, true)
+      assert.equal(stats.body.todayAnswered, 3)
+      assert.equal(stats.body.starredCount, 1)
+      assert.equal(stats.body.wrongBookCount, 0)
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
+})
+
+test('Contract 7 (Merged HTTP): /plan-contract 日计划时间盒 + /plan 主动 Gemini 矩阵与 snooze + GET /wall/boss-brief', async (tc) => {
+  const WORK_10AM = Date.UTC(2026, 10, 23, 2, 0, 0) // 北京时间 10:00
+  tc.mock.timers.enable({ apis: ['Date'], now: WORK_10AM })
+  try {
+    await withHome(async () => {
+      const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
+
+      // 1) /plan-contract 准备 → 构建 → 观看时间盒操作
+      const eRes = await call(h(), 'POST', '/plan-contract', { action: 'set_energy', energyLevel: 'high' })
+      assert.equal(eRes.body.ok, true)
+      assert.equal(eRes.body.dayPlan.energyLevel, 'high')
+
+      const gRes = await call(h(), 'POST', '/plan-contract', { action: 'generate_default', energyLevel: 'high' })
+      assert.equal(gRes.body.ok, true)
+      assert.ok(gRes.body.dayPlan.dayBlocks.some((b) => b.slot === 'lunch' && b.isBreak), '必须含 12:00-14:00 午休放风块')
+
+      const upRes = await call(h(), 'POST', '/plan-contract', {
+        action: 'upsert_block',
+        block: { id: 'blk-focus-1', startMin: 570, endMin: 615, title: '主线申论套卷', deliverable: '写完并核对要点', lockMode: 'strict', allowedApps: ['md.obsidian'] },
+      })
+      assert.equal(upRes.body.ok, true)
+      const stRes = await call(h(), 'GET', '/plan-contract')
+      assert.equal(stRes.body.dayPlan.dayBlocks.some((b) => b.id === 'blk-focus-1'), true)
+
+      // 2) 关闭自动点火说话/只测 Gemini 触发矩阵：连续撞锁 2 次 → lock-bounce (10m 急冷却)
+      await call(h(), 'POST', '/config', { control: true, minGapMs: 0 })
+      await call(h(), 'POST', '/event', { type: 'intercept-hit', app: 'com.ss.android.ugc.aweme', label: '抖音', reason: '工作时段拦截娱乐 App' })
+      await call(h(), 'POST', '/event', { type: 'intercept-hit', app: 'com.ss.android.ugc.aweme', label: '抖音', reason: '工作时段拦截娱乐 App' })
+      const pBounce = await call(h(), 'POST', '/plan', {
+        roll: 0,
+        timeZone: TZ,
+        phone: { app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 1, screenOn: true },
+      })
+      assert.equal(pBounce.body.geminiAutoPull?.triggered, true)
+      assert.equal(pBounce.body.geminiAutoPull?.reason, 'lock-bounce')
+
+      // 3) 用户点 snooze_gemini 30 分钟 → 在延后窗内即便长时间娱乐也不再弹自动 Gemini
+      const snz = await call(h(), 'POST', '/storyline', { action: 'snooze_gemini', minutes: 30 })
+      assert.equal(snz.body.ok, true)
+      assert.ok(snz.body.snoozeUntil > WORK_10AM)
+      tc.mock.timers.setTime(WORK_10AM + 15 * 60_000)
+      const pSnoozed = await call(h(), 'POST', '/plan', {
+        roll: 0,
+        timeZone: TZ,
+        phone: { app: 'com.ss.android.ugc.aweme', label: '抖音', fun: true, minutes: 12, screenOn: true },
+      })
+      assert.equal(pSnoozed.body.geminiAutoPull, undefined, 'snooze 期间不得自动拉起 Gemini')
+
+      // 4) GET /wall/boss-brief 真实聚合全局账本数据
+      const boss = await call(h(), 'GET', '/wall/boss-brief')
+      assert.equal(boss.body.ok, true)
+      assert.ok(boss.body.snapshot.blockedCount >= 2, `期望读到真实撞锁计数 >=2，实际 ${boss.body.snapshot.blockedCount}`)
+      assert.ok(boss.body.snapshot.planBlocksSummary.todayTotal >= 1)
+      assert.match(boss.body.bossPrompt, /冷血直属主管|老板全局审视/)
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
+})

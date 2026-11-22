@@ -186,7 +186,14 @@ import {
   requestPass, revokeEmergencyPass,
 } from './pass_ledger.js'
 import { arbitrateSpeak } from './speak_arbiter.js'
-import { buildStandardGeminiBrief, markGeminiSessionEnded, normalizeGeminiGate, requestGemini } from './gemini_gate.js'
+import {
+  buildStandardGeminiBrief,
+  evaluateProactiveGeminiTriggers,
+  markGeminiSessionEnded,
+  normalizeGeminiGate,
+  requestGemini,
+  snoozeGeminiAuto,
+} from './gemini_gate.js'
 import { appendTimeEntry, CARRY_CAP_MIN, computeTimeLedger, normalizeTimeLedger } from './time_ledger.js'
 import { createLockBus } from './lock_bus.js'
 import {
@@ -234,7 +241,7 @@ import { DEPTS, TRIGGER_TEXT, blockLine, fixedBlocksOf, lateLine, markBlockDone,
 import { DEPARTMENTS, DEPT_DUTY, appendSlot, behaviorReport, completeOf, depositLines, depositOf, missingText, normalizeEntry, reconcileEntry, slotAsk, statusOf, withEntry } from './deposit.js'
 import { AUDIT_CODES, APPEAL_CODES, APPEAL_MAX_PER_DAY, appealLeft, appealVoice, verdictVoice, wallThread } from './wall_voice.js'
 import {
-  SCREENSHOT_DIRS, auditSixDiceSlot, auditStrokeSlot, auditTask, baselineFor, buildSixDicePlan, buildStrokePlan, checkMorningTasks, evidenceType,
+  SCREENSHOT_DIRS, auditSixDiceSlot, auditStrokeSlot, auditTask, baselineFor, buildBossAuditBrief, buildSixDicePlan, buildStrokePlan, checkMorningTasks, evidenceType,
   listScreenshots, loadWallMemory, noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
 } from './wall_auditor.js'
 import { executeCapability } from './capabilities.js'
@@ -2991,6 +2998,12 @@ export function apply(ctx) {
       }
     },
     requestGeminiGate: (opts) => requestGeminiViaGate(opts),
+    snoozeGeminiAutoNow: (minutes = 30, now = Date.now()) => {
+      const tz = zoneOr(config.timeZone)
+      const next = snoozeGeminiAuto(loadGeminiGate(now, tz), minutes, now, tz)
+      if (next && typeof next === 'object') saveGeminiGate(next)
+      return next
+    },
   })
   function intensityTightenTool() {
     return {
@@ -5844,6 +5857,62 @@ export function apply(ctx) {
       appeal: { code: r.code, pass: r.pass, text: verdictVoice(r.code, r.vars), left: left - 1, appealLeft: left - 1 },
     }
   }
+  function wallBossBriefRoute(body = {}) {
+    // 老板/主管宏观全局审视导出器：汇总近 7 天计划/封印兑现率、今日正事与娱乐真实分布、
+    // 锁机撞锁与紧急通行、未兑现承诺与日计划块状态，供冷血主管视角做全局追问。
+    const now = Date.now()
+    const tz = requestZone(body?.timeZone, config)
+    const today = dayString(now, tz)
+    const todayV4 = (() => { try { return v4Hub?.todayViewV4?.(now) || null } catch { return null } })()
+    const passSum = todayV4?.passLedger || (() => {
+      try {
+        const info = intensityStateNow(now, tz)
+        return passLedgerSummary(loadPassLedger(now, tz), { day: today, cap: info.emergencyDisarmDailyCap, now })
+      } catch {
+        return null
+      }
+    })()
+    const seals = (() => { try { return loadSeals(now, tz)?.items || [] } catch { return [] } })()
+    const locksOverview = (() => { try { return buildLocksOverview(now, tz) } catch { return {} } })()
+    const commitments = (() => { try { return readCommitments(home(), now, 10) } catch { return [] } })()
+    const planBlocks = (() => { try { return v4Hub?.loadDayPlan?.(now)?.dayBlocks || [] } catch { return [] } })()
+    const entries = readLedger(home(), 400)
+    const recentBreaches = entries.filter((e) => {
+      if (!e || now - Number(e.at || 0) > 7 * 86_400_000) return false
+      return ['intercept-hit', 'blocked-open', 'disarm', 'emergency-pass', 'checkpoint-overdue-locked', 'takeover', 'breach', 'breakglass'].includes(String(e.state || ''))
+    })
+    const rep = (() => { try { return usageReportView(now, tz) } catch { return {} } })()
+    const weekStats = (() => {
+      try {
+        const ov = v4Hub?.analyticsRoute?.({ action: 'overview', rangeDays: 7 })
+        return ov?.summary || {}
+      } catch {
+        return {}
+      }
+    })()
+    const funMinFallback = Number(rep?.funMinutes) || 0
+    const focusMinFallback = Math.max(0, (Number(rep?.totalMinutes) || 0) - funMinFallback)
+    return {
+      v: 1,
+      ...buildBossAuditBrief({
+        now,
+        tz,
+        todayStats: {
+          buckets: todayV4?.charts?.buckets || {},
+          workMin: todayV4?.brief?.focusMin ?? focusMinFallback,
+          funMin: todayV4?.brief?.funMin ?? funMinFallback,
+          passLedger: passSum,
+          disarms: passSum?.emergency?.used ?? 0,
+        },
+        weekStats,
+        locksOverview,
+        seals,
+        commitments,
+        planBlocks,
+        recentBreaches,
+      }),
+    }
+  }
   /**
    * 本周还剩几天放风额度——四部门没交齐的当天归零。
    *
@@ -7813,6 +7882,7 @@ export function apply(ctx) {
         if (path === '/storyline') return send(res, 200, v4Hub.storylineRoute(body.value || {}))
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
+        if (path === '/wall/boss-brief') return send(res, 200, wallBossBriefRoute(body.value))
         if (path === '/tiers') return send(res, 200, tiersRoute(body.value))
         if (path === '/seals') return send(res, 200, sealsRoute(body.value))
         if (path === '/covenant') return send(res, 200, covenantRoute(body.value))
@@ -8173,6 +8243,9 @@ export function apply(ctx) {
       // A3：审查记录是只读的，所以它是 GET；body 里没东西也照样能查。
       if (req.method === 'GET' && path === '/wall/thread') {
         return send(res, 200, wallThreadRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
+      }
+      if (req.method === 'GET' && path === '/wall/boss-brief') {
+        return send(res, 200, wallBossBriefRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
       }
       // C1：挂载卡的只读视图（浮层小卡打开时先 GET 一次）。写操作走 POST。
       if (req.method === 'GET' && path === '/mount') {
@@ -11056,7 +11129,7 @@ export function apply(ctx) {
     }
     const intInfo = intensityStateNow(now, tz)
     const th = intInfo.thresholds
-    const min = zoneMinuteOfDay(now, tz)
+    const min = localMinute(phone, zoneMinuteOfDay(now, tz))
     const boutGap = !run && lastBoutEndAt > 0 && now - lastBoutEndAt >= th.boutGapPushMin * 60_000 && min >= 9 * 60 && min < 21 * 60 + 30
     const m = driveMode({
       tideBand: water?.band, tideLevel: water?.level, frontTier, frontMinutes,
@@ -12305,6 +12378,93 @@ export function apply(ctx) {
             preferVoice: true,
             brief: gateRes.brief || pullBrief,
           }
+        }
+      }
+      if (!geminiAutoPull && canAttemptAutoPull && !emergencyActive && !hardCapped && phone?.app) {
+        try {
+          const tfNow = tierFnNow()
+          const modNow = localMinute(phone, zoneMinuteOfDay(now, tz))
+          const isNightNow = Boolean(lastRhythm?.night)
+          const isQuietNow = inQuiet(now, config.quietStart, config.quietEnd, tz)
+          const switchesRecent = Array.isArray(phone?.switches?.recent) ? phone.switches.recent : []
+          const funSwitches5m = switchesRecent.filter((sw) => {
+            const atMs = Number(sw?.at) || 0
+            if (atMs > 0 && now - atMs > 5 * 60_000) return false
+            const pkg = String(sw?.app || sw?.to || '')
+            return pkg && ['fun', 'game'].includes(tfNow(pkg, sw?.label || ''))
+          }).length
+          const lockBounceCount = ledger.filter((e) => (
+            now - Number(e?.at || 0) <= 15 * 60_000 &&
+            (e?.state === 'intercept-hit' || e?.state === 'blocked-open')
+          )).length
+          const justFinishedBout = Boolean(driveRes?.lastBoutEndAt && now - Number(driveRes.lastBoutEndAt) <= 15 * 60_000) ||
+            ledger.some((e) => e?.state === 'bout-closed' && now - Number(e?.at || 0) <= 10 * 60_000)
+          const lastInterceptNow = loadLastIntercept()
+          const trig = evaluateProactiveGeminiTriggers(
+            loadGeminiGate(now, tz),
+            {
+              minuteOfDay: modNow,
+              isNight: isNightNow,
+              hasActiveBout: boutNow || Boolean(v4ContractTick.contract),
+              funDwellMin: phone?.fun ? dwellMin : 0,
+              funSwitches5m,
+              lockBounceCount,
+              justFinishedBout,
+              boutRecapped: Boolean(gem?.recap),
+              eveningClosed: Boolean(v4ContractTick.eveningReportGenerated),
+              lastBlockedApp: lastInterceptNow?.label || lastInterceptNow?.pkg || '',
+              lastBlockedWhy: lastInterceptNow?.reason || '',
+              front: phone?.label || phone?.app || '',
+              frontMinutes: dwellMin,
+              funMinutesToday: Number(timeLedger?.funUsed) || 0,
+              owner: String(config.owner || '他'),
+              kbDirPath: (() => { try { const d = notesDir(); return d ? kbDir(d, home()) : '' } catch { return '' } })(),
+              commitments: readCommitments(home(), now, 3).map((c) => c.statement),
+              bridge: bridgeHealthy(now),
+            },
+            {
+              now,
+              tz,
+              day: dayString(now, tz),
+              dailyCap: intensityNow.thresholds.geminiAutoMaxPerDay,
+              pullMode,
+              emergencyActive,
+              isNight: isNightNow,
+              isQuiet: isQuietNow,
+              hardCapped,
+              sessionActive: gem.inside || Boolean(gem.session),
+            },
+          )
+          // `post-bout-or-evening` 仅在两条鱼未主动开口时轻量补位，绝不抢占晚间审视/督办话语权
+          const allowSpeakYield = trig.scenario !== 'post-bout-or-evening' || !out.speak
+          if (trig.triggered && trig.state && allowSpeakYield) {
+            saveGeminiGate(trig.state)
+            recordHardNow({
+              kind: 'auto_gemini',
+              source: 'gemini:' + trig.scenario,
+              why: trig.packet?.topic || trig.scenario,
+              now,
+              tz,
+              dedupeKey: 'gem:' + trig.scenario + ':' + Math.floor(now / 60_000),
+            })
+            v4Hub.markStoryAutoPulled(now, trig.packet?.title || trig.scenario)
+            geminiAutoPull = {
+              triggered: true,
+              nonIntrusive: true,
+              at: now,
+              scenario: trig.scenario,
+              topic: trig.packet?.topic || trig.scenario,
+              title: trig.packet?.title || trig.scenario,
+              subtitle: trig.packet?.subtitle || '',
+              mode: pullMode,
+              reason: trig.scenario,
+              preferVoice: true,
+              canSnooze: true,
+              brief: trig.brief || '',
+            }
+          }
+        } catch (error) {
+          console.error('[companion] Gemini 主动触发矩阵评估失败：' + String((error && error.message) || error))
         }
       }
     }

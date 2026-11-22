@@ -212,6 +212,10 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             "wallThread" -> ProactiveRuntime.fetchPluginRoute(
                 result, "GET", "/wall/thread?timeZone=${BeijingClock.ZONE.id}", null,
             )
+            // 老板/主管全局审视接口：汇总近 7 天兑现、真实时长分布、违约与未兑现承诺供 Gemini 质询。
+            "bossBrief" -> ProactiveRuntime.fetchPluginRoute(
+                result, "GET", "/wall/boss-brief?timeZone=${BeijingClock.ZONE.id}", null,
+            )
             // A3：申诉。只收「一条具体判定 + 新的物理证据」，每天 2 次；判还是由插件里的墙算。
             "wallAppeal" -> {
                 val body = LinkedHashMap<String, Any?>()

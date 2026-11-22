@@ -145,7 +145,7 @@ test('忙完：妹妹来迎接一次；"忙完了"提前收工也关掉拒绝模
   await withHome(async (home) => {
     const now = Date.now()
     const t = setup(home, { gear: 'busy', gearUntil: now - 60_000, gearSince: now - 41 * 60_000, gearWhat: '做饭' })
-    const p = await t.plan(wechat)
+    const p = await t.plan({ ...wechat, local: '15:00' })
     assert.equal(p.body.reason, 'busy-done', JSON.stringify(p.body))
     assert.equal(p.body.speaker, 'companion')
     await t.request('req-done-001')
@@ -153,7 +153,7 @@ test('忙完：妹妹来迎接一次；"忙完了"提前收工也关掉拒绝模
     assert.match(text(t.sis), /报到/)
     assert.match(text(t.sis), /不评分、不扣分/)
     await finishTurn(t.h, t.sis, 2, '饭做好了没，香不香')
-    const again = await t.plan(wechat)
+    const again = await t.plan({ ...wechat, local: '15:00' })
     assert.notEqual(again.body.reason, 'busy-done', '只迎一次')
   })
   await withHome(async (home) => {
@@ -241,7 +241,7 @@ test('Gemini 连麦中途跑了：妹妹叫他回去（能动手就直接打开 
     writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({
       session: { topic: '想清楚要不要考研', until: now + 20 * 60_000, startedAt: now - 10 * 60_000 }, inSince: now - 9 * 60_000, lastInAt: now - 3 * 60_000,
     }))
-    const p = await t.plan(wechat)
+    const p = await t.plan({ ...wechat, local: '15:00' })
     assert.equal(p.body.reason, 'gemini-left', JSON.stringify(p.body))
     assert.equal(p.body.speaker, 'companion')
     await t.request('req-left-0001')
@@ -258,7 +258,7 @@ test('Gemini 回：出来几分钟后姐姐去后台屏读回那段对话、存�
     const t = setup(home, { notesPath: vault, state: 'brain', patrolHours: [] })
     // 在 Gemini 里待了 15 分钟，4 分钟前出来
     writeFileSync(join(home, 'companion', 'gemini.json'), JSON.stringify({ inSince: now - 19 * 60_000, lastInAt: now - 4 * 60_000 }))
-    const p = await t.plan(wechat)
+    const p = await t.plan({ ...wechat, local: '15:00' })
     assert.equal(p.body.reason, 'gemini-recap', JSON.stringify(p.body))
     assert.equal(p.body.speaker, 'strategist')
     await t.request('req-recap-001')
@@ -269,7 +269,7 @@ test('Gemini 回：出来几分钟后姐姐去后台屏读回那段对话、存�
     assert.match(prompt, /gemini_log/)
     assert.match(prompt, /绝不编/)
     await finishTurn(t.h, t.big, 2, '你卡在特征值那步，明天先把习题 3.2 做了。')
-    const again = await t.plan(wechat)
+    const again = await t.plan({ ...wechat, local: '15:00' })
     assert.notEqual(again.body.reason, 'gemini-recap', '这一段只读一次')
     const r = t.big.tools.gemini_log.execute({ summary: '过了一遍特征值和特征向量', stuck: '对角化的条件', next: '明早做习题 3.2', quotes: ['我其实没懂为什么要对角化'], topic: '线代' })
     assert.equal(r.ok, true, r.text)

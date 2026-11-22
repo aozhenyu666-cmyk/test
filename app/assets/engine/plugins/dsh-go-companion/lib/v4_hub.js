@@ -8,7 +8,19 @@
 // - dept_skills.js (四部门防骗红旗 / 反沉没成本 / 三段因果链可执行 Skill)
 
 import { join } from 'node:path'
-import { cleanBankUnlockState, creditReviewAnswer, judgeQuizAnswer, pickNextQuizQuestion, reviewCapFor, SELF_JUDGED_WEIGHT } from './bank_unlock.js'
+import {
+  build7dQuizStats,
+  buildPracticeSession,
+  cleanBankUnlockState,
+  creditReviewAnswer,
+  getWrongBookList,
+  judgeQuizAnswer,
+  pickNextQuizQuestion,
+  recordPracticeAnswer,
+  reviewCapFor,
+  SELF_JUDGED_WEIGHT,
+  toggleQuestionStar,
+} from './bank_unlock.js'
 import { buildImportPreview, detectQuestionAnomalies, GEMINI_IMPORT_PROMPT_TEMPLATE, normalizeImages, normalizeQuestionKind, parseBankAny } from './bank_import.js'
 import { answerLockReviewCard } from './review_cards.js'
 import { evaluateAutonomy14d, evaluateAutonomyLevel } from './autonomy.js'
@@ -27,8 +39,11 @@ import {
 import { commitBoutOutcomeToNode, compileBoutFromNode, dossierSummary } from './plan_compiler.js'
 import {
   AI_PROMPT_SCRIPTS,
+  applyDayPlanAction,
+  cleanDayPlanState,
   cleanPlanContract,
   COMMON_PLAN_PRESETS,
+  computeDayPlanStats,
   evaluateCheckpointSubmission,
   evaluateContractTick,
   inspectScenarioApps,
@@ -130,6 +145,7 @@ export function createV4Hub(deps) {
     getLockRequests = () => [],
     getTodayBrainStats = null,
     onContractClear = null,
+    snoozeGeminiAutoNow = null,
   } = deps
 
   const tz = () => zoneOr(getConfig()?.timeZone)
@@ -367,6 +383,56 @@ export function createV4Hub(deps) {
   const loadContract = () => cleanPlanContract(readState(stateFile('plan-contract.json'), null))
   const saveContract = (c) => writeJson(stateFile('plan-contract.json'), c)
 
+  const DAY_PLAN_ACTIONS = new Set([
+    'get_day_plan',
+    'set_energy',
+    'generate_default',
+    'upsert_block',
+    'delete_block',
+    'set_block_status',
+    'move_carryover',
+    'set_day_plan',
+  ])
+
+  function loadDayPlan(now = Date.now()) {
+    const tzName = tz()
+    const today = dayString(now, tzName)
+    const raw = readState(stateFile('plan-daybox.json'), null)
+    if (raw && typeof raw === 'object' && raw.day && raw.day !== today && Array.isArray(raw.dayBlocks)) {
+      // 跨天自动将昨日未完成的非休息时间块带入今日准备态待选列表
+      const carried = raw.dayBlocks
+        .filter((b) => b && !b.isBreak && b.status !== 'done')
+        .map((b, i) => ({
+          id: `carry-${String(b.id || i + 1)}`,
+          title: String(b.title || ''),
+          minutes: Math.max(10, Math.min(180, (Number(b.endMin) || 0) - (Number(b.startMin) || 0) || 45)),
+          lockMode: b.lockMode || 'strict',
+          deliverable: b.deliverable || '',
+          allowedApps: Array.isArray(b.allowedApps) ? b.allowedApps : ['md.obsidian', 'com.tencent.mm'],
+          fromDay: raw.day,
+          moved: false,
+        }))
+        .filter((c) => c.title)
+      return cleanDayPlanState({ energyLevel: raw.energyLevel || 'mid', carryoverItems: carried, dayBlocks: [] }, { day: today, now })
+    }
+    return cleanDayPlanState(raw, { day: today, now })
+  }
+
+  function saveDayPlan(state, now = Date.now()) {
+    const today = dayString(now, tz())
+    const clean = cleanDayPlanState(state, { day: today, now })
+    writeJson(stateFile('plan-daybox.json'), { ...clean, updatedAt: now })
+    return clean
+  }
+
+  function funBudgetMinNow(now = Date.now()) {
+    try {
+      const tl = getTimeLedger?.(now, dayString(now, tz()))
+      if (tl && Number.isFinite(Number(tl.funLeft))) return Math.max(0, Math.round(Number(tl.funLeft)))
+    } catch {}
+    return 30
+  }
+
   function computeAutonomy(now = Date.now()) {
     const tzName = tz()
     const day = dayString(now, tzName)
@@ -558,9 +624,10 @@ export function createV4Hub(deps) {
         banks,
         bankName,
         bankTotal,
-        wrongCount: st.wrongIds.length,
+        wrongCount: (st.wrongBookIds?.length ? st.wrongBookIds : st.wrongIds).length,
         config: st.config,
         stats: st.stats,
+        stats7d: build7dQuizStats(st, now, tz(), catalog),
       }
     }
 
@@ -679,9 +746,58 @@ export function createV4Hub(deps) {
       }
     }
 
+    if (action === 'practice_session') {
+      return {
+        v: 1,
+        ...buildPracticeSession(catalog, st, {
+          bankId: body?.bankId ?? body?.id ?? '',
+          kind: body?.kind ?? '',
+          scope: body?.scope ?? 'all',
+          limit: body?.limit ?? 20,
+          excludeIds: body?.excludeIds ?? [],
+          now,
+        }),
+      }
+    }
+
+    if (action === 'submit_practice_answer') {
+      const r = recordPracticeAnswer(catalog, st, {
+        questionId: body?.questionId,
+        answer: body?.answer ?? '',
+        rating: body?.rating,
+        elapsedMs: body?.elapsedMs ?? 0,
+        now,
+        tz: tz(),
+      })
+      if (r.ok && r.state) saveBankUnlock(r.state)
+      return { v: 1, ...r, state: undefined }
+    }
+
+    if (action === 'toggle_star') {
+      const r = toggleQuestionStar(st, body?.questionId, body?.starred)
+      if (r.ok && r.state) saveBankUnlock(r.state)
+      return { v: 1, ...r, state: undefined }
+    }
+
+    if (action === 'stats_7d') {
+      return { v: 1, ok: true, ...build7dQuizStats(st, now, tz(), catalog) }
+    }
+
+    if (action === 'wrong_book_list') {
+      return {
+        v: 1,
+        ...getWrongBookList(catalog, st, {
+          bankId: body?.bankId ?? '',
+          kind: body?.kind ?? '',
+          limit: body?.limit ?? 200,
+          now,
+        }),
+      }
+    }
+
     if (action === 'status' || action === 'quiz_session') {
       const card = serveReviewCard(st, now, catalog)
-      if (card) return { v: 1, ok: true, banks: summarizeCatalog(catalog, st), ...card.payload }
+      if (card) return { v: 1, ok: true, banks: summarizeCatalog(catalog, st), stats7d: build7dQuizStats(st, now, tz(), catalog), ...card.payload }
       const preview = pickNextQuizQuestion(catalog, st)
       if (preview.state) saveBankUnlock(preview.state)
       return {
@@ -689,7 +805,8 @@ export function createV4Hub(deps) {
         ok: true,
         config: st.config,
         stats: st.stats,
-        wrongCount: st.wrongIds.length,
+        stats7d: build7dQuizStats(preview.state || st, now, tz(), catalog),
+        wrongCount: (st.wrongBookIds?.length ? st.wrongBookIds : st.wrongIds).length,
         bankName: preview.bankName || '未导入',
         bankTotal: preview.bankTotal,
         banks: summarizeCatalog(catalog, st),
@@ -1156,10 +1273,39 @@ export function createV4Hub(deps) {
         }),
       }
     }
+    if (DAY_PLAN_ACTIONS.has(action)) {
+      const dayPlanCur = loadDayPlan(now)
+      const res = applyDayPlanAction(dayPlanCur, { ...body, action }, {
+        now,
+        day: dayString(now, tz()),
+        funBudgetMin: funBudgetMinNow(now),
+      })
+      if (res.ok && action !== 'get_day_plan') {
+        saveDayPlan(res, now)
+      }
+      return {
+        v: 1,
+        ...res,
+        dayPlan: {
+          v: 1,
+          day: res.day,
+          energyLevel: res.energyLevel,
+          carryoverItems: res.carryoverItems,
+          dayBlocks: res.dayBlocks,
+          stats: res.stats,
+          updatedAt: res.updatedAt,
+        },
+      }
+    }
     if (action === 'status') {
       const cur = loadContract()
       const ticked = evaluateContractTick(cur, now)
       if (ticked.changed && ticked.contract) saveContract(ticked.contract)
+      const dayPlanCur = loadDayPlan(now)
+      const dayPlanStats = computeDayPlanStats(dayPlanCur.dayBlocks, {
+        funBudgetMin: funBudgetMinNow(now),
+        energyLevel: dayPlanCur.energyLevel,
+      })
       return {
         v: 1,
         ok: true,
@@ -1169,6 +1315,10 @@ export function createV4Hub(deps) {
         graceSecDefault: Math.round(OVERDUE_GRACE_MS / 1000),
         presets: COMMON_PLAN_PRESETS,
         scripts: AI_PROMPT_SCRIPTS,
+        dayPlan: {
+          ...dayPlanCur,
+          stats: dayPlanStats,
+        },
       }
     }
     if (action === 'set') {
@@ -1534,6 +1684,22 @@ export function createV4Hub(deps) {
     const tzName = tz()
     const action = String(body?.action || 'get')
     let store = loadStorylineStore(now)
+    if (action === 'snooze_gemini') {
+      const mins = Math.max(5, Math.min(180, Number(body?.minutes) || 30))
+      const snoozeRes = typeof snoozeGeminiAutoNow === 'function'
+        ? snoozeGeminiAutoNow(mins, now)
+        : { ok: true, snoozeUntil: now + mins * 60_000 }
+      record({ state: 'gemini-snooze', at: now, minutes: mins })
+      return {
+        v: 1,
+        ok: true,
+        minutes: mins,
+        snoozeUntil: snoozeRes?.snoozeUntil || (now + mins * 60_000),
+        pullMode: store.pullMode,
+        storyline: store,
+        promptBlock: formatIntradayPromptBlock(store, now, tzName),
+      }
+    }
     if (action === 'set_gemini_pull_mode') {
       store = setPullMode(store, body?.pullMode, { now, tz: tzName })
       saveStorylineStore(store)
@@ -1937,6 +2103,7 @@ export function createV4Hub(deps) {
     horizonsRoute,
     bankRoute,
     planContractRoute,
+    loadDayPlan,
     skillsAuditRoute,
     analyticsRoute,
     storylineRoute,
