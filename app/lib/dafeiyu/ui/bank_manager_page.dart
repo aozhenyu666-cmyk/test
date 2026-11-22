@@ -16,6 +16,7 @@ import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../bank/bank_text_extract.dart';
 import '../channels/proactive_state.dart';
+import 'quiz_practice_page.dart';
 import 'review_page.dart';
 
 const String _fallbackGeminiTemplate = '''请把我今天收集的零散资料/笔记/错题/截图内容，整理加工成一份【混合知识卡与防遗忘题库 JSON】，方便我直接导入 DSH Go 题库中心并在锁屏刷题巩固。
@@ -187,6 +188,25 @@ class _BankManagerPageState extends State<BankManagerPage> {
       }
       unawaited(_refresh());
     }
+  }
+
+  Future<void> _openPractice({
+    String bankId = '',
+    String bankName = '',
+    String kind = '',
+    String scope = 'all',
+    String? title,
+  }) async {
+    await QuizPracticePage.open(
+      context,
+      channel: _channel,
+      bankId: bankId,
+      bankName: bankName,
+      kind: kind,
+      scope: scope,
+      title: title,
+    );
+    if (mounted) unawaited(_refresh());
   }
 
   Future<void> _copyGeminiTemplate() async {
@@ -1042,7 +1062,291 @@ D. 中性产业政策
                 Icon(AppIcons.disclosure, size: 14, color: theme.colorScheme.primary),
               ],
             ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  key: ValueKey('bank-practice-$bankId'),
+                  onPressed: total == 0
+                      ? null
+                      : () => unawaited(
+                            _openPractice(
+                              bankId: bankId,
+                              bankName: name,
+                              scope: 'all',
+                              title: name,
+                            ),
+                          ),
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  icon: const Icon(AppIcons.play, size: 15),
+                  label: const Text('单刷这套题'),
+                ),
+                if (mcqCount > 0)
+                  OutlinedButton(
+                    key: ValueKey('bank-practice-$bankId-mcq'),
+                    onPressed: () => unawaited(
+                      _openPractice(
+                        bankId: bankId,
+                        bankName: name,
+                        kind: 'mcq',
+                        scope: 'all',
+                        title: '$name · 选择',
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                    child: const Text('只刷选择'),
+                  ),
+                if (cardCount > 0)
+                  OutlinedButton(
+                    key: ValueKey('bank-practice-$bankId-card'),
+                    onPressed: () => unawaited(
+                      _openPractice(
+                        bankId: bankId,
+                        bankName: name,
+                        kind: 'card',
+                        scope: 'all',
+                        title: '$name · 展示卡',
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                    child: const Text('只刷卡片'),
+                  ),
+                if (qaCount > 0)
+                  OutlinedButton(
+                    key: ValueKey('bank-practice-$bankId-short_qa'),
+                    onPressed: () => unawaited(
+                      _openPractice(
+                        bankId: bankId,
+                        bankName: name,
+                        kind: 'short_qa',
+                        scope: 'all',
+                        title: '$name · 小问题',
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                    child: const Text('只刷小问题'),
+                  ),
+              ],
+            ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStats7dQuickCard(ThemeData theme, DshColors colors) {
+    final stats = _bankData['stats'] is Map ? _bankData['stats'] as Map : const {};
+    final stats7d = _bankData['stats7d'] is Map ? _bankData['stats7d'] as Map : const {};
+    final answered = (stats['answered'] as num?)?.toInt() ?? 0;
+    final correct = (stats['correct'] as num?)?.toInt() ?? 0;
+    final wrongFallback = (_bankData['wrongCount'] as num?)?.toInt() ?? 0;
+
+    final todayAnswered = (stats7d['todayAnswered'] as num?)?.toInt() ?? 0;
+    final total7d = (stats7d['totalAnswered7d'] as num?)?.toInt() ?? answered;
+    final acc7d = (stats7d['accuracy7d'] as num?)?.toInt() ??
+        (answered > 0 ? ((correct * 100) / answered).round() : null);
+    final fsrsDue = (stats7d['fsrsDueCount'] as num?)?.toInt() ?? 0;
+    final wrongBook = (stats7d['wrongBookCount'] as num?)?.toInt() ?? wrongFallback;
+    final starredCount = (stats7d['starredCount'] as num?)?.toInt() ?? 0;
+
+    final rawDays = stats7d['days'] is List ? stats7d['days'] as List : const [];
+    final days = <Map<String, dynamic>>[
+      for (final d in rawDays)
+        if (d is Map) Map<String, dynamic>.from(d),
+    ];
+    final maxDayCount = days.fold<int>(
+      1,
+      (m, d) => ((d['answered'] as num?)?.toInt() ?? 0) > m ? ((d['answered'] as num?)?.toInt() ?? 0) : m,
+    );
+
+    return GlassSurface(
+      key: const ValueKey('bank-7d-stats-card'),
+      tier: GlassTier.card,
+      borderRadius: AppShape.radiusLg,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(AppIcons.chart, size: 18, color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '7 日刷题统计 & 快捷入口',
+                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  Text(
+                    acc7d == null ? '近 7 日正确率 --' : '近 7 日正确率 $acc7d%',
+                    style: AppType.tabular(
+                      theme.textTheme.labelMedium!.copyWith(
+                        color: acc7d != null && acc7d >= 70 ? colors.success : theme.colorScheme.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: _QuickStatPill(
+                      label: '今日已刷',
+                      value: '$todayAnswered 题',
+                      accent: theme.colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _QuickStatPill(
+                      label: '近 7 日题量',
+                      value: '$total7d 题',
+                      accent: colors.info,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _QuickStatPill(
+                      label: 'FSRS 到期',
+                      value: '$fsrsDue 题',
+                      accent: fsrsDue > 0 ? colors.warning : colors.textTertiary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _QuickStatPill(
+                      label: '错题 / 收藏',
+                      value: '$wrongBook / $starredCount',
+                      accent: wrongBook > 0 ? colors.danger : colors.success,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: AppShape.radiusXs,
+                child: LinearProgressIndicator(
+                  value: acc7d == null ? 0.0 : (acc7d.clamp(0, 100) / 100.0),
+                  minHeight: 6,
+                  backgroundColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
+                  color: acc7d != null && acc7d >= 75 ? colors.success : theme.colorScheme.primary,
+                ),
+              ),
+              if (days.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 44,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      for (final d in days)
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 2),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                Expanded(
+                                  child: Align(
+                                    alignment: Alignment.bottomCenter,
+                                    child: FractionallySizedBox(
+                                      heightFactor: (((d['answered'] as num?)?.toInt() ?? 0) / maxDayCount)
+                                          .clamp(0.12, 1.0),
+                                      child: Container(
+                                        width: 12,
+                                        decoration: BoxDecoration(
+                                          color: ((d['answered'] as num?)?.toInt() ?? 0) > 0
+                                              ? theme.colorScheme.primary.withValues(alpha: 0.78)
+                                              : theme.colorScheme.surfaceContainerHighest,
+                                          borderRadius: AppShape.radiusXs,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  '${d['label'] ?? ''}'.split('-').last,
+                                  style: AppType.tabular(
+                                    theme.textTheme.labelSmall!.copyWith(
+                                      fontSize: 10,
+                                      color: colors.textTertiary,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      key: const ValueKey('bank-quick-all'),
+                      onPressed: () => unawaited(_openPractice(scope: 'all', title: '综合刷题')),
+                      icon: const Icon(AppIcons.play, size: 16),
+                      label: const Text('开始综合刷题'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      key: const ValueKey('bank-quick-wrong'),
+                      onPressed: () => unawaited(_openPractice(scope: 'wrong_book', title: '错题本攻坚')),
+                      icon: const Icon(AppIcons.warning, size: 16),
+                      label: Text(wrongBook > 0 ? '专攻错题本 ($wrongBook)' : '专攻错题本'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('bank-quick-fsrs'),
+                      onPressed: () => unawaited(_openPractice(scope: 'fsrs_due', title: 'FSRS 今日复习')),
+                      icon: const Icon(AppIcons.recurring, size: 16),
+                      label: Text(fsrsDue > 0 ? 'FSRS 今日复习 ($fsrsDue)' : 'FSRS 今日复习'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('bank-quick-starred'),
+                      onPressed: () => unawaited(_openPractice(scope: 'starred', title: '刷我的收藏')),
+                      icon: const Icon(AppIcons.favoriteActive, size: 16),
+                      label: Text(starredCount > 0 ? '刷我的收藏 ($starredCount)' : '刷我的收藏'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1092,6 +1396,8 @@ D. 中性产业政策
             text: _loading ? '读取中…' : '解锁规则：答对 $reqCount 题 → 放行 $unlockMin 分钟（知识卡/简答自评计 0.7 题进度）',
           ),
         ),
+        _buildStats7dQuickCard(theme, colors),
+        const SizedBox(height: 14),
         _buildCatalogSection(theme, colors),
         const SizedBox(height: 14),
         ListPageCard(
@@ -1246,6 +1552,47 @@ D. 中性产业政策
           ),
         ),
       ],
+    );
+  }
+}
+
+class _QuickStatPill extends StatelessWidget {
+  const _QuickStatPill({required this.label, required this.value, required this.accent});
+
+  final String label;
+  final String value;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = DshColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: AppShape.radiusMd,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall?.copyWith(fontSize: 11, color: colors.textTertiary),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppType.tabular(
+              theme.textTheme.labelLarge!.copyWith(color: accent, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

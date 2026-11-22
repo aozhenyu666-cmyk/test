@@ -203,6 +203,165 @@ export function parseBank(input) {
   return { ok: true, warnings, bank: { version: BANK_VERSION, id: id || 'bank', name: name || id || '题库', questions } }
 }
 
+export { QUESTION_KINDS }
+
+function cleanImageItem(item) {
+  let path = ''
+  let role = 'stem'
+  let caption = ''
+  if (typeof item === 'string') {
+    path = text(item)
+  } else if (isPlainObject(item)) {
+    path = text(item.path ?? item.url ?? item.src ?? item.file ?? '')
+    role = text(item.role).toLowerCase() === 'option' ? 'option' : 'stem'
+    caption = text(item.caption ?? item.alt ?? item.title ?? '')
+  }
+  path = path.replace(/^<|>$/g, '').trim()
+  return path ? { path, role, caption } : null
+}
+
+/** 归一化题目图片数组，去重并过滤空路径。 */
+export function cleanQuestionImages(rawImages) {
+  if (!rawImages) return []
+  const arr = Array.isArray(rawImages) ? rawImages : [rawImages]
+  const out = []
+  const seen = new Set()
+  for (const item of arr) {
+    const img = cleanImageItem(item)
+    if (!img) continue
+    const key = `${img.role}:${img.path}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(img)
+  }
+  return out
+}
+
+/** 统一推断题目形态：mcq / card / short_qa。 */
+export function resolveQuestionKind(q) {
+  const rawKind = text(q?.kind ?? q?.形态).toLowerCase()
+  if (['card', 'knowledge_card', 'flashcard', '展示卡', '知识卡', '规律卡', '笔记卡', '概念卡', '卡片'].includes(rawKind)) {
+    return 'card'
+  }
+  if (['short_qa', 'short-qa', 'shortqa', 'qa', 'short', '小问题', '简答', '简答题', '简答卡', '问答', '问答题', '思考题'].includes(rawKind)) {
+    return 'short_qa'
+  }
+  if (['mcq', 'choice', 'single', 'multiple', '选择', '选择题', '单选', '单选题', '多选', '多选题', '判断', '判断题'].includes(rawKind)) {
+    return 'mcq'
+  }
+  const opts = Array.isArray(q?.选项) ? q.选项 : (Array.isArray(q?.options) ? q.options : [])
+  if (opts.length >= 2) return 'mcq'
+  const t = text(q?.题型 ?? q?.type)
+  if (/展示卡|知识卡|规律卡|笔记卡|卡片/.test(t)) return 'card'
+  if (/小问题|简答|问答|思考题/.test(t)) return 'short_qa'
+  if (/选择|单选|多选/.test(t)) return 'mcq'
+  const ans = text(q?.答案 ?? q?.answer).toUpperCase()
+  if (opts.length < 2 && /^[A-H]{1,4}$/.test(ans)) return 'mcq'
+  return 'short_qa'
+}
+
+/**
+ * 从裸题数组、单份题库或多套题库目录中提取并按 qid 严格去重题目池。
+ * 指定 bankId 时即使该套库当前未启用也允许单刷；留空则只取已启用题库。
+ */
+export function extractQuestionPool(rawOrCatalog, { bankId = '', includeDisabled = false } = {}) {
+  const wantBankId = text(bankId)
+  const rawPool = []
+  let defaultBankName = '我的题库'
+
+  if (Array.isArray(rawOrCatalog)) {
+    for (let i = 0; i < rawOrCatalog.length; i += 1) {
+      const q = rawOrCatalog[i]
+      const bId = String(q?._bankId || '')
+      if (wantBankId && bId && bId !== wantBankId) continue
+      rawPool.push({
+        qid: String(q?.id || `idx-${i}`),
+        bankId: bId,
+        bankName: String(q?._bankName || '我的题库'),
+        raw: q,
+      })
+    }
+    defaultBankName = rawPool[0]?.bankName || '我的题库'
+  } else if (Array.isArray(rawOrCatalog?.banks)) {
+    const matchedBanks = wantBankId
+      ? rawOrCatalog.banks.filter((b) => b && String(b.id || '') === wantBankId)
+      : rawOrCatalog.banks.filter((b) => b && (includeDisabled || b.enabled !== false))
+    for (const b of matchedBanks) {
+      const qs = Array.isArray(b.questions) ? b.questions : (Array.isArray(b.题目) ? b.题目 : [])
+      const bName = String(b.name || b.名称 || '我的题库')
+      const bId = String(b.id || '')
+      for (let i = 0; i < qs.length; i += 1) {
+        const q = qs[i]
+        rawPool.push({
+          qid: String(q?.id || `${bId || 'bank'}:idx-${i}`),
+          bankId: bId,
+          bankName: bName,
+          raw: q,
+        })
+      }
+    }
+    defaultBankName = matchedBanks.length === 1
+      ? String(matchedBanks[0].name || matchedBanks[0].名称 || '我的题库')
+      : (matchedBanks.length > 1 ? `${matchedBanks[0].name || matchedBanks[0].名称} 等 ${matchedBanks.length} 套` : '未启用题库')
+  } else {
+    const bId = String(rawOrCatalog?.id || '')
+    const bName = String(rawOrCatalog?.名称 || rawOrCatalog?.name || '我的题库')
+    const list = (!wantBankId || !bId || bId === wantBankId)
+      ? (Array.isArray(rawOrCatalog?.题目) ? rawOrCatalog.题目 : (Array.isArray(rawOrCatalog?.questions) ? rawOrCatalog.questions : []))
+      : []
+    for (let i = 0; i < list.length; i += 1) {
+      const q = list[i]
+      rawPool.push({
+        qid: String(q?.id || `idx-${i}`),
+        bankId: bId,
+        bankName: bName,
+        raw: q,
+      })
+    }
+    defaultBankName = bName
+  }
+
+  const deduped = []
+  const seenQids = new Set()
+  for (const item of rawPool) {
+    if (!item?.raw || !item.qid || seenQids.has(item.qid)) continue
+    seenQids.add(item.qid)
+    deduped.push(item)
+  }
+  return { pool: deduped, defaultBankName }
+}
+
+/** 格式化为专练页所需标准题目结构。 */
+export function formatPracticeQuestion(entry, qStat = null) {
+  const q = entry?.raw || {}
+  const optsRaw = Array.isArray(q.选项) ? q.选项 : (Array.isArray(q.options) ? q.options : [])
+  const options = optsRaw.map((x) => String(x ?? '').trim()).filter(Boolean)
+  const kind = resolveQuestionKind(q)
+  const explain = Array.isArray(q.解析) ? q.解析.join('\n') : String(q.解析 || q.analysis || '')
+  const images = cleanQuestionImages(q.images ?? q.图片)
+  const dueAt = Math.max(0, Number(qStat?.fsrs?.dueAt ?? qStat?.fsrs?.due) || 0)
+  return {
+    id: String(entry.qid),
+    bankId: String(entry.bankId || ''),
+    bankName: String(entry.bankName || '我的题库'),
+    kind,
+    stem: String(q.题干 || q.stem || ''),
+    options,
+    answer: String(q.答案 || q.answer || ''),
+    explain,
+    type: String(q.题型 || q.type || ''),
+    images,
+    starred: Boolean(qStat?.starred),
+    inWrongBook: Boolean(qStat?.inWrongBook),
+    streakCorrect: Math.max(0, Number(qStat?.streakCorrect) || 0),
+    dueAt,
+    seenCount: Math.max(0, Number(qStat?.seenCount) || 0),
+    correctCount: Math.max(0, Number(qStat?.correctCount) || 0),
+    wrongCount: Math.max(0, Number(qStat?.wrongCount) || 0),
+    lastSeenAt: Math.max(0, Number(qStat?.lastSeenAt) || 0),
+  }
+}
+
 /** 按题型 / 年份数一遍（面板和统计用）。 */
 export function bankStats(bank) {
   const questions = Array.isArray(bank?.questions) ? bank.questions : []
