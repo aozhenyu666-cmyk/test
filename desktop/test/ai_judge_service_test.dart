@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dsh_go_fish_pc/models/guard_models.dart';
 import 'package:dsh_go_fish_pc/services/ai_judge_service.dart';
@@ -151,5 +152,129 @@ void main() {
     expect(reply, contains('娱乐 42 分钟'));
     expect(lastUserBody, contains('watchdogRestarts'));
     expect(lastUserBody, contains('blocksTriggered'));
+  });
+
+  test('AiJudgeService deterministically falls back when key missing, offline, timed out, or non-JSON without leaking key', () async {
+    const cfg = AiProviderConfig(
+      preset: 'deepseek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+      enabled: true,
+    );
+    final t0 = DateTime.utc(2026, 11, 19, 6, 0).millisecondsSinceEpoch;
+
+    // 1. Missing API key -> skips transport & falls back cleanly
+    var calls = 0;
+    final noKeySvc = AiJudgeService(
+      transport: ({required url, required headers, required body}) async {
+        calls++;
+        return '{}';
+      },
+    );
+    final noKeyRec = await noKeySvc.judgeActivity(
+      config: cfg,
+      apiKey: '',
+      app: 'chrome',
+      title: 'bilibili 视频',
+      focusSession: const FocusSessionState(active: true, taskName: '行测'),
+      ledger: const UsageLedger(dayKey: '2026-11-19'),
+      nowUtcMs: t0,
+    );
+    expect(calls, 0);
+    expect(noKeyRec.verdict, 'need_check');
+    expect(noKeyRec.source, 'fallback');
+
+    final noKeyPass = await noKeySvc.evaluateStudyPassRequest(
+      config: cfg,
+      apiKey: '',
+      claim: '我要看行测教学视频',
+      app: 'chrome',
+      title: 'bilibili',
+      focusSession: const FocusSessionState(),
+      ledger: const UsageLedger(dayKey: '2026-11-19'),
+      nowUtcMs: t0,
+    );
+    expect(noKeyPass.approved, isFalse);
+
+    // 2. Network error -> falls back & redacts secret key in testConnection
+    const secret = 'sk-super-secret-xyz';
+    final offlineSvc = AiJudgeService(
+      transport: ({required url, required headers, required body}) async {
+        throw HttpException('401 Unauthorized Bearer $secret');
+      },
+    );
+    final netRec = await offlineSvc.judgeActivity(
+      config: cfg,
+      apiKey: secret,
+      app: 'chrome',
+      title: 'youtube',
+      focusSession: const FocusSessionState(),
+      ledger: const UsageLedger(dayKey: '2026-11-19'),
+      nowUtcMs: t0,
+    );
+    expect(netRec.verdict, 'need_check');
+    expect(netRec.source, 'fallback');
+    expect(netRec.reason.contains(secret), isFalse);
+
+    final conn = await offlineSvc.testConnection(config: cfg, apiKey: secret);
+    expect(conn.ok, isFalse);
+    expect(conn.detail.contains(secret), isFalse);
+
+    // 3. Timeout <= 8s enforced -> deterministic fallback
+    expect(AiJudgeService.maxRequestTimeout.inSeconds, lessThanOrEqualTo(8));
+    final slowSvc = AiJudgeService(
+      requestTimeout: const Duration(milliseconds: 30),
+      transport: ({required url, required headers, required body}) async {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        return '{}';
+      },
+    );
+    final timeoutRec = await slowSvc.judgeActivity(
+      config: cfg,
+      apiKey: secret,
+      app: 'chrome',
+      title: 'zhihu',
+      focusSession: const FocusSessionState(),
+      ledger: const UsageLedger(dayKey: '2026-11-19'),
+      nowUtcMs: t0,
+    );
+    expect(timeoutRec.verdict, 'need_check');
+    expect(timeoutRec.source, 'fallback');
+
+    // 4. Non-JSON response -> deterministic fallback
+    final badJsonSvc = AiJudgeService(
+      transport: ({required url, required headers, required body}) async {
+        return jsonEncode({
+          'choices': [
+            {
+              'message': {'content': '抱歉，我无法判断这个页面是不是学习。'}
+            }
+          ]
+        });
+      },
+    );
+    final badJsonRec = await badJsonSvc.judgeActivity(
+      config: cfg,
+      apiKey: secret,
+      app: 'chrome',
+      title: 'bilibili 混剪',
+      focusSession: const FocusSessionState(),
+      ledger: const UsageLedger(dayKey: '2026-11-19'),
+      nowUtcMs: t0,
+    );
+    expect(badJsonRec.verdict, 'need_check');
+    expect(badJsonRec.source, 'fallback');
+
+    final badJsonPass = await badJsonSvc.evaluateStudyPassRequest(
+      config: cfg,
+      apiKey: secret,
+      claim: '我要看资料分析讲解视频',
+      app: 'chrome',
+      title: 'bilibili',
+      focusSession: const FocusSessionState(),
+      ledger: const UsageLedger(dayKey: '2026-11-19'),
+      nowUtcMs: t0,
+    );
+    expect(badJsonPass.approved, isFalse);
   });
 }

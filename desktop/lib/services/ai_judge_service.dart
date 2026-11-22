@@ -24,10 +24,18 @@ class AiPassEvaluation {
 }
 
 class AiJudgeService {
-  AiJudgeService({AiTransport? transport})
-      : _transport = transport ?? _defaultHttpTransport;
+  AiJudgeService({
+    AiTransport? transport,
+    Duration requestTimeout = maxRequestTimeout,
+  })  : _transport = transport ?? _defaultHttpTransport,
+        requestTimeout = requestTimeout > maxRequestTimeout
+            ? maxRequestTimeout
+            : requestTimeout;
+
+  static const Duration maxRequestTimeout = Duration(seconds: 8);
 
   final AiTransport _transport;
+  final Duration requestTimeout;
   final Map<String, AiJudgmentRecord> _cache = {};
   int _lastAutoJudgeUtcMs = 0;
 
@@ -35,6 +43,32 @@ class AiJudgeService {
 
   void clearCache() {
     _cache.clear();
+  }
+
+  static bool isLocalEndpoint(String baseUrl) {
+    final uri = Uri.tryParse(baseUrl.trim());
+    if (uri == null) return false;
+    final host = uri.host.toLowerCase();
+    return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+  }
+
+  static bool hasUsableCredentials(AiProviderConfig config, String apiKey) {
+    if (!config.isConfigured) return false;
+    if (apiKey.trim().isNotEmpty) return true;
+    return config.preset == 'ollama' || isLocalEndpoint(config.baseUrl);
+  }
+
+  static String sanitizeError(Object error, String apiKey) {
+    var msg = error.toString();
+    final key = apiKey.trim();
+    if (key.isNotEmpty) {
+      msg = msg.replaceAll(key, '[REDACTED_KEY]');
+    }
+    msg = msg.replaceAll(
+      RegExp(r'Bearer\s+[A-Za-z0-9._\-]+', caseSensitive: false),
+      'Bearer [REDACTED]',
+    );
+    return msg;
   }
 
   Future<AiJudgmentRecord> judgeActivity({
@@ -53,6 +87,20 @@ class AiJudgeService {
       nowUtcMs,
     );
     if (cached != null) return cached;
+
+    if (!hasUsableCredentials(config, apiKey)) {
+      final fallback = AiJudgmentRecord(
+        atUtcMs: nowUtcMs,
+        app: app,
+        title: title,
+        verdict: 'need_check',
+        leaseMinutes: 0,
+        reason: '未配置可用 AI API Key，已回退纯规则引擎',
+        source: 'fallback',
+      );
+      _cache[RuleEngine.judgmentCacheKey(app, title)] = fallback;
+      return fallback;
+    }
 
     if (nowUtcMs - _lastAutoJudgeUtcMs < 15000) {
       return AiJudgmentRecord(
@@ -85,40 +133,81 @@ class AiJudgeService {
       'todayEntertainmentMin': ledger.entertainmentMinutes.toStringAsFixed(1),
     });
 
-    final rawContent = await _callChatCompletions(
-      config: config,
-      apiKey: apiKey,
-      messages: [
-        {'role': 'system', 'content': systemPrompt},
-        {'role': 'user', 'content': userPrompt},
-      ],
-      temperature: 0.1,
-    );
+    try {
+      final rawContent = await _callChatCompletions(
+        config: config,
+        apiKey: apiKey,
+        messages: [
+          {'role': 'system', 'content': systemPrompt},
+          {'role': 'user', 'content': userPrompt},
+        ],
+        temperature: 0.1,
+      ).timeout(requestTimeout);
 
-    final parsed = _extractJsonMap(rawContent);
-    final rawVerdict = (parsed?['verdict'] ?? '').toString().trim();
-    final isAllow = rawVerdict == 'allow_study';
-    final leaseMinutes = isAllow
-        ? (_parseInt(parsed?['leaseMinutes'], fallback: 20)).clamp(5, 30)
-        : 0;
-    final reason = (parsed?['reason'] ?? '')
-        .toString()
-        .trim()
-        .ifEmpty(isAllow ? 'AI 判定当前内容符合学习目标' : 'AI 判定偏向娱乐消遣');
-    final hint = (parsed?['actionHint'] ?? '').toString().trim();
+      final parsed = _extractJsonMap(rawContent);
+      final rawVerdict = (parsed?['verdict'] ?? '').toString().trim();
+      if (parsed == null ||
+          (rawVerdict != 'allow_study' && rawVerdict != 'entertainment')) {
+        final fallback = AiJudgmentRecord(
+          atUtcMs: nowUtcMs,
+          app: app,
+          title: title,
+          verdict: 'need_check',
+          leaseMinutes: 0,
+          reason: 'AI 返回非标准 JSON 裁决，已回退纯规则引擎',
+          source: 'fallback',
+        );
+        _cache[RuleEngine.judgmentCacheKey(app, title)] = fallback;
+        return fallback;
+      }
 
-    final record = AiJudgmentRecord(
-      atUtcMs: nowUtcMs,
-      app: app,
-      title: title,
-      verdict: isAllow ? 'allow_study' : 'entertainment',
-      leaseMinutes: leaseMinutes,
-      reason: reason,
-      actionHint: hint,
-      source: 'auto',
-    );
-    _cache[RuleEngine.judgmentCacheKey(app, title)] = record;
-    return record;
+      final isAllow = rawVerdict == 'allow_study';
+      final leaseMinutes = isAllow
+          ? (_parseInt(parsed['leaseMinutes'], fallback: 20)).clamp(5, 30)
+          : 0;
+      final reason = (parsed['reason'] ?? '')
+          .toString()
+          .trim()
+          .ifEmpty(isAllow ? 'AI 判定当前内容符合学习目标' : 'AI 判定偏向娱乐消遣');
+      final hint = (parsed['actionHint'] ?? '').toString().trim();
+
+      final record = AiJudgmentRecord(
+        atUtcMs: nowUtcMs,
+        app: app,
+        title: title,
+        verdict: isAllow ? 'allow_study' : 'entertainment',
+        leaseMinutes: leaseMinutes,
+        reason: reason,
+        actionHint: hint,
+        source: 'auto',
+      );
+      _cache[RuleEngine.judgmentCacheKey(app, title)] = record;
+      return record;
+    } on TimeoutException {
+      final fallback = AiJudgmentRecord(
+        atUtcMs: nowUtcMs,
+        app: app,
+        title: title,
+        verdict: 'need_check',
+        leaseMinutes: 0,
+        reason: 'AI 裁决超时（>${requestTimeout.inSeconds}s），已回退纯规则引擎',
+        source: 'fallback',
+      );
+      _cache[RuleEngine.judgmentCacheKey(app, title)] = fallback;
+      return fallback;
+    } catch (_) {
+      final fallback = AiJudgmentRecord(
+        atUtcMs: nowUtcMs,
+        app: app,
+        title: title,
+        verdict: 'need_check',
+        leaseMinutes: 0,
+        reason: 'AI 接口不可达或响应异常，已回退纯规则引擎',
+        source: 'fallback',
+      );
+      _cache[RuleEngine.judgmentCacheKey(app, title)] = fallback;
+      return fallback;
+    }
   }
 
   Future<AiPassEvaluation> evaluateStudyPassRequest({
@@ -140,6 +229,14 @@ class AiJudgeService {
       );
     }
 
+    if (!hasUsableCredentials(config, apiKey)) {
+      return const AiPassEvaluation(
+        approved: false,
+        leaseMinutes: 0,
+        reason: '未配置可用 API Key，已回退纯规则引擎（不予放行）',
+      );
+    }
+
     final systemPrompt = [
       '你是严格但讲理的学习通行证审批官。',
       '用户正在请求在受控网站/应用上获得限时学习通行证。',
@@ -157,41 +254,63 @@ class AiJudgeService {
       'ledgerDigest': jsonDecode(ledger.toCompactDigestJson()),
     });
 
-    final rawContent = await _callChatCompletions(
-      config: config,
-      apiKey: apiKey,
-      messages: [
-        {'role': 'system', 'content': systemPrompt},
-        {'role': 'user', 'content': userPrompt},
-      ],
-      temperature: 0.1,
-    );
+    try {
+      final rawContent = await _callChatCompletions(
+        config: config,
+        apiKey: apiKey,
+        messages: [
+          {'role': 'system', 'content': systemPrompt},
+          {'role': 'user', 'content': userPrompt},
+        ],
+        temperature: 0.1,
+      ).timeout(requestTimeout);
 
-    final parsed = _extractJsonMap(rawContent);
-    final approved = parsed?['approved'] == true;
-    final leaseMinutes = approved
-        ? (_parseInt(parsed?['leaseMinutes'], fallback: 15)).clamp(5, 30)
-        : 0;
-    final reason = (parsed?['reason'] ?? '')
-        .toString()
-        .trim()
-        .ifEmpty(approved ? '审批通过，请专注当前目标' : '理由与当前窗口证据不符，未予放行');
+      final parsed = _extractJsonMap(rawContent);
+      if (parsed == null || parsed['approved'] is! bool) {
+        return const AiPassEvaluation(
+          approved: false,
+          leaseMinutes: 0,
+          reason: 'AI 返回非标准 JSON，已回退纯规则引擎（不予放行）',
+        );
+      }
 
-    _cache[RuleEngine.judgmentCacheKey(app, title)] = AiJudgmentRecord(
-      atUtcMs: nowUtcMs,
-      app: app,
-      title: title,
-      verdict: approved ? 'allow_study' : 'entertainment',
-      leaseMinutes: leaseMinutes,
-      reason: reason,
-      source: 'appeal',
-    );
+      final approved = parsed['approved'] == true;
+      final leaseMinutes = approved
+          ? (_parseInt(parsed['leaseMinutes'], fallback: 15)).clamp(5, 30)
+          : 0;
+      final reason = (parsed['reason'] ?? '')
+          .toString()
+          .trim()
+          .ifEmpty(approved ? '审批通过，请专注当前目标' : '理由与当前窗口证据不符，未予放行');
 
-    return AiPassEvaluation(
-      approved: approved,
-      leaseMinutes: leaseMinutes,
-      reason: reason,
-    );
+      _cache[RuleEngine.judgmentCacheKey(app, title)] = AiJudgmentRecord(
+        atUtcMs: nowUtcMs,
+        app: app,
+        title: title,
+        verdict: approved ? 'allow_study' : 'entertainment',
+        leaseMinutes: leaseMinutes,
+        reason: reason,
+        source: 'appeal',
+      );
+
+      return AiPassEvaluation(
+        approved: approved,
+        leaseMinutes: leaseMinutes,
+        reason: reason,
+      );
+    } on TimeoutException {
+      return AiPassEvaluation(
+        approved: false,
+        leaseMinutes: 0,
+        reason: 'AI 审批超时（>${requestTimeout.inSeconds}s），已回退纯规则引擎',
+      );
+    } catch (_) {
+      return const AiPassEvaluation(
+        approved: false,
+        leaseMinutes: 0,
+        reason: 'AI 请求失败或断网，已回退纯规则引擎（不予放行）',
+      );
+    }
   }
 
   Future<String> chatWithCoach({
@@ -228,13 +347,17 @@ class AiJudgeService {
       {'role': 'user', 'content': userMessage.trim()},
     ];
 
-    final reply = await _callChatCompletions(
-      config: config,
-      apiKey: apiKey,
-      messages: messages,
-      temperature: 0.4,
-    );
-    return reply.trim();
+    try {
+      final reply = await _callChatCompletions(
+        config: config,
+        apiKey: apiKey,
+        messages: messages,
+        temperature: 0.4,
+      ).timeout(requestTimeout);
+      return reply.trim();
+    } catch (e) {
+      throw StateError(sanitizeError(e, apiKey));
+    }
   }
 
   Future<({bool ok, String detail})> testConnection({
@@ -244,6 +367,11 @@ class AiJudgeService {
     if (config.baseUrl.trim().isEmpty || config.model.trim().isEmpty) {
       return (ok: false, detail: '请填写完整的 Base URL 和模型名称');
     }
+    if (apiKey.trim().isEmpty &&
+        config.preset != 'ollama' &&
+        !isLocalEndpoint(config.baseUrl)) {
+      return (ok: false, detail: '请填写有效的 API Key');
+    }
     try {
       final reply = await _callChatCompletions(
         config: config,
@@ -252,13 +380,13 @@ class AiJudgeService {
           {'role': 'user', 'content': '请只回复 OK'},
         ],
         temperature: 0.0,
-      );
+      ).timeout(requestTimeout);
       return (
         ok: true,
         detail: '连接成功（模型 ${config.model} 返回：${reply.trim().ifEmpty("OK")}）',
       );
     } catch (e) {
-      return (ok: false, detail: '连接失败：$e');
+      return (ok: false, detail: '连接失败：${sanitizeError(e, apiKey)}');
     }
   }
 
@@ -315,13 +443,21 @@ class AiJudgeService {
     required String body,
   }) async {
     final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 10);
+      ..connectionTimeout = const Duration(seconds: 4);
+    if (isLocalEndpoint(url)) {
+      client.findProxy = (_) => 'DIRECT';
+    }
     try {
-      final req = await client.postUrl(Uri.parse(url));
+      final req = await client
+          .postUrl(Uri.parse(url))
+          .timeout(const Duration(seconds: 4));
       headers.forEach(req.headers.set);
       req.add(utf8.encode(body));
-      final resp = await req.close().timeout(const Duration(seconds: 20));
-      final respBody = await resp.transform(utf8.decoder).join();
+      final resp = await req.close().timeout(maxRequestTimeout);
+      final respBody = await resp
+          .transform(utf8.decoder)
+          .join()
+          .timeout(maxRequestTimeout);
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         final preview =
             respBody.length > 260 ? respBody.substring(0, 260) : respBody;

@@ -148,7 +148,7 @@ import {
 import { createV4Hub } from './v4_hub.js'
 import { EMERGENCY_PACKAGES, PROXY_PACKAGES, RESIDENT_PACKAGES, SELF_PACKAGES, SYSTEM_PACKAGES, isNeverLockPkg } from './never_lock.js'
 import { contextLines, loadGeminiSetting, parseReceipt } from './trigger.js'
-import { AGREE_RE, BASE_EXTRA, TIER_FILE, TIER_LABEL, TIER_RANK, classifyTierChanges, parseTierFile, renderTierFile, tierOf } from './app_tiers.js'
+import { AGREE_RE, BASE_EXTRA, DEFAULT_NEUTRAL_WORK_QUOTA_MIN, NEUTRAL_COMM_PACKAGES, TIER_FILE, TIER_LABEL, TIER_RANK, WORK_DEFAULT, classifyTierChanges, parseTierFile, renderTierFile, resolveScopeApps, tierOf } from './app_tiers.js'
 import { computeQuota } from './quota.js'
 import { buildLockDecision } from './lock_decision.js'
 import { CHAT_PACKAGES, driveMode, ignite, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
@@ -172,7 +172,6 @@ import {
   eveningCapFor, setEveningCap, EVENING_END,
 } from './verifier_mode.js'
 import { appendInboxEntry, buildStrategizeBundle, readInboxEntries } from './inbox_dept.js'
-import { WORK_DEFAULT } from './app_tiers.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
 import { noteExcerpts, reflectDue, reflectLines, reflectMarkdown, reflectSlot, reflectSystem, reflectUser, runReflect } from './reflect.js'
@@ -229,7 +228,7 @@ import {
   AUDIT_DIR, PENDING_FILE, RULES_COOLDOWN_DAYS, RULES_FILE, WALL_DIR, appendAudit, classifyRules, parseRules, readText as readVaultText, rulesNeedSwitchKeys,
   findObsidianVault, renderPending, renderRules, renderTaskNote, taskNotePath, updatePending, writeText as writeVaultText,
 } from './vault_wall.js'
-import { GEMINI_PACKAGES, driftPull, geminiBrief, geminiLines, geminiMode, geminiSteps, inGemini, recapMarkdown, trackGemini } from './gemini.js'
+import { GEMINI_PACKAGES, computeGeminiGentleAccounting, driftPull, geminiBrief, geminiLines, geminiMode, geminiSteps, inGemini, recapMarkdown, trackGemini } from './gemini.js'
 import { auditOf, cardsOf, groupPrompts } from './sisters.js'
 import { ClockKernel, parseCron } from './clock_kernel.js'
 import { classifyApp, isDualUseApp, isPureGame, resolveAppNames } from './app_resolver.js'
@@ -244,6 +243,11 @@ export { drillToggle }
 
 export function apply(ctx) {
   let config = readConfig()
+  // #18: 默认启用单一裁决器执法；仅当磁盘 config.json 显式写过布尔值 false 时保持影子模式
+  const rawCfgInit = readState(configPath(), null)
+  if (typeof rawCfgInit?.arbiterEnforce !== 'boolean') {
+    config = { ...config, arbiterEnforce: true }
+  }
   let garden = loadGarden(gardenPath())
   // 判球要模型。llm 不在就一直是 undefined，判球自动退回本地规则——不能因为缺服务就不加载插件。
   let llmStream
@@ -2881,7 +2885,8 @@ export function apply(ctx) {
       if (res.ok) mirrorWorkStoreToFiles(res.state, now, tz)
       return res
     },
-    getArbiterEnforce: () => Boolean(config.arbiterEnforce),
+    getArbiterEnforce: () => config.arbiterEnforce !== false,
+    getGeminiAccounting: (now = Date.now(), tz = zoneOr(config.timeZone)) => geminiAccountingNow(now, tz),
     getLockRequests: (now = Date.now()) => lockBus.list(now),
     getTodayBrainStats: (now = Date.now()) => brainRt.view(now),
     onContractClear: (now = Date.now()) => { lockBus.revokeBySource('contract', { now }) },
@@ -8054,7 +8059,7 @@ export function apply(ctx) {
       intensityThresholds: intInfo.thresholds,
       refuseUntil: Number(config.refuseUntil) > Date.now() ? Number(config.refuseUntil) : 0,
       lockShadow: config.lockShadow !== false,
-      arbiterEnforce: Boolean(config.arbiterEnforce),
+      arbiterEnforce: config.arbiterEnforce !== false,
       sessionId: config.sessionId ?? null,
       quietStart: config.quietStart,
       quietEnd: config.quietEnd,
@@ -8126,7 +8131,8 @@ export function apply(ctx) {
     while (recentHuman.length > 12) recentHuman.shift()
   }
   let lastInstalled = []
-  const tierFnNow = () => (pkg, label = '') => tierOf(pkg, { label, overrides: config.appTiers || {}, declaredApps: appsOf() })
+  const tierOverridesNow = () => (config.appTiers && typeof config.appTiers === 'object' ? config.appTiers : {})
+  const tierFnNow = () => (pkg, label = '') => tierOf(pkg, { label, overrides: tierOverridesNow(), declaredApps: appsOf() })
   const loadTierPending = () => readState(stateFile('app-tiers-pending.json'), {}) || {}
   const saveTierPending = (p) => writeJson(stateFile('app-tiers-pending.json'), p)
   const TIER_LOOSEN_MS = 24 * 3_600_000
@@ -8806,6 +8812,7 @@ export function apply(ctx) {
       balance: funLeft === null ? null : { funLeft },
       deadlines,
       receiptsToday: loadGeminiReceipts().items.filter((r) => r.day === today).length,
+      geminiAccounting: geminiAccountingNow(now, tz, seals),
       review: (() => {
         try {
           return reviewSnapshot(now)
@@ -8824,9 +8831,16 @@ export function apply(ctx) {
       verify: (() => {
         try {
           const vv = verifyView(now, tz)
-          return { active: vv.active, until: vv.untilMinute != null ? sealHm(vv.untilMinute) : null, recovery: vv.recovery,
+          const wdNight = wallDecision(wallCfgNow(), now, tz)
+          return {
+            active: vv.active,
+            until: vv.untilMinute != null ? sealHm(vv.untilMinute) : null,
+            recovery: vv.recovery,
             spend: vv.spend ? { until: zoneHm(vv.spend.until, tz), minutes: vv.spend.minutes } : null,
-            evening: vv.evening?.active ? { used: vv.evening.used, cap: vv.evening.cap, hit: vv.evening.hit } : null }
+            evening: vv.evening?.active ? { used: vv.evening.used, cap: vv.evening.cap, hit: vv.evening.hit } : null,
+            emergency: Boolean(isEmergencyPassOrDisarmActive(now, tz)),
+            nightLock: Boolean(lastRhythm?.night || (wdNight.locked && wdNight.kind === 'night')),
+          }
         } catch {
           return null
         }
@@ -9626,6 +9640,25 @@ export function apply(ctx) {
     }
   }
   /**
+   * 4.5 Gemini 温和折算汇总（只记账不拦人）。
+   */
+  function geminiAccountingNow(now = Date.now(), tz = zoneOr(config.timeZone), sealsOpt = null) {
+    const today = dayString(now, tz)
+    let geminiMinutesToday = 0
+    try {
+      geminiMinutesToday = Math.max(0, Math.round(Number(v4Hub?.getGeminiStats?.(today, now)?.minutesToday) || 0))
+    } catch {}
+    const receiptsToday = loadGeminiReceipts().items.filter((r) => r && r.day === today)
+    const sealsState = sealsOpt || loadSeals(now, tz)
+    const todaySeals = (Array.isArray(sealsState?.items) ? sealsState.items : []).filter((x) => x.day === today)
+    const floorMetToday = todaySeals.length > 0 && todaySeals.every((x) => ['floor', 'stretch', 'waived'].includes(x.status))
+    return computeGeminiGentleAccounting({
+      geminiMinutesToday,
+      receiptsToday,
+      floorMetToday,
+    })
+  }
+  /**
    * POST /seals：list / add（封明天或当天现定）/ raise（只能加码）/ claim（外部刷题报数）/ waive（写理由、扣一次紧急解除）/ check。
    * 没有「改小」「删除」这两个动作——这是故意的。
    */
@@ -9640,6 +9673,8 @@ export function apply(ctx) {
       v: 1, ok: true, today, tomorrow: nextYmd(today), minuteOfDay: min, cutoffMinute: SEAL_CUTOFF_MINUTE, cutoffPassed: min >= SEAL_CUTOFF_MINUTE,
       kinds: SEAL_KINDS, items: st.items.filter((x) => x.day === today || x.day === nextYmd(today)),
       coldCutoffMinute: COLD_CUTOFF_MINUTE, workStarted: workStartedToday(now, tz), weekReview: pendingWeekReview(),
+      arbiterEnforce: config.arbiterEnforce !== false,
+      geminiAccounting: geminiAccountingNow(now, tz, st),
       verify: (() => {
         try {
           return verifyView(now, tz)
@@ -10068,6 +10103,8 @@ export function apply(ctx) {
       quota,
       lease: taskLease,
       radarDeny: [...extraDeny, ...busDeny],
+      today: Array.isArray(phone?.today) && phone.today.length ? phone.today : (Array.isArray(lastPhone?.today) ? lastPhone.today : []),
+      neutralWorkQuotaMin: DEFAULT_NEUTRAL_WORK_QUOTA_MIN,
       now,
     })
   }
@@ -11407,7 +11444,7 @@ export function apply(ctx) {
       boutId: liveBoutId,
       sealId: liveSealId,
       ...(liveBoutId ? { bout: { id: liveBoutId, sealId: liveSealId } } : {}),
-      arbiterEnforce: Boolean(config.arbiterEnforce),
+      arbiterEnforce: config.arbiterEnforce !== false,
       intensity: intensityFinal.intensity,
       effectiveIntensity: intensityFinal.effectiveIntensity,
       autonomyShift: intensityFinal.autonomyShift,
@@ -11518,7 +11555,7 @@ export function apply(ctx) {
       v: 1,
       version: '0.2.0',
       config: publicConfig(),
-      arbiterEnforce: Boolean(config.arbiterEnforce),
+      arbiterEnforce: config.arbiterEnforce !== false,
       intensity: intInfo.intensity,
       effectiveIntensity: intInfo.effectiveIntensity,
       autonomyShift: intInfo.autonomyShift,
@@ -12031,6 +12068,23 @@ export function apply(ctx) {
     return loaded.ok ? loaded.protocol : null
   }
 
+  function resolveBoutSealNow(now = Date.now(), tz = zoneOr(config.timeZone), explicitSealId = '', explicitSealTitle = '') {
+    const sid = String(explicitSealId || '').trim()
+    const today = dayString(now, tz)
+    const items = loadSeals(now, tz).items
+    if (sid) {
+      const matched = items.find((x) => x.id === sid)
+      return { sealId: sid, sealTitle: String(explicitSealTitle || matched?.title || '') }
+    }
+    const targetSeal = items
+      .filter((x) => x.day === today && !['stretch', 'floor', 'waived'].includes(x.status))
+      .sort((a, b) => (Number(a.dueMinute) || 0) - (Number(b.dueMinute) || 0))[0] || null
+    return {
+      sealId: String(targetSeal?.id || ''),
+      sealTitle: String(targetSeal?.title || ''),
+    }
+  }
+
   function startBout(protocolId, opts = {}) {
     const protocol = builtinProtocolOf(protocolId) ||
       customProtocolOf(protocolId) ||
@@ -12061,12 +12115,31 @@ export function apply(ctx) {
       return { ok: false, toast: why }
     }
     const now = Date.now()
+    const tzB = zoneOr(config.timeZone)
     const goal = String(opts.goal || '').trim().slice(0, 120)
     const budgetMin = Number(opts.minutes) > 0 ? Math.max(5, Math.min(240, Math.round(Number(opts.minutes)))) : 0
     const workId = String(opts.workId || '').trim()
     const parentHorizonId = String(opts.parentHorizonId || '').trim()
-    live = { official, db, protocol, packet: pkt, department: dept, apps: opts.apps || null, goal, budgetMin, openedAt: now, workId, parentHorizonId,
-      sealId: String(opts.sealId || '') }
+    const existingApps = cleanAllowList([
+      ...(Array.isArray(opts.apps?.need) ? opts.apps.need : []),
+      ...(Array.isArray(opts.apps?.allow) ? opts.apps.allow : []),
+    ])
+    const hasExplicitApps = Boolean(opts.apps && typeof opts.apps === 'object' && existingApps.length > 0)
+    const scope = resolveScopeApps(goal || pkt?.goal || protocol.name || protocol.id || '', {
+      installed: lastPhone?.installedApps || [],
+      overrides: tierOverridesNow(),
+      extra: existingApps,
+    })
+    const scopeKey = String(opts.scopeKey || scope.scopeKey || 'default')
+    const scopeLabel = String(opts.scopeLabel || scope.scopeLabel || '')
+    const resolvedApps = hasExplicitApps
+      ? opts.apps
+      : { need: scope.allow, allow: scope.allow }
+    const boutSeal = resolveBoutSealNow(now, tzB, opts.sealId, opts.sealTitle)
+    live = {
+      official, db, protocol, packet: pkt, department: dept, apps: resolvedApps, goal, budgetMin, openedAt: now, workId, parentHorizonId,
+      sealId: boutSeal.sealId, sealTitle: boutSeal.sealTitle, scopeKey, scopeLabel,
+    }
     try {
       const tzW = zoneOr(config.timeZone)
       const wsCur = workStoreNow(now, tzW).store
@@ -12091,10 +12164,20 @@ export function apply(ctx) {
     // 她们开的（by: 'ai'）也不算他自己开的：主动开局比量的是他，不是她们。
     brainRt.noteBout({ protocolId: protocol.id, outcome: 'open', self: opts.by !== 'plan' && opts.by !== 'ai' }, now)
     // 第九轮：开局时带了 App 要求就记下（严格模式和「切出」都按它判）。
-    if (opts.apps && typeof opts.apps === 'object') presetRt.setApps('current', opts.apps, now, String(opts.by || 'panel'))
+    if (resolvedApps && typeof resolvedApps === 'object') presetRt.setApps('current', resolvedApps, now, String(opts.by || 'panel'))
     // 第三项：局官的第一句必须是工作包的第一步（施工书总验收第 4 条）。
     const head = openSay(pkt)
-    return { ok: true, department: dept, toast: '开局：' + protocol.name + '。' + (head || String(started.say || '')), say: head || String(started.say || '') }
+    return {
+      ok: true,
+      department: dept,
+      scopeKey,
+      scopeLabel,
+      allow: cleanAllowList([...(resolvedApps?.need || []), ...(resolvedApps?.allow || [])]),
+      sealId: boutSeal.sealId,
+      sealTitle: boutSeal.sealTitle,
+      toast: '开局：' + protocol.name + '。' + (head || String(started.say || '')),
+      say: head || String(started.say || ''),
+    }
   }
 
   function answerBout(text, form = 'text', channel = 'text', hold = false) {
@@ -12254,6 +12337,10 @@ export function apply(ctx) {
           allow: [...new Set(allow)],
           startedAt: live.openedAt,
           minutes: live.budgetMin || Number(live.protocol?.budget?.minutes) || 45,
+          scopeKey: String(live.scopeKey || ''),
+          scopeLabel: String(live.scopeLabel || ''),
+          sealId: String(live.sealId || ''),
+          sealTitle: String(live.sealTitle || ''),
           ...(live.packet?.deliverable ? { deliverable: String(live.packet.deliverable) } : {}),
           ...(live.contextBrief ? { nodeContext: live.contextBrief } : {}),
           ...(live.nodeLink ? { nodeLink: live.nodeLink } : {}),
@@ -12267,12 +12354,29 @@ export function apply(ctx) {
         desc: x.protocol.budget?.note || x.protocol.desc || ('建议时长 ' + (x.protocol.budget?.minutes || 0) + ' 分钟'),
         minutes: x.protocol.budget?.minutes || 0,
       }))
+    const queue = (dayData.plan?.items || []).map((it) => {
+      const existing = cleanAllowList([
+        ...(Array.isArray(it?.need) ? it.need : []),
+        ...(Array.isArray(it?.allow) ? it.allow : []),
+      ])
+      const sc = resolveScopeApps(it?.title || it?.protocolId || '', {
+        installed: lastPhone?.installedApps || [],
+        overrides: tierOverridesNow(),
+        extra: existing,
+      })
+      return {
+        ...it,
+        scopeKey: String(it?.scopeKey || sc.scopeKey || 'default'),
+        scopeLabel: String(it?.scopeLabel || sc.scopeLabel || ''),
+        allow: existing.length ? existing : sc.allow,
+      }
+    })
     return {
       v: 1,
       ok: true,
       running,
       strict: Boolean(strictInfo),
-      queue: dayData.plan?.items || [],
+      queue,
       protocols,
       snapshot: boutsSnapshot(),
     }
@@ -12306,6 +12410,7 @@ export function apply(ctx) {
       let goal = body?.title
       let workId = String(body?.id || '')
       let parentHorizonId = String(body?.parentHorizonId || '')
+      let sealId = String(body?.sealId || '')
       if ((!protocolId || !apps || !parentHorizonId) && body?.id) {
         const queued = (planDayRoute({ action: 'list' }).plan?.items || []).find((it) => String(it?.id || '') === String(body.id))
         if (queued) {
@@ -12314,9 +12419,31 @@ export function apply(ctx) {
           if (!packet && queued.packet) packet = queued.packet
           if (!goal && queued.title) goal = queued.title
           if (!parentHorizonId && queued.parentHorizonId) parentHorizonId = String(queued.parentHorizonId)
+          if (!sealId && queued.sealId) sealId = String(queued.sealId)
         }
       }
-      const r = startBout(protocolId, { apps, packet, department: body?.department, goal, minutes: body?.minutes, by: body?.by || 'panel', workId, parentHorizonId, sealId: body?.sealId })
+      const existingAllow = cleanAllowList([...(Array.isArray(apps?.need) ? apps.need : []), ...(Array.isArray(apps?.allow) ? apps.allow : [])])
+      const scope = resolveScopeApps(goal || packet?.goal || protocolId, {
+        installed: lastPhone?.installedApps || [],
+        overrides: tierOverridesNow(),
+        extra: existingAllow,
+      })
+      if (!apps || existingAllow.length === 0) {
+        apps = { need: scope.allow, allow: scope.allow }
+      }
+      const r = startBout(protocolId, {
+        apps,
+        packet,
+        department: body?.department,
+        goal,
+        minutes: body?.minutes,
+        by: body?.by || 'panel',
+        workId,
+        parentHorizonId,
+        sealId,
+        scopeKey: scope.scopeKey,
+        scopeLabel: scope.scopeLabel,
+      })
       if (r.ok && body?.strict === true && apps && ([...(apps.need || []), ...(apps.allow || [])].length > 0)) {
         presetRt.strictNow(Date.now(), String(goal || '面板严格局'), 'panel')
       }
@@ -12416,7 +12543,7 @@ export function apply(ctx) {
       if (!s || seen.has(s)) continue
       seen.add(s)
       out.push(s)
-      if (out.length >= 30) break
+      if (out.length >= 60) break
     }
     return out
   }
@@ -12470,7 +12597,12 @@ export function apply(ctx) {
     const minutes = Math.max(5, Math.min(240, Math.round(Number(body?.minutes) || 45)))
     const strict = body?.strict !== false
     const parsedAllow = cleanAllowList(body?.allow || body?.apps?.allow || body?.apps?.need)
-    const allow = parsedAllow.length ? parsedAllow : defaultAllowApps()
+    const scope = resolveScopeApps(goal || String(body?.protocolId || ''), {
+      installed: lastPhone?.installedApps || [],
+      overrides: tierOverridesNow(),
+      extra: parsedAllow,
+    })
+    const allow = scope.allow.length ? cleanAllowList(scope.allow) : (parsedAllow.length ? parsedAllow : defaultAllowApps())
     config = { ...config, defaultAllow: allow }
     try { writeConfig(config) } catch {}
     const r = startBout(String(body?.protocolId || 'execute'), {
@@ -12479,12 +12611,15 @@ export function apply(ctx) {
       minutes,
       department: body?.department,
       packet: body?.packet,
+      sealId: body?.sealId,
+      scopeKey: scope.scopeKey,
+      scopeLabel: scope.scopeLabel,
       by: String(body?.by || 'panel'),
     })
     if (r.ok && strict && allow.length > 0) {
       presetRt.strictNow(now, goal, String(body?.by || 'panel'))
     }
-    return { v: 1, ...r, strict, allow, minutes, goal }
+    return { v: 1, ...r, strict, allow, minutes, goal, scopeKey: scope.scopeKey, scopeLabel: scope.scopeLabel }
   }
 
   function todayTaskRoute(body = {}) {

@@ -771,6 +771,23 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     return _fallbackProtocols;
   }
 
+  String _resolveBoutSealTitle(Map<String, dynamic> cur) {
+    final direct = '${cur['sealTitle'] ?? ''}'.trim();
+    if (direct.isNotEmpty) return direct;
+    final sealId = '${cur['sealId'] ?? ''}'.trim();
+    if (sealId.isEmpty) return '';
+    final items = _seals?['items'];
+    if (items is List) {
+      for (final raw in items) {
+        if (raw is Map && '${raw['id'] ?? ''}'.trim() == sealId) {
+          final title = '${raw['title'] ?? ''}'.trim();
+          if (title.isNotEmpty) return title;
+        }
+      }
+    }
+    return '';
+  }
+
   double? _runningProgress(Map<String, dynamic> cur) {
     final endsAt = cur['until'] as num? ?? cur['endsAt'] as num?;
     if (endsAt == null) return null;
@@ -798,6 +815,8 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       final endsAt = cur['until'] as num? ?? cur['endsAt'] as num?;
       final appsRaw = cur['allow'] ?? (cur['apps'] is Map ? (cur['apps'] as Map)['allow'] : null);
       final allow = appsRaw is List ? [for (final a in appsRaw) '$a'] : const <String>[];
+      final scopeLabel = '${cur['scopeLabel'] ?? ''}'.trim();
+      final sealTitle = _resolveBoutSealTitle(cur);
       final ringColor = strict ? colors.danger : scheme.primary;
       final progress = _runningProgress(cur);
 
@@ -856,6 +875,39 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                   Icon(AppIcons.forward, size: 18, color: colors.textTertiary),
                 ],
               ),
+              if (scopeLabel.isNotEmpty || sealTitle.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (scopeLabel.isNotEmpty)
+                      StatusChip(
+                        key: const ValueKey('running-bout-scope-chip'),
+                        tone: StatusTone.ok,
+                        label: '自动范围：$scopeLabel（免手选）',
+                      ),
+                    if (sealTitle.isNotEmpty)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(AppIcons.verified, size: 14, color: colors.info),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              '本局关联验收点：$sealTitle',
+                              key: const ValueKey('running-bout-seal-label'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(color: colors.info),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 12),
               Divider(height: 0.5, thickness: 0.5, color: scheme.outlineVariant.withValues(alpha: 0.45)),
               const SizedBox(height: 10),
@@ -1456,6 +1508,8 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     final startedAt = cur['startedAt'] as num? ?? cur['at'] as num?;
     final protocol = '${cur['protocolId'] ?? cur['protocol'] ?? ''}'.trim();
     final deliverable = '${cur['deliverable'] ?? cur['goal'] ?? cur['accept'] ?? ''}'.trim();
+    final scopeLabel = '${cur['scopeLabel'] ?? ''}'.trim();
+    final sealTitle = _resolveBoutSealTitle(cur);
     final appsRaw = cur['allow'] ?? (cur['apps'] is Map ? (cur['apps'] as Map)['allow'] : null);
     final allow = appsRaw is List ? [for (final a in appsRaw) '$a'] : const <String>[];
     final ringColor = strict ? colors.danger : theme.colorScheme.primary;
@@ -1506,6 +1560,12 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                       label: startedAt != null && startedAt > 0 ? '${_clockOf(startedAt)} → ${_clockOf(endsAt)}' : '到 ${_clockOf(endsAt)}',
                     ),
                     if (protocol.isNotEmpty) StatusChip(tone: StatusTone.idle, label: protocol),
+                    if (scopeLabel.isNotEmpty)
+                      StatusChip(
+                        key: const ValueKey('bout-detail-scope-chip'),
+                        tone: StatusTone.ok,
+                        label: '自动范围：$scopeLabel（免手选）',
+                      ),
                   ],
                 ),
               ],
@@ -1518,6 +1578,15 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
         title: '这一局',
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         children: [
+          if (sealTitle.isNotEmpty)
+            ListPageRow(
+              key: const ValueKey('bout-detail-seal-row'),
+              icon: AppIcons.verified,
+              iconColor: colors.info,
+              title: '本局关联验收点：$sealTitle',
+              subtitle: '开局已自动关联，无需手动再挑',
+              subtitleMaxLines: 2,
+            ),
           ListPageRow(
             icon: AppIcons.done,
             title: '要交付什么',

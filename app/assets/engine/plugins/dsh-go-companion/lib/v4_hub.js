@@ -125,7 +125,8 @@ export function createV4Hub(deps) {
     getVerifySession = () => null,
     getSealLines = () => [],
     markWorkStatusNow = null,
-    getArbiterEnforce = () => false,
+    getArbiterEnforce = () => true,
+    getGeminiAccounting = null,
     getLockRequests = () => [],
     getTodayBrainStats = null,
     onContractClear = null,
@@ -1246,6 +1247,7 @@ export function createV4Hub(deps) {
 
     const todayStr = dayString(now, tzName)
     const geminiStats = getGeminiStats(todayStr, now)
+    const geminiAccounting = typeof getGeminiAccounting === 'function' ? getGeminiAccounting(now, tzName) : null
     const lockArbiter = computeLockArbiter(now, { autonomy: contractTick.autonomy })
     const activeSisterSkin = resolveActiveSisterSkin({ speaker: getSpeaker?.() || 'companion', lockArbiter })
     const unifiedTasks = getUnifiedTasks(now)
@@ -1275,7 +1277,8 @@ export function createV4Hub(deps) {
       v: 1,
       ok: true,
       day: todayStr,
-      arbiterEnforce: Boolean(getArbiterEnforce?.()),
+      arbiterEnforce: getArbiterEnforce?.() !== false,
+      ...(geminiAccounting ? { geminiAccounting } : {}),
       intensity: intensityInfo.intensity,
       effectiveIntensity: intensityInfo.effectiveIntensity || intensityInfo.intensity,
       autonomyShift: Number(intensityInfo.autonomyShift) || 0,

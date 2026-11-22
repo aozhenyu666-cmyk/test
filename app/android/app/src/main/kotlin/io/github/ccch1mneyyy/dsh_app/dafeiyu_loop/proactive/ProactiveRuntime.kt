@@ -136,6 +136,54 @@ class CompanionReleaseTracker {
 }
 
 /**
+ * Pure JVM-testable convergence policy for session foreground evaluation (`sessionFront`).
+ * Guarantees unified release/safety gates always win, and when a fresh arbiter verdict is present,
+ * legacy session grace/lock rules do not fire when the arbiter allows the app.
+ */
+object SessionArbiterPolicy {
+    enum class Action {
+        UNIFIED_RELEASE,
+        ARBITER_SHADOW,
+        ARBITER_OPEN,
+        ARBITER_LOCK,
+        LEGACY_SESSION,
+    }
+
+    fun decide(
+        unifiedRelease: Boolean,
+        disarmed: Boolean,
+        neverLock: Boolean,
+        arbiterShouldLock: Boolean?,
+        arbiterReasonTag: String?,
+    ): Action {
+        if (unifiedRelease || disarmed || neverLock) return Action.UNIFIED_RELEASE
+        if (arbiterShouldLock != null) {
+            if (arbiterReasonTag == "shadow") return Action.ARBITER_SHADOW
+            return if (arbiterShouldLock) Action.ARBITER_LOCK else Action.ARBITER_OPEN
+        }
+        return Action.LEGACY_SESSION
+    }
+}
+
+/**
+ * Pure JVM-testable defiance classification policy (`defiantIn`).
+ * When a fresh arbiter verdict exists, only apps the arbiter locks count as defiant.
+ */
+object DefiancePolicy {
+    fun isDefiant(
+        screenOn: Boolean,
+        unifiedRelease: Boolean,
+        arbiterShouldLock: Boolean?,
+        legacyListed: Boolean,
+        hasLegacyPass: Boolean,
+    ): Boolean {
+        if (!screenOn || unifiedRelease) return false
+        if (arbiterShouldLock != null) return arbiterShouldLock
+        return legacyListed && !hasLegacyPass
+    }
+}
+
+/**
  * Android adapter for the proactive kernel (loop/core). Owns one [Coordinator] and one
  * [ProactiveScheduler] per process, builds the [Gate] from DSH's own state (read only), runs the
  * kernel's commands, and keeps exactly one timer: a main-thread callback at the coordinator's next
@@ -621,6 +669,7 @@ object ProactiveRuntime {
 
     /**
      * 舱内前台变了：同一份判定给两条调用路用，且 30 秒滑窗记横跳次数（回到桌面/任务应用不再洗白计数）。
+     * 当单一裁决器处于执法且未过期时，以裁决器作为唯一执法真相源，避免旧伴侣多头规则在裁决器放行时再弹宽限/拉锁。
      */
     private fun sessionFront(pkg: String?, forceCheck: Boolean = false): Boolean {
         if (pkg == null) return false
@@ -645,6 +694,34 @@ object ProactiveRuntime {
             graceHinted = false
         }
         if (!sessionActive()) return false
+        val unifiedRelease = hasUnifiedRelease(now)
+        val disarmed = LockSafety.disarmed(app, now)
+        val neverLock = LockSafety.neverLock(app, pkg)
+        val arbiterOutcome = if (unifiedRelease || disarmed || neverLock) {
+            null
+        } else {
+            ArbiterShadow.evaluateForEnforce(app, pkg)
+        }
+        when (SessionArbiterPolicy.decide(
+            unifiedRelease = unifiedRelease,
+            disarmed = disarmed,
+            neverLock = neverLock,
+            arbiterShouldLock = arbiterOutcome?.shouldLock,
+            arbiterReasonTag = arbiterOutcome?.reasonTag,
+        )) {
+            SessionArbiterPolicy.Action.UNIFIED_RELEASE -> return false
+            SessionArbiterPolicy.Action.ARBITER_SHADOW -> {
+                LockSafety.shadowHit(app, pkg, arbiterOutcome!!.why, "arbiter")
+                return false
+            }
+            SessionArbiterPolicy.Action.ARBITER_OPEN -> {
+                if (pkg in sessionAllow || pkg == app.packageName) forcedApp = null
+                if (force?.app == pkg) force = null
+                return false
+            }
+            SessionArbiterPolicy.Action.ARBITER_LOCK -> return lockInSession(pkg, arbiterOutcome)
+            SessionArbiterPolicy.Action.LEGACY_SESSION -> Unit
+        }
         return when (sessionVerdict(pkg)) {
             SessionVerdict.ALLOW -> {
                 // 仅在真正回到白名单目标 App 时清防抖，回桌面不洗白
@@ -666,13 +743,14 @@ object ProactiveRuntime {
     }
 
     /** 4 级锁：同一个 App 启动时连发的窗口事件只锁一次（输入法已由 FrontChange 排除）。 */
-    private fun lockInSession(pkg: String): Boolean {
+    private fun lockInSession(pkg: String, arbiterOutcome: ArbiterEnforceOutcome? = null): Boolean {
         val now = System.currentTimeMillis()
         if (hasUnifiedRelease(now)) return false
         if (forcedApp == pkg && now - forcedAt < SESSION_LOCK_DEBOUNCE_MS) return true
         forcedApp = pkg
         forcedAt = now
-        val f = Force(4, pkg, workWhy ?: lockWhy() ?: "专时锁定中，只许任务应用", now + FORCE_HOLD_MS, refuse = sessionStrict)
+        val whyText = arbiterOutcome?.why ?: (workWhy ?: lockWhy() ?: "专时锁定中，只许任务应用")
+        val f = Force(4, pkg, whyText, now + FORCE_HOLD_MS, refuse = if (arbiterOutcome != null) true else sessionStrict)
         force = f
         enforce(f, fresh = true)
         return true
@@ -794,10 +872,11 @@ object ProactiveRuntime {
     fun canOfferBoutBuffer(lockMode: String): Boolean {
         if (!::app.isInitialized) return false
         val primary = primaryLock()?.kind
-        val arbiterPrio = runCatching { ArbiterShadow.current()?.priority }.getOrNull()
+        val freshArbiter = runCatching { ArbiterShadow.currentFresh() }.getOrNull()
+        val arbiterPrio = freshArbiter?.priority
         if (primary == LockPriority.KIND_NIGHT || arbiterPrio == "P1") return false
         val focusActive = runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.focus.FocusRuntime.isActive() }.getOrDefault(false)
-        val arbiterAllowlist = runCatching { ArbiterShadow.current()?.mode == io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ArbiterDecision.MODE_ALLOWLIST }.getOrDefault(false)
+        val arbiterAllowlist = freshArbiter?.mode == io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ArbiterDecision.MODE_ALLOWLIST
         val inBoutOrVerify = focusActive || sessionActive() || lastSessionBy == "verify" || lastSessionBy == "seal" ||
             arbiterAllowlist || lockMode == io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.InterceptRules.MODE_STRICT ||
             arbiterPrio in setOf("P3", "P3.5", "P4", "P5")
@@ -933,10 +1012,24 @@ object ProactiveRuntime {
             runCatching { InterceptRuntime.openTarget(app, bouncePkg) }
         } else {
             val fg = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
-            if (fg != null && listed(fg)) {
-                val f = Force(4, fg, lockWhy(pkg = fg) ?: "应急放行已到期，回到当前任务", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
-                force = f
-                enforce(f, fresh = true)
+            if (!fg.isNullOrBlank()) {
+                val arbiterOutcome = ArbiterShadow.evaluateForEnforce(app, fg)
+                if (arbiterOutcome != null) {
+                    when {
+                        arbiterOutcome.reasonTag == "shadow" -> {
+                            LockSafety.shadowHit(app, fg, arbiterOutcome.why, "arbiter")
+                        }
+                        arbiterOutcome.shouldLock -> {
+                            val f = Force(4, fg, arbiterOutcome.why, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
+                            force = f
+                            enforce(f, fresh = true)
+                        }
+                    }
+                } else if (listed(fg)) {
+                    val f = Force(4, fg, lockWhy(pkg = fg) ?: "应急放行已到期，回到当前任务", System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true)
+                    force = f
+                    enforce(f, fresh = true)
+                }
             }
         }
     }
@@ -1135,7 +1228,16 @@ object ProactiveRuntime {
         loadSession()
         return System.currentTimeMillis() < sessionUntil
     }
-    fun isStrictSession(): Boolean = sessionActive() && sessionStrict && !breaking() && !inEmergencyPass()
+    fun isStrictSession(): Boolean {
+        if (!sessionActive() || !sessionStrict || hasUnifiedRelease()) return false
+        if (::app.isInitialized && ArbiterShadow.enforceEnabled(app)) {
+            val fresh = ArbiterShadow.currentFresh()
+            if (fresh != null && fresh.mode != io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ArbiterDecision.MODE_ALLOWLIST) {
+                return false
+            }
+        }
+        return true
+    }
     /** R9：这个舱是不是 Gemini 连麦（锁页的「回去」按钮按它换文案）。 */
     fun sessionIsGemini(): Boolean = sessionApp()?.let { it in GEMINI_PACKAGES } ?: false
 
@@ -1460,7 +1562,7 @@ object ProactiveRuntime {
             consultPlanSoon(minGapMs = 15_000L)
             return
         }
-        // H5: 当 arbiterEnforce 开启且已有裁决器输出时，直接按 ArbiterDecision.decide 执法（永不锁/测试模式/紧急解除仍优先于一切）。
+        // H5: 当 arbiterEnforce 开启且已有新鲜裁决器输出时，直接按 ArbiterDecision.decide 执法（永不锁/测试模式/紧急解除仍优先于一切）。
         val arbiterOutcome = ArbiterShadow.evaluateForEnforce(app, packageName)
         if (arbiterOutcome != null) {
             when {
@@ -1472,6 +1574,9 @@ object ProactiveRuntime {
                     force = f
                     enforce(f, fresh = true)
                     onBlockedOpen(packageName)
+                }
+                else -> {
+                    if (force?.app == packageName) force = null
                 }
             }
             consultPlanSoon(minGapMs = 15_000L)
@@ -1597,9 +1702,20 @@ object ProactiveRuntime {
 
     /** In front and it counts: listed, screen on, and no pass (破窗放风 / 训练放行 / 白名单 / 互动舱) allows it. */
     private fun defiantIn(pkg: String?, screenOn: Boolean): Boolean {
-        if (pkg == null || !screenOn) return false
-        if (!listed(pkg) || hasUnifiedRelease()) return false
-        return runCatching { !InterceptRuntime.hasPass(pkg) }.getOrDefault(true)
+        if (pkg == null) return false
+        val unifiedRelease = hasUnifiedRelease()
+        val arbiterOutcome = if (!screenOn || unifiedRelease) null else ArbiterShadow.evaluateForEnforce(app, pkg)
+        val legacyListed = if (arbiterOutcome == null) listed(pkg) else false
+        val hasPass = if (arbiterOutcome == null && legacyListed) {
+            runCatching { InterceptRuntime.hasPass(pkg) }.getOrDefault(false)
+        } else false
+        return DefiancePolicy.isDefiant(
+            screenOn = screenOn,
+            unifiedRelease = unifiedRelease,
+            arbiterShouldLock = arbiterOutcome?.shouldLock,
+            legacyListed = legacyListed,
+            hasLegacyPass = hasPass,
+        )
     }
 
     private fun sampleDefiance() {
@@ -1736,11 +1852,12 @@ object ProactiveRuntime {
                     return
                 }
                 !arbiterOutcome.shouldLock -> {
+                    if (force?.app == f.app) force = null
                     Log.i(TAG, "arbiterEnforce open: skip force on ${f.app} (${arbiterOutcome.reasonTag})")
                     return
                 }
                 else -> {
-                    if (f.refuse && VisibleSurface.isHeldBy(VisibleSurface.OWNER_PROACTIVE)) {
+                    if (VisibleSurface.isHeldBy(VisibleSurface.OWNER_PROACTIVE)) {
                         VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, null)
                     }
                     val shown = runCatching {
@@ -1749,7 +1866,7 @@ object ProactiveRuntime {
                             f.app,
                             null,
                             arbiterOutcome.why,
-                            strict = f.refuse,
+                            strict = true,
                             unlockHow = arbiterOutcome.unlockHow,
                         )
                     }.getOrDefault(false)
@@ -1796,7 +1913,7 @@ object ProactiveRuntime {
         val planCap = (map["emergencyDisarmDailyCap"] as? Number)?.toInt()
             ?: ((map["intensity"] as? Map<*, *>)?.get("emergencyDisarmDailyCap") as? Number)?.toInt()
         if (planCap != null && planCap > 0) LockSafety.setDailyCap(app, planCap)
-        // H5：同步裁决器执法开关（默认关）并更新裁决器输出。
+        // H5：同步裁决器执法开关（默认开）并更新裁决器输出。
         (map["arbiterEnforce"] as? Boolean)?.let { ArbiterShadow.setEnforceEnabled(app, it) }
         runCatching { ArbiterShadow.update(map["lock"]) }
         val nowNotif = System.currentTimeMillis()
@@ -1843,21 +1960,27 @@ object ProactiveRuntime {
         if (companionReleaseTracker.shouldReleaseOnPlan(force != null, f?.get("release") == true, hasActiveCompanionLock)) {
             releaseCompanionLock()
         }
-        force?.let { enforce(it) }
-        if (force == null && !hasUnifiedRelease(stamp) && ArbiterShadow.enforceEnabled(app)) {
-            val fg = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
-            if (!fg.isNullOrBlank()) {
-                val outcome = ArbiterShadow.evaluateForEnforce(app, fg)
-                if (outcome != null && outcome.shouldLock) {
-                    enforce(Force(4, fg, outcome.why, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true))
-                } else if (outcome?.reasonTag == "shadow") {
-                    LockSafety.shadowHit(app, fg, outcome.why, "companion-arbiter")
-                }
+        val pendingForce = force
+        if (pendingForce != null) {
+            val forceOutcome = ArbiterShadow.evaluateForEnforce(app, pendingForce.app)
+            if (forceOutcome != null && !forceOutcome.shouldLock && forceOutcome.reasonTag != "shadow") {
+                force = null
+            } else {
+                enforce(pendingForce)
+            }
+        }
+        val fgNow = NowFeed.snapshot(SystemClock.elapsedRealtime()).app
+        if (!fgNow.isNullOrBlank() && force?.app != fgNow && !hasUnifiedRelease(stamp) && ArbiterShadow.enforceEnabled(app)) {
+            val outcome = ArbiterShadow.evaluateForEnforce(app, fgNow)
+            if (outcome != null && outcome.shouldLock) {
+                enforce(Force(4, fgNow, outcome.why, System.currentTimeMillis() + FORCE_HOLD_MS, refuse = true))
+            } else if (outcome?.reasonTag == "shadow") {
+                LockSafety.shadowHit(app, fgNow, outcome.why, "companion-arbiter")
             }
         }
         (map["media"] as? String)?.takeIf { it == "pause" || it == "resume" }?.let { PhoneMediaControl.control(app, it) }
         // 连麦舱：同一份分级判定（sessionFront），不再各写一份"非白名单就锁"。
-        if (sessionActive()) sessionFront(NowFeed.snapshot(SystemClock.elapsedRealtime()).app)
+        if (sessionActive()) sessionFront(fgNow)
         val at = (map["nextCheckAt"] as? Number)?.toLong() ?: 0L
         // 接口约定 §2: a layer's `until` running out changes the lock by itself, and the phone is the
         // one holding that cache. Wake at the earlier of the two and ask again, instead of polling or

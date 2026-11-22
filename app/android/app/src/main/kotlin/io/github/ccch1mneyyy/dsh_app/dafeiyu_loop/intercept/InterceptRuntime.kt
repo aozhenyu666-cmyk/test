@@ -102,6 +102,50 @@ class BoutSwitchBuffer(private val durationMs: Long = BUFFER_DURATION_MS) {
 object CompanionReleasePolicy {
     fun shouldReopenTarget(pkg: String?, hasOpenOtherLock: Boolean, neverLock: Boolean): Boolean =
         !pkg.isNullOrBlank() && !neverLock && !hasOpenOtherLock
+
+    fun resolveHasOpenOtherLock(
+        arbiterShouldLock: Boolean?,
+        proactiveLocked: Boolean,
+        focusLocked: Boolean,
+        guardStrictLocked: Boolean,
+    ): Boolean = if (arbiterShouldLock != null) {
+        arbiterShouldLock || focusLocked
+    } else {
+        proactiveLocked || focusLocked || guardStrictLocked
+    }
+}
+
+/**
+ * Pure JVM-testable convergence router for [InterceptRuntime.onForeground]:
+ * ensures safety/release gates always win, and when a fresh arbiter verdict exists,
+ * it is the sole truth source (preventing legacy rules from blocking when arbiter allows).
+ */
+object InterceptConvergencePolicy {
+    enum class ForegroundAction {
+        UNIFIED_RELEASE,
+        ARBITER_SHADOW,
+        ARBITER_ALLOW,
+        ARBITER_LOCK,
+        LEGACY_FALLBACK,
+    }
+
+    fun decideForeground(
+        disarmed: Boolean,
+        neverLock: Boolean,
+        unifiedRelease: Boolean,
+        boutBufferActive: Boolean,
+        arbiterShouldLock: Boolean?,
+        arbiterReasonTag: String?,
+    ): ForegroundAction {
+        if (disarmed || neverLock || unifiedRelease || boutBufferActive) {
+            return ForegroundAction.UNIFIED_RELEASE
+        }
+        if (arbiterShouldLock != null) {
+            if (arbiterReasonTag == "shadow") return ForegroundAction.ARBITER_SHADOW
+            return if (arbiterShouldLock) ForegroundAction.ARBITER_LOCK else ForegroundAction.ARBITER_ALLOW
+        }
+        return ForegroundAction.LEGACY_FALLBACK
+    }
 }
 
 /**
@@ -250,36 +294,52 @@ object InterceptRuntime {
         // 裁决器影子对比：只记新旧分歧，不执法。
         runCatching { ArbiterShadow.observe(app, packageName) }
         // 2026-11-18 锁机安全：紧急解除期间什么都不锁；桌面 / DSH 自己 / 系统界面永远不锁。
-        if (LockSafety.disarmed(app, now)) return
-        if (LockSafety.neverLock(app, packageName)) return
+        val disarmed = LockSafety.disarmed(app, now)
+        val neverLock = LockSafety.neverLock(app, packageName)
         // 统一放行（刷题达标 / 花余额放行 / 急事放行 / 破窗 / 2.5 分钟局内切出缓冲）优先级高于所有拦截。
-        if (runCatching { ProactiveRuntime.hasUnifiedRelease(now) }.getOrDefault(false) || isBoutBufferActive()) {
-            return
+        val unifiedRelease = runCatching { ProactiveRuntime.hasUnifiedRelease(now) }.getOrDefault(false)
+        val boutBufferActive = isBoutBufferActive()
+        // H5：arbiterEnforce=true 且已有新鲜裁决器输出时，只认 ArbiterDecision.decide 执法。
+        val arbiterOutcome = if (disarmed || neverLock || unifiedRelease || boutBufferActive) {
+            null
+        } else {
+            runCatching { ArbiterShadow.evaluateForEnforce(app, packageName) }.getOrNull()
         }
-        // H5：arbiterEnforce=true 且已有裁决器输出时，只认 ArbiterDecision.decide 执法。
-        val arbiterOutcome = runCatching {
-            ArbiterShadow.evaluateForEnforce(app, packageName)
-        }.getOrNull()
-        if (arbiterOutcome != null) {
-            if (arbiterOutcome.reasonTag == "shadow") {
-                LockSafety.shadowHit(app, packageName, arbiterOutcome.why, "arbiter")
+        when (InterceptConvergencePolicy.decideForeground(
+            disarmed = disarmed,
+            neverLock = neverLock,
+            unifiedRelease = unifiedRelease,
+            boutBufferActive = boutBufferActive,
+            arbiterShouldLock = arbiterOutcome?.shouldLock,
+            arbiterReasonTag = arbiterOutcome?.reasonTag,
+        )) {
+            InterceptConvergencePolicy.ForegroundAction.UNIFIED_RELEASE -> return
+            InterceptConvergencePolicy.ForegroundAction.ARBITER_SHADOW -> {
+                LockSafety.shadowHit(app, packageName, arbiterOutcome!!.why, "arbiter")
                 return
             }
-            if (!arbiterOutcome.shouldLock) return
-            if (resurface(packageName, arbiterOutcome.why, now, arbiterOutcome.unlockHow)) return
-            if (screenBusy()) {
-                Log.i(TAG, "surface busy (" + VisibleSurface.holder() + "); no arbiter lock for " + packageName)
+            InterceptConvergencePolicy.ForegroundAction.ARBITER_ALLOW -> {
+                clearOpenIfPackageMatches(packageName, "arbiter_open", now)
                 return
             }
-            val d = g.force(packageName, null, env(now), now, strict = true)
-            if (d is InterceptDecision.Block) {
-                show(d, now, arbiterOutcome.why, arbiterOutcome.unlockHow)
+            InterceptConvergencePolicy.ForegroundAction.ARBITER_LOCK -> {
+                val out = arbiterOutcome!!
+                if (resurface(packageName, out.why, now, out.unlockHow, arbiterShouldLock = true)) return
+                if (screenBusy()) {
+                    Log.i(TAG, "surface busy (" + VisibleSurface.holder() + "); no arbiter lock for " + packageName)
+                    return
+                }
+                val d = g.force(packageName, null, env(now), now, strict = true)
+                if (d is InterceptDecision.Block) {
+                    show(d, now, out.why, out.unlockHow)
+                }
+                return
             }
-            return
+            InterceptConvergencePolicy.ForegroundAction.LEGACY_FALLBACK -> {
+                // 裁决器关闭或决策过期（>10 分钟）时安全回退：仅恢复仍未结束的锁页。
+                if (resurface(packageName, null, now)) return
+            }
         }
-        // A lock that is still in force comes back whenever its app does (亮屏 / 回到游戏), even
-        // with the person's own interception switch off: the lock is state, the page is only its face.
-        if (resurface(packageName, null, now)) return
         // 2026-11-19 整理：「娱乐锁机」自己的名单 / 冷却 / 每日上限 / 开关不再自己判锁——
         // 它的名单已并入插件的 App 分类表（娱乐 / 游戏），锁不锁由插件按分类 + 余额 + 局判，
         // 经 ProactiveRuntime → [forceBlock] 落到同一张锁页。两套规则同时判，会出现「插件放行、这里又拦」。
@@ -309,16 +369,31 @@ object InterceptRuntime {
             Log.i(TAG, "companion lock skipped for " + packageName + " (unified release or bout buffer active)")
             return false
         }
+        val arbiterOutcome = runCatching { ArbiterShadow.evaluateForEnforce(app, packageName) }.getOrNull()
+        if (arbiterOutcome != null && !arbiterOutcome.shouldLock) {
+            if (arbiterOutcome.reasonTag != "shadow") {
+                clearOpenIfPackageMatches(packageName, "arbiter_open", now)
+            }
+            Log.i(TAG, "companion lock skipped for $packageName (arbiter=${arbiterOutcome.reasonTag})")
+            return false
+        }
+        val effectiveWhy = if (arbiterOutcome != null) {
+            why?.takeIf { it.isNotBlank() } ?: arbiterOutcome.why
+        } else why
+        val effectiveUnlockHow = if (arbiterOutcome != null) {
+            unlockHow?.takeIf { it.isNotBlank() } ?: arbiterOutcome.unlockHow
+        } else unlockHow
+        val effectiveStrict = if (arbiterOutcome != null) true else strict
         // A lock already in force: show it again if its page is not on screen (or let a superseded
         // one go and decide this app afresh).
-        if (resurface(packageName, why, now, unlockHow)) return true
+        if (resurface(packageName, effectiveWhy, now, effectiveUnlockHow, arbiterShouldLock = arbiterOutcome?.shouldLock)) return true
         if (screenBusy()) return false
-        val d = g.force(packageName, label, env(now), now, strict)
+        val d = g.force(packageName, label, env(now), now, effectiveStrict)
         if (d !is InterceptDecision.Block) {
             Log.d(TAG, "companion lock skipped for " + packageName + ": " + ((d as? InterceptDecision.Allow)?.reason ?: "ignore"))
             return false
         }
-        show(d, now, why, unlockHow)
+        show(d, now, effectiveWhy, effectiveUnlockHow)
         return true
     }
 
@@ -334,9 +409,11 @@ object InterceptRuntime {
         if (!g.onReleased(id, RELEASE_RULE, now)) return false
         InterceptPageActivity.withdraw(id)
         VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, id)
-        val arbiterLocked = pkg != null && runCatching {
-            ArbiterShadow.evaluateForEnforce(context, pkg)?.shouldLock == true
-        }.getOrDefault(false)
+        if (pendingLaunchEventId == id) pendingLaunchEventId = null
+        val arbiterOutcome = pkg?.let {
+            runCatching { ArbiterShadow.evaluateForEnforce(context, it) }.getOrNull()
+        }
+        val arbiterLocked = arbiterOutcome?.shouldLock == true
         val proactiveLocked = pkg != null && runCatching {
             ProactiveRuntime.wouldLock(pkg)
         }.getOrDefault(false)
@@ -349,7 +426,12 @@ object InterceptRuntime {
             g.effectiveLockMode() == InterceptRules.MODE_STRICT &&
             !runCatching { ProactiveRuntime.hasUnifiedRelease(now) }.getOrDefault(false) &&
             !isBoutBufferActive()
-        val hasOpenOtherLock = arbiterLocked || proactiveLocked || focusLocked || guardStrictLocked
+        val hasOpenOtherLock = CompanionReleasePolicy.resolveHasOpenOtherLock(
+            arbiterShouldLock = arbiterOutcome?.shouldLock,
+            proactiveLocked = proactiveLocked,
+            focusLocked = focusLocked,
+            guardStrictLocked = guardStrictLocked,
+        )
         val neverLock = pkg != null && runCatching { LockSafety.neverLock(context, pkg) }.getOrDefault(false)
         if (CompanionReleasePolicy.shouldReopenTarget(pkg, hasOpenOtherLock, neverLock)) {
             runCatching { openTarget(context, pkg!!) }
@@ -368,6 +450,8 @@ object InterceptRuntime {
     private var openLabel: String? = null
     private var openWhy: String? = null
     private var openUnlockHow: String? = null
+    private var pendingLaunchEventId: String? = null
+    private var pendingLaunchAtElapsed: Long = 0L
 
     /** A lock nobody resolved in this long is stale (its page is long gone). */
     private const val STALE_OPEN_MS = 30 * 60_000L
@@ -376,7 +460,19 @@ object InterceptRuntime {
         val id = guard?.expireStale(now, STALE_OPEN_MS) ?: return
         InterceptPageActivity.withdraw(id)
         VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, id)
+        if (pendingLaunchEventId == id) pendingLaunchEventId = null
         Log.i(TAG, "stale lock closed: " + id)
+    }
+
+    private fun clearOpenIfPackageMatches(packageName: String, reason: String, now: Long) {
+        val g = guard ?: return
+        val open = g.openEventId() ?: return
+        if (g.openPackage() != packageName) return
+        InterceptPageActivity.withdraw(open)
+        g.onDismissed(open, reason, now)
+        VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, open)
+        if (pendingLaunchEventId == open) pendingLaunchEventId = null
+        Log.i(TAG, "stale lock cleared for $packageName ($open, $reason)")
     }
 
     /**
@@ -390,31 +486,49 @@ object InterceptRuntime {
      *    ended, so the new app can be decided normally (false);
      *  * anything else (launcher, DSH, phone) → the lock stays, nothing to show.
      */
-    private fun resurface(packageName: String, why: String?, now: Long, unlockHow: String? = null): Boolean {
+    private fun resurface(
+        packageName: String,
+        why: String?,
+        now: Long,
+        unlockHow: String? = null,
+        arbiterShouldLock: Boolean? = null,
+    ): Boolean {
         val g = guard ?: return false
         val open = g.openEventId() ?: return false
-        if (InterceptPageActivity.isOnScreen(open)) return true
+        if (InterceptPageActivity.isOnScreen(open) ||
+            (pendingLaunchEventId == open && SystemClock.elapsedRealtime() - pendingLaunchAtElapsed < 1_500L)
+        ) return true
         val pkg = g.openPackage()
         if (pkg == packageName) {
             if (screenBusy()) return true
             if (LockSafety.shadowHit(app, packageName, why ?: openWhy, "resurface")) return true
             if (!takeScreen(open)) return true
+            if (!why.isNullOrBlank()) openWhy = why
+            if (!unlockHow.isNullOrBlank()) openUnlockHow = unlockHow
             val label = openLabel ?: g.config.targetFor(packageName)?.label ?: packageName
             val ok = InterceptPageActivity.start(
                 app, open, packageName, label, config().trainingMs, now + PAGE_TTL_MS, why ?: openWhy,
                 lockMode = effectiveLockMode(), openSinceWall = g.state.openSinceWall, todayCount = g.state.countToday,
                 unlockHow = unlockHow ?: openUnlockHow,
             )
-            if (!ok) VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, open)
+            if (ok) {
+                pendingLaunchEventId = open
+                pendingLaunchAtElapsed = SystemClock.elapsedRealtime()
+            } else {
+                VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, open)
+            }
             Log.i(TAG, "lock resurfaced for " + packageName + " (" + open + ") ok=" + ok)
             return true
         }
-        val lockable = g.config.targetFor(packageName) != null ||
-            runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.wouldLock(packageName) }.getOrDefault(false)
+        val lockable = arbiterShouldLock ?: (
+            g.config.targetFor(packageName) != null ||
+                runCatching { io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.ProactiveRuntime.wouldLock(packageName) }.getOrDefault(false)
+            )
         if (!lockable) return true
         InterceptPageActivity.withdraw(open)
         g.onDismissed(open, "superseded", now)
         VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, open)
+        if (pendingLaunchEventId == open) pendingLaunchEventId = null
         return false
     }
 
@@ -464,7 +578,10 @@ object InterceptRuntime {
             lockMode = effectiveLockMode(), openSinceWall = now, todayCount = guard?.state?.countToday ?: 1,
             unlockHow = unlockHow,
         )
-        if (!ok) {
+        if (ok) {
+            pendingLaunchEventId = block.eventId
+            pendingLaunchAtElapsed = SystemClock.elapsedRealtime()
+        } else {
             VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, block.eventId)
             // The system refused the page: the interception did not happen, so nothing is owed.
             guard?.onUnavailable(block.eventId, "start_failed", System.currentTimeMillis())
@@ -497,6 +614,7 @@ object InterceptRuntime {
      * itself is *not* ended here: 灭屏不清锁. It ends only through one of the reports below.
      */
     fun onPageGone(eventId: String?) {
+        if (eventId == null || pendingLaunchEventId == eventId) pendingLaunchEventId = null
         VisibleSurface.release(VisibleSurface.OWNER_INTERCEPT, eventId)
     }
 

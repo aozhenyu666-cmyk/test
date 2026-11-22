@@ -10,7 +10,7 @@
 // 每一份都带 why（为什么）和 unlockHow（怎么解），锁页显示的就是它，和执法永远一致。
 // 原来那些锁（雷达、姐妹力度、切换次数、契约、专时、连麦、深夜）都只是这里的输入。
 
-import { isBasePkg, WORK_DEFAULT } from './app_tiers.js'
+import { DEFAULT_NEUTRAL_WORK_QUOTA_MIN, isBasePkg, NEUTRAL_COMM_PACKAGES, WORK_DEFAULT } from './app_tiers.js'
 import { GEMINI_PACKAGES } from './gemini.js'
 import { isNeverLockPkg, PROXY_PACKAGES } from './never_lock.js'
 
@@ -27,13 +27,48 @@ const nonEmpty = (s, fallback) => (typeof s === 'string' && s.trim() ? s.trim() 
  * @param {object} p.quota        computeQuota 的结果
  * @param {object} p.lease        当前通行证 { app, until, goal }
  * @param {Array}  p.radarDeny    雷达 / 姐妹 / 切换次数临时锁的 [{app, until, why}]
+ * @param {Array}  p.today        今日手机使用明细 [{ app, minutes }]
+ * @param {number} p.neutralWorkQuotaMin 中立通讯 App 工作时段共享总量上限（默认 35 分钟）
  */
 export function buildLockDecision({ arbiter = null, work = null, installed = [], tierOf = () => 'other', quota = null,
-  lease = null, radarDeny = [], now = Date.now() } = {}) {
+  lease = null, radarDeny = [], today = [], neutralWorkQuotaMin = DEFAULT_NEUTRAL_WORK_QUOTA_MIN, now = Date.now() } = {}) {
   const a = arbiter || { priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自主推进态' }
   const pkgs = (Array.isArray(installed) ? installed : []).map((x) => ({ pkg: String(x?.pkg || ''), label: String(x?.label || '') })).filter((x) => x.pkg)
   const ofTier = (t) => pkgs.filter((x) => tierOf(x.pkg, x.label) === t).map((x) => x.pkg)
+  const labelOf = (pkg) => pkgs.find((x) => x.pkg === pkg)?.label || ''
   const leaseApp = lease && Number(lease.until) > now && lease.app ? String(lease.app) : ''
+
+  const hasToday = Array.isArray(today)
+  const rawQuota = neutralWorkQuotaMin === undefined || neutralWorkQuotaMin === null
+    ? DEFAULT_NEUTRAL_WORK_QUOTA_MIN
+    : Number(neutralWorkQuotaMin)
+  const limitMin = Number.isFinite(rawQuota) ? Math.max(0, rawQuota) : DEFAULT_NEUTRAL_WORK_QUOTA_MIN
+  const neutralSet = new Set(NEUTRAL_COMM_PACKAGES)
+  const commUsedMin = hasToday
+    ? today.reduce((sum, row) => {
+      const pkg = String(row?.app || row?.pkg || '').trim()
+      if (!neutralSet.has(pkg)) return sum
+      return sum + Math.max(0, Number(row?.minutes) || 0)
+    }, 0)
+    : 0
+  const commExceeded = commUsedMin >= limitMin
+  const commQuota = { usedMin: commUsedMin, limitMin, exceeded: commExceeded }
+
+  const activeRadarDeny = new Set()
+  for (const d of Array.isArray(radarDeny) ? radarDeny : []) {
+    const pkg = String(d?.app || '').trim()
+    if (pkg && !safeBase(pkg) && (!d.until || Number(d.until) > now)) {
+      activeRadarDeny.add(pkg)
+    }
+  }
+  const commAutoAllow = (hasToday && !commExceeded)
+    ? NEUTRAL_COMM_PACKAGES.filter((p) => {
+      if (activeRadarDeny.has(p)) return false
+      const t = tierOf(p, labelOf(p))
+      return t !== 'fun' && t !== 'game'
+    })
+    : []
+
   const base = {
     v: 1,
     priority: a.priority,
@@ -41,6 +76,7 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
     label: a.label,
     quota: quota ? { funLeft: quota.funLeft, gameLeft: quota.gameLeft, funOut: quota.funOut, gameOut: quota.gameOut, line: quota.line } : null,
     lease: leaseApp ? { app: leaseApp, until: Number(lease.until), goal: String(lease.goal || '') } : null,
+    commQuota,
   }
 
   if (a.priority === 'P0') {
@@ -61,14 +97,26 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
       ? [...GEMINI_PACKAGES, ...PROXY_PACKAGES]
       : (role === 'TAKEOVER_STRICT' ? [...WORK_DEFAULT, ...ofTier('work'), ...GEMINI_PACKAGES, ...PROXY_PACKAGES] : [])
     const withLease = (role === 'BOUT_STRICT' || role === 'TAKEOVER_STRICT') && leaseApp ? [leaseApp] : []
+    const commForBout = role === 'BOUT_STRICT' ? commAutoAllow : []
     const allow = Array.isArray(a.allow) && !a.allow.includes('*') ? a.allow : []
+    const finalAllow = uniq([...allow, ...extra, ...withLease, ...commForBout])
+    const exceededCommNeedPass = (role === 'BOUT_STRICT' && hasToday && commExceeded)
+      ? NEUTRAL_COMM_PACKAGES.filter((p) => {
+        if (p === leaseApp || finalAllow.includes(p) || safeBase(p)) return false
+        const t = tierOf(p, labelOf(p))
+        return !['base', 'work', 'fun', 'game'].includes(t)
+      })
+      : []
     const needPass = (role === 'BOUT_STRICT' || role === 'TAKEOVER_STRICT')
-      ? ofTier('dual').filter((p) => p !== leaseApp && !allow.includes(p) && !safeBase(p))
+      ? uniq([
+        ...ofTier('dual').filter((p) => p !== leaseApp && !finalAllow.includes(p) && !safeBase(p)),
+        ...exceededCommNeedPass,
+      ])
       : []
     return {
       ...base,
       mode: 'allowlist',
-      allow: uniq([...allow, ...extra, ...withLease]),
+      allow: finalAllow,
       deny: [],
       needPass,
       why: nonEmpty(a.why, nonEmpty(a.label, '规则严格锁定中')),
@@ -76,20 +124,31 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
     }
   }
 
-  // 干活态（契约柔性期、局、忙时、专时）：白名单 = 工作层 + 这一段声明的 App + 手上的通行证。
+  // 干活态（契约柔性期、局、忙时、专时）：白名单 = 工作层 + 这一段声明的 App + 手上的通行证 + 未超额度的中立通讯 App。
   if (a.priority === 'P5' || work?.active) {
     const allow = uniq([
       ...WORK_DEFAULT, ...ofTier('work'),
       ...(Array.isArray(a.allow) && !a.allow.includes('*') ? a.allow : []),
       ...(Array.isArray(work?.allow) ? work.allow : []),
       ...(leaseApp ? [leaseApp] : []),
+      ...commAutoAllow,
     ])
+    const exceededCommNeedPass = (hasToday && commExceeded)
+      ? NEUTRAL_COMM_PACKAGES.filter((p) => {
+        if (p === leaseApp || allow.includes(p) || safeBase(p)) return false
+        const t = tierOf(p, labelOf(p))
+        return !['base', 'work', 'fun', 'game'].includes(t)
+      })
+      : []
     return {
       ...base,
       mode: 'allowlist',
       allow,
       deny: [],
-      needPass: ofTier('dual').filter((p) => !allow.includes(p) && !safeBase(p)),
+      needPass: uniq([
+        ...ofTier('dual').filter((p) => !allow.includes(p) && !safeBase(p)),
+        ...exceededCommNeedPass,
+      ]),
       why: nonEmpty(work?.why || a.why, '正在干活：只放行工作 App 和这一局声明的 App'),
       unlockHow: '双用途 App 先跟鲸澜说清用途领通行证；娱乐等收工或进自由态再用',
     }

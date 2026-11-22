@@ -769,21 +769,32 @@ test('H5 lock_bus：过期自动修剪、来源撤销防幽灵锁、P2.5 接管�
     }
   }
 
-  // 4) HTTP arbiterEnforce 默认 false，POST /config 可开关并在 /status /plan /today 一致曝光；紧急解除清除锁总线
+  // 4) HTTP arbiterEnforce 默认 true，POST /config 可关闭再打开并在 /status /plan /today 一致曝光；紧急解除清除锁总线
   await withHome(async (home) => {
     seedHome(home)
     const sis = makeAgent('session-sis')
     const host = makeHost({ agent: sis, strategistAgent: makeAgent('session-big') })
 
     const s0 = await call(host.handler, 'GET', '/dsh-go-companion/v1/status')
-    assert.equal(s0.body.arbiterEnforce, false)
-    assert.equal(s0.body.config.arbiterEnforce, false)
+    assert.equal(s0.body.arbiterEnforce, true)
+    assert.equal(s0.body.config.arbiterEnforce, true)
+    const t0 = await call(host.handler, 'GET', '/dsh-go-companion/v1/today')
+    assert.equal(t0.body.arbiterEnforce, true)
+
+    const cfgOff = await call(host.handler, 'POST', '/dsh-go-companion/v1/config', { arbiterEnforce: false })
+    assert.equal(cfgOff.body.config.arbiterEnforce, false)
+    const tOff = await call(host.handler, 'GET', '/dsh-go-companion/v1/today')
+    assert.equal(tOff.body.arbiterEnforce, false)
+    const pOff = await call(host.handler, 'POST', '/dsh-go-companion/v1/plan', { roll: 0, timeZone: TZ, phone: { app: 'md.obsidian', fun: false, minutes: 1, screenOn: true } })
+    assert.equal(pOff.body.arbiterEnforce, false)
 
     const cfgSet = await call(host.handler, 'POST', '/dsh-go-companion/v1/config', { arbiterEnforce: true })
     assert.equal(cfgSet.body.config.arbiterEnforce, true)
 
     const t1 = await call(host.handler, 'GET', '/dsh-go-companion/v1/today')
     assert.equal(t1.body.arbiterEnforce, true)
+    const p1 = await call(host.handler, 'POST', '/dsh-go-companion/v1/plan', { roll: 0, timeZone: TZ, phone: { app: 'md.obsidian', fun: false, minutes: 1, screenOn: true } })
+    assert.equal(p1.body.arbiterEnforce, true)
 
     // 先触发一次临时封禁，再发 disarm 必须撤销 lockBus 幽灵锁
     await sis.tools.block_apps.execute({ apps: ['com.ss.android.ugc.aweme'], hours: 2, reason: '防走神' })

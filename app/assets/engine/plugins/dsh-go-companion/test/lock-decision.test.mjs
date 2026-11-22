@@ -101,3 +101,23 @@ test('紧急放行全开；深夜(P1)只剩底座；连麦舱(P2)只许 Gemini +
   assert.equal(decideApp(night, 'com.baidu.netdisk', base).lock, true)
   assert.equal(decideApp(night, 'com.android.dialer', base).lock, false)
 })
+
+test('干活态：中立通讯 App（微信/QQ）35m 配额内自动放行，超额后落入 needPass', () => {
+  const under = buildLockDecision({
+    arbiter: arb('P4', { source: 'BOUT_STRICT' }),
+    installed,
+    tierOf: tf,
+    today: [{ app: 'com.tencent.mm', minutes: 20 }],
+  })
+  assert.deepEqual(under.commQuota, { usedMin: 20, limitMin: 35, exceeded: false })
+  assert.equal(decideApp(under, 'com.tencent.mm', base).lock, false)
+
+  const over = buildLockDecision({
+    arbiter: arb('P4', { source: 'BOUT_STRICT' }),
+    installed,
+    tierOf: tf,
+    today: [{ app: 'com.tencent.mm', minutes: 20 }, { app: 'com.tencent.mobileqq', minutes: 15 }],
+  })
+  assert.deepEqual(over.commQuota, { usedMin: 35, limitMin: 35, exceeded: true })
+  assert.equal(decideApp(over, 'com.tencent.mm', base).pass, true)
+})

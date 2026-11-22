@@ -31,6 +31,113 @@ export const WORK_DEFAULT = Object.freeze([
   'com.baidu.netdisk', 'com.hpbr.bosszhipin', 'md.obsidian', 'cn.wps.moffice_eng',
 ])
 
+export const NEUTRAL_COMM_PACKAGES = Object.freeze(['com.tencent.mm', 'com.tencent.mobileqq'])
+
+export const DEFAULT_NEUTRAL_WORK_QUOTA_MIN = 35
+
+export const TASK_APP_SCOPES = Object.freeze({
+  exam: Object.freeze({
+    key: 'exam',
+    label: '刷题/行测',
+    packages: Object.freeze([
+      'com.fenbi.android.solar', 'com.fenbi.android.leo', 'com.huatu.ztk', 'com.offcn.android',
+      'com.ichi2.anki', 'com.duolingo', 'com.youdao.dict', 'com.eudic',
+      'md.obsidian', 'cn.wps.moffice_eng', 'notion.id', 'com.baidu.netdisk',
+      'com.google.android.apps.bard',
+    ]),
+    hintRe: /(粉笔|华图|中公|题库|刷题|行测|做题|模考|词典|翻译|单词|百词斩|墨墨|不背|anki|duolingo|dict|eudic|youdao|fenbi|huatu|offcn|obsidian|notion|wps|学习|笔记)/i,
+  }),
+  write: Object.freeze({
+    key: 'write',
+    label: '写作/笔记',
+    packages: Object.freeze([
+      'md.obsidian', 'cn.wps.moffice_eng', 'notion.id', 'com.baidu.netdisk',
+      'com.ss.android.lark', 'com.alibaba.android.rimet',
+      'com.google.android.apps.bard', 'com.openai.chatgpt', 'com.anthropic.claude',
+    ]),
+    hintRe: /(笔记|写作|申论|文档|word|obsidian|notion|wps|网盘|netdisk|语雀|石墨|飞书|钉钉|typora|flomo|markdown|doc|note)/i,
+  }),
+  think: Object.freeze({
+    key: 'think',
+    label: '深度共脑(含Gemini)',
+    packages: Object.freeze([
+      'com.google.android.apps.bard', 'com.openai.chatgpt', 'com.anthropic.claude',
+      'md.obsidian', 'notion.id', 'cn.wps.moffice_eng',
+    ]),
+    hintRe: /(gemini|bard|chatgpt|claude|共脑|思考|脑图|xmind|obsidian|notion|flomo|笔记)/i,
+  }),
+  default: Object.freeze({
+    key: 'default',
+    label: '常规学习',
+    packages: Object.freeze([
+      ...WORK_DEFAULT,
+      'com.ichi2.anki', 'com.duolingo', 'notion.id',
+    ]),
+    hintRe: /(学习|笔记|词典|题库|文档|工作|obsidian|notion|wps|anki|duolingo|netdisk|bard|chatgpt|claude)/i,
+  }),
+})
+
+function detectTaskScopeKey(taskTextOrKind = '') {
+  const raw = String(taskTextOrKind || '').trim()
+  const low = raw.toLowerCase()
+  if (low === 'exam' || /(刷题|行测|做题|真题|模考|背词|背单词|单词|题库|考研|公考|考公|国考|省考|复盘错题|anki|quiz|exam)/i.test(raw)) {
+    return 'exam'
+  }
+  if (low === 'write' || /(写作|申论|笔记|大作文|周报|复盘|文档|草稿|论文|简历|write|essay|note|doc)/i.test(raw)) {
+    return 'write'
+  }
+  if (low === 'think' || /(共脑|gemini|连麦|深度思考|推演|构思|讨论|头脑风暴|think|brainstorm)/i.test(raw)) {
+    return 'think'
+  }
+  return 'default'
+}
+
+/**
+ * 4.3 预设任务 App 放行范围（开局零手选）：
+ * 按标题/类型归类并从 installed + WORK_DEFAULT + extra 中筛选允许包名，
+ * 硬过滤掉 tierOf(p, { overrides }) 为 'fun' 或 'game' 的包名。
+ */
+export function resolveScopeApps(taskTextOrKind = '', { installed = [], overrides = {}, extra = [] } = {}) {
+  const scopeKey = detectTaskScopeKey(taskTextOrKind)
+  const scope = TASK_APP_SCOPES[scopeKey] || TASK_APP_SCOPES.default
+  const labelMap = new Map()
+  const matchedInstalled = []
+
+  for (const item of Array.isArray(installed) ? installed : []) {
+    const pkg = typeof item === 'string' ? item.trim() : String(item?.pkg || '').trim()
+    const label = typeof item === 'object' && item ? String(item.label || '').trim() : ''
+    if (!pkg) continue
+    if (label) labelMap.set(pkg, label)
+    const t = tierOf(pkg, { label, overrides })
+    if (t === 'fun' || t === 'game') continue
+    if (t === 'work' || scope.packages.includes(pkg) || scope.hintRe.test(`${pkg} ${label}`)) {
+      matchedInstalled.push(pkg)
+    }
+  }
+
+  const rawCandidates = [
+    ...scope.packages,
+    ...WORK_DEFAULT,
+    ...matchedInstalled,
+    ...(Array.isArray(extra) ? extra : []),
+  ]
+
+  const allow = []
+  const seen = new Set()
+  for (const item of rawCandidates) {
+    const pkg = String(item || '').trim()
+    if (!pkg || seen.has(pkg)) continue
+    seen.add(pkg)
+    const label = labelMap.get(pkg) || ''
+    const tWithLabel = tierOf(pkg, { label, overrides })
+    const tBase = tierOf(pkg, { overrides })
+    if (tWithLabel === 'fun' || tWithLabel === 'game' || tBase === 'fun' || tBase === 'game') continue
+    allow.push(pkg)
+  }
+
+  return { scopeKey, scopeLabel: scope.label, allow }
+}
+
 export const DUAL_DEFAULT = Object.freeze([
   'com.android.chrome', 'com.vivo.browser', 'com.quark.browser', 'com.tencent.mm', 'com.tencent.mobileqq',
   ...DUAL_USE_PACKAGES,

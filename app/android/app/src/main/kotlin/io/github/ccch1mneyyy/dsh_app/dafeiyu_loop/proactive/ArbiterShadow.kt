@@ -22,6 +22,33 @@ data class ArbiterEnforceOutcome(
 )
 
 object ArbiterEnforcePolicy {
+    const val DEFAULT_ENFORCE_ENABLED = true
+
+    fun resolveEnforceSwitch(persistedValue: Boolean?): Boolean = persistedValue ?: DEFAULT_ENFORCE_ENABLED
+
+    fun evaluateAt(
+        arbiterEnforce: Boolean,
+        decision: ArbiterDecision?,
+        receivedAt: Long,
+        now: Long,
+        pkg: String?,
+        neverLock: Boolean,
+        disarmed: Boolean,
+        shadow: Boolean,
+        isSystem: Boolean = false,
+        released: Boolean = false,
+    ): ArbiterEnforceOutcome? = evaluate(
+        arbiterEnforce = arbiterEnforce,
+        decision = decision,
+        pkg = pkg,
+        neverLock = neverLock,
+        disarmed = disarmed,
+        shadow = shadow,
+        isSystem = isSystem,
+        released = released,
+        decisionFresh = decision != null && ArbiterDecision.isFresh(receivedAt, now),
+    )
+
     fun evaluate(
         arbiterEnforce: Boolean,
         decision: ArbiterDecision?,
@@ -31,8 +58,9 @@ object ArbiterEnforcePolicy {
         shadow: Boolean,
         isSystem: Boolean = false,
         released: Boolean = false,
+        decisionFresh: Boolean = true,
     ): ArbiterEnforceOutcome? {
-        if (!arbiterEnforce || decision == null) return null
+        if (!arbiterEnforce || decision == null || !decisionFresh) return null
         val p = pkg?.trim().orEmpty()
         if (p.isEmpty() || neverLock || isSystem) {
             return ArbiterEnforceOutcome(shouldLock = false, why = "base", unlockHow = "", reasonTag = "never_lock")
@@ -80,7 +108,7 @@ object ArbiterEnforcePolicy {
 }
 
 /**
- * 2026-11-18 裁决器影子对比与 H5 执法开关（默认关）：
+ * 2026-11-18 裁决器影子对比与 H5 执法开关（默认开）：
  * - `arbiterEnforce == false`：只计算并记分歧到 files/loop/arbiter-diff.jsonl，不执法；
  * - `arbiterEnforce == true`：由 [evaluateForEnforce] 给出唯一裁决，同时永不锁/测试模式/紧急解除仍优先于一切。
  */
@@ -97,8 +125,10 @@ object ArbiterShadow {
     fun enforceEnabled(ctx: Context): Boolean {
         enforceCache?.let { return it }
         return runCatching {
-            ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENFORCE, false)
-        }.getOrDefault(false).also { enforceCache = it }
+            val prefs = ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val persisted = if (prefs.contains(KEY_ENFORCE)) prefs.getBoolean(KEY_ENFORCE, true) else null
+            ArbiterEnforcePolicy.resolveEnforceSwitch(persisted)
+        }.getOrDefault(ArbiterEnforcePolicy.DEFAULT_ENFORCE_ENABLED).also { enforceCache = it }
     }
 
     fun setEnforceEnabled(ctx: Context, on: Boolean) {
@@ -116,10 +146,12 @@ object ArbiterShadow {
         val p = pkg?.trim().orEmpty()
         val released = runCatching { ProactiveRuntime.hasUnifiedRelease() }.getOrDefault(false) ||
             runCatching { InterceptRuntime.isBoutBufferActive() }.getOrDefault(false)
-        return ArbiterEnforcePolicy.evaluate(
+        return ArbiterEnforcePolicy.evaluateAt(
             arbiterEnforce = true,
             // 过期的裁决（引擎超过 10 分钟没给新的）不执法，退回旧路径。
-            decision = current?.takeIf { ArbiterDecision.isFresh(receivedAt, System.currentTimeMillis()) },
+            decision = current,
+            receivedAt = receivedAt,
+            now = System.currentTimeMillis(),
             pkg = p,
             neverLock = p.isNotEmpty() && LockSafety.neverLock(ctx, p),
             disarmed = LockSafety.disarmed(ctx),
@@ -133,7 +165,7 @@ object ArbiterShadow {
         if (!enforceEnabled(ctx)) return false
         val p = pkg?.trim().orEmpty()
         if (p.isEmpty()) return false
-        val d = current?.takeIf { ArbiterDecision.isFresh(receivedAt, System.currentTimeMillis()) } ?: return false
+        val d = currentFresh() ?: return false
         return p in d.needPass
     }
 
@@ -143,6 +175,9 @@ object ArbiterShadow {
     }
 
     fun current(): ArbiterDecision? = current
+
+    fun currentFresh(now: Long = System.currentTimeMillis()): ArbiterDecision? =
+        current?.takeIf { ArbiterDecision.isFresh(receivedAt, now) }
 
     /** 底座：永不锁那一层，加上系统自带的 App（宁可放过）。 */
     fun isBase(ctx: Context, pkg: String): Boolean =

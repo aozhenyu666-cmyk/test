@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import '../models/guard_models.dart';
+import 'bridge_local_sync.dart';
 
 class WindowClassification {
   const WindowClassification({
@@ -52,7 +53,7 @@ class RuleEditResult {
 class RuleEngine {
   static const int _beijingOffsetMs = 8 * 3600 * 1000;
 
-  static const Set<String> neverBlockProcesses = {
+  static const Set<String> _systemNeverBlockProcesses = {
     'dsh_go_fish_pc',
     'dsh_fish_watchdog',
     'explorer',
@@ -71,6 +72,30 @@ class RuleEngine {
     'runtimebroker',
   };
 
+  static const Set<String> neverBlockProcesses = {
+    ..._systemNeverBlockProcesses,
+    'obsidian',
+    'code',
+    'cursor',
+    'antigravity',
+    'windowsterminal',
+    'wt',
+    'pwsh',
+    'powershell',
+    'cmd',
+    'node',
+    'python',
+    'pythonw',
+    'tailscale',
+    'tailscaled',
+    'clash',
+    'clash-verge',
+    'mihomo',
+    'nekobox',
+    'nekoray',
+    'v2rayn',
+  };
+
   static const Set<String> browserProcesses = {
     'chrome',
     'msedge',
@@ -82,6 +107,9 @@ class RuleEngine {
     'arc',
     '360chrome',
     'qqbrowser',
+    'chromium',
+    'sogouexplorer',
+    'centbrowser',
   };
 
   static const String _challengeAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -101,6 +129,23 @@ class RuleEngine {
 
   static bool isBrowserApp(String app) {
     return browserProcesses.contains(normalizeApp(app));
+  }
+
+  /// Hard safety invariant: only explicit standalone entertainment/game client
+  /// exes in [GuardRulesConfig.blockedApps] may be terminated; browsers,
+  /// never-block processes, work tools, and keyword-matched multi-purpose apps
+  /// must always downgrade to [EnforcementAction.minimizeAndShield].
+  static bool canTerminateProcess(String app, GuardRulesConfig rules) {
+    final norm = normalizeApp(app);
+    if (norm.isEmpty || isNeverBlockApp(norm) || isBrowserApp(norm)) {
+      return false;
+    }
+    final workSet = rules.workApps.map(normalizeApp).toSet();
+    if (workSet.contains(norm)) {
+      return false;
+    }
+    final blockedSet = rules.blockedApps.map(normalizeApp).toSet();
+    return blockedSet.contains(norm);
   }
 
   static String beijingDayKey(int utcMs) {
@@ -152,7 +197,7 @@ class RuleEngine {
     required GuardRulesConfig rules,
   }) {
     final normApp = normalizeApp(app);
-    if (isNeverBlockApp(normApp)) {
+    if (normApp.isEmpty || _systemNeverBlockProcesses.contains(normApp)) {
       return WindowClassification(
         normalizedApp: normApp,
         tier: ActivityTier.neverBlock,
@@ -160,6 +205,15 @@ class RuleEngine {
     }
 
     final workSet = rules.workApps.map(normalizeApp).toSet();
+    if (isNeverBlockApp(normApp)) {
+      return WindowClassification(
+        normalizedApp: normApp,
+        tier: workSet.contains(normApp)
+            ? ActivityTier.work
+            : ActivityTier.neverBlock,
+      );
+    }
+
     if (workSet.contains(normApp)) {
       return WindowClassification(
         normalizedApp: normApp,
@@ -168,7 +222,7 @@ class RuleEngine {
     }
 
     final blockedSet = rules.blockedApps.map(normalizeApp).toSet();
-    if (blockedSet.contains(normApp)) {
+    if (!isBrowserApp(normApp) && blockedSet.contains(normApp)) {
       return WindowClassification(
         normalizedApp: normApp,
         tier: ActivityTier.blocked,
@@ -267,12 +321,22 @@ class RuleEngine {
     required AiProviderConfig aiConfig,
     required Map<String, AiJudgmentRecord> aiCache,
     required int nowUtcMs,
+    PhoneBridgeSnapshot? phoneBridge,
+    bool phoneLockSyncEnabled = false,
   }) {
     if (isAfk) {
       return const EnforcementDecision(
         allowed: true,
         action: EnforcementAction.none,
         reason: '离开键盘（AFK）',
+      );
+    }
+
+    if (isNeverBlockApp(app)) {
+      return const EnforcementDecision(
+        allowed: true,
+        action: EnforcementAction.none,
+        reason: '系统底座或核心工具白名单',
       );
     }
 
@@ -294,11 +358,24 @@ class RuleEngine {
       );
     }
 
+    final phoneSyncEffective =
+        phoneLockSyncEnabled && phoneBridge != null && phoneBridge.isEffective;
+    if (phoneSyncEffective &&
+        phoneBridge.directive == PhoneSyncDirective.relax) {
+      return EnforcementDecision(
+        allowed: true,
+        action: EnforcementAction.none,
+        reason: '手机同步放行：${phoneBridge.reason}',
+      );
+    }
+
     final inCurfew = isInNightCurfew(rules, nowUtcMs);
     final inFocus = focusSession.isActiveAt(nowUtcMs);
     final quotaExhausted =
         ledger.entertainmentMinutes >= rules.dailyEntertainmentLimitMin;
-    final mustEnforce = inCurfew || inFocus || quotaExhausted;
+    final phoneTighten =
+        phoneSyncEffective && phoneBridge.directive == PhoneSyncDirective.tighten;
+    final mustEnforce = inCurfew || inFocus || quotaExhausted || phoneTighten;
 
     if (!mustEnforce) {
       return const EnforcementDecision(
@@ -308,19 +385,21 @@ class RuleEngine {
       );
     }
 
-    final triggerPrefix = inFocus
-        ? '专注锁进行中（${focusSession.taskName.isEmpty ? "专注时段" : focusSession.taskName}）'
-        : inCurfew
-            ? '深夜宵禁时段（${formatMinuteOfDay(rules.nightCurfewStartMin)}-${formatMinuteOfDay(rules.nightCurfewEndMin)}）'
-            : '今日娱乐额度已耗尽（${ledger.entertainmentMinutes.toStringAsFixed(0)}/${rules.dailyEntertainmentLimitMin} 分钟）';
+    final triggerPrefix = phoneTighten
+        ? phoneBridge.reason
+        : inFocus
+            ? '专注锁进行中（${focusSession.taskName.isEmpty ? "专注时段" : focusSession.taskName}）'
+            : inCurfew
+                ? '深夜宵禁时段（${formatMinuteOfDay(rules.nightCurfewStartMin)}-${formatMinuteOfDay(rules.nightCurfewEndMin)}）'
+                : '今日娱乐额度已耗尽（${ledger.entertainmentMinutes.toStringAsFixed(0)}/${rules.dailyEntertainmentLimitMin} 分钟）';
 
     if (cls.tier == ActivityTier.blocked) {
-      final isBrowser = isBrowserApp(cls.normalizedApp);
+      final allowTerminate = canTerminateProcess(cls.normalizedApp, rules);
       return EnforcementDecision(
         allowed: false,
-        action: isBrowser
-            ? EnforcementAction.minimizeAndShield
-            : EnforcementAction.terminateAndShield,
+        action: allowTerminate
+            ? EnforcementAction.terminateAndShield
+            : EnforcementAction.minimizeAndShield,
         reason: '$triggerPrefix · 禁止访问明确娱乐应用/页面「$app」',
         canRequestAiPass: false,
       );

@@ -1,6 +1,8 @@
 package io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.intercept
 
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.CompanionReleaseTracker
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.DefiancePolicy
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.SessionArbiterPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -147,5 +149,186 @@ class LockStabilizationTest {
         assertFalse(restored.canTrigger("bout-1", elapsed + 200_000L))
         assertFalse(restored.canTrigger("bout-2", elapsed + 200_000L))
         assertTrue(restored.canTrigger("bout-3", elapsed + 200_000L))
+    }
+
+    @Test
+    fun interceptConvergenceRespectsReleaseBufferAndSingleArbiterTruth() {
+        // Unified release and 2.5m bout buffer always preempt arbiter lock
+        assertEquals(
+            InterceptConvergencePolicy.ForegroundAction.UNIFIED_RELEASE,
+            InterceptConvergencePolicy.decideForeground(
+                disarmed = false,
+                neverLock = false,
+                unifiedRelease = true,
+                boutBufferActive = false,
+                arbiterShouldLock = true,
+                arbiterReasonTag = "arbiter_lock",
+            ),
+        )
+        assertEquals(
+            InterceptConvergencePolicy.ForegroundAction.UNIFIED_RELEASE,
+            InterceptConvergencePolicy.decideForeground(
+                disarmed = false,
+                neverLock = false,
+                unifiedRelease = false,
+                boutBufferActive = true,
+                arbiterShouldLock = true,
+                arbiterReasonTag = "arbiter_lock",
+            ),
+        )
+        // When arbiter allows (e.g. free mode / WeChat within quota / allowlist), must NOT fall back to legacy blocking
+        assertEquals(
+            InterceptConvergencePolicy.ForegroundAction.ARBITER_ALLOW,
+            InterceptConvergencePolicy.decideForeground(
+                disarmed = false,
+                neverLock = false,
+                unifiedRelease = false,
+                boutBufferActive = false,
+                arbiterShouldLock = false,
+                arbiterReasonTag = "arbiter_open",
+            ),
+        )
+        // Shadow mode yields ARBITER_SHADOW without real lock
+        assertEquals(
+            InterceptConvergencePolicy.ForegroundAction.ARBITER_SHADOW,
+            InterceptConvergencePolicy.decideForeground(
+                disarmed = false,
+                neverLock = false,
+                unifiedRelease = false,
+                boutBufferActive = false,
+                arbiterShouldLock = false,
+                arbiterReasonTag = "shadow",
+            ),
+        )
+        // Fresh arbiter lock locks cleanly
+        assertEquals(
+            InterceptConvergencePolicy.ForegroundAction.ARBITER_LOCK,
+            InterceptConvergencePolicy.decideForeground(
+                disarmed = false,
+                neverLock = false,
+                unifiedRelease = false,
+                boutBufferActive = false,
+                arbiterShouldLock = true,
+                arbiterReasonTag = "arbiter_lock",
+            ),
+        )
+        // Expired / null arbiter verdict safely falls back
+        assertEquals(
+            InterceptConvergencePolicy.ForegroundAction.LEGACY_FALLBACK,
+            InterceptConvergencePolicy.decideForeground(
+                disarmed = false,
+                neverLock = false,
+                unifiedRelease = false,
+                boutBufferActive = false,
+                arbiterShouldLock = null,
+                arbiterReasonTag = null,
+            ),
+        )
+    }
+
+    @Test
+    fun companionReleaseIgnoresLegacyLocksWhenArbiterAllowsWhileKeepingFocusBoundary() {
+        // Arbiter allows (false) -> legacy proactiveLocked & guardStrictLocked must NOT block reopen
+        val blockedByLegacy = CompanionReleasePolicy.resolveHasOpenOtherLock(
+            arbiterShouldLock = false,
+            proactiveLocked = true,
+            focusLocked = false,
+            guardStrictLocked = true,
+        )
+        assertFalse(blockedByLegacy)
+        assertTrue(CompanionReleasePolicy.shouldReopenTarget("com.tencent.mm", blockedByLegacy, neverLock = false))
+
+        // Native FocusRuntime active independently preserves clear boundary
+        val blockedByFocus = CompanionReleasePolicy.resolveHasOpenOtherLock(
+            arbiterShouldLock = false,
+            proactiveLocked = false,
+            focusLocked = true,
+            guardStrictLocked = false,
+        )
+        assertTrue(blockedByFocus)
+        assertFalse(CompanionReleasePolicy.shouldReopenTarget("com.tencent.mm", blockedByFocus, neverLock = false))
+
+        // Fallback (arbiterShouldLock == null) respects legacy rules
+        assertTrue(
+            CompanionReleasePolicy.resolveHasOpenOtherLock(
+                arbiterShouldLock = null,
+                proactiveLocked = true,
+                focusLocked = false,
+                guardStrictLocked = false,
+            ),
+        )
+    }
+
+    @Test
+    fun sessionArbiterAndDefiancePoliciesPreventLegacyMultiHeadLocking() {
+        assertEquals(
+            SessionArbiterPolicy.Action.UNIFIED_RELEASE,
+            SessionArbiterPolicy.decide(
+                unifiedRelease = true,
+                disarmed = false,
+                neverLock = false,
+                arbiterShouldLock = true,
+                arbiterReasonTag = "arbiter_lock",
+            ),
+        )
+        // Arbiter allows -> session must NOT trigger legacy graceHint/lockInSession
+        assertEquals(
+            SessionArbiterPolicy.Action.ARBITER_OPEN,
+            SessionArbiterPolicy.decide(
+                unifiedRelease = false,
+                disarmed = false,
+                neverLock = false,
+                arbiterShouldLock = false,
+                arbiterReasonTag = "arbiter_open",
+            ),
+        )
+        assertEquals(
+            SessionArbiterPolicy.Action.LEGACY_SESSION,
+            SessionArbiterPolicy.decide(
+                unifiedRelease = false,
+                disarmed = false,
+                neverLock = false,
+                arbiterShouldLock = null,
+                arbiterReasonTag = null,
+            ),
+        )
+
+        // Defiance check: arbiter open overrides legacy listed=true; unified release always false
+        assertFalse(
+            DefiancePolicy.isDefiant(
+                screenOn = true,
+                unifiedRelease = false,
+                arbiterShouldLock = false,
+                legacyListed = true,
+                hasLegacyPass = false,
+            ),
+        )
+        assertFalse(
+            DefiancePolicy.isDefiant(
+                screenOn = true,
+                unifiedRelease = true,
+                arbiterShouldLock = true,
+                legacyListed = true,
+                hasLegacyPass = false,
+            ),
+        )
+        assertTrue(
+            DefiancePolicy.isDefiant(
+                screenOn = true,
+                unifiedRelease = false,
+                arbiterShouldLock = true,
+                legacyListed = false,
+                hasLegacyPass = true,
+            ),
+        )
+        assertTrue(
+            DefiancePolicy.isDefiant(
+                screenOn = true,
+                unifiedRelease = false,
+                arbiterShouldLock = null,
+                legacyListed = true,
+                hasLegacyPass = false,
+            ),
+        )
     }
 }

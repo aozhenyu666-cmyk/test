@@ -39,6 +39,7 @@ class _PlanHubPageState extends State<PlanHubPage> {
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
   Map<String, dynamic> _today = const {};
   Map<String, dynamic>? _seals;
+  bool? _arbiterEnforce;
   bool _loading = true;
   int _cardRefreshTick = 0;
 
@@ -52,6 +53,9 @@ class _PlanHubPageState extends State<PlanHubPage> {
     if (!fromInit && mounted) setState(() => _cardRefreshTick++);
     unawaited(_channel.sealsOp({'action': 'list'}).then((r) {
       if (mounted && r != null && r['ok'] == true) setState(() => _seals = r);
+    }).catchError((_) {}));
+    unawaited(_channel.arbiterEnforce().then((v) {
+      if (mounted && v != null) setState(() => _arbiterEnforce = v);
     }).catchError((_) {}));
     final t = await _channel.todayStatus();
     if (!mounted) return;
@@ -95,6 +99,12 @@ class _PlanHubPageState extends State<PlanHubPage> {
       for (final h in [...med, ...long])
         if (RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch('${h['due'] ?? ''}') && '${h['due']}'.compareTo(todayYmd) >= 0) h,
     ]..sort((a, b) => '${a['due']}'.compareTo('${b['due']}'));
+    final statusMap = _today['status'] is Map ? _today['status'] as Map : null;
+    final arbiterRaw =
+        _seals?['arbiterEnforce'] ?? _today['arbiterEnforce'] ?? statusMap?['arbiterEnforce'] ?? _arbiterEnforce;
+    final arbiterEnforce = arbiterRaw is bool ? arbiterRaw : true;
+    final gaRaw = _seals?['geminiAccounting'] ?? _today['geminiAccounting'];
+    final geminiSummary = gaRaw is Map ? '${gaRaw['summaryLine'] ?? ''}'.trim() : '';
 
     return AppPage.list(
       title: '计划',
@@ -112,6 +122,38 @@ class _PlanHubPageState extends State<PlanHubPage> {
           trailing: due.isEmpty
               ? null
               : StatusChip(tone: StatusTone.warn, label: '最近截止 ${'${due.first['due']}'.substring(5)}'),
+          footer: Padding(
+            padding: const EdgeInsets.only(left: OverviewCard.inset),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                StatusChip(
+                  key: const ValueKey('plan-arbiter-chip'),
+                  tone: arbiterEnforce ? StatusTone.ok : StatusTone.idle,
+                  label: arbiterEnforce ? '单一裁决器执法中' : '影子模式',
+                ),
+                if (geminiSummary.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(AppIcons.askAi, size: 13, color: colors.textTertiary),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          geminiSummary,
+                          key: const ValueKey('plan-gemini-summary'),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
         NodMenuCard(
           key: const ValueKey('plan-nod-slot'),

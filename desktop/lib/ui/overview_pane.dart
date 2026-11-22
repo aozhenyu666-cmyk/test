@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/guard_models.dart';
+import '../services/bridge_local_sync.dart';
 import '../services/pc_guard_controller.dart';
 import '../services/rule_engine.dart';
 import '../theme/mist_theme.dart';
@@ -234,6 +235,8 @@ class _OverviewPaneState extends State<OverviewPane> {
           ],
         ),
         const SizedBox(height: 12),
+        _buildBridgeSyncCard(context, c, now),
+        const SizedBox(height: 12),
         MistGlassSurface(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -359,6 +362,90 @@ class _OverviewPaneState extends State<OverviewPane> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildBridgeSyncCard(
+    BuildContext context,
+    PcGuardController c,
+    int now,
+  ) {
+    final syncedOnline = c.phoneLockSyncEnabled && c.bridgeState.isSyncedOnline;
+    final ageSec = c.bridgeState.syncAgeSecondsAt(now);
+    final statusText = !c.phoneLockSyncEnabled
+        ? '独立运行（已关闭手机跟锁）'
+        : syncedOnline
+            ? '手机桥：在线（同步于 $ageSec 秒前）'
+            : '独立运行（未连本机桥）';
+
+    final statusColor = syncedOnline
+        ? switch (c.bridgeState.directive) {
+            PhoneSyncDirective.tighten => MistColors.crimson,
+            PhoneSyncDirective.relax => MistColors.emerald,
+            PhoneSyncDirective.none => MistColors.cobalt,
+          }
+        : MistColors.inkMuted;
+
+    return MistGlassSurface(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                syncedOnline
+                    ? Icons.phonelink_lock_rounded
+                    : Icons.phonelink_off_rounded,
+                color: syncedOnline ? MistColors.cobalt : MistColors.inkMuted,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  statusText,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              if (syncedOnline && c.bridgeState.reason.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: statusColor.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Text(
+                    c.bridgeState.reason,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: statusColor,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text(
+              '自愿跟锁手机（127.0.0.1:8788 本机桥联动）',
+              style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text(
+              '开启后每 20 秒同步手机封印/默认验收/深夜锁/晚间封顶并同步放行花余额放风/紧急解除/恢复日；桥离线时自动退回 PC 独立规则',
+              style: TextStyle(fontSize: 12),
+            ),
+            value: c.phoneLockSyncEnabled,
+            onChanged: (v) => c.setPhoneLockSyncEnabled(v),
+          ),
+        ],
+      ),
     );
   }
 

@@ -103,9 +103,11 @@ bool IsProtectedProcessBasename(const std::string& lower_base) {
       "sihost",
       "taskmgr",
       "taskhostw",
+      "runtimebroker",
       "ctfmon",
       "textinputhost",
       "searchhost",
+      "searchapp",
       "startmenuexperiencehost",
       "shellexperiencehost",
       "lockapp",
@@ -120,14 +122,32 @@ bool IsProtectedProcessBasename(const std::string& lower_base) {
       "code",
       "cursor",
       "windsurf",
+      "antigravity",
       "obsidian",
+      "node",
+      "python",
+      "pythonw",
+      "tailscale",
+      "tailscaled",
+      "clash",
+      "clash-verge",
+      "mihomo",
+      "nekobox",
+      "nekoray",
+      "v2rayn",
       "chrome",
       "msedge",
+      "edge",
       "firefox",
       "brave",
       "vivaldi",
       "opera",
       "arc",
+      "360chrome",
+      "qqbrowser",
+      "chromium",
+      "sogouexplorer",
+      "centbrowser",
       "dsh_go_fish_pc",
       "dsh_fish_watchdog",
   };
@@ -607,6 +627,9 @@ void FlutterWindow::SetupWin32Channel() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (!prevent_close_) {
+    SignalWatchdogStopEvent();
+  }
   RemoveTrayIcon();
   win32_channel_ = nullptr;
   if (flutter_controller_) {
@@ -619,6 +642,22 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_QUERYENDSESSION) {
+    // Never block Windows shutdown, restart, or logoff.
+    return TRUE;
+  }
+
+  if (message == WM_ENDSESSION) {
+    if (wparam != FALSE) {
+      SignalWatchdogStopEvent();
+      prevent_close_ = false;
+      shield_topmost_ = false;
+      RemoveTrayIcon();
+      ::DestroyWindow(hwnd);
+    }
+    return 0;
+  }
+
   if (prevent_close_ &&
       (message == WM_CLOSE ||
        (message == WM_SYSCOMMAND && (wparam & 0xFFF0) == SC_CLOSE))) {

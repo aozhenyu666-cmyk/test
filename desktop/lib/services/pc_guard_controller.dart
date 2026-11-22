@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/guard_models.dart';
 import 'ai_judge_service.dart';
+import 'bridge_local_sync.dart';
 import 'file_secret_store.dart';
 import 'rule_engine.dart';
 import 'win32_bridge.dart';
@@ -27,22 +28,26 @@ class PcGuardController extends ChangeNotifier {
     FileSecretStore? store,
     Win32Bridge? win32,
     AiJudgeService? aiJudge,
+    BridgeLocalSync? bridgeSync,
     int Function()? nowUtcMs,
     this.afkThresholdSec = 180,
   })  : store = store ?? FileSecretStore(),
         win32 = win32 ?? Win32Bridge(),
         aiJudge = aiJudge ?? AiJudgeService(),
+        bridgeSync = bridgeSync ?? BridgeLocalSync(),
         _nowUtcMs =
             nowUtcMs ?? (() => DateTime.now().toUtc().millisecondsSinceEpoch);
 
   final FileSecretStore store;
   final Win32Bridge win32;
   final AiJudgeService aiJudge;
+  final BridgeLocalSync bridgeSync;
   final int Function() _nowUtcMs;
   final int afkThresholdSec;
 
   static const int maxEmergencyPassesPerDay = 2;
   static const int emergencyPassMinutes = 5;
+  static const int bridgeSyncIntervalMs = 20 * 1000;
 
   int get currentNowUtcMs => _nowUtcMs();
 
@@ -52,6 +57,8 @@ class PcGuardController extends ChangeNotifier {
   List<StudyLease> activeLeases = const [];
   AiProviderConfig aiConfig = const AiProviderConfig();
   String aiApiKey = '';
+  bool phoneLockSyncEnabled = true;
+  PhoneBridgeSnapshot bridgeState = const PhoneBridgeSnapshot.offline();
 
   LatestWindowSample? latestSample;
   ActiveBlockState? activeBlock;
@@ -64,6 +71,8 @@ class PcGuardController extends ChangeNotifier {
 
   Timer? _loopTimer;
   bool _tickBusy = false;
+  bool _bridgeSyncBusy = false;
+  int _lastBridgeSyncAttemptUtcMs = 0;
   int _lastTickUtcMs = 0;
   int _tickCount = 0;
   final Set<String> _inFlightAiKeys = <String>{};
@@ -136,6 +145,11 @@ class PcGuardController extends ChangeNotifier {
     }
     aiApiKey = await store.readSecret('ai_api_key') ?? '';
 
+    final bridgeJson = await store.readJsonFile('bridge_sync_config.json');
+    if (bridgeJson.containsKey('phoneLockSyncEnabled')) {
+      phoneLockSyncEnabled = bridgeJson['phoneLockSyncEnabled'] != false;
+    }
+
     await store.clearAuthorizedExitFlag();
 
     final watchdogRestarts = await store.consumeWatchdogRestartLog();
@@ -161,9 +175,50 @@ class PcGuardController extends ChangeNotifier {
     await _syncNativeGuardState();
 
     if (autoStartLoop) {
+      if (phoneLockSyncEnabled) {
+        unawaited(syncBridgeNow());
+      }
       startLoop();
     }
     notifyListeners();
+  }
+
+  Future<void> setPhoneLockSyncEnabled(bool enabled) async {
+    phoneLockSyncEnabled = enabled;
+    await store.writeJsonFile('bridge_sync_config.json', {
+      'phoneLockSyncEnabled': enabled,
+      'updatedAtUtcMs': _nowUtcMs(),
+    });
+    _appendLog(
+      _nowUtcMs(),
+      'bridge_sync',
+      enabled ? '已开启手机本机桥自愿跟锁（127.0.0.1:8788）' : '已关闭手机跟锁，切回 PC 独立规则',
+    );
+    if (enabled) {
+      unawaited(syncBridgeNow());
+    } else {
+      bridgeState = const PhoneBridgeSnapshot.offline();
+    }
+    notifyListeners();
+  }
+
+  Future<void> syncBridgeNow() async {
+    if (_bridgeSyncBusy || !phoneLockSyncEnabled) return;
+    _bridgeSyncBusy = true;
+    _lastBridgeSyncAttemptUtcMs = _nowUtcMs();
+    try {
+      final next = await bridgeSync.fetchToday();
+      bridgeState = next;
+      if (activeBlock != null &&
+          next.isEffective &&
+          next.directive == PhoneSyncDirective.relax) {
+        activeBlock = null;
+        await win32.setShieldTopmost(false);
+      }
+      notifyListeners();
+    } finally {
+      _bridgeSyncBusy = false;
+    }
   }
 
   void startLoop() {
@@ -269,7 +324,13 @@ class PcGuardController extends ChangeNotifier {
         );
       }
 
-      // 7. Heartbeat watchdog supervision & periodic persistence
+      // 7. Heartbeat watchdog supervision, periodic bridge sync & persistence
+      if (sensorRunning &&
+          phoneLockSyncEnabled &&
+          (_lastBridgeSyncAttemptUtcMs == 0 ||
+              now - _lastBridgeSyncAttemptUtcMs >= bridgeSyncIntervalMs)) {
+        unawaited(syncBridgeNow());
+      }
       if (rules.strictGuardArmed && _tickCount % 3 == 0) {
         unawaited(
           win32.ensureWatchdog(
@@ -282,14 +343,23 @@ class PcGuardController extends ChangeNotifier {
         await _persistLedger();
       }
 
-      // 8. Auto-dismiss shield if user switched back to work window
-      if (activeBlock != null && !snap.selfActive && cls.tier == ActivityTier.work) {
+      // 8. Auto-dismiss shield if user switched back to work window or phone relaxed
+      final phoneRelaxed = phoneLockSyncEnabled &&
+          bridgeState.isEffective &&
+          bridgeState.directive == PhoneSyncDirective.relax;
+      if (activeBlock != null &&
+          !snap.selfActive &&
+          (cls.tier == ActivityTier.work || phoneRelaxed)) {
         activeBlock = null;
         await win32.setShieldTopmost(false);
       }
 
       // 9. Enforcement decision (skip self window)
       if (!snap.selfActive && snap.app.trim().isNotEmpty) {
+        final effectiveAiConfig =
+            AiJudgeService.hasUsableCredentials(aiConfig, aiApiKey)
+                ? aiConfig
+                : aiConfig.copyWith(enabled: false);
         final decision = RuleEngine.evaluateEnforcement(
           app: snap.app,
           title: snap.title,
@@ -298,9 +368,11 @@ class PcGuardController extends ChangeNotifier {
           ledger: ledger,
           focusSession: focusSession,
           activeLeases: activeLeases,
-          aiConfig: aiConfig,
+          aiConfig: effectiveAiConfig,
           aiCache: aiJudge.cacheView,
           nowUtcMs: now,
+          phoneBridge: bridgeState,
+          phoneLockSyncEnabled: phoneLockSyncEnabled,
         );
 
         switch (decision.action) {
@@ -440,10 +512,17 @@ class PcGuardController extends ChangeNotifier {
             'ai_lease',
             'AI 判定非学习用途（${snap.app}）：${rec.reason}',
           );
+        } else if (rec.source == 'fallback') {
+          _appendLog(
+            _nowUtcMs(),
+            'ai_fallback',
+            'AI 不可用已回退纯规则引擎（${snap.app}）：${rec.reason}',
+          );
         }
         await _persistLedger();
       } catch (e) {
-        statusBanner = 'AI 裁决请求失败：$e';
+        statusBanner =
+            'AI 裁决请求失败：${AiJudgeService.sanitizeError(e, aiApiKey)}';
       } finally {
         _inFlightAiKeys.remove(cacheKey);
         aiRequestBusy = false;
@@ -459,7 +538,13 @@ class PcGuardController extends ChangeNotifier {
     required String actionKind,
     required int nowUtcMs,
   }) async {
-    if (actionKind == 'terminateAndShield') {
+    // Hard invariant: browsers, neverBlock processes, work apps, and
+    // keyword-only matches must never be terminated via TerminateProcess.
+    final safeActionKind = (actionKind == 'terminateAndShield' &&
+            RuleEngine.canTerminateProcess(cls.normalizedApp, rules))
+        ? 'terminateAndShield'
+        : 'minimizeAndShield';
+    if (safeActionKind == 'terminateAndShield') {
       await win32.terminateProcess(snap.pid, cls.normalizedApp);
     } else {
       await win32.minimizeWindow(snap.hwnd);
@@ -471,7 +556,7 @@ class PcGuardController extends ChangeNotifier {
       title: snap.title,
       tier: cls.tier,
       reason: decision.reason,
-      actionKind: actionKind,
+      actionKind: safeActionKind,
       canRequestAiPass: decision.canRequestAiPass,
       triggeredAtUtcMs: nowUtcMs,
       actionHint: decision.actionHint,
@@ -485,7 +570,7 @@ class PcGuardController extends ChangeNotifier {
       _appendLog(
         nowUtcMs,
         'block',
-        '[$actionKind] ${snap.app}「${snap.title}」-> ${decision.reason}',
+        '[$safeActionKind] ${snap.app}「${snap.title}」-> ${decision.reason}',
       );
       await _persistLedger();
     }
@@ -615,6 +700,10 @@ class PcGuardController extends ChangeNotifier {
   Future<({bool ok, String message})> dismissShieldAfterReturningToWork() async {
     final snap = await win32.getForeground();
     if (snap != null && !snap.selfActive && snap.app.trim().isNotEmpty) {
+      final effectiveAiConfig =
+          AiJudgeService.hasUsableCredentials(aiConfig, aiApiKey)
+              ? aiConfig
+              : aiConfig.copyWith(enabled: false);
       final decision = RuleEngine.evaluateEnforcement(
         app: snap.app,
         title: snap.title,
@@ -623,9 +712,11 @@ class PcGuardController extends ChangeNotifier {
         ledger: ledger,
         focusSession: focusSession,
         activeLeases: activeLeases,
-        aiConfig: aiConfig,
+        aiConfig: effectiveAiConfig,
         aiCache: aiJudge.cacheView,
         nowUtcMs: _nowUtcMs(),
+        phoneBridge: bridgeState,
+        phoneLockSyncEnabled: phoneLockSyncEnabled,
       );
       if (!decision.allowed) {
         return (
@@ -693,7 +784,10 @@ class PcGuardController extends ChangeNotifier {
       await _persistLedger();
       return (ok: false, message: 'AI 拒绝放行：${eval.reason}');
     } catch (e) {
-      return (ok: false, message: 'AI 审批请求失败：$e');
+      return (
+        ok: false,
+        message: 'AI 审批请求失败：${AiJudgeService.sanitizeError(e, aiApiKey)}',
+      );
     } finally {
       aiRequestBusy = false;
       notifyListeners();
@@ -853,7 +947,7 @@ class PcGuardController extends ChangeNotifier {
         CoachMessage(
           isUser: false,
           speaker: '系统',
-          text: 'AI 请求失败：$e',
+          text: 'AI 请求失败：${AiJudgeService.sanitizeError(e, aiApiKey)}',
           atUtcMs: _nowUtcMs(),
         ),
       );

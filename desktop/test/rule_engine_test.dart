@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:dsh_go_fish_pc/models/guard_models.dart';
+import 'package:dsh_go_fish_pc/services/bridge_local_sync.dart';
 import 'package:dsh_go_fish_pc/services/rule_engine.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -235,5 +236,214 @@ void main() {
     expect(c48.length, 48);
     expect(c80.length, 80);
     expect(c80.contains(RegExp(r'[01IOL]')), isFalse);
+  });
+
+  test('browsers and neverBlock/desktop-stack tools can never be terminated even if misconfigured', () {
+    final now = DateTime.utc(2026, 11, 19, 6, 0).millisecondsSinceEpoch;
+    // Even if someone puts chrome or obsidian into blockedApps, safety invariants hold.
+    final hostileRules = const GuardRulesConfig(dailyEntertainmentLimitMin: 0).copyWith(
+      blockedApps: [
+        ...GuardRulesConfig.defaultBlockedApps,
+        'chrome',
+        'msedge',
+        'firefox',
+        'obsidian',
+        'nekobox',
+      ],
+    );
+
+    // Every desktop stack process in neverBlockProcesses is never blocked or terminated.
+    for (final tool in const [
+      'obsidian',
+      'code',
+      'cursor',
+      'antigravity',
+      'windowsterminal',
+      'pwsh',
+      'powershell',
+      'cmd',
+      'node',
+      'python',
+      'tailscale',
+      'clash',
+      'mihomo',
+      'nekobox',
+      'v2rayn',
+    ]) {
+      expect(RuleEngine.isNeverBlockApp(tool), isTrue, reason: tool);
+      expect(RuleEngine.canTerminateProcess(tool, hostileRules), isFalse, reason: tool);
+      final dec = RuleEngine.evaluateEnforcement(
+        app: tool,
+        title: '抖音测试标题',
+        isAfk: false,
+        rules: hostileRules,
+        ledger: const UsageLedger(dayKey: '2026-11-19'),
+        focusSession: const FocusSessionState(),
+        activeLeases: const [],
+        aiConfig: const AiProviderConfig(),
+        aiCache: const {},
+        nowUtcMs: now,
+      );
+      expect(dec.allowed, isTrue, reason: tool);
+    }
+
+    // Browsers must always downgrade to minimizeAndShield, never terminateAndShield.
+    for (final browser in RuleEngine.browserProcesses) {
+      expect(RuleEngine.canTerminateProcess(browser, hostileRules), isFalse, reason: browser);
+      final dec = RuleEngine.evaluateEnforcement(
+        app: browser,
+        title: '抖音网页版',
+        isAfk: false,
+        rules: hostileRules,
+        ledger: const UsageLedger(dayKey: '2026-11-19'),
+        focusSession: const FocusSessionState(),
+        activeLeases: const [],
+        aiConfig: const AiProviderConfig(),
+        aiCache: const {},
+        nowUtcMs: now,
+      );
+      expect(dec.allowed, isFalse, reason: browser);
+      expect(dec.action, EnforcementAction.minimizeAndShield, reason: browser);
+    }
+
+    // Browser learning/knowledge titles are classified as work and always allowed.
+    for (final kw in const [
+      'Gemini',
+      'Claude',
+      'ChatGPT',
+      'DeepTutor',
+      'http://127.0.0.1:8001/chat',
+      'GitHub - repo',
+      'Obsidian 笔记',
+      '粉笔模考',
+      '行测',
+      '申论',
+      '资料分析',
+      '判断推理',
+      '面试准备',
+      '简历修改',
+      '考公',
+      '牛客网',
+      'LeetCode',
+    ]) {
+      final cls = RuleEngine.classifyWindow(
+        app: 'msedge',
+        title: kw,
+        rules: hostileRules,
+      );
+      expect(cls.tier, ActivityTier.work, reason: kw);
+    }
+
+    // Multi-purpose app matched only by blocked keyword also downgrades to minimizeAndShield.
+    final weixinDec = RuleEngine.evaluateEnforcement(
+      app: 'weixin',
+      title: '抖音分享链接',
+      isAfk: false,
+      rules: hostileRules,
+      ledger: const UsageLedger(dayKey: '2026-11-19'),
+      focusSession: const FocusSessionState(),
+      activeLeases: const [],
+      aiConfig: const AiProviderConfig(),
+      aiCache: const {},
+      nowUtcMs: now,
+    );
+    expect(weixinDec.allowed, isFalse);
+    expect(weixinDec.action, EnforcementAction.minimizeAndShield);
+  });
+
+  test('evaluateEnforcement synchronizes tightening and relaxation from local phone bridge', () {
+    final now = DateTime.utc(2026, 11, 19, 6, 0).millisecondsSinceEpoch;
+    const rules = GuardRulesConfig(dailyEntertainmentLimitMin: 60);
+    const ledgerOk = UsageLedger(dayKey: '2026-11-19', entertainmentSeconds: 5 * 60);
+    const ledgerExhausted = UsageLedger(dayKey: '2026-11-19', entertainmentSeconds: 60 * 60);
+
+    // Phone tighten (overdue seal lock) blocks Steam even though PC quota remains.
+    const phoneTight = PhoneBridgeSnapshot(
+      bridgeOnline: true,
+      phoneOnline: true,
+      syncedAtUtcMs: 1000,
+      fetchedAtUtcMs: 2000,
+      directive: PhoneSyncDirective.tighten,
+      reason: '手机封印逾期严格锁：「资料分析」（0/20，最晚 15:00）',
+    );
+    final blockedByPhone = RuleEngine.evaluateEnforcement(
+      app: 'steam',
+      title: 'Steam',
+      isAfk: false,
+      rules: rules,
+      ledger: ledgerOk,
+      focusSession: const FocusSessionState(),
+      activeLeases: const [],
+      aiConfig: const AiProviderConfig(),
+      aiCache: const {},
+      nowUtcMs: now,
+      phoneBridge: phoneTight,
+      phoneLockSyncEnabled: true,
+    );
+    expect(blockedByPhone.allowed, isFalse);
+    expect(blockedByPhone.action, EnforcementAction.terminateAndShield);
+    expect(blockedByPhone.reason, contains('手机封印逾期严格锁'));
+
+    // Disabling voluntary toggle reverts immediately to PC independent rules.
+    final ignoredWhenOff = RuleEngine.evaluateEnforcement(
+      app: 'steam',
+      title: 'Steam',
+      isAfk: false,
+      rules: rules,
+      ledger: ledgerOk,
+      focusSession: const FocusSessionState(),
+      activeLeases: const [],
+      aiConfig: const AiProviderConfig(),
+      aiCache: const {},
+      nowUtcMs: now,
+      phoneBridge: phoneTight,
+      phoneLockSyncEnabled: false,
+    );
+    expect(ignoredWhenOff.allowed, isTrue);
+
+    // Phone relax (spend balance / emergency / recovery) relaxes PC block even when PC quota exhausted.
+    const phoneRelax = PhoneBridgeSnapshot(
+      bridgeOnline: true,
+      phoneOnline: true,
+      syncedAtUtcMs: 1000,
+      fetchedAtUtcMs: 2000,
+      directive: PhoneSyncDirective.relax,
+      reason: '手机花余额放风中（20 分钟，至 15:30）',
+    );
+    final relaxedByPhone = RuleEngine.evaluateEnforcement(
+      app: 'chrome',
+      title: '抖音网页版',
+      isAfk: false,
+      rules: rules,
+      ledger: ledgerExhausted,
+      focusSession: const FocusSessionState(),
+      activeLeases: const [],
+      aiConfig: const AiProviderConfig(),
+      aiCache: const {},
+      nowUtcMs: now,
+      phoneBridge: phoneRelax,
+      phoneLockSyncEnabled: true,
+    );
+    expect(relaxedByPhone.allowed, isTrue);
+    expect(relaxedByPhone.reason, contains('手机同步放行'));
+
+    // Offline bridge falls back 100% to PC independent rules.
+    const offline = PhoneBridgeSnapshot.offline();
+    final offlineFallback = RuleEngine.evaluateEnforcement(
+      app: 'chrome',
+      title: '抖音网页版',
+      isAfk: false,
+      rules: rules,
+      ledger: ledgerExhausted,
+      focusSession: const FocusSessionState(),
+      activeLeases: const [],
+      aiConfig: const AiProviderConfig(),
+      aiCache: const {},
+      nowUtcMs: now,
+      phoneBridge: offline,
+      phoneLockSyncEnabled: true,
+    );
+    expect(offlineFallback.allowed, isFalse);
+    expect(offlineFallback.action, EnforcementAction.minimizeAndShield);
   });
 }

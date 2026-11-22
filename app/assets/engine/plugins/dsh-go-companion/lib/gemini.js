@@ -186,3 +186,41 @@ export function geminiLines(state, now = Date.now()) {
   }
   return lines
 }
+
+/**
+ * 4.5 Gemini 温和折算纯记录函数：
+ * 不发硬踢券、不设卡拦截，仅按今日回执统计估算学习时长与无回执时长。
+ */
+export function computeGeminiGentleAccounting({ geminiMinutesToday = 0, receiptsToday = [], floorMetToday = false } = {}) {
+  const totalMin = Math.max(0, Math.round(Number(geminiMinutesToday) || 0))
+  const list = Array.isArray(receiptsToday) ? receiptsToday : []
+  let rawReceiptMin = 0
+  let receiptCount = 0
+  for (const r of list) {
+    if (!r || typeof r !== 'object') continue
+    const v = String(r.verdict || '').toLowerCase().trim()
+    if (v === 'pass') {
+      receiptCount += 1
+      const est = Number(r.minutes)
+      rawReceiptMin += Number.isFinite(est) && est > 0 ? Math.round(est) : 20
+    } else if (v === 'partial') {
+      receiptCount += 1
+      const est = Number(r.minutes)
+      rawReceiptMin += Number.isFinite(est) && est > 0 ? Math.round(est) : 10
+    }
+  }
+  const withReceiptMin = Math.min(totalMin, Math.max(0, rawReceiptMin))
+  const unreceiptedMin = Math.max(0, totalMin - withReceiptMin)
+  const freeMode = floorMetToday === true
+  const summaryLine = freeMode
+    ? `今日保底已达标 · Gemini 自由探索中（已用 ${totalMin}m）`
+    : `今日 Gemini 共 ${totalMin}m（有回执学习约 ${withReceiptMin}m · 无回执 ${unreceiptedMin}m）`
+  return {
+    totalMin,
+    withReceiptMin,
+    unreceiptedMin,
+    receiptCount,
+    freeMode,
+    summaryLine,
+  }
+}

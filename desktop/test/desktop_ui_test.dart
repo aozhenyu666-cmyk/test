@@ -1,10 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dsh_go_fish_pc/main.dart';
+import 'package:dsh_go_fish_pc/services/bridge_local_sync.dart';
 import 'package:dsh_go_fish_pc/services/file_secret_store.dart';
 import 'package:dsh_go_fish_pc/services/pc_guard_controller.dart';
 import 'package:dsh_go_fish_pc/services/win32_bridge.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _UiFakeWin32 extends Win32Bridge {
@@ -89,5 +91,61 @@ void main() {
     expect(find.text('大肥鱼 PC 严防拦截盾'), findsOneWidget);
     expect(find.text('我已关闭娱乐，回到工作'), findsOneWidget);
     expect(find.text('完成反思并继续'), findsNothing);
+  });
+
+  testWidgets('OverviewPane displays bridge offline/online status and voluntary follow-lock toggle', (tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+
+    final tmp = Directory.systemTemp.createTempSync('dsh_pc_bridge_ui_test_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
+    var fakeNow = DateTime.utc(2026, 11, 19, 6, 0).millisecondsSinceEpoch;
+    var online = false;
+    final bridge = BridgeLocalSync(
+      keyResolver: () async => 'dfyl_ui_key',
+      nowUtcMs: () => fakeNow,
+      httpGet: (uri, headers) async {
+        if (!online) throw const SocketException('offline');
+        return (
+          statusCode: 200,
+          body: jsonEncode({
+            'ok': true,
+            'phoneOnline': true,
+            'syncedAt': fakeNow - 12000,
+            'verifier': {'active': true, 'until': '18:00'},
+          }),
+        );
+      },
+    );
+
+    final ctrl = PcGuardController(
+      store: FileSecretStore(tmp),
+      win32: _UiFakeWin32(),
+      bridgeSync: bridge,
+      nowUtcMs: () => fakeNow,
+    );
+    addTearDown(ctrl.dispose);
+
+    await tester.pumpWidget(DshGoFishPcApp(controller: ctrl, autoInit: false));
+    await tester.pump();
+
+    expect(find.text('独立运行（未连本机桥）'), findsOneWidget);
+    expect(find.text('自愿跟锁手机（127.0.0.1:8788 本机桥联动）'), findsOneWidget);
+
+    online = true;
+    await tester.runAsync(() => ctrl.syncBridgeNow());
+    await tester.pump();
+
+    expect(find.text('手机桥：在线（同步于 12 秒前）'), findsOneWidget);
+    expect(find.text('手机默认验收严防中（至 18:00）'), findsOneWidget);
+
+    final toggle = find.byType(Switch);
+    expect(toggle, findsWidgets);
+    await tester.runAsync(() => ctrl.setPhoneLockSyncEnabled(false));
+    await tester.pump();
+
+    expect(find.text('独立运行（已关闭手机跟锁）'), findsOneWidget);
   });
 }

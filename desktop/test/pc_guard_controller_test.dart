@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
+import 'package:dsh_go_fish_pc/models/guard_models.dart';
 import 'package:dsh_go_fish_pc/services/ai_judge_service.dart';
+import 'package:dsh_go_fish_pc/services/bridge_local_sync.dart';
 import 'package:dsh_go_fish_pc/services/file_secret_store.dart';
 import 'package:dsh_go_fish_pc/services/pc_guard_controller.dart';
 import 'package:dsh_go_fish_pc/services/rule_engine.dart';
@@ -279,5 +281,120 @@ void main() {
           .exists(),
       isTrue,
     );
+  });
+
+  test('PcGuardController syncs phone bridge tighten/relax, degrades offline, and never kills browsers', () async {
+    final tmp = await Directory.systemTemp.createTemp('dsh_pc_bridge_ctrl_test_');
+    addTearDown(() => tmp.delete(recursive: true));
+
+    var fakeUtcMs = DateTime.utc(2026, 11, 19, 6, 0).millisecondsSinceEpoch; // 14:00 Beijing
+    var bridgeMode = 'tighten';
+    final fakeWin32 = _FakeWin32Bridge();
+
+    final bridge = BridgeLocalSync(
+      keyResolver: () async => 'dfyl_test_key',
+      nowUtcMs: () => fakeUtcMs,
+      httpGet: (uri, headers) async {
+        if (bridgeMode == 'offline') {
+          throw const SocketException('bridge down');
+        }
+        if (bridgeMode == 'tighten') {
+          return (
+            statusCode: 200,
+            body: jsonEncode({
+              'ok': true,
+              'phoneOnline': true,
+              'syncedAt': fakeUtcMs - 4000,
+              'today': {
+                'locking': {
+                  'id': 'seal-1',
+                  'title': '申论大作文提纲',
+                  'actual': 0,
+                  'floor': 1,
+                  'until': '16:00',
+                },
+              },
+              'verifier': {'active': true, 'until': '16:00'},
+            }),
+          );
+        }
+        return (
+          statusCode: 200,
+          body: jsonEncode({
+            'ok': true,
+            'phoneOnline': true,
+            'syncedAt': fakeUtcMs - 1000,
+            'verifier': {
+              'active': false,
+              'spend': {'minutes': 15, 'until': '14:20'},
+            },
+          }),
+        );
+      },
+    );
+
+    final ctrl = PcGuardController(
+      store: FileSecretStore(tmp),
+      win32: fakeWin32,
+      bridgeSync: bridge,
+      nowUtcMs: () => fakeUtcMs,
+    );
+    addTearDown(ctrl.dispose);
+
+    await ctrl.init(autoStartLoop: false);
+    // Even if chrome is added to blockedApps, it must NEVER be terminated.
+    await ctrl.proposeRulesUpdate(
+      ctrl.rules.copyWith(
+        blockedApps: [...GuardRulesConfig.defaultBlockedApps, 'chrome'],
+      ),
+    );
+
+    // 1. Sync phone tighten -> browser entertainment is minimized & shielded with real phone reason
+    await ctrl.syncBridgeNow();
+    expect(ctrl.bridgeState.isSyncedOnline, isTrue);
+    expect(ctrl.bridgeState.directive, PhoneSyncDirective.tighten);
+
+    fakeWin32.nextForeground = const ForegroundWindowSnapshot(
+      app: 'chrome',
+      title: '抖音网页版',
+      idleSec: 0,
+      selfActive: false,
+      pid: 9001,
+      hwnd: 8001,
+    );
+    await ctrl.tickSensor();
+    expect(ctrl.activeBlock, isNotNull);
+    expect(ctrl.activeBlock!.actionKind, 'minimizeAndShield');
+    expect(ctrl.activeBlock!.reason, contains('申论大作文提纲'));
+    expect(fakeWin32.calls, contains('minimizeWindow:8001'));
+    expect(fakeWin32.calls, isNot(contains('terminateProcess:9001:chrome')));
+
+    // 2. Phone starts spend pass -> relaxes PC block & auto-dismisses shield
+    bridgeMode = 'spend';
+    fakeUtcMs += 20000;
+    await ctrl.syncBridgeNow();
+    expect(ctrl.bridgeState.directive, PhoneSyncDirective.relax);
+    expect(ctrl.activeBlock, isNull);
+    expect(fakeWin32.shieldTopmost, isFalse);
+
+    await ctrl.tickSensor();
+    expect(ctrl.activeBlock, isNull);
+
+    // 3. Bridge offline -> falls back 100% to PC independent rules (within 60m quota -> allowed)
+    bridgeMode = 'offline';
+    fakeUtcMs += 20000;
+    await ctrl.syncBridgeNow();
+    expect(ctrl.bridgeState.bridgeOnline, isFalse);
+    await ctrl.tickSensor();
+    expect(ctrl.activeBlock, isNull);
+
+    // 4. Voluntary toggle can disable & persist follow-lock
+    bridgeMode = 'tighten';
+    await ctrl.setPhoneLockSyncEnabled(false);
+    expect(ctrl.phoneLockSyncEnabled, isFalse);
+    await ctrl.syncBridgeNow();
+    expect(ctrl.bridgeState.isEffective, isFalse);
+    await ctrl.tickSensor();
+    expect(ctrl.activeBlock, isNull);
   });
 }

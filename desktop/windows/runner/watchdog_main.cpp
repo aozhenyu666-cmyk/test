@@ -188,11 +188,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::CloseHandle(mutex);
     return 1;
   }
-  ::ResetEvent(stop_event);
 
   std::vector<ULONGLONG> recent_restarts;
 
   for (;;) {
+    if (!IsStrictArmedInStateDir(state_dir)) {
+      break;
+    }
+
     DWORD wait_rc = ::WaitForSingleObject(stop_event, 1500);
     if (wait_rc == WAIT_OBJECT_0) {
       break;
