@@ -12435,9 +12435,9 @@ export function apply(ctx) {
               sessionActive: gem.inside || Boolean(gem.session),
             },
           )
-          // `post-bout-or-evening` 仅在两条鱼未主动开口时轻量补位，绝不抢占晚间审视/督办话语权
-          const allowSpeakYield = trig.scenario !== 'post-bout-or-evening' || !out.speak
-          if (trig.triggered && trig.state && allowSpeakYield) {
+          // 轻度破冰与晚间压卡仅在两条鱼本次未主动发声时补位；唯独连续撞锁（>=2次）才可在无打架前提出卡点诊断
+          const allowTriggerNow = !out.speak || trig.scenario === 'lock-bounce'
+          if (trig.triggered && trig.state && allowTriggerNow) {
             saveGeminiGate(trig.state)
             recordHardNow({
               kind: 'auto_gemini',
@@ -12468,8 +12468,8 @@ export function apply(ctx) {
         }
       }
     }
-    // 2026-11-20 每一拍只做一件事：拉起了 Gemini 就不再开口（Gemini 就是这一拍的那件事）。
-    if (geminiAutoPull?.triggered && out.speak) {
+    // 2026-11-20 每一拍只做一件事：硬拉起 Gemini 时不再发双鱼球；非强抢提醒卡不抢走既有发声权。
+    if (geminiAutoPull?.triggered && !geminiAutoPull.nonIntrusive && out.speak) {
       nextSpeaker = null
       Object.assign(out, { speak: false, reason: 'gemini-pull' })
     }
