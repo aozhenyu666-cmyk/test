@@ -136,7 +136,7 @@ import {
   stripStrategistAudit, telemetryContradictionHint,
 } from './strategist_audit.js'
 import {
-  collectDepartmentSop, dispatchDepartmentSop, governDepartmentSop, inferDepartment, isValidDepartment,
+  archiveJudgeFile, collectDepartmentSop, dispatchDepartmentSop, governDepartmentSop, inferDepartment, isValidDepartment,
   routeBoutDepartment, strategizeDepartmentSop,
 } from './departments.js'
 import { TIER_AMBIGUOUS, TIER_CONTEXTUAL, TIER_EXEMPT, classifyAppTier, detectDegradedEscape, evaluateContextualExemption } from './app_governance.js'
@@ -167,11 +167,11 @@ import { addCards, cleanPool, dueCards, rateCard, deleteCard, delayedRecall, def
 import { previewIntervals } from './fsrs.js'
 import { addReview, cleanReview, decideReview, parseWeekReview, reviewMarkdown, reviewPromptLines } from './week_review.js'
 import {
-  DEFAULT_BASE_FUN_MIN, DEFAULT_TEMPLATES, applyNodCardOverrides, buildNodCard, checkSpend, checkStart, dayOutcomes, defaultVerify,
-  parseTemplates, recoveryStep, renderTemplates, shouldApplyTemplate, templateSeals, verifyPromptLines, eveningOf, eveningStep,
-  eveningCapFor, setEveningCap, EVENING_END,
+  DAYTIME_SPEND_CAP_MIN, DEFAULT_BASE_FUN_MIN, DEFAULT_TEMPLATES, SPEND_MIN, applyNodCardOverrides, buildNodCard, checkSpend, checkStart,
+  classifySpendWindow, dayOutcomes, defaultVerify, parseTemplates, recoveryStep, renderTemplates, shouldApplyTemplate, templateSeals,
+  verifyPromptLines, eveningOf, eveningStep, eveningCapFor, setEveningCap, EVENING_END,
 } from './verifier_mode.js'
-import { appendInboxEntry, buildStrategizeBundle, readInboxEntries } from './inbox_dept.js'
+import { appendInboxEntry, buildStrategizeBundle, compactInbox, readInboxEntries } from './inbox_dept.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
 import { cardLive, cleanCard, takeoverCard, toggleStep } from './card.js'
 import { noteExcerpts, reflectDue, reflectLines, reflectMarkdown, reflectSlot, reflectSystem, reflectUser, runReflect } from './reflect.js'
@@ -208,6 +208,21 @@ let remountAll = null
 export function setStatePin(id) {
   statePin = id || null
   if (typeof remountAll === 'function') remountAll()
+}
+
+function compactJsonlFile(file, maxBytes = 512 * 1024, keepLines = 300) {
+  try {
+    if (!existsSync(file) || statSync(file).size <= maxBytes) return false
+    const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean)
+    if (lines.length <= keepLines) return false
+    const kept = lines.slice(-keepLines).join('\n') + '\n'
+    const tmp = file + '.' + String(process.pid) + '.tmp'
+    writeFileSync(tmp, kept, { encoding: 'utf8', mode: 0o600 })
+    renameSync(tmp, file)
+    return true
+  } catch {
+    return false
+  }
 }
 import {
   DEFAULT_WALL, wallConfig, wallDecision, mealNow, activeRelax, tightenActive, relaxRemaining, relaxUsedThisWeek, relaxBonus,
@@ -248,6 +263,8 @@ export function apply(ctx) {
   if (typeof rawCfgInit?.arbiterEnforce !== 'boolean') {
     config = { ...config, arbiterEnforce: true }
   }
+  compactJsonlFile(stateFile('ctx-budget.jsonl'), 512 * 1024, 300)
+  compactJsonlFile(stateFile('seals.jsonl'), 512 * 1024, 300)
   let garden = loadGarden(gardenPath())
   // 判球要模型。llm 不在就一直是 undefined，判球自动退回本地规则——不能因为缺服务就不加载插件。
   let llmStream
@@ -1803,8 +1820,9 @@ export function apply(ctx) {
   let lastRhythm = null
   // 2026-11-20 公约挑场景用：上一拍裁决器是不是在锁。
   let lastLockActive = false
-  // 2026-11-21 1.4 止血：记录上一拍是否处于伴侣强制锁态，只在锁态刚转为可放行那一拍发 release: true。
-  let prevCompanionLocked = false
+  // 2026-11-22 P0 修复：伴侣力度锁边沿与裁决器锁边沿分离跟踪，避免默认验收工作窗激活时压死 graceUntil 放行边沿。
+  let prevForceLocked = false
+  let prevArbiterLocked = false
   let lastApplyWindow = null
   /** A4：块结束时该问的那句「这一块记到哪个部」——内容层，30 分钟内有效。 */
   let slotAskNext = null
@@ -2176,6 +2194,7 @@ export function apply(ctx) {
       strict: s.strict !== false,
       graceMs: s.strict === false ? 10_000 : 0,
       mode: s.strict === false ? 'task-lease' : 'ai-work',
+      ...(s.by ? { by: s.by } : {}),
     }
   }
   const taskLeaseView = (now) => {
@@ -3428,7 +3447,8 @@ export function apply(ctx) {
       try {
         const kbDirNow = kbDir(dir, home())
         mkdirSync(kbDirNow, { recursive: true })
-        appendFileSync(join(kbDirNow, JUDGE_FILE), '\n' + digest.join('\n') + '\n', 'utf8')
+        archiveJudgeFile(kbDirNow, { now, tz })
+        appendFileSync(join(kbDirNow, JUDGE_FILE), `\n<!-- stance-digest:${dayString(now, tz)} -->\n` + digest.join('\n') + '\n', 'utf8')
       } catch {
         // 笔记库不可写就只留在账本里
       }
@@ -3759,7 +3779,8 @@ export function apply(ctx) {
         if (!apps.length) return { ok: false, text: skipped.length ? '这些永远不封：' + skipped.join('、') : '没有有效的包名。' }
         const keep = (Array.isArray(config.blockExtra) ? config.blockExtra : []).filter((b) => b && Number(b.until) > now && !apps.includes(b.app))
         commit({ blockExtra: [...keep, ...apps.map((app) => ({ app, until, by: role }))].slice(-30) })
-        record({ state: 'block', at: now, apps, until, by: role, reason: String(args.reason || '').slice(0, 120) })
+        const labels = apps.map((p) => appDisplayLabel(p))
+        record({ state: 'block', at: now, apps, labels, until, by: role, reason: String(args.reason || '').slice(0, 120) })
         return { ok: true, text: '封了 ' + apps.join('、') + '，到 ' + zoneMd(until, zoneOr(config.timeZone)) + ' ' + zoneHm(until, zoneOr(config.timeZone)) + '。' + (skipped.length ? '（' + skipped.join('、') + ' 永远不封）' : '') }
       },
     }
@@ -4666,7 +4687,8 @@ export function apply(ctx) {
           commit({
             blockExtra: [...keep, ...apps.map((app) => ({ app, until, by: callerRole, why: why || '姐妹临时封禁' }))].slice(-30),
           })
-          record({ state: 'dispatch-block', at: now, by: callerRole, apps, minutes: mins, why })
+          const labels = apps.map((p) => appDisplayLabel(p))
+          record({ state: 'dispatch-block', at: now, by: callerRole, apps, labels, minutes: mins, why })
           return { ok: true, text: `已封禁 ${apps.join('、')} ${mins} 分钟，一开即锁。` }
         }
 
@@ -4740,8 +4762,10 @@ export function apply(ctx) {
         additionalProperties: false,
       },
       output: toolOutput,
-      execute: (args = {}) => {
+      execute: (args = {}, execCtx = {}) => {
         const now = Date.now()
+        const callerSid = execCtx?.agent?.session?.id || execCtx?.agent?.id || execCtx?.sessionId || ''
+        const by = callerSid ? speakerOf(callerSid) : (args.by || 'sister')
         const { resolved } = resolveAppNames([args.app], {
           installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : lastInstalled,
           declaredApps: appsOf(),
@@ -4764,7 +4788,8 @@ export function apply(ctx) {
         }
         commit({ appTiers: { ...(config.appTiers || {}), [pkg]: tier } })
         writeTierFile()
-        record({ state: 'app-tier-set', at: now, pkg, from: before, to: tier, loosen, why: String(args.why || '').slice(0, 120) })
+        const label = appDisplayLabel(pkg, args.app)
+        record({ state: 'app-tier-set', at: now, by, pkg, label, from: before, to: tier, loosen, why: String(args.why || '').slice(0, 120) })
         return { ok: true, text: pkg + '：' + TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '（' + (loosen ? '他同意的放松' : '改严，立即生效') + '）。他也可以在 大肥鱼/墙/App分层.md 里改。' }
       },
     }
@@ -7007,7 +7032,9 @@ export function apply(ctx) {
     // 超预算的块要能被看见（规格第 4 条）。落自己的 ctx-budget.jsonl，不塞 ledger.jsonl：
     // 账本那边有按行位置断言的既有用例，不能被每轮一条的注入记录挤动。
     try {
-      appendFileSync(stateFile('ctx-budget.jsonl'), JSON.stringify({
+      const budgetFile = stateFile('ctx-budget.jsonl')
+      compactJsonlFile(budgetFile, 512 * 1024, 300)
+      appendFileSync(budgetFile, JSON.stringify({
         at: Date.now(), role, chars: fitted.chars, tokens: estimateTokens(fitted.text), kept: fitted.kept, dropped: fitted.dropped,
       }) + '\n', 'utf8')
     } catch {
@@ -8001,7 +8028,7 @@ export function apply(ctx) {
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bouts') return send(res, 200, boutsGetRoute())
-      if (req.method === 'GET' && path === '/today') return send(res, 200, v4Hub.todayViewV4())
+      if (req.method === 'GET' && path === '/today') return send(res, 200, { ...v4Hub.todayViewV4(), locksOverview: buildLocksOverview(Date.now()) })
       if (req.method === 'GET' && path === '/horizons') return send(res, 200, v4Hub.horizonsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bank') return send(res, 200, v4Hub.bankRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/health') return send(res, 200, { v: 1, ok: true, ...healthNow(Date.now()) })
@@ -8137,6 +8164,37 @@ export function apply(ctx) {
   const saveTierPending = (p) => writeJson(stateFile('app-tiers-pending.json'), p)
   const TIER_LOOSEN_MS = 24 * 3_600_000
   let tierSeen = { key: '', at: 0 }
+  const KNOWN_APP_LABELS = {
+    'com.xunmeng.pinduoduo': '拼多多',
+    'com.ss.android.ugc.aweme': '抖音',
+    'tv.danmaku.bili': '哔哩哔哩',
+    'com.tencent.tmgp.sgame': '王者荣耀',
+    'com.tencent.mm': '微信',
+    'com.tencent.mobileqq': 'QQ',
+    'com.xingin.xhs': '小红书',
+    'com.smile.gifmaker': '快手',
+    'com.kuaishou.nebula': '快手极速版',
+    'com.taobao.taobao': '淘宝',
+    'com.jingdong.app.mall': '京东',
+    'com.google.android.apps.bard': 'Gemini',
+    'md.obsidian': 'Obsidian',
+    'com.android.chrome': 'Chrome',
+    'com.quark.browser': '夸克',
+  }
+  function appDisplayLabel(pkg, explicitLabel = '') {
+    const p = String(pkg || '').trim()
+    if (!p) return ''
+    if (explicitLabel && explicitLabel !== p && !explicitLabel.includes('.')) return String(explicitLabel).trim()
+    const fromPhone = (Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : []).find((a) => (a?.pkg || a?.package) === p)
+    if (fromPhone?.label) return String(fromPhone.label)
+    const fromInst = lastInstalled.find((a) => (a?.pkg || a?.package) === p)
+    if (fromInst?.label) return String(fromInst.label)
+    const fromToday = (Array.isArray(lastPhone?.today) ? lastPhone.today : []).find((a) => a?.app === p)
+    if (fromToday?.label) return String(fromToday.label)
+    const fromCfg = appsOf().find((a) => (a?.package || a?.pkg) === p)
+    if (fromCfg?.label) return String(fromCfg.label)
+    return KNOWN_APP_LABELS[p] || (explicitLabel ? String(explicitLabel).trim() : p)
+  }
   function tierLabels() {
     const out = {}
     for (const a of lastInstalled) if (a?.pkg) out[a.pkg] = a.label || ''
@@ -8319,6 +8377,9 @@ export function apply(ctx) {
     } catch (error) {
       console.error('[companion] 晚间上限失败：' + String((error && error.message) || error))
     }
+    try {
+      compactInbox(vaultKb() || home(), { now, tz })
+    } catch {}
     const today = dayString(now, tz)
     const min = zoneMinuteOfDay(now, tz)
     let v = loadVerify()
@@ -8411,18 +8472,75 @@ export function apply(ctx) {
       })(),
     }
   }
+  function daytimeSpentMinToday(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const today = dayString(now, tz)
+    let sum = 0
+    for (const e of readLedger(home(), 600)) {
+      if (!e || e.state !== 'balance-spend') continue
+      const eDay = e.day || (Number(e.at) ? dayString(Number(e.at), tz) : '')
+      if (eDay !== today) continue
+      const eWin = e.window || (Number(e.at) ? classifySpendWindow(zoneMinuteOfDay(Number(e.at), tz)) : '')
+      if (eWin === 'daytime') {
+        sum += Math.max(0, Math.round(Number(e.minutes) || 0))
+      }
+    }
+    return sum
+  }
   function spendBalance({ minutes, reason, by = 'panel' }, now = Date.now()) {
     const tz = zoneOr(config.timeZone)
+    const today = dayString(now, tz)
+    const min = zoneMinuteOfDay(now, tz)
+    const window = classifySpendWindow(min)
+    const sealsState = loadSeals(now, tz)
+    const overdueSeal = lockingSeal(sealsState, { now, today })
+    const overdueContract = Boolean((() => { try { return v4Hub?.contractSessionView?.(now, { escalatedOnly: true }) } catch { return null } })())
+    const arbiterNow = (() => { try { return v4Hub?.computeLockArbiter?.(now) } catch { return null } })()
+    if (overdueSeal || overdueContract || arbiterNow?.priority === 'P3' || arbiterNow?.source === 'CONTRACT_OVERDUE_STRICT') {
+      return {
+        ok: false,
+        error: 'verify-overdue',
+        text: '当前有已到点未过保底的验收点（严锁中），请先交付验收或保底再解锁，不可用零散余额绕过。紧急情况请走 3 分钟应急通行。',
+      }
+    }
+    if (eveningLockUntil(now, tz)) return { ok: false, error: 'evening-cap', text: '今晚的娱乐上限已经用完了，锁到明早 7 点。余额留着明天用。' }
+    const wdRaw = wallDecision(wallCfgNow(), now, tz)
+    const nightLocked = Boolean(lastRhythm?.night === 'lock' || (wdRaw.locked && wdRaw.kind === 'night'))
+    if (nightLocked) {
+      return { ok: false, error: 'night-lock', text: '已进入深夜睡眠护栏（锁到明早 7 点），余额留着明天用。' }
+    }
+    const todaySeals = sealsState.items.filter((x) => x.day === today)
+    const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch')
+    const daytimeSpentMin = daytimeSpentMinToday(now, tz)
+    const daytimeRem = Math.max(0, DAYTIME_SPEND_CAP_MIN - daytimeSpentMin)
+    if (window === 'daytime' && !floorPassed && daytimeRem < SPEND_MIN) {
+      return {
+        ok: false,
+        error: 'daytime-cap',
+        text: daytimeSpentMin >= DAYTIME_SPEND_CAP_MIN
+          ? '白天工作时段零散花余额已达 30 分钟上限。12:00–14:00 午休及 18:00 后可自由花余额，或先过今日保底立即解除白天 30m 限制。'
+          : `白天工作时段零散槽位仅剩 ${daytimeRem} 分钟（不足 ${SPEND_MIN} 分钟最低起花），12:00–14:00 午休及 18:00 后可自由花余额，或先过今日保底立即解除白天 30m 限制。`,
+      }
+    }
     let balance = 0
     try {
       balance = Number(timeLedgerNow(now, tz, lastPhone).funLeft) || 0
     } catch {}
-    if (eveningLockUntil(now, tz)) return { ok: false, error: 'evening-cap', text: '今晚的娱乐上限已经用完了，锁到明早 7 点。余额留着明天用。' }
-    const c = checkSpend({ minutes, reason, balance })
+    const rawMin = Math.round(Number(minutes) || 0)
+    const effectiveMinutes = window === 'daytime' && !floorPassed ? Math.min(rawMin, daytimeRem) : rawMin
+    const c = checkSpend({ minutes: effectiveMinutes, reason, balance })
     if (!c.ok) return c
-    commit({ spendPass: { until: now + c.minutes * 60_000, minutes: c.minutes, reason: c.reason, at: now, by } })
-    record({ state: 'balance-spend', at: now, minutes: c.minutes, reason: c.reason, by })
-    return { ok: true, minutes: c.minutes, until: now + c.minutes * 60_000, text: '好，' + c.minutes + ' 分钟（到 ' + zoneHm(now + c.minutes * 60_000, tz) + '）。理由记下了：' + c.reason + '。花完自动回到默认验收。' }
+    const until = now + c.minutes * 60_000
+    commit({ spendPass: { until, minutes: c.minutes, reason: c.reason, at: now, by, window } })
+    record({ state: 'balance-spend', at: now, day: today, window, minutes: c.minutes, reason: c.reason, by })
+    const truncated = window === 'daytime' && !floorPassed && rawMin > c.minutes && c.minutes === daytimeRem && balance >= daytimeRem
+    const capNote = truncated ? `（白天未过保底零散上限剩 ${daytimeRem} 分钟，已截断按 ${c.minutes} 分钟放行）` : ''
+    return {
+      ok: true,
+      minutes: c.minutes,
+      window,
+      until,
+      text: '好，' + c.minutes + ' 分钟（到 ' + zoneHm(until, tz) + '）' + capNote + '。理由记下了：' + c.reason + '。花完自动回到默认验收。',
+    }
   }
   function startWork({ hours, sprint = false, by = 'panel' }, now = Date.now()) {
     const tz = zoneOr(config.timeZone)
@@ -9100,7 +9218,9 @@ export function apply(ctx) {
     writeJson(stateFile('seals.json'), state)
     if (event) {
       try {
-        appendFileSync(stateFile('seals.jsonl'), JSON.stringify({ at: now, ...event }) + '\n', 'utf8')
+        const sealsLog = stateFile('seals.jsonl')
+        compactJsonlFile(sealsLog, 512 * 1024, 300)
+        appendFileSync(sealsLog, JSON.stringify({ at: now, ...event }) + '\n', 'utf8')
       } catch {}
     }
     mirrorSealsToVault(state, now, tz)
@@ -9659,6 +9779,436 @@ export function apply(ctx) {
     })
   }
   /**
+   * 锁与余额大盘视图（供 Strategy/Locks UI 消费）。
+   */
+  function formatRecentActionEntry(e, tz) {
+    if (!e || typeof e !== 'object') return null
+    const st = String(e.state || '')
+    const names = roleNames(config)
+    const actorOf = (by) => {
+      const k = String(by || '').trim().toLowerCase()
+      if (k === 'strategist' || k === 'big') return names.strategist || '鲸澜'
+      if (k === 'companion' || k === 'sis') return names.companion || '鱼丸'
+      if (k === 'sister') return '双鱼'
+      if (k === 'radar' || k === 'behavior-radar') return '行为雷达'
+      if (k === 'wall') return '墙'
+      if (k === 'template') return '模板'
+      if (k === 'gemini') return 'Gemini'
+      if (k === 'ai') return 'AI'
+      if (k === 'reflect') return '夜间反思'
+      if (k === 'timeline') return '时间轴'
+      if (k === 'panel' || k === 'user' || k === 'app') return '你'
+      return by ? String(by) : '系统'
+    }
+    const targetApps = () => {
+      if (Array.isArray(e.labels) && e.labels.length) return e.labels.join('、')
+      if (Array.isArray(e.apps) && e.apps.length) return e.apps.map((p) => appDisplayLabel(p)).join('、')
+      if (e.pkg) return appDisplayLabel(e.pkg, e.label || '')
+      if (e.app) return appDisplayLabel(e.app, e.label || '')
+      return ''
+    }
+    const at = Number(e.at) || 0
+    const hm = at ? zoneHm(at, tz) : ''
+    let actor = actorOf(e.by)
+    let action = ''
+    let target = ''
+    let reason = String(e.reason || e.why || '').slice(0, 120)
+
+    switch (st) {
+      case 'block':
+      case 'block_apps':
+      case 'dispatch-block':
+        action = '临时封禁'
+        target = targetApps()
+        break
+      case 'app-tier-set':
+        action = e.loosen ? '调松分层' : (e.to === 'fun' ? '改严为娱乐' : e.to === 'game' ? '改严为游戏' : `分层调为${TIER_LABEL[e.to] || e.to || ''}`)
+        target = targetApps()
+        break
+      case 'app-tiers': {
+        const list = [...(Array.isArray(e.tighten) ? e.tighten : []), ...(Array.isArray(e.loosen) ? e.loosen : [])]
+        action = '同步分层'
+        target = list.map((p) => appDisplayLabel(p)).join('、') || 'App分层.md'
+        break
+      }
+      case 'dispatch-tag-app':
+        action = `App打标(${e.roleTag || ''})`
+        target = targetApps()
+        break
+      case 'dispatch-focus-lock':
+        action = '开启专时锁'
+        target = Array.isArray(e.allow) ? e.allow.map((p) => appDisplayLabel(p)).slice(0, 4).join('、') : ''
+        break
+      case 'dispatch-unlock-focus':
+        action = '解除专时锁'
+        target = '专时与临时锁'
+        break
+      case 'sister-tool':
+        action = String(e.tool || e.action || '姐妹动作')
+        target = String(e.target || targetApps() || '')
+        break
+      case 'bout-open':
+      case 'bout-start':
+      case 'ai-open-bout':
+      case 'plan-open':
+      case 'drive-auto-open':
+      case 'ignite-open':
+      case 'timeline-open':
+        action = st === 'ai-open-bout' ? '姐妹开局' : st === 'drive-auto-open' || st === 'ignite-open' || st === 'timeline-open' ? '自动开局' : '开启一局'
+        target = String(e.goal || e.protocolId || e.toast || e.id || '')
+        break
+      case 'seal-plan-day':
+      case 'seal-add':
+      case 'nod-card-confirm':
+      case 'checkpoints-by-ai':
+        action = st === 'nod-card-confirm' ? '点头确认今日菜单' : '立下验收点'
+        target = e.title ? String(e.title) : `共 ${Number(e.n ?? e.added) || 1} 项`
+        break
+      case 'template-applied':
+        actor = '模板'
+        action = '自动套用模板'
+        target = String(e.template || '今日模板') + (e.recovery ? '（恢复日）' : '')
+        reason = e.added ? `新增 ${e.added} 条验收点` : (e.noBank ? '题库未导入跳过题库项' : reason)
+        break
+      case 'behavior-radar':
+      case 'radar-lock':
+        actor = '行为雷达'
+        action = e.downgradedByHardCap ? '行为提醒(满额降级)' : '行为雷达触发'
+        target = targetApps() || String(e.kind || '')
+        break
+      case 'balance-spend':
+        actor = actorOf(e.by || 'panel')
+        action = '花余额放松'
+        target = `${Number(e.minutes) || 0} 分钟` + (e.window === 'lunch' ? '（午休窗）' : e.window === 'evening' ? '（晚间窗）' : e.window === 'daytime' ? '（白天槽）' : '')
+        break
+      case 'intensity-tighten':
+      case 'intensity-change':
+      case 'intensity-promoted':
+        action = st === 'intensity-tighten' ? '收紧强度' : '强度调整'
+        target = String(e.tier || e.intensity || e.target || '')
+        break
+      case 'seal-below':
+        actor = '墙'
+        action = '逾期未过保底严锁'
+        target = String(e.id || '')
+        reason = `${e.actual ?? 0}/${e.floor ?? 0}`
+        break
+      case 'seal-pay':
+        actor = '墙'
+        action = e.tier === 'stretch' ? '验收过拉伸奖余额' : '验收过保底奖余额'
+        target = `+${Number(e.minutes) || 0} 分钟`
+        break
+      case 'seal-waive':
+        action = '豁免封印'
+        target = String(e.id || '')
+        break
+      case 'evening-cap-hit':
+        actor = '墙'
+        action = '晚间上限触顶锁定'
+        target = `${e.used ?? 0}/${e.cap ?? 120} 分钟`
+        break
+      case 'emergency-pass-grant':
+        action = '急事 3 分钟通行'
+        target = '全应用放行'
+        break
+      case 'grant-task-lease':
+        actor = names.strategist || '鲸澜'
+        action = '批双用途通行证'
+        target = targetApps() + (e.minutes ? ` (${e.minutes}m)` : '')
+        reason = String(e.goal || reason || '')
+        break
+      case 'takeover-start':
+        actor = '推进器'
+        action = '强制接管回位'
+        target = '回到正事应用'
+        break
+      case 'control':
+      case 'task-start':
+      case 'tighten':
+        action = st === 'tighten' ? '今日收紧到零点' : String(e.action || e.mode || '管控动作')
+        target = String(e.goal || (e.minutes ? `${e.minutes} 分钟` : ''))
+        break
+      default:
+        return null
+    }
+    return { at, hm, actor, action, target, reason }
+  }
+
+  function buildLocksOverview(now = Date.now(), tz = zoneOr(config.timeZone), sealsOpt = null) {
+    const today = dayString(now, tz)
+    const min = zoneMinuteOfDay(now, tz)
+    const sealsState = sealsOpt || loadSeals(now, tz)
+    const todaySeals = (Array.isArray(sealsState?.items) ? sealsState.items : []).filter((x) => x.day === today)
+    const overdueSeal = lockingSeal(sealsState, { now, today })
+    const overdueContract = Boolean((() => { try { return v4Hub?.contractSessionView?.(now, { escalatedOnly: true }) } catch { return null } })())
+    const lockArbiter = (() => { try { return v4Hub?.computeLockArbiter?.(now) } catch { return null } })() || {
+      active: false, priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自主推进态', why: '', unlockHow: '',
+    }
+    const verifyOverdue = Boolean(overdueSeal || overdueContract || lockArbiter?.priority === 'P3' || lockArbiter?.source === 'CONTRACT_OVERDUE_STRICT')
+
+    const activeLock = {
+      active: Boolean(lockArbiter?.active),
+      priority: String(lockArbiter?.priority || 'P6'),
+      source: String(lockArbiter?.source || 'AUTONOMY_RELAXED'),
+      label: String(lockArbiter?.label || '自主推进态'),
+      why: String(lockArbiter?.why || ''),
+      unlockHow: String(lockArbiter?.unlockHow || ''),
+      verifyOverdue,
+    }
+
+    const ext = loadExternal()
+    const emInfo = activeEmergencyInfo(now, tz)
+    const emActive = Boolean(emInfo)
+    const wdRaw = wallDecision(wallCfgNow(), now, tz)
+    const nightLocked = Boolean(lastRhythm?.night === 'lock' || (wdRaw.locked && wdRaw.kind === 'night'))
+    const ev = eveningNow(now, tz)
+    const evLockUntil = eveningLockUntil(now, tz)
+    const evLock = evLockUntil > 0
+    const gem = loadGemini()
+    const gemSessionActive = Boolean((gem?.session && (!gem.session.until || Number(gem.session.until) > now)) || lockArbiter.priority === 'P2')
+    const aiWorkStrict = Boolean(config.aiWorkSession && config.aiWorkSession.by !== 'takeover' && config.aiWorkSession.strict !== false && (!config.aiWorkSession.until || Number(config.aiWorkSession.until) > now))
+    const drive = readState(stateFile('drive.json'), {}) || {}
+    const tkActive = Boolean(drive?.takeover?.active || (config.aiWorkSession?.by === 'takeover' && (!config.aiWorkSession.until || Number(config.aiWorkSession.until) > now)) || lockArbiter.priority === 'P3.5')
+    const presetSess = presetRt.sessionView(now)
+    const verifySess = verifySessionView(now)
+    const dayWallLocked = Boolean(wdRaw.locked && wdRaw.kind !== 'night')
+    const contractView = (() => { try { return v4Hub?.contractSessionView?.(now) } catch { return null } })()
+    const flexContract = Boolean(contractView && !contractView.strict)
+    const taskLeaseActive = Boolean(config.taskLease && Number(config.taskLease.until) > now)
+    const extLease = activeAppLease(ext, now)
+    const flexAiWork = Boolean(config.aiWorkSession && config.aiWorkSession.strict === false && (!config.aiWorkSession.until || Number(config.aiWorkSession.until) > now))
+    const tl = (() => {
+      try {
+        return timeLedgerNow(now, tz, lastPhone)
+      } catch {
+        return { funLeft: 0, carry: 0, earnedBank: 0, earnedBout: 0, earnedSeal: 0, earnedBreak: 0, earned: 0, penalty: 0, funOut: true, gameOut: true }
+      }
+    })()
+    const activeBlocks = blockedNow(now)
+    const busDenies = lockBus.list(now).filter((r) => r.kind === 'deny')
+    const refuseOn = refuseUntilAt(now) > now
+
+    const allLocks = [
+      {
+        id: 'EMERGENCY_SUSPEND',
+        priority: 'P0',
+        name: '急事 3 分钟通行证',
+        active: emActive,
+        summary: emActive
+          ? `通行放行中（${emInfo?.reason || '急事通行'}），其余拦截暂停`
+          : '未开启 · 急事时可激活 3 分钟全放行（每日次数有限）',
+        unlockHow: '倒计时 3 分钟结束自动恢复原护栏状态',
+      },
+      {
+        id: 'NIGHT_CURFEW',
+        priority: 'P1',
+        name: '深夜睡眠 & 晚间上限锁',
+        active: nightLocked || evLock || lockArbiter.priority === 'P1',
+        summary: nightLocked
+          ? '深夜睡眠护栏生效中（00:30–07:00 锁定娱乐）'
+          : (evLock ? `晚间娱乐上限（${ev.cap} 分钟）已用完，锁到明早 07:00` : `未触发 · 18:00 起晚间上限 ${ev.cap}m，00:30–07:00 深夜锁`),
+        unlockHow: '次日晨间 07:00 自动解封（电话/短信/地图/支付始终放行）',
+      },
+      {
+        id: 'GEMINI_LIVE_CELL',
+        priority: 'P2',
+        name: 'Gemini 连麦舱',
+        active: gemSessionActive,
+        summary: gemSessionActive
+          ? `连麦进行中${gem?.session?.topic ? '（' + gem.session.topic + '）' : ''}，仅放行 Gemini 与急事底线`
+          : '未开启 · 进入 Gemini 共脑连麦时自动收拢',
+        unlockHow: '完成连麦并提交复盘，或连麦到期后自动解除',
+      },
+      {
+        id: 'CONTRACT_OVERDUE_STRICT',
+        priority: 'P3',
+        name: '计划/封印逾期验收严锁',
+        active: Boolean(overdueSeal || overdueContract || aiWorkStrict || lockArbiter.priority === 'P3'),
+        summary: overdueSeal
+          ? `封印「${overdueSeal.title}」逾期未过保底（${overdueSeal.actual}/${overdueSeal.floor}），严锁不可用零散余额绕过`
+          : (overdueContract
+              ? '计划契约检查点逾期未交付，已进入严格锁定'
+              : (aiWorkStrict ? String(config.aiWorkSession?.why || '专时严格锁定中') : '未触发 · 验收点到点未过保底或契约逾期时触发')),
+        unlockHow: overdueSeal
+          ? '交付证据达到保底线立即解封（或写理由豁免占 1 次紧急解除）'
+          : '交付验收达标或完成本轮专时后立即解封',
+      },
+      {
+        id: 'TAKEOVER_STRICT',
+        priority: 'P3.5',
+        name: '强制接管回位锁',
+        active: tkActive,
+        summary: tkActive
+          ? String(drive?.takeover?.reason || config.aiWorkSession?.why || '系统已接管，请回到正事应用')
+          : '未触发 · 持续偏航失控时自动拉回正事应用',
+        unlockHow: '回到指定正事应用（或提交 Gemini 复盘）后自动解除',
+      },
+      {
+        id: 'BOUT_STRICT',
+        priority: 'P4',
+        name: '专心局 / 默认工作窗验收锁',
+        active: Boolean(presetSess || verifySess || dayWallLocked || lockArbiter.priority === 'P4'),
+        summary: presetSess
+          ? String(presetSess.why || '专注严格局进行中，仅放行工作白名单')
+          : (verifySess
+              ? '工作时段默认验收中（仅放行常用工作 App，微信/QQ 共享 35m 额度）'
+              : (dayWallLocked ? String(wdRaw.why || '防分心时段护栏生效中') : '未触发 · 工作时段或开启专注局时自动守护')),
+        unlockHow: presetSess
+          ? '完成本局收工验收，或切出缓冲/花可用余额'
+          : '工作时段结束 / 午休 / 花挣来的余额可临时放风',
+      },
+      {
+        id: 'CONTRACT_FLEX',
+        priority: 'P5',
+        name: '契约柔性护航 / 外挂租约',
+        active: Boolean(flexContract || taskLeaseActive || extLease || flexAiWork || lockArbiter.priority === 'P5'),
+        summary: taskLeaseActive
+          ? `任务短租约放行中（${config.taskLease.goal || appDisplayLabel(config.taskLease.app)}）`
+          : (flexContract
+              ? `契约柔性护航期（${contractView.topic}），学习白名单不打扰`
+              : (extLease ? `外脑租约放行中（${extLease.agentId || '外部工具'}）` : '未触发 · 签下契约或申请双用途 App 短租约时生效')),
+        unlockHow: '到点交付验收或租约到期后自动结束',
+      },
+      {
+        id: 'AUTONOMY_RELAXED',
+        priority: 'P6',
+        name: '娱乐余额门槛 & 行为雷达 / 双鱼临时封禁',
+        active: Boolean(tl.funOut || tl.gameOut || activeBlocks.length > 0 || busDenies.length > 0 || refuseOn),
+        summary: (activeBlocks.length || busDenies.length)
+          ? `临时封禁 ${activeBlocks.length || busDenies.length} 个应用${tl.funOut ? ' · 今日娱乐余额已耗尽' : ''}`
+          : (refuseOn
+              ? '拒绝模式生效中：娱乐应用打开即锁'
+              : (tl.funOut ? '当前可用娱乐余额为 0 分钟（刷题/交验收可挣额度）' : '自由余额门槛正常 · 行为雷达与双鱼临时封禁待命')),
+        unlockHow: '过一局/验收/刷题挣余额，或待临时封禁倒计时到期',
+      },
+    ]
+
+    const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch')
+    const daytimeSpentMin = daytimeSpentMinToday(now, tz)
+    const daytimeRemainingMin = Math.max(0, DAYTIME_SPEND_CAP_MIN - daytimeSpentMin)
+    const eveningRemainingMin = Math.max(0, ev.cap - ev.used)
+    const currentWindow = classifySpendWindow(min)
+    const currentWindowLabel = currentWindow === 'lunch'
+      ? '午休自由时段（12:00–14:00，不占白天 30m）'
+      : currentWindow === 'evening'
+        ? `晚间自由时段（18:00 起，温和封顶 ${ev.cap}m）`
+        : currentWindow === 'night'
+          ? (nightLocked ? '深夜休整时段（00:30–07:00 护栏生效）' : '夜间收尾时段（23:00 起，受晚间封顶约束）')
+          : (floorPassed ? '白天工作时段（今日保底已过，自由花余额）' : '白天工作时段（零散上限 30m）')
+
+    let spendBlockReason = ''
+    if (verifyOverdue) {
+      spendBlockReason = '当前有已到点未过保底的验收点（严锁中），请先交付验收或保底再解锁，不可用零散余额绕过'
+    } else if (evLock) {
+      spendBlockReason = '今晚的娱乐上限已用完，锁到明早 07:00'
+    } else if (nightLocked) {
+      spendBlockReason = '已进入深夜睡眠护栏（锁到明早 07:00）'
+    } else if (currentWindow === 'daytime' && !floorPassed && daytimeRemainingMin < SPEND_MIN) {
+      spendBlockReason = '白天零散 30m 已用完（12:00–14:00 午休或 18:00 后可自由花，或先过今日保底解除）'
+    } else if (tl.funLeft < SPEND_MIN) {
+      spendBlockReason = `可用余额不足 ${SPEND_MIN} 分钟，先交一个验收点或刷题挣余额`
+    }
+
+    const nextFreeWindowText = currentWindow === 'daytime'
+      ? (min >= 14 * 60 ? '18:00 后' : '12:00–14:00 午休或 18:00 后')
+      : currentWindow === 'lunch'
+        ? '当前午休自由窗（至 14:00），18:00 后再次自由'
+        : currentWindow === 'evening'
+          ? `当前晚间自由窗（封顶 ${ev.cap}m）`
+          : '明早 07:00 解除深夜锁，12:00–14:00 午休可自由花'
+
+    const sp = config.spendPass && Number(config.spendPass.until) > now ? config.spendPass : null
+    const earnedBankMin = Number(tl.earnedBank) || 0
+    const earnedTotalMin = Number(tl.earned) || 0
+    const earnedWorkMin = Math.max(0, earnedTotalMin - earnedBankMin)
+
+    const wallet = {
+      availableMin: Number(tl.funLeft) || 0,
+      carryInMin: Number(tl.carry) || 0,
+      earnedBankMin,
+      earnedBankCap: 60,
+      earnedWorkMin,
+      earnedTotalMin,
+      penaltyMin: Number(tl.penalty) || 0,
+      daytimeSpentMin,
+      daytimeCapMin: DAYTIME_SPEND_CAP_MIN,
+      daytimeRemainingMin,
+      eveningSpentMin: Number(ev.used) || 0,
+      eveningCapMin: Number(ev.cap) || 120,
+      eveningRemainingMin,
+      currentWindow,
+      currentWindowLabel,
+      floorPassed,
+      canSpendNow: !spendBlockReason,
+      spendBlockReason,
+      nextFreeWindowText,
+      activeSpendPass: sp
+        ? { until: Number(sp.until), minutes: Number(sp.minutes) || 0, reason: String(sp.reason || ''), untilHm: zoneHm(Number(sp.until), tz) }
+        : null,
+      lockShadow: config.lockShadow !== false,
+    }
+
+    const scheduleSlots = todaySeals.map((s) => {
+      const startMinute = s.startMinute >= 0 ? s.startMinute : null
+      const effStart = startMinute !== null ? startMinute : Math.max(0, s.dueMinute - (Number(s.estMinutes) || 45))
+      const isCurrentSlot = Boolean(
+        (s.status === 'open' || s.status === 'below') &&
+        (live?.sealId === s.id || (min >= effStart && min <= s.dueMinute) || Number(s.lockUntil) > now),
+      )
+      return {
+        id: s.id,
+        title: s.title,
+        kind: s.kind,
+        startMinute,
+        dueMinute: s.dueMinute,
+        startHm: startMinute !== null ? sealHm(startMinute) : '',
+        dueHm: sealHm(s.dueMinute),
+        stretch: s.stretch,
+        floor: s.floor,
+        claimed: s.claimed,
+        progress: s.actual,
+        status: s.status,
+        isCurrentSlot,
+      }
+    })
+    const seenSlotTitles = new Set(scheduleSlots.map((x) => x.title))
+    try {
+      const ws = workStoreNow(now, tz)
+      for (const it of ws?.planItems || []) {
+        const title = String(it?.title || it?.protocolId || '').trim()
+        if (!title || seenSlotTitles.has(title) || !Number.isFinite(Number(it?.minute))) continue
+        const startMinute = Math.max(0, Math.min(1439, Math.round(Number(it.minute))))
+        const dur = Math.max(10, Math.round(Number(it.budget || it.minutes || 45)))
+        const dueMinute = Math.min(1439, startMinute + dur)
+        scheduleSlots.push({
+          id: String(it.id || ''),
+          title,
+          kind: 'plan',
+          startMinute,
+          dueMinute,
+          startHm: sealHm(startMinute),
+          dueHm: sealHm(dueMinute),
+          stretch: dur,
+          floor: dur,
+          claimed: 0,
+          progress: it.openedAt ? 1 : 0,
+          status: it.missed ? 'below' : (it.openedAt ? 'active' : 'open'),
+          isCurrentSlot: Boolean(!it.missed && min >= startMinute && min <= dueMinute),
+        })
+      }
+    } catch {}
+    scheduleSlots.sort((a, b) => (a.startMinute ?? a.dueMinute) - (b.startMinute ?? b.dueMinute))
+
+    const recentActions = readLedger(home(), 300)
+      .map((e) => formatRecentActionEntry(e, tz))
+      .filter(Boolean)
+      .slice(-20)
+      .reverse()
+
+    return { activeLock, allLocks, wallet, scheduleSlots, recentActions }
+  }
+
+  /**
    * POST /seals：list / add（封明天或当天现定）/ raise（只能加码）/ claim（外部刷题报数）/ waive（写理由、扣一次紧急解除）/ check。
    * 没有「改小」「删除」这两个动作——这是故意的。
    */
@@ -9682,8 +10232,22 @@ export function apply(ctx) {
           return null
         }
       })(),
-      locking: lockingSeal(st, { now, today }), ...extra,
+      locking: lockingSeal(st, { now, today }),
+      locksOverview: (() => {
+        try {
+          return buildLocksOverview(now, tz, st)
+        } catch {
+          return null
+        }
+      })(),
+      ...extra,
     })
+    if (action === 'locks_overview') {
+      try {
+        sealTick(now, tz, lastPhone)
+      } catch {}
+      return { v: 1, ok: true, locksOverview: buildLocksOverview(now, tz) }
+    }
     if (action === 'list' || action === 'check') {
       sealTick(now, tz, lastPhone)
       return view(loadSeals(now, tz))
@@ -11319,9 +11883,13 @@ export function apply(ctx) {
     }
     lastLockActive = Boolean(lockArbiter?.active)
     const wantReleaseNow = emergencyActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && Number(mind.brain.graceUntil) > now)))
-    const companionLockedNow = !emergencyActive && (effectiveForceLevel >= 3 || Boolean(lockArbiter?.active))
-    const effectiveForceRelease = prevCompanionLocked && wantReleaseNow && !companionLockedNow
-    prevCompanionLocked = companionLockedNow
+    const forceLockedNow = !emergencyActive && !hardCapDowngrade && effectiveForceLevel >= 3
+    const arbiterLockedNow = !emergencyActive && Boolean(lockArbiter?.active)
+    const forceJustReleased = prevForceLocked && !forceLockedNow
+    const arbiterJustReleased = prevArbiterLocked && !arbiterLockedNow
+    const effectiveForceRelease = wantReleaseNow && (forceJustReleased || arbiterJustReleased)
+    prevForceLocked = forceLockedNow
+    prevArbiterLocked = arbiterLockedNow
     const activeSisterSkin = resolveActiveSisterSkin({ speaker: speakerOut, lockArbiter })
     const timeLedger = timeLedgerNow(now, tz, phone)
     // 2026-11-18：裁决器的唯一输出（手机先影子对比，确认没问题再切成唯一执法依据）。
@@ -12149,7 +12717,7 @@ export function apply(ctx) {
       if (mk.item?.links?.nodeId) live.nodeLink = { horizonId: mk.item.links.horizonId || parentHorizonId, nodeId: mk.item.links.nodeId }
       if (mk.item?.contextBrief) live.contextBrief = mk.item.contextBrief
     } catch {}
-    record({ state: 'bout-open', at: now, protocolId: protocol.id, department: dept, via: 'panel' })
+    record({ state: 'bout-open', at: now, protocolId: protocol.id, department: dept, via: 'panel', by: String(opts.by || 'panel'), goal: goal || pkt?.goal || protocol.name || protocol.id })
     try {
       v4Hub?.recordStoryline?.({ kind: 'bout_start', actor: 'user', summary: `开局「${goal || protocol.name || protocol.id}」`, at: now }, now)
     } catch {}

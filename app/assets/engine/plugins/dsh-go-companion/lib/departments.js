@@ -287,6 +287,153 @@ export function dispatchDepartmentSop({
   }
 }
 
+export const JUDGE_ARCHIVE_DAYS = 30
+
+function judgeDaysBetween(a, b) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(a || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(b || ''))) return 0
+  return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86_400_000)
+}
+
+function splitJudgeSections(text) {
+  const lines = String(text || '').split(/\r?\n/)
+  const sections = []
+  let current = { day: '', marker: '', lines: [] }
+  const pushCurrent = () => {
+    if (current.lines.some((l) => l.trim().length > 0)) {
+      sections.push(current)
+    }
+    current = { day: '', marker: '', lines: [] }
+  }
+
+  for (const line of lines) {
+    const trim = line.trim()
+    const markerMatch = /^<!--\s*[^:>]+:\s*(\d{4}-\d{2}-\d{2})\s*-->$/.exec(trim)
+    if (markerMatch) {
+      pushCurrent()
+      current = { day: markerMatch[1], marker: trim, lines: [line] }
+      continue
+    }
+    const headingDateMatch = /^#{2,3}\s+(\d{4}-\d{2}-\d{2})\b/.exec(trim)
+    if (headingDateMatch) {
+      if (current.day === headingDateMatch[1] && current.lines.length <= 2) {
+        current.lines.push(line)
+      } else {
+        pushCurrent()
+        current = { day: headingDateMatch[1], marker: '', lines: [line] }
+      }
+      continue
+    }
+    if (/^#{1,3}\s+/.test(trim)) {
+      if (current.day && current.lines.length === 1 && /^<!--/.test(current.lines[0].trim())) {
+        current.lines.push(line)
+      } else {
+        pushCurrent()
+        current = { day: '', marker: '', lines: [line] }
+      }
+      continue
+    }
+    const bulletDateMatch = /^[-*]\s+(\d{4}-\d{2}-\d{2})\b/.exec(trim)
+    if (!current.day && bulletDateMatch) {
+      pushCurrent()
+      sections.push({ day: bulletDateMatch[1], marker: '', lines: [line] })
+      continue
+    }
+    current.lines.push(line)
+  }
+  pushCurrent()
+  return sections
+}
+
+/**
+ * 判断.md 写入前月度归档裁剪：
+ * 活跃 判断.md 仅保留未标日期规则与最近 30 天记录，旧月份按月移入 大肥鱼/归档/判断-YYYY-MM.md。
+ */
+export function archiveJudgeFile(kb, { now = Date.now(), tz = 'Asia/Shanghai', maxDays = JUDGE_ARCHIVE_DAYS } = {}) {
+  const rawKb = String(kb || '').trim()
+  if (!rawKb) return { ok: false, changed: false, archivedCount: 0, archiveFiles: [] }
+  const targetKb = !existsSync(join(rawKb, JUDGE_FILE)) && existsSync(join(rawKb, '大肥鱼', JUDGE_FILE))
+    ? join(rawKb, '大肥鱼')
+    : rawKb
+  const judgePath = join(targetKb, JUDGE_FILE)
+  if (!existsSync(judgePath)) {
+    return { ok: true, changed: false, judgePath, archivedCount: 0, archiveFiles: [] }
+  }
+
+  let cur = ''
+  try {
+    cur = readFileSync(judgePath, 'utf8')
+  } catch {
+    return { ok: false, changed: false, judgePath, archivedCount: 0, archiveFiles: [] }
+  }
+
+  const sections = splitJudgeSections(cur)
+  const ts = Number.isFinite(Number(now)) ? Number(now) : Date.now()
+  const nowDay = dayString(ts, tz)
+  let refDay = nowDay
+  for (const s of sections) {
+    if (s.day && s.day > refDay) refDay = s.day
+  }
+
+  const kept = []
+  const archived = []
+  for (const s of sections) {
+    if (s.day && judgeDaysBetween(s.day, refDay) > maxDays) {
+      archived.push(s)
+    } else {
+      kept.push(s)
+    }
+  }
+
+  if (archived.length === 0) {
+    return { ok: true, changed: false, judgePath, archivedCount: 0, archiveFiles: [] }
+  }
+
+  const archiveDir = join(targetKb, '归档')
+  const archiveFiles = []
+  try {
+    mkdirSync(archiveDir, { recursive: true })
+    const byMonth = new Map()
+    for (const s of archived) {
+      const month = s.day.slice(0, 7)
+      if (!byMonth.has(month)) byMonth.set(month, [])
+      byMonth.get(month).push(s)
+    }
+    for (const [month, list] of byMonth.entries()) {
+      const archFile = join(archiveDir, `判断-${month}.md`)
+      let archCur = existsSync(archFile) ? readFileSync(archFile, 'utf8') : ''
+      if (!archCur.trim()) {
+        archCur = `# 大肥鱼 · 判断归档（${month}）\n\n> 从 大肥鱼/判断.md 自动归档的历史判断与督办审计。\n`
+      }
+      const chunks = []
+      for (const s of list) {
+        if (s.marker && archCur.includes(s.marker)) continue
+        const block = s.lines.join('\n').trim()
+        if (block) chunks.push(block)
+      }
+      if (chunks.length) {
+        const prefix = archCur.endsWith('\n\n') ? '' : (archCur.endsWith('\n') ? '\n' : '\n\n')
+        writeFileSync(archFile, archCur + prefix + chunks.join('\n\n') + '\n', 'utf8')
+      }
+      archiveFiles.push(archFile)
+    }
+
+    const keptText = kept
+      .map((s) => s.lines.join('\n').trimEnd())
+      .filter((t) => t.length > 0)
+      .join('\n\n')
+    writeFileSync(judgePath, (keptText || '# 判断') + '\n', 'utf8')
+    return {
+      ok: true,
+      changed: true,
+      judgePath,
+      archivedCount: archived.length,
+      archiveFiles,
+    }
+  } catch (error) {
+    return { ok: false, changed: false, judgePath, error: String((error && error.message) || error), archivedCount: 0, archiveFiles: [] }
+  }
+}
+
 /**
  * 督办审计部 SOP：绑定 locked_plan_modality_queue -> daily_behavior_audit，晚间回写 判断.md。
  */
@@ -318,6 +465,7 @@ export function governDepartmentSop({
   if (kb && writeNightly) {
     try {
       mkdirSync(kb, { recursive: true })
+      archiveJudgeFile(kb, { now: at, tz })
       judgePath = join(kb, JUDGE_FILE)
       const marker = `<!-- govern-audit:${audit.day} -->`
       const cur = existsSync(judgePath) ? readFileSync(judgePath, 'utf8') : ''

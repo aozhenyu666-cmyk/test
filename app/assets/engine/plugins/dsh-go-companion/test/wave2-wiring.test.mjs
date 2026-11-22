@@ -7,7 +7,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -29,38 +29,51 @@ const DAY_TZ = ZONES.find((z) => { const m = minuteOfDayOf(Date.now(), z); retur
 
 function agentOf(id) {
   const tools = {}
+  const contexts = []
   return {
     id,
     status: 'idle',
     inbox: { hasPending: false },
     sent: [],
-    contexts: [],
+    contexts,
     tools,
     followup(m) { this.sent.push(m) },
     ctx: {
-      systemPrompt: { context() { return () => {} } },
+      systemPrompt: { context(def) { contexts.push(def); return () => {} } },
       tools: { register(def) { tools[def.name] = def; return () => { delete tools[def.name] } } },
     },
   }
 }
 
-function host(agents) {
+function host(agents, opts = {}) {
   let handler
+  const listeners = new Map()
+  const globalTools = {}
   const ctx = {
     get(name) {
       if (name === 'agents') return { get: (id) => agents[id], roots: () => Object.values(agents), list: () => Object.values(agents) }
+      if (name === 'tools') return { register(def) { globalTools[def.name] = def; return () => { delete globalTools[def.name] } } }
       if (name === 'connection') return { requestRejection: () => undefined }
       if (name === 'sessionController') return { resolveAgent: async (id) => ({ agent: agents[id] }) }
       if (name === 'workspaceRegistry') return { archivedSessionIds: [] }
       return undefined
     },
-    on() {},
-    inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) },
+    on(name, fn) { if (!listeners.has(name)) listeners.set(name, []); listeners.get(name).push(fn) },
+    inject(_d, cb) {
+      cb({
+        webServer: { register(r) { handler = r.handler } },
+        effect(fn) { fn() },
+        ...(opts.llmStream ? { llm: { stream: opts.llmStream } } : {}),
+      })
+    },
     effect(fn) { fn() },
   }
   setStatePin('standby')
   apply(ctx)
-  return () => handler
+  const emit = async (sid, type, data) => {
+    for (const fn of listeners.get('session/event') || []) await fn({ id: sid }, { type, data })
+  }
+  return Object.assign(() => handler, { emit, globalTools })
 }
 
 function call(handler, method, path, body) {
@@ -72,7 +85,7 @@ function call(handler, method, path, body) {
   return Promise.resolve(handler(req, res)).then(() => ({ status: res.statusCode, body: res.text ? JSON.parse(res.text) : null }))
 }
 
-async function withHome(fn, cfg = {}) {
+async function withHome(fn, cfg = {}, hostOpts = {}) {
   const home = mkdtempSync(join(tmpdir(), 'companion-w2-'))
   const old = process.env.DSH_HOME
   process.env.DSH_HOME = home
@@ -87,9 +100,12 @@ async function withHome(fn, cfg = {}) {
       quietEnd: 12,
       ...cfg,
     }))
-    const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
+    const sis = agentOf(SIS)
+    const big = agentOf(BIG)
+    const h = host({ [SIS]: sis, [BIG]: big }, hostOpts)
+    const get = (path) => call(h(), 'GET', path).then((r) => r.body)
     const post = (path, body) => call(h(), 'POST', path, body).then((r) => r.body)
-    return await fn({ home, post, h })
+    return await fn({ home, get, post, h, sis, big })
   } finally {
     if (old === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = old
@@ -436,5 +452,233 @@ test('[1.1/4.8] 锁屏复习卡 rc: 判题防连点 + 达标返回 earnedOnly/ne
     assert.equal(ok.needSpend, true)
     assert.equal(ok.earnedAdded, 10)
     assert.equal(ok.question?.id, 'q-next')
+  }, { verifyMode: { enabled: false } })
+})
+
+test('[P0 e2e.mjs:53] 工作窗默认验收激活时，game(40) 触发伴侣锁并在讲通理由获 graceUntil 后正确发一次 release: true', async () => {
+  await withHome(async ({ home, get, post, h, sis, big }) => {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: DAY_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+    // 预留结转额度，避免 40m 超额接管掩盖工作窗默认验收（BOUT_STRICT）
+    writeFileSync(join(home, 'companion', 'fun-wallet.json'), JSON.stringify({ v: 1, day: today, carryIn: 60, lastLeft: 60 }))
+    const game = (minutes) => ({
+      app: 'com.tencent.tmgp.sgame',
+      label: '王者荣耀',
+      minutes,
+      fun: true,
+      screenOn: true,
+      local: '15:00',
+      today: [{ app: 'com.tencent.tmgp.sgame', label: '王者荣耀', minutes, fun: true }],
+    })
+
+    // 1) 工作窗默认验收激活 (lockArbiter.active === true) 且游戏 40 分钟触发伴侣力度锁 (level>=3)
+    const p1 = await post('/plan', { roll: 100, timeZone: DAY_TZ, phone: game(40) })
+    assert.equal(p1.lockArbiter.active, true, '工作窗默认验收激活')
+    assert.equal(p1.lockArbiter.source, 'BOUT_STRICT')
+    assert.equal(p1.force.name, 'lock')
+    assert.equal(p1.force.level >= 3, true)
+    assert.equal(p1.force.release, false)
+
+    // 2) 发球并模拟一轮会话交互，用户合理反驳获得 graceUntil > now
+    const reqId = 'req-p0-grace'
+    const reqRes = await post('/request', {
+      v: 1,
+      requestId: reqId,
+      eventId: 'evt-p0-grace',
+      kind: 'random_chat',
+      payload: {},
+      deadlineMs: 30000,
+      phone: game(40),
+    })
+    assert.equal(reqRes.requestId, reqId)
+    const targetSid = big.sent.length ? BIG : SIS
+    const targetAgent = big.sent.length ? big : sis
+    const m = targetAgent.sent[targetAgent.sent.length - 1]
+    assert.ok(m, '发球应投递到对应会话')
+    await h.emit(targetSid, 'turn/start', { turn: 1 })
+    await h.emit(targetSid, 'user/message', { id: m.id, content: m.content, source: m.source, turn: 1 })
+    await h.emit(targetSid, 'assistant/message', { turn: 1, message: { content: [{ type: 'text', text: '怎么又开一把？' }] } })
+    await h.emit(targetSid, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const res = await get(`/result?requestId=${reqId}&waitMs=0`)
+    assert.equal(res.state, 'generated')
+    await post('/outcome', { requestId: reqId, stage: 'displayed' })
+
+    // 讲通理由 -> judgeReply 判 pushback -> graceUntil > now
+    await h.emit(targetSid, 'user/message', {
+      id: 'u-grace-1',
+      content: [{ type: 'text', text: '我打这局是因为作业写完了' }],
+      source: { kind: 'user' },
+    })
+
+    // 3) 下一拍 /plan：work window 仍开启 (lockArbiter.active 仍为 true)，但伴侣力度锁刚因 graceUntil 放开 -> release 必须为 true！
+    const p2 = await post('/plan', { roll: 100, timeZone: DAY_TZ, phone: game(45) })
+    assert.equal(p2.lockArbiter.active, true, '默认验收工作窗仍在')
+    assert.equal(p2.lockArbiter.source, 'BOUT_STRICT')
+    assert.equal(p2.force.level <= 1, true, 'graceUntil 期间伴侣力度降回 <=1')
+    assert.equal(p2.force.release, true, '即使工作窗激活，伴侣力度锁刚释放仍必须发一次 release: true')
+
+    // 4) 再下一拍两类锁态均无边沿变化 -> release 立刻回落为 false
+    const p3 = await post('/plan', { roll: 100, timeZone: DAY_TZ, phone: game(46) })
+    assert.equal(p3.force.level <= 1, true)
+    assert.equal(p3.force.release, false, '状态维持后 release 立即回落 false')
+  }, {
+    mode: 'coach',
+    judgeProvider: 'mock',
+    judgeModel: 'mock',
+    day: { windows: { workday: [[0, 1440]], restday: [[0, 1440]], outing: [[0, 1440]] } },
+    wall: { meals: [] },
+  }, {
+    llmStream: async function* () {
+      yield { type: 'text-delta', text: '{"verdict":"pushback","why":"作业写完了","next":"deeper"}' }
+    },
+  })
+})
+
+test('[P0 e2e.mjs:53 cold] 冷启动无结转 game(40) 触发接管+伴侣锁，讲通获 graceUntil 后仍正确发一次 release: true', async () => {
+  await withHome(async ({ get, post, h, sis, big }) => {
+    const game = (minutes) => ({
+      app: 'com.tencent.tmgp.sgame',
+      label: '王者荣耀',
+      minutes,
+      fun: true,
+      screenOn: true,
+      local: '15:00',
+      today: [{ app: 'com.tencent.tmgp.sgame', label: '王者荣耀', minutes, fun: true }],
+    })
+    const p1 = await post('/plan', { roll: 100, timeZone: DAY_TZ, phone: game(40) })
+    assert.equal(p1.lockArbiter.active, true)
+    assert.equal(p1.lockArbiter.source, 'TAKEOVER_STRICT')
+    assert.equal(p1.force.name, 'lock')
+    assert.equal(p1.force.level >= 3, true)
+    assert.equal(p1.force.release, false)
+
+    const reqId = 'req-p0-cold-grace'
+    const reqRes = await post('/request', {
+      v: 1,
+      requestId: reqId,
+      eventId: 'evt-p0-cold-grace',
+      kind: 'random_chat',
+      payload: {},
+      deadlineMs: 30000,
+      phone: game(40),
+    })
+    assert.equal(reqRes.requestId, reqId)
+    const targetSid = big.sent.length ? BIG : SIS
+    const targetAgent = big.sent.length ? big : sis
+    const m = targetAgent.sent[targetAgent.sent.length - 1]
+    assert.ok(m, '发球应投递到对应会话')
+    await h.emit(targetSid, 'turn/start', { turn: 1 })
+    await h.emit(targetSid, 'user/message', { id: m.id, content: m.content, source: m.source, turn: 1 })
+    await h.emit(targetSid, 'assistant/message', { turn: 1, message: { content: [{ type: 'text', text: '打太久了。' }] } })
+    await h.emit(targetSid, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    assert.equal((await get(`/result?requestId=${reqId}&waitMs=0`)).state, 'generated')
+    await post('/outcome', { requestId: reqId, stage: 'displayed' })
+    await h.emit(targetSid, 'user/message', {
+      id: 'u-grace-cold',
+      content: [{ type: 'text', text: '我打这局是因为作业写完了' }],
+      source: { kind: 'user' },
+    })
+
+    const p2 = await post('/plan', { roll: 100, timeZone: DAY_TZ, phone: game(45) })
+    assert.equal(p2.lockArbiter.active, true)
+    assert.equal(p2.force.level <= 1, true)
+    assert.equal(p2.force.release, true)
+
+    const p3 = await post('/plan', { roll: 100, timeZone: DAY_TZ, phone: game(46) })
+    assert.equal(p3.force.level <= 1, true)
+    assert.equal(p3.force.release, false)
+  }, {
+    mode: 'coach',
+    judgeProvider: 'mock',
+    judgeModel: 'mock',
+    day: { windows: { workday: [[0, 1440]], restday: [[0, 1440]], outing: [[0, 1440]] } },
+    wall: { meals: [] },
+  }, {
+    llmStream: async function* () {
+      yield { type: 'text-delta', text: '{"verdict":"pushback","why":"作业写完了","next":"deeper"}' }
+    },
+  })
+})
+
+test('[locksOverview & recentActions & jsonl compaction] 全量 8 锁大盘、双鱼限制拼多多轨迹、GET /today 与 >512KB 日志压缩', async () => {
+  await withHome(async ({ home, get, post, h, big }) => {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: DAY_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+    writeFileSync(join(home, 'companion', 'fun-wallet.json'), JSON.stringify({ v: 1, day: today, carryIn: 45, lastLeft: 45 }))
+    writeFileSync(join(home, 'companion', 'seals.json'), JSON.stringify({
+      v: 1,
+      items: [
+        { id: 's-slot-2', day: today, title: '下午申论写作', kind: 'file', path: '学习/申论.md', stretch: 800, floor: 400, startMinute: 14 * 60, dueMinute: 16 * 60, status: 'open', actual: 0 },
+        { id: 's-slot-1', day: today, title: '上午行测 20 题', kind: 'quiz', stretch: 20, floor: 10, startMinute: 9 * 60, dueMinute: 11 * 60, status: 'open', actual: 6 },
+      ],
+    }))
+
+    // 触发双鱼工具：鲸澜用 app_tier 把拼多多改严 + block_apps 封禁拼多多
+    const tierRes = h.globalTools.app_tier.execute(
+      { app: '拼多多', tier: 'fun', why: '白天老刷百亿补贴' },
+      { agent: { session: { id: BIG } } },
+    )
+    assert.equal(tierRes.ok, true)
+    const blkRes = big.tools.block_apps.execute({
+      apps: ['com.xunmeng.pinduoduo'],
+      hours: 2,
+      reason: '限制拼多多防冲动逛街',
+    })
+    assert.equal(blkRes.ok, true)
+
+    // 校验 /seals action=locks_overview 与 GET /today 返回完全一致的大盘字段
+    const loRes = await post('/seals', { action: 'locks_overview' })
+    assert.equal(loRes.ok, true)
+    const ov = loRes.locksOverview
+    assert.ok(ov)
+    assert.equal(typeof ov.activeLock.active, 'boolean')
+    assert.equal(typeof ov.activeLock.verifyOverdue, 'boolean')
+    assert.equal(ov.allLocks.length, 8)
+    assert.deepEqual(
+      ov.allLocks.map((x) => x.priority),
+      ['P0', 'P1', 'P2', 'P3', 'P3.5', 'P4', 'P5', 'P6'],
+    )
+    assert.equal(ov.wallet.carryInMin, 45)
+    assert.equal(ov.wallet.earnedBankCap, 60)
+    assert.equal(ov.wallet.daytimeCapMin, 30)
+    assert.equal(ov.wallet.eveningCapMin, 120)
+    assert.equal(ov.wallet.lockShadow, true, '红线：config.lockShadow 默认保持 true')
+
+    // scheduleSlots 按 startMinute 升序排列
+    assert.equal(ov.scheduleSlots.length, 2)
+    assert.equal(ov.scheduleSlots[0].id, 's-slot-1')
+    assert.equal(ov.scheduleSlots[0].startHm, '09:00')
+    assert.equal(ov.scheduleSlots[0].dueHm, '11:00')
+    assert.equal(ov.scheduleSlots[1].id, 's-slot-2')
+
+    // recentActions 包含可读的双鱼限制拼多多轨迹
+    const blockAct = ov.recentActions.find((a) => a.action === '临时封禁' && a.target.includes('拼多多'))
+    const tierAct = ov.recentActions.find((a) => a.action === '改严为娱乐' && a.target.includes('拼多多'))
+    assert.ok(blockAct, '应包含封禁拼多多可读轨迹')
+    assert.equal(blockAct.actor, '鲸澜')
+    assert.match(blockAct.reason, /限制拼多多/)
+    assert.ok(tierAct, '应包含改严拼多多分层轨迹')
+    assert.equal(tierAct.actor, '鲸澜')
+
+    // GET /today 同步返回 locksOverview
+    const todayRes = await get('/today')
+    assert.ok(todayRes.locksOverview)
+    assert.equal(todayRes.locksOverview.allLocks.length, 8)
+
+    // seals.jsonl & ctx-budget.jsonl 超过 512KB 自动压缩保留最新 300 行
+    const bigLine = JSON.stringify({ at: Date.now(), role: 'companion', chars: 500, tokens: 120, kept: ['persona', 'pad-' + 'x'.repeat(180)], dropped: [] }) + '\n'
+    const countNeed = Math.ceil((560 * 1024) / Buffer.byteLength(bigLine, 'utf8'))
+    const payload = bigLine.repeat(countNeed)
+    writeFileSync(join(home, 'companion', 'ctx-budget.jsonl'), payload)
+    writeFileSync(join(home, 'companion', 'seals.jsonl'), payload)
+
+    // 触发一次人设上下文渲染与封印写入
+    big.contexts[0].text()
+    await post('/seals', { action: 'add', seal: { title: '触发日志压缩测试', kind: 'screenshots', stretch: 2, dueMinute: 1439, target: 'tomorrow' } })
+
+    const budgetLines = readFileSync(join(home, 'companion', 'ctx-budget.jsonl'), 'utf8').split('\n').filter(Boolean)
+    const sealLines = readFileSync(join(home, 'companion', 'seals.jsonl'), 'utf8').split('\n').filter(Boolean)
+    assert.equal(budgetLines.length, 301, 'ctx-budget.jsonl 压缩为 300 条旧行 + 1 条新行')
+    assert.equal(sealLines.length, 301, 'seals.jsonl 压缩为 300 条旧行 + 1 条新行')
+    assert.ok(statSync(join(home, 'companion', 'ctx-budget.jsonl')).size < 200 * 1024)
+    assert.ok(statSync(join(home, 'companion', 'seals.jsonl')).size < 200 * 1024)
   }, { verifyMode: { enabled: false } })
 })

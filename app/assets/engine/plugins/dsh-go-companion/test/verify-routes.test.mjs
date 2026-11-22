@@ -184,3 +184,96 @@ test('题库空着：模板里的题库类不立（立了只能被锁）、手�
     assert.match(add.text, /先在「题库」页导入/)
   }, ALL_DAY)
 })
+
+function findZoneIn(predicate) {
+  const now = Date.now()
+  for (const z of Intl.supportedValuesOf('timeZone')) {
+    const m = minuteOfDay(now, z)
+    if (predicate(m)) return z
+  }
+  return null
+}
+
+test('分时花余额：验收逾期严禁花（verify-overdue）、白天未过保底上限 30m 且自动截断、过保底解除、午休不占白天槽', async () => {
+  const DAYTIME_TZ = findZoneIn((m) => (m >= 8 * 60 && m < 11 * 60 + 50) || (m >= 14 * 60 && m < 17 * 60 + 50))
+  const LUNCH_TZ = findZoneIn((m) => m >= 12 * 60 && m < 13 * 60 + 50)
+  assert.ok(DAYTIME_TZ, '应能找到当前处于白天工作窗的时区')
+  assert.ok(LUNCH_TZ, '应能找到当前处于午休窗的时区')
+
+  // 1) 白天未过保底：30m 槽位、截断、超限拒花、过保底立刻解除
+  await withHome(async ({ home, seals, h }) => {
+    const first = await seals({ action: 'list' })
+    const today = first.today
+    writeFileSync(join(home, 'companion', 'fun-wallet.json'), JSON.stringify({ v: 1, day: today, carryIn: 100, lastLeft: 100 }))
+    // 安排一条尚未达保底的今日封印
+    writeFileSync(join(home, 'companion', 'seals.json'), JSON.stringify({
+      v: 1,
+      items: [{ id: 's-day1', day: today, title: '白天任务', kind: 'screenshots', stretch: 4, floor: 2, dueMinute: 23 * 60 + 50, status: 'open', actual: 0 }],
+    }))
+
+    // 花 20m -> ok，记入 window:'daytime'
+    const sp1 = await seals({ action: 'spend', minutes: 20, reason: '上午刷一会儿B站休息' })
+    assert.equal(sp1.ok, true)
+    assert.equal(sp1.minutes, 20)
+    assert.equal(sp1.locksOverview.wallet.daytimeSpentMin, 20)
+    assert.equal(sp1.locksOverview.wallet.daytimeRemainingMin, 10)
+    assert.equal(sp1.locksOverview.wallet.floorPassed, false)
+
+    // 再申请 25m -> 截断到剩余 10m
+    const sp2 = await seals({ action: 'spend', minutes: 25, reason: '再来一点休息一下' })
+    assert.equal(sp2.ok, true)
+    assert.equal(sp2.minutes, 10)
+    assert.equal(sp2.locksOverview.wallet.daytimeSpentMin, 30)
+    assert.equal(sp2.locksOverview.wallet.daytimeRemainingMin, 0)
+    assert.equal(sp2.locksOverview.wallet.canSpendNow, false)
+
+    // 第 3 次白天申请 -> daytime-cap 拒绝
+    const sp3 = await seals({ action: 'spend', minutes: 10, reason: '还想再玩一会儿' })
+    assert.equal(sp3.ok, false)
+    assert.equal(sp3.error, 'daytime-cap')
+    assert.match(sp3.text, /12:00–14:00 午休/)
+
+    // 校验 ledger 写入了 window: 'daytime' 与 day
+    const ledRows = readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    const spendRows = ledRows.filter((e) => e.state === 'balance-spend')
+    assert.equal(spendRows.length, 2)
+    assert.equal(spendRows[0].window, 'daytime')
+    assert.equal(spendRows[0].day, today)
+
+    // 一旦该封印过保底 -> floorPassed === true，白天 30m 限制立刻解除
+    writeFileSync(join(home, 'companion', 'seals.json'), JSON.stringify({
+      v: 1,
+      items: [{ id: 's-day1', day: today, title: '白天任务', kind: 'screenshots', stretch: 4, floor: 2, dueMinute: 23 * 60 + 50, status: 'floor', actual: 2 }],
+    }))
+    const sp4 = await seals({ action: 'spend', minutes: 15, reason: '过保底后奖励自己' })
+    assert.equal(sp4.ok, true)
+    assert.equal(sp4.minutes, 15)
+    assert.equal(sp4.locksOverview.wallet.floorPassed, true)
+
+    // 若出现逾期严锁封印 -> 直接 verify-overdue 禁花
+    writeFileSync(join(home, 'companion', 'seals.json'), JSON.stringify({
+      v: 1,
+      items: [{ id: 's-over', day: today, title: '逾期验收点', kind: 'screenshots', stretch: 4, floor: 2, dueMinute: 1, status: 'below', actual: 0, lockUntil: Date.now() + 600_000 }],
+    }))
+    const ov = await seals({ action: 'spend', minutes: 10, reason: '逾期了还想摸鱼' })
+    assert.equal(ov.ok, false)
+    assert.equal(ov.error, 'verify-overdue')
+    const todayRes = await call(h(), 'GET', '/today')
+    assert.equal(todayRes.body.locksOverview.activeLock.verifyOverdue, true)
+    assert.equal(todayRes.body.locksOverview.wallet.canSpendNow, false)
+  }, { timeZone: DAYTIME_TZ, lockTimeZone: false, ...ALL_DAY })
+
+  // 2) 午休窗（12:00–14:00）：不扣白天 30m 槽位，即便白天槽已满也能花可用余额
+  await withHome(async ({ home, seals }) => {
+    const first = await seals({ action: 'list' })
+    const today = first.today
+    writeFileSync(join(home, 'companion', 'fun-wallet.json'), JSON.stringify({ v: 1, day: today, carryIn: 80, lastLeft: 80 }))
+    // 预先写入白天已花满 30m
+    writeFileSync(join(home, 'companion', 'ledger.jsonl'), JSON.stringify({ state: 'balance-spend', at: Date.now() - 3600_000, day: today, window: 'daytime', minutes: 30, reason: '上午花满', by: 'panel' }) + '\n')
+    const spLunch = await seals({ action: 'spend', minutes: 25, reason: '午休看个视频放松' })
+    assert.equal(spLunch.ok, true)
+    assert.equal(spLunch.minutes, 25)
+    assert.equal(spLunch.locksOverview.wallet.currentWindow, 'lunch')
+    assert.equal(spLunch.locksOverview.wallet.daytimeSpentMin, 30, '午休不占用白天 30m 槽位')
+  }, { timeZone: LUNCH_TZ, lockTimeZone: false, ...ALL_DAY })
+})

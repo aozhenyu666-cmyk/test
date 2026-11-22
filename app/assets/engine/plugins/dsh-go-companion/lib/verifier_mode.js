@@ -278,6 +278,24 @@ export const EVENING_CAP_DEFAULT = 120
 export const DEFAULT_BASE_FUN_MIN = 30
 export const EVENING_CAP_MIN = 30
 export const EVENING_CAP_MAX = 180
+export const DAYTIME_SPEND_CAP_MIN = 30
+export const LUNCH_BREAK_WINDOW = Object.freeze([12 * 60, 14 * 60])
+
+/**
+ * 分时余额花销窗口分类：
+ * - [12:00, 14:00) -> 'lunch'（午休自由窗，不扣白天 30m 槽位）
+ * - [18:00, 23:00) -> 'evening'（晚间自由窗，受晚间上限约束）
+ * - [00:00, 07:00) 或 [23:00, 24:00) -> 'night'（夜间/深夜窗）
+ * - 其余白天时段 [07:00, 12:00) / [14:00, 18:00) -> 'daytime'（未过保底零散上限 30m）
+ */
+export function classifySpendWindow(minuteOfDay) {
+  const raw = Number(minuteOfDay)
+  const m = Number.isFinite(raw) ? ((Math.floor(raw) % 1440) + 1440) % 1440 : 0
+  if (m >= LUNCH_BREAK_WINDOW[0] && m < LUNCH_BREAK_WINDOW[1]) return 'lunch'
+  if (m >= EVENING_FROM && m < 23 * 60) return 'evening'
+  if (m < EVENING_END || m >= 23 * 60) return 'night'
+  return 'daytime'
+}
 
 /** 现在算不算「晚上」，算的话属于哪一晚（过了零点还算前一晚）。 */
 export function eveningOf(today, yesterday, minuteOfDay, from = EVENING_FROM) {

@@ -1,13 +1,17 @@
 // 4.10 四部门极简收件箱纯模块（lib/inbox_dept.js）单元测试
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   INBOX_FILE,
+  INBOX_MAX_BYTES,
+  INBOX_MAX_DAYS,
+  INBOX_MAX_ENTRIES,
   appendInboxEntry,
   buildStrategizeBundle,
+  compactInbox,
   readInboxEntries,
   resolveInboxPath,
 } from '../lib/inbox_dept.js'
@@ -92,5 +96,65 @@ test('buildStrategizeBundle：打包收件箱 + 卡壳记录 + 未过保底验�
     assert.match(bundle.markdown, /数量关系工程问题（卡点：设特值总设反）/)
     assert.match(bundle.markdown, /\[未过保底\] 行测一套（上午）（完成 6\/10）/)
     assert.match(bundle.markdown, /\[资料分析\] 基期倍数公式与现期倍数差值？（错 2 次）/)
+  })
+})
+
+test('收件箱硬上限：超 14 天 / 120 条 / 16KB 自动按月归档到 大肥鱼/归档/收件箱-YYYY-MM.md', () => {
+  assert.equal(INBOX_MAX_DAYS, 14)
+  assert.equal(INBOX_MAX_ENTRIES, 120)
+  assert.equal(INBOX_MAX_BYTES, 16 * 1024)
+
+  // 1) 超 14 天按月归档
+  withTempDir((vault) => {
+    const tOldOct = Date.parse('2026-10-05T10:00:00+08:00')
+    const tRecent = Date.parse('2026-11-22T09:00:00+08:00')
+    appendInboxEntry(vault, { text: '十月初的老碎片需要归档', tag: '随记', at: tOldOct })
+    const res = appendInboxEntry(vault, { text: '今天的新碎片留在活跃文件', tag: '灵感', at: tRecent })
+    assert.equal(res.ok, true)
+    assert.equal(res.archivedCount, 1)
+
+    const active = readInboxEntries(vault, { limit: 200 })
+    assert.equal(active.length, 1)
+    assert.equal(active[0].text, '今天的新碎片留在活跃文件')
+
+    const archOct = join(vault, '大肥鱼', '归档', '收件箱-2026-10.md')
+    assert.equal(existsSync(archOct), true)
+    assert.match(readFileSync(archOct, 'utf8'), /十月初的老碎片需要归档/)
+  })
+
+  // 2) 超 120 条上限自动归档最旧条目
+  withTempDir((vault) => {
+    const baseAt = Date.parse('2026-11-22T08:00:00+08:00')
+    for (let i = 1; i <= 130; i += 1) {
+      const r = appendInboxEntry(vault, { text: `第 ${i} 条短记录`, tag: '随记', at: baseAt + i * 1000 })
+      assert.equal(r.ok, true)
+    }
+    const active = readInboxEntries(vault, { limit: 200 })
+    assert.equal(active.length, 120)
+    assert.equal(active[0].text, '第 11 条短记录')
+    assert.equal(active[active.length - 1].text, '第 130 条短记录')
+
+    const archNov = join(vault, '大肥鱼', '归档', '收件箱-2026-11.md')
+    assert.equal(existsSync(archNov), true)
+    const archText = readFileSync(archNov, 'utf8')
+    assert.match(archText, /第 1 条短记录/)
+    assert.match(archText, /第 10 条短记录/)
+  })
+
+  // 3) 超 16KB 硬上限自动截断归档（保持在 Gemini Bridge 24KB 读取窗内）
+  withTempDir((vault) => {
+    const baseAt = Date.parse('2026-11-22T09:00:00+08:00')
+    const chunk = '长内容测试'.repeat(160) // 800 汉字约 2.4KB/条
+    for (let i = 1; i <= 12; i += 1) {
+      appendInboxEntry(vault, { text: `长条${i}-${chunk}`, tag: '灵感', at: baseAt + i * 1000 })
+    }
+    const inboxPath = resolveInboxPath(vault).file
+    assert.ok(statSync(inboxPath).size <= INBOX_MAX_BYTES, '活跃收件箱必须 <= 16KB')
+    const cmp = compactInbox(vault, { now: baseAt + 20_000 })
+    assert.equal(cmp.ok, true)
+    assert.equal(cmp.changed, false)
+    const archNov = join(vault, '大肥鱼', '归档', '收件箱-2026-11.md')
+    assert.equal(existsSync(archNov), true)
+    assert.match(readFileSync(archNov, 'utf8'), /长条1-/)
   })
 })

@@ -10,9 +10,196 @@ import { dayString } from './daily.js'
 import { hm } from './tz.js'
 
 export const INBOX_FILE = '大肥鱼/收件箱.md'
+export const INBOX_MAX_DAYS = 14
+export const INBOX_MAX_ENTRIES = 120
+export const INBOX_MAX_BYTES = 16 * 1024
+export const INBOX_ARCHIVE_DIR = '归档'
 const INBOX_BASENAME = '收件箱.md'
 const KB_FOLDER = '大肥鱼'
 const HEADER = '# 大肥鱼 · 收件箱\n\n> 四部门极简收件箱：随时记一句，晚上或打开谋划思考部时一键打包。\n'
+
+function daysBetweenYmd(a, b) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(a || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(b || ''))) return 0
+  return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86_400_000)
+}
+
+function parseAllInboxEntries(raw) {
+  const entries = []
+  let currentDay = ''
+  for (const rawLine of String(raw || '').split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const dayMatch = /^##\s+(\d{4}-\d{2}-\d{2})\b/.exec(line)
+    if (dayMatch) {
+      currentDay = dayMatch[1]
+      continue
+    }
+    if (line.startsWith('#') || line.startsWith('>')) continue
+
+    let m = /^-\s+(\d{2}:\d{2})\s+\[([^\]]+)\]\s+(.+)$/.exec(line)
+    if (m) {
+      entries.push({ day: currentDay, time: m[1], tag: m[2].trim(), text: m[3].trim(), raw: line })
+      continue
+    }
+    m = /^-\s+(\d{2}:\d{2})\s+(.+)$/.exec(line)
+    if (m) {
+      entries.push({ day: currentDay, time: m[1], tag: '随记', text: m[2].trim(), raw: line })
+      continue
+    }
+    m = /^[-*]\s+(?:\[([^\]]+)\]\s+)?(.+)$/.exec(line)
+    if (m) {
+      entries.push({ day: currentDay, time: '', tag: (m[1] || '随记').trim(), text: m[2].trim(), raw: line })
+    }
+  }
+  return entries
+}
+
+function renderInboxMarkdown(entries) {
+  const out = [HEADER.trimEnd()]
+  let lastDay = null
+  for (const e of entries) {
+    const d = e.day || ''
+    if (d && d !== lastDay) {
+      out.push('', `## ${d}`, '')
+      lastDay = d
+    } else if (lastDay === null) {
+      out.push('')
+      lastDay = ''
+    }
+    out.push(e.raw)
+  }
+  return out.join('\n') + '\n'
+}
+
+function archiveInboxEntries(kbFolder, archived, fallbackDay) {
+  if (!archived.length) return []
+  const archiveDir = join(kbFolder, INBOX_ARCHIVE_DIR)
+  mkdirSync(archiveDir, { recursive: true })
+  const byMonth = new Map()
+  for (const e of archived) {
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(e.day) ? e.day : fallbackDay
+    const month = day.slice(0, 7)
+    if (!byMonth.has(month)) byMonth.set(month, [])
+    byMonth.get(month).push({ ...e, day })
+  }
+  const files = []
+  for (const [month, list] of byMonth.entries()) {
+    const archFile = join(archiveDir, `收件箱-${month}.md`)
+    const header = `# 大肥鱼 · 收件箱归档（${month}）\n\n> 从 大肥鱼/收件箱.md 自动归档的历史条目。\n`
+    let cur = existsSync(archFile) ? readFileSync(archFile, 'utf8') : ''
+    if (!cur.trim()) cur = header
+    const dayHeaders = [...cur.matchAll(/^##\s+(\d{4}-\d{2}-\d{2})\b/gm)]
+    let lastDay = dayHeaders.length ? dayHeaders[dayHeaders.length - 1][1] : ''
+    const chunks = []
+    for (const e of list) {
+      if (e.day !== lastDay) {
+        chunks.push('', `## ${e.day}`, '')
+        lastDay = e.day
+      }
+      chunks.push(e.raw)
+    }
+    const needLeading = cur.endsWith('\n') ? '' : '\n'
+    const out = cur + needLeading + chunks.join('\n') + '\n'
+    writeFileSync(archFile, out, 'utf8')
+    files.push(archFile)
+  }
+  return files
+}
+
+/**
+ * 整理并执行 大肥鱼/收件箱.md 硬上限保护：
+ * - 仅保留最近 14 天、最多 120 条、活跃正文 <= 16 KB（保证在 Gemini Bridge READ_BYTES=24KB 窗内）；
+ * - 超出条目按月归档到 大肥鱼/归档/收件箱-YYYY-MM.md。
+ */
+export function compactInbox(
+  kbDir,
+  {
+    now = Date.now(),
+    tz = 'Asia/Shanghai',
+    maxDays = INBOX_MAX_DAYS,
+    maxEntries = INBOX_MAX_ENTRIES,
+    maxBytes = INBOX_MAX_BYTES,
+  } = {},
+) {
+  const pathRes = resolveInboxPath(kbDir)
+  if (!pathRes.ok) return pathRes
+  if (!existsSync(pathRes.file)) {
+    return { ok: true, changed: false, file: pathRes.file, archivedCount: 0, keptCount: 0, activeBytes: 0, archiveFiles: [] }
+  }
+  let raw = ''
+  try {
+    raw = readFileSync(pathRes.file, 'utf8')
+  } catch (error) {
+    return { ok: false, error: '读取收件箱失败：' + String((error && error.message) || error) }
+  }
+
+  const all = parseAllInboxEntries(raw).map((e, idx) => ({ ...e, _idx: idx }))
+  const zone = String(tz || 'Asia/Shanghai').trim() || 'Asia/Shanghai'
+  const ts = Number.isFinite(Number(now)) ? Number(now) : Date.now()
+  const nowDay = dayString(ts, zone)
+  let newestDay = nowDay
+  for (const e of all) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(e.day) && e.day > newestDay) newestDay = e.day
+  }
+  const refDay = newestDay
+
+  const archived = []
+  let kept = []
+  for (const e of all) {
+    if (e.day && daysBetweenYmd(e.day, refDay) > maxDays) {
+      archived.push(e)
+    } else {
+      kept.push(e)
+    }
+  }
+
+  // 若仍超过条数或字节上限，按日期时间从旧到新依次归档
+  kept.sort((a, b) => {
+    const ka = `${a.day || refDay} ${a.time || '00:00'}`
+    const kb = `${b.day || refDay} ${b.time || '00:00'}`
+    if (ka !== kb) return ka < kb ? -1 : 1
+    return a._idx - b._idx
+  })
+
+  while (kept.length > maxEntries) {
+    archived.push(kept.shift())
+  }
+
+  let activeMd = renderInboxMarkdown(kept)
+  while (kept.length > 1 && Buffer.byteLength(activeMd, 'utf8') > maxBytes) {
+    archived.push(kept.shift())
+    activeMd = renderInboxMarkdown(kept)
+  }
+
+  const activeBytes = Buffer.byteLength(raw, 'utf8')
+  const nextBytes = Buffer.byteLength(activeMd, 'utf8')
+  if (archived.length === 0) {
+    return { ok: true, changed: false, file: pathRes.file, archivedCount: 0, keptCount: kept.length, activeBytes, archiveFiles: [] }
+  }
+
+  archived.sort((a, b) => {
+    const ka = `${a.day || refDay} ${a.time || '00:00'}`
+    const kb = `${b.day || refDay} ${b.time || '00:00'}`
+    if (ka !== kb) return ka < kb ? -1 : 1
+    return a._idx - b._idx
+  })
+
+  try {
+    const archiveFiles = archiveInboxEntries(dirname(pathRes.file), archived, refDay)
+    writeFileSync(pathRes.file, activeMd, 'utf8')
+    return {
+      ok: true,
+      changed: true,
+      file: pathRes.file,
+      archivedCount: archived.length,
+      keptCount: kept.length,
+      activeBytes: nextBytes,
+      archiveFiles,
+    }
+  } catch (error) {
+    return { ok: false, error: '归档收件箱失败：' + String((error && error.message) || error) }
+  }
+}
 
 function clockIn(at, tz) {
   try {
@@ -85,7 +272,18 @@ export function appendInboxEntry(kbDir, { text, tag = '随记', at = Date.now(),
       ? `${needLeadingNewline}${line}\n`
       : `${needLeadingNewline}\n## ${day}\n\n${line}\n`
     appendFileSync(pathRes.file, chunk, 'utf8')
-    return { ok: true, file: pathRes.file, day, time, tag: cleanTag, text: cleanText, line, entry: { day, time, tag: cleanTag, text: cleanText, raw: line } }
+    const cmp = compactInbox(kbDir, { now: ts, tz: zone })
+    return {
+      ok: true,
+      file: pathRes.file,
+      day,
+      time,
+      tag: cleanTag,
+      text: cleanText,
+      line,
+      entry: { day, time, tag: cleanTag, text: cleanText, raw: line },
+      ...(cmp.archivedCount ? { archivedCount: cmp.archivedCount, archiveFiles: cmp.archiveFiles } : {}),
+    }
   } catch (error) {
     return { ok: false, error: '写入收件箱失败：' + String((error && error.message) || error) }
   }
@@ -106,36 +304,7 @@ export function readInboxEntries(kbDir, { limit = 20 } = {}) {
   }
 
   const cap = Math.max(1, Math.min(200, Math.round(Number(limit) || 20)))
-  const entries = []
-  let currentDay = ''
-
-  for (const rawLine of raw.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line) continue
-    const dayMatch = /^##\s+(\d{4}-\d{2}-\d{2})\b/.exec(line)
-    if (dayMatch) {
-      currentDay = dayMatch[1]
-      continue
-    }
-    if (line.startsWith('#') || line.startsWith('>')) continue
-
-    let m = /^-\s+(\d{2}:\d{2})\s+\[([^\]]+)\]\s+(.+)$/.exec(line)
-    if (m) {
-      entries.push({ day: currentDay, time: m[1], tag: m[2].trim(), text: m[3].trim(), raw: line })
-      continue
-    }
-    m = /^-\s+(\d{2}:\d{2})\s+(.+)$/.exec(line)
-    if (m) {
-      entries.push({ day: currentDay, time: m[1], tag: '随记', text: m[2].trim(), raw: line })
-      continue
-    }
-    m = /^[-*]\s+(?:\[([^\]]+)\]\s+)?(.+)$/.exec(line)
-    if (m) {
-      entries.push({ day: currentDay, time: '', tag: (m[1] || '随记').trim(), text: m[2].trim(), raw: line })
-    }
-  }
-
-  return entries.slice(-cap)
+  return parseAllInboxEntries(raw).slice(-cap)
 }
 
 function formatStuckLine(item) {
