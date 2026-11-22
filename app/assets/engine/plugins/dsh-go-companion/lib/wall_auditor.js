@@ -17,6 +17,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildStrokePlan, evaluateSixDiceSlot, evaluateStroke, slotsForStage } from './six_dice.js'
 import { candidateNotesForLinking, writeBidirectionalWikiLinks } from './notes.js'
+import { DEFAULT_TZ, hm as zoneHm, ymd as zoneYmd, zoneOr } from './tz.js'
 
 export const WALL_LABEL = '〔墙〕'
 /** 一份笔记要长多少才算"写了东西"：大约一两百个汉字。改个错别字、加个空行都不够。 */
@@ -372,3 +373,229 @@ export async function auditStrokeSlot(input = {}, deps = {}) {
 }
 
 export { buildStrokePlan }
+
+// ---------------------------------------------------------------- 老板/主管全局审视接口（纯函数）
+
+function numVal(v, d = 0) {
+  return Number.isFinite(Number(v)) ? Number(v) : d
+}
+
+function shiftYmdStr(ymdStr, deltaDays) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || ''))
+  if (!m) return ''
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + Number(deltaDays || 0)))
+  return dt.toISOString().slice(0, 10)
+}
+
+/**
+ * 「老板 / 主管型墙」宏观全局审视简报生成器（为未来独立墙 AI 与 Gemini Bridge 审视铺路）。
+ * 汇总近 7 天计划/封印兑现率、今日工作 vs 娱乐真实时长、被拦与紧急通行次数、未兑现承诺、昨日与今日计划块跳票情况，
+ * 输出结构化快照 + 冷血无寒暄全局质询 Prompt（强制先查事实再提 3 个直击逃避模式的尖锐追问）。
+ */
+export function buildBossAuditBrief({
+  now = Date.now(),
+  tz = DEFAULT_TZ,
+  todayStats = {},
+  weekStats = {},
+  locksOverview = null,
+  seals = null,
+  commitments = [],
+  planBlocks = [],
+  recentBreaches = [],
+} = {}) {
+  const ts = numVal(now, Date.now())
+  const tzName = zoneOr(tz)
+  const today = zoneYmd(ts, tzName)
+  const yesterday = shiftYmdStr(today, -1)
+  const sevenDaysAgo = shiftYmdStr(today, -6)
+
+  // 1. 今日真实工作 vs 娱乐 vs 折腾工具时长
+  const t = todayStats && typeof todayStats === 'object' ? todayStats : {}
+  const buckets = (t.buckets && typeof t.buckets === 'object' ? t.buckets : null)
+    || (t.charts?.buckets && typeof t.charts.buckets === 'object' ? t.charts.buckets : {})
+  const briefObj = t.brief && typeof t.brief === 'object' ? t.brief : {}
+  const mainlineMin = Math.max(0, Math.round(numVal(buckets.mainlineMin ?? t.mainlineMin, 0)))
+  const videoStudyMin = Math.max(0, Math.round(numVal(buckets.videoStudyMin ?? t.videoStudyMin, 0)))
+  const geminiMin = Math.max(0, Math.round(numVal(buckets.geminiMin ?? t.geminiMin ?? t.geminiMinutesToday, 0)))
+  const tinkerMin = Math.max(0, Math.round(numVal(buckets.toolTinkerMin ?? t.toolTinkerMin, 0)))
+  const workMin = Math.max(
+    0,
+    Math.round(
+      mainlineMin + videoStudyMin + geminiMin > 0
+        ? (mainlineMin + videoStudyMin + geminiMin)
+        : numVal(t.workMin ?? t.focusMin ?? briefObj.focusMin, 0),
+    ),
+  )
+  const funMin = Math.max(0, Math.round(numVal(buckets.funMin ?? t.funMin ?? briefObj.funMin, 0)))
+
+  // 2. 近 7 天封印与计划兑现率
+  const rawSeals = Array.isArray(seals) ? seals : (Array.isArray(seals?.items) ? seals.items : [])
+  const recentSeals = rawSeals.filter((s) => {
+    if (!s || typeof s !== 'object') return false
+    const d = String(s.day || '')
+    return !d || (d >= sevenDaysAgo && d <= today)
+  })
+  const sealDone = recentSeals.filter((s) => s.status === 'floor' || s.status === 'stretch').length
+  const sealMissed = recentSeals.filter((s) => s.status === 'below').length
+  const sealWaived = recentSeals.filter((s) => s.status === 'waived').length
+  const sealTotal = recentSeals.length
+
+  const w = weekStats && typeof weekStats === 'object' ? weekStats : {}
+  const weekSealDone = sealTotal > 0 ? sealDone : Math.max(0, Math.round(numVal(w.sealDone ?? w.done, 0)))
+  const weekSealTotal = sealTotal > 0 ? sealTotal : Math.max(0, Math.round(numVal(w.sealTotal ?? w.total, 0)))
+
+  // 3. 昨日与今日计划块完成 / 跳票统计
+  const rawBlocks = Array.isArray(planBlocks)
+    ? planBlocks
+    : [
+        ...((Array.isArray(planBlocks?.yesterday) ? planBlocks.yesterday : []).map((b) => ({ ...b, day: b?.day || yesterday }))),
+        ...((Array.isArray(planBlocks?.today) ? planBlocks.today : []).map((b) => ({ ...b, day: b?.day || today }))),
+      ]
+  const nonBreakBlocks = rawBlocks.filter((b) => b && typeof b === 'object' && !b.isBreak && !(b.slot === 'lunch' && b.lockMode === 'gentle'))
+  const todayBlocks = nonBreakBlocks.filter((b) => !b.day || b.day === today)
+  const yesterdayBlocks = nonBreakBlocks.filter((b) => b.day === yesterday)
+  const blocksDone = nonBreakBlocks.filter((b) => b.status === 'done').length
+  const blocksSkipped = nonBreakBlocks.filter((b) => b.status === 'skipped').length
+  const todayBlocksDone = todayBlocks.filter((b) => b.status === 'done').length
+  const todayBlocksSkipped = todayBlocks.filter((b) => b.status === 'skipped').length
+  const yesterdayBlocksUnfinished = yesterdayBlocks.filter((b) => b.status !== 'done').length
+
+  const combinedDone = weekSealDone + blocksDone + Math.max(0, Math.round(numVal(w.planDone, 0)))
+  const combinedTotal = weekSealTotal + nonBreakBlocks.length + Math.max(0, Math.round(numVal(w.planTotal, 0)))
+  const fulfillmentRatePct = combinedTotal > 0
+    ? Math.round((combinedDone / combinedTotal) * 100)
+    : (Number.isFinite(Number(w.fulfillmentRatePct ?? w.fulfillmentRate))
+        ? Math.max(0, Math.min(100, Math.round(Number(w.fulfillmentRatePct ?? w.fulfillmentRate))))
+        : null)
+
+  // 4. 被拦、违约与紧急通行次数
+  const breaches = Array.isArray(recentBreaches) ? recentBreaches.filter(Boolean) : []
+  const locks = locksOverview && typeof locksOverview === 'object' ? locksOverview : {}
+  const activeLock = locks.activeLock && typeof locks.activeLock === 'object' ? locks.activeLock : {}
+  const wallet = locks.wallet && typeof locks.wallet === 'object' ? locks.wallet : {}
+  const recentActions = Array.isArray(locks.recentActions) ? locks.recentActions : []
+
+  const blockedFromActions = recentActions.filter((a) => /拦|封|deny|block/i.test(String(a?.action || ''))).length
+  const blockedFromBreaches = breaches.filter((b) => /block|deny|bounce|intercept|被拦/i.test(String(b?.kind || b?.type || b?.state || ''))).length
+  const blockedCount = Math.max(Math.round(numVal(t.blockedCount ?? w.blockedCount, 0)), blockedFromActions + blockedFromBreaches)
+
+  const emergencyFromPassLedger = numVal(t.passLedger?.emergency?.used ?? t.disarms, 0)
+  const emergencyFromBreaches = breaches.filter((b) => /emergency|disarm|breakglass|紧急|破窗/i.test(String(b?.kind || b?.type || b?.state || ''))).length
+  const emergencyPassCount = Math.max(Math.round(emergencyFromPassLedger), emergencyFromBreaches, Math.round(numVal(t.emergencyUsedToday, 0)))
+
+  const breachCount = Math.max(breaches.length, Math.round(numVal(t.violationsToday ?? w.breachCount, 0)))
+  const breachSummaries = breaches.slice(-5).reverse().map((b) => {
+    if (typeof b === 'string') return b.slice(0, 80)
+    const atTxt = Number(b.at) > 0 ? zoneHm(Number(b.at), tzName) : ''
+    const what = String(b.reason || b.why || b.target || b.app || b.kind || b.state || '越界/违约').slice(0, 60)
+    return (atTxt ? `[${atTxt}] ` : '') + what
+  })
+
+  // 5. 未兑现承诺
+  const pendingCommitments = (Array.isArray(commitments) ? commitments : [])
+    .map((c) => {
+      if (typeof c === 'string') return { title: c.trim(), done: false }
+      if (!c || typeof c !== 'object') return null
+      const status = String(c.status || '').toLowerCase()
+      const done = c.done === true || status === 'done' || status === 'fulfilled' || status === 'passed'
+      const title = String(c.statement || c.title || c.text || '').trim().slice(0, 80)
+      return title ? { title, done, due: String(c.due || c.deadline || '').slice(0, 20) } : null
+    })
+    .filter((c) => c && !c.done)
+
+  // 6. 提炼结构性全局偏差（keyGaps）
+  const keyGaps = []
+  if (fulfillmentRatePct !== null && fulfillmentRatePct < 60) {
+    keyGaps.push(`近 7 天计划/封印兑现率仅 ${fulfillmentRatePct}%（${combinedDone}/${combinedTotal}），存在系统性立而不做`)
+  }
+  if (funMin > 0 && (funMin >= workMin || (funMin >= 45 && workMin < 60))) {
+    keyGaps.push(`今日纯娱乐 ${funMin}m 已逼近或反超工作推进 ${workMin}m`)
+  }
+  if (tinkerMin >= 40 && tinkerMin > mainlineMin) {
+    keyGaps.push(`工具折腾 ${tinkerMin}m 超过主线硬输出 ${mainlineMin}m（典型伪忙碌逃避）`)
+  }
+  if (emergencyPassCount >= 2 || blockedCount >= 3 || breachCount >= 2) {
+    keyGaps.push(`近期撞锁被拦 ${blockedCount} 次、紧急/破窗通行 ${emergencyPassCount} 次、违约记录 ${breachCount} 条`)
+  }
+  if (pendingCommitments.length > 0) {
+    keyGaps.push(`仍有 ${pendingCommitments.length} 项未兑现承诺悬空（首项：${pendingCommitments[0].title}）`)
+  }
+  if (blocksSkipped > 0 || yesterdayBlocksUnfinished > 0) {
+    keyGaps.push(`计划块跳票/未收口：昨日未完 ${yesterdayBlocksUnfinished} 块，累计主动跳过 ${blocksSkipped} 块`)
+  }
+  if (activeLock.verifyOverdue) {
+    keyGaps.push(`当前仍处于逾期严锁态（${activeLock.label || activeLock.source || '逾期未交付'}）`)
+  }
+  if (!keyGaps.length) {
+    keyGaps.push('当前全局未见明显失血缺口，重点盯防晚间松懈与次日首位硬块兑现')
+  }
+
+  const rateText = fulfillmentRatePct === null ? '暂无足够样本' : `${fulfillmentRatePct}%（${combinedDone}/${combinedTotal}）`
+  const headline = `7日兑现 ${rateText} · 今日正事 ${workMin}m / 娱乐 ${funMin}m · 拦/急 ${blockedCount}/${emergencyPassCount} · 悬空承诺 ${pendingCommitments.length}`
+
+  const snapshot = {
+    day: today,
+    fulfillmentRatePct,
+    fulfillmentDone: combinedDone,
+    fulfillmentTotal: combinedTotal,
+    sealStats7d: { done: weekSealDone, total: weekSealTotal, missed: sealMissed, waived: sealWaived },
+    todayWorkMin: workMin,
+    todayMainlineMin: mainlineMin,
+    todayVideoStudyMin: videoStudyMin,
+    todayGeminiMin: geminiMin,
+    todayTinkerMin: tinkerMin,
+    todayFunMin: funMin,
+    blockedCount,
+    emergencyPassCount,
+    breachCount,
+    breachSummaries,
+    pendingCommitmentsCount: pendingCommitments.length,
+    pendingCommitments: pendingCommitments.slice(0, 5),
+    planBlocksSummary: {
+      total: nonBreakBlocks.length,
+      done: blocksDone,
+      skipped: blocksSkipped,
+      todayTotal: todayBlocks.length,
+      todayDone: todayBlocksDone,
+      todaySkipped: todayBlocksSkipped,
+      yesterdayUnfinished: yesterdayBlocksUnfinished,
+    },
+    activeLock: {
+      active: Boolean(activeLock.active),
+      priority: String(activeLock.priority || 'P6'),
+      label: String(activeLock.label || '未锁定'),
+      verifyOverdue: Boolean(activeLock.verifyOverdue),
+    },
+    availableFunMin: wallet.availableMin !== undefined ? Math.round(numVal(wallet.availableMin, 0)) : null,
+  }
+
+  const promptLines = [
+    '【角色指令：冷血直属主管 / 老板全局审视，零寒暄、零安慰、严禁只盯单一微小时段】',
+    '规则：先核查下方客观全局账本（若连着 dafeiyu 工具先调 dafeiyu_today / dafeiyu_wall 交叉验真），再基于整体逃避模式发问；不接受「明天一定」「差不多」「状态不好」等虚词。',
+    '',
+    `[全局事实快照 · ${today}]`,
+    `- 近 7 天计划/封印兑现率：${rateText}${sealMissed > 0 ? `（含未过保底 ${sealMissed} 条）` : ''}`,
+    `- 今日真实时间投向：主线与学习 ${workMin}m（主线 ${mainlineMin}m / 网课 ${videoStudyMin}m / Gemini ${geminiMin}m） vs 纯娱乐 ${funMin}m vs 折腾工具 ${tinkerMin}m`,
+    `- 门禁与破戒：被拦 ${blockedCount} 次 · 紧急/破窗通行 ${emergencyPassCount} 次 · 违约记录 ${breachCount} 条 · 当前锁态：${snapshot.activeLock.active ? `${snapshot.activeLock.priority} ${snapshot.activeLock.label}` : '未锁'}`,
+    `- 计划块执行：今日完成 ${todayBlocksDone}/${todayBlocks.length}（跳过 ${todayBlocksSkipped}），昨日遗留未完 ${yesterdayBlocksUnfinished} 块`,
+    `- 未兑现承诺（${pendingCommitments.length} 项）：${pendingCommitments.length ? pendingCommitments.slice(0, 4).map((c) => c.title).join('；') : '无'}`,
+    ...(breachSummaries.length ? [`- 近期异常/破窗摘要：${breachSummaries.join('；')}`] : []),
+    `- 系统判出的结构缺口：${keyGaps.join('；')}`,
+    '',
+    '[强制输出要求]',
+    '1. 先用不超过 2 句话直接给出你对当下全局态势的老板定性（只讲事实与代价）；',
+    '2. 紧接着提出 **3 个直击全局逃避模式的尖锐追问**（分别指向：为什么承诺/计划块反复跳票、是否在用娱乐/工具折腾回避核心硬骨头、为什么出现多次撞锁/紧急通行）；',
+    '3. 最后给出 1 条未来 24 小时唯一可验、不可讨价还价的止损硬指令。',
+  ]
+
+  return {
+    ok: true,
+    v: 1,
+    generatedAt: ts,
+    day: today,
+    snapshot,
+    headline,
+    keyGaps,
+    bossPrompt: promptLines.join('\n'),
+  }
+}

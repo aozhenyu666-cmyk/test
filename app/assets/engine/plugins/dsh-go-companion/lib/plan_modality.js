@@ -190,6 +190,9 @@ export function cleanPlanContract(raw) {
     createdAt: Number(raw.createdAt) || Date.now(),
     updatedAt: Number(raw.updatedAt) || Date.now(),
     checkpoints: cps,
+    energyLevel: normalizeEnergyLevel(raw.energyLevel),
+    carryoverItems: cleanCarryoverItems(raw.carryoverItems ?? raw.carryover),
+    dayBlocks: cleanDayBlocks(raw.dayBlocks),
   }
 }
 
@@ -349,5 +352,646 @@ export function evaluateCheckpointSubmission(rawContract, { checkpointId, summar
     needsInteractive: false,
     checkpoint: target,
     contract: next,
+  }
+}
+
+// ============================================================================
+// V5 计划模态三态跃迁：1. 准备（精力/昨日结转/硬骨头）→ 2. 构建（时间盒）→ 3. 观看（24h 轴/偏航/验收）
+// ============================================================================
+
+export const ENERGY_LEVELS = Object.freeze(['low', 'mid', 'high'])
+export const DAY_SLOTS = Object.freeze(['morning', 'lunch', 'afternoon', 'evening'])
+export const BLOCK_LOCK_MODES = Object.freeze(['gentle', 'strict', 'verify'])
+export const BLOCK_STATUSES = Object.freeze(['pending', 'running', 'done', 'skipped'])
+export const LUNCH_BREAK_WINDOW = Object.freeze({ startMin: 12 * 60, endMin: 14 * 60 })
+
+export const ENERGY_PROFILES = Object.freeze({
+  low: Object.freeze({
+    level: 'low',
+    label: '低电量保底',
+    recommendedBlocks: 2,
+    blockMinutes: 30,
+    defaultLockMode: 'gentle',
+    hint: '低耗能保底：2 个温和短块 + 12:00–14:00 午休合法放风',
+  }),
+  mid: Object.freeze({
+    level: 'mid',
+    label: '标准推进',
+    recommendedBlocks: 4,
+    blockMinutes: 45,
+    defaultLockMode: 'strict',
+    hint: '标准节奏：4 个专注块 + 12:00–14:00 午休合法放风',
+  }),
+  high: Object.freeze({
+    level: 'high',
+    label: '满血冲刺',
+    recommendedBlocks: 5,
+    blockMinutes: 60,
+    defaultLockMode: 'verify',
+    hint: '冲刺节奏：5 个高密深水块 + 验收锁强交付',
+  }),
+})
+
+const intNum = (v, d = 0) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : d)
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+
+export function normalizeEnergyLevel(raw) {
+  const s = String(raw || '').trim().toLowerCase()
+  return ENERGY_LEVELS.includes(s) ? s : 'mid'
+}
+
+export function slotFromMinute(minute) {
+  const m = clamp(intNum(minute, 540), 0, 1439)
+  if (m < LUNCH_BREAK_WINDOW.startMin) return 'morning'
+  if (m < LUNCH_BREAK_WINDOW.endMin) return 'lunch'
+  if (m < 18 * 60) return 'afternoon'
+  return 'evening'
+}
+
+function cleanAppsList(raw, fallback = ['md.obsidian', 'com.tencent.mm']) {
+  if (!Array.isArray(raw)) return [...fallback]
+  const clean = [...new Set(raw.map((x) => String(x || '').trim()).filter(Boolean))].slice(0, 24)
+  return clean.length ? clean : [...fallback]
+}
+
+export function cleanCarryoverItem(raw, idx = 0) {
+  if (typeof raw === 'string') {
+    const title = raw.trim().slice(0, 100)
+    if (!title) return null
+    return {
+      id: `carry-${idx + 1}`,
+      title,
+      deliverable: '补完昨日遗留交付',
+      minutes: 45,
+      lockMode: 'strict',
+      slot: 'morning',
+      allowedApps: ['md.obsidian', 'com.tencent.mm'],
+      source: 'yesterday',
+      moved: false,
+      movedBlockId: '',
+    }
+  }
+  if (!raw || typeof raw !== 'object') return null
+  const title = String(raw.title ?? raw.task ?? '').trim().slice(0, 100)
+  if (!title) return null
+  const id = String(raw.id || `carry-${idx + 1}`).trim().slice(0, 60)
+  const slot = DAY_SLOTS.includes(raw.slot) ? raw.slot : 'morning'
+  const lockMode = BLOCK_LOCK_MODES.includes(raw.lockMode) ? raw.lockMode : 'strict'
+  return {
+    id,
+    title,
+    deliverable: String(raw.deliverable ?? raw.expectedDeliverable ?? '补完昨日遗留并给出可验产出').trim().slice(0, 160),
+    minutes: clamp(intNum(raw.minutes ?? raw.durationMin, 45), 5, 240),
+    lockMode,
+    slot,
+    allowedApps: cleanAppsList(raw.allowedApps),
+    source: String(raw.source || 'yesterday').slice(0, 32),
+    moved: Boolean(raw.moved),
+    movedBlockId: String(raw.movedBlockId || '').slice(0, 60),
+  }
+}
+
+export function cleanCarryoverItems(raw) {
+  const list = Array.isArray(raw) ? raw : []
+  const out = []
+  const seen = new Set()
+  for (let i = 0; i < list.length && out.length < 24; i += 1) {
+    const item = cleanCarryoverItem(list[i], i)
+    if (!item) continue
+    if (seen.has(item.id)) item.id = `${item.id}-${out.length + 1}`
+    seen.add(item.id)
+    out.push(item)
+  }
+  return out
+}
+
+export function cleanDayBlock(raw, idx = 0) {
+  if (!raw || typeof raw !== 'object') return null
+  const title = String(raw.title || '').trim().slice(0, 120)
+  if (!title) return null
+  const id = String(raw.id || `blk-${idx + 1}`).trim().slice(0, 60)
+  const startMin = clamp(intNum(raw.startMin, 9 * 60), 0, 1435)
+  const rawDur = Number(raw.durationMin ?? raw.minutes)
+  const defaultEnd = Number.isFinite(rawDur) && rawDur >= 5
+    ? Math.min(1440, startMin + clamp(Math.round(rawDur), 5, 360))
+    : Math.min(1440, startMin + 45)
+  const endMin = clamp(intNum(raw.endMin, defaultEnd), startMin + 5, 1440)
+  const slot = DAY_SLOTS.includes(raw.slot) ? raw.slot : slotFromMinute(startMin)
+  const isBreak = raw.isBreak === true || (slot === 'lunch' && /午休|放风|休息/.test(title))
+  const lockMode = BLOCK_LOCK_MODES.includes(raw.lockMode) ? raw.lockMode : (isBreak ? 'gentle' : 'strict')
+  const status = BLOCK_STATUSES.includes(raw.status) ? raw.status : 'pending'
+  const allowedApps = cleanAppsList(raw.allowedApps)
+  return {
+    id,
+    slot,
+    startMin,
+    endMin,
+    title,
+    deliverable: String(raw.deliverable || (isBreak ? '到点收心回到工位' : '提交可见产出或通过验收')).trim().slice(0, 180),
+    lockMode,
+    allowedApps,
+    status,
+    isBreak,
+    horizonId: String(raw.horizonId || '').slice(0, 64),
+    checkpointId: String(raw.checkpointId || '').slice(0, 64),
+    updatedAt: Number(raw.updatedAt) || 0,
+  }
+}
+
+export function cleanDayBlocks(raw) {
+  const list = Array.isArray(raw) ? raw : []
+  const out = []
+  const seen = new Set()
+  for (let i = 0; i < list.length && out.length < 32; i += 1) {
+    const blk = cleanDayBlock(list[i], i)
+    if (!blk) continue
+    if (seen.has(blk.id)) blk.id = `${blk.id}-${out.length + 1}`
+    seen.add(blk.id)
+    out.push(blk)
+  }
+  return out.sort((a, b) => (a.startMin - b.startMin) || (a.endMin - b.endMin))
+}
+
+/**
+ * 统计全天时间块：区分真实专注块 vs 午休合法放风块，计算预计专注分钟与娱乐预算对比。
+ */
+export function computeDayPlanStats(blocksRaw, { funBudgetMin = 30, energyLevel = 'mid' } = {}) {
+  const blocks = cleanDayBlocks(blocksRaw)
+  const level = normalizeEnergyLevel(energyLevel)
+  const budget = Math.max(0, intNum(funBudgetMin, 30))
+
+  let totalFocusMin = 0
+  let completedFocusMin = 0
+  let runningFocusMin = 0
+  let remainingFocusMin = 0
+  let lunchBreakMin = 0
+  let focusCount = 0
+  let doneCount = 0
+  let skippedCount = 0
+  let runningCount = 0
+
+  for (const b of blocks) {
+    const mins = Math.max(0, b.endMin - b.startMin)
+    if (b.isBreak) {
+      if (b.status !== 'skipped') lunchBreakMin += mins
+      continue
+    }
+    if (b.status === 'skipped') {
+      skippedCount += 1
+      continue
+    }
+    focusCount += 1
+    totalFocusMin += mins
+    if (b.status === 'done') {
+      doneCount += 1
+      completedFocusMin += mins
+    } else if (b.status === 'running') {
+      runningCount += 1
+      runningFocusMin += mins
+      remainingFocusMin += mins
+    } else {
+      remainingFocusMin += mins
+    }
+  }
+
+  return {
+    totalFocusMin,
+    completedFocusMin,
+    runningFocusMin,
+    remainingFocusMin,
+    lunchBreakMin,
+    funBudgetMin: budget,
+    focusCount,
+    doneCount,
+    skippedCount,
+    runningCount,
+    focusToFunRatio: budget > 0 ? Number((totalFocusMin / budget).toFixed(2)) : null,
+    overBudgetWarning: totalFocusMin === 0 && budget > 0,
+    energyLevel: level,
+    energyProfile: ENERGY_PROFILES[level],
+  }
+}
+
+/**
+ * 根据精力档位生成默认一日推荐时间盒（自动把 12:00–14:00 标注为合法午休放风块）。
+ */
+export function buildDefaultDayPlan({
+  energyLevel = 'mid',
+  carryoverItems = [],
+  funBudgetMin = 30,
+  allowedApps = ['md.obsidian', 'com.tencent.mm'],
+  fillCarryover = false,
+  now = Date.now(),
+} = {}) {
+  const level = normalizeEnergyLevel(energyLevel)
+  const apps = cleanAppsList(allowedApps)
+  const carries = cleanCarryoverItems(carryoverItems)
+
+  const lunchBlock = {
+    id: 'blk-lunch-break',
+    slot: 'lunch',
+    startMin: LUNCH_BREAK_WINDOW.startMin,
+    endMin: LUNCH_BREAK_WINDOW.endMin,
+    title: '午休合法放风（12:00–14:00 自动免锁）',
+    deliverable: '14:00 准时回到工位启动下午块',
+    lockMode: 'gentle',
+    allowedApps: [...apps],
+    status: 'pending',
+    isBreak: true,
+    updatedAt: now,
+  }
+
+  const templates = {
+    low: [
+      { id: 'blk-low-1', slot: 'morning', startMin: 9 * 60 + 30, endMin: 10 * 60, title: '上午最小启动块（保底破冰）', deliverable: '写下今天唯一核心目标的物理文件/题量开头', lockMode: 'gentle' },
+      lunchBlock,
+      { id: 'blk-low-2', slot: 'afternoon', startMin: 15 * 60, endMin: 15 * 60 + 35, title: '下午稳态收尾块', deliverable: '完成最小可验收进度并落账', lockMode: 'gentle' },
+    ],
+    mid: [
+      { id: 'blk-mid-1', slot: 'morning', startMin: 9 * 60, endMin: 9 * 60 + 45, title: '上午硬骨头攻坚（第一局）', deliverable: '提交阶段性笔记/题量/代码产出', lockMode: 'strict' },
+      { id: 'blk-mid-2', slot: 'morning', startMin: 10 * 60, endMin: 10 * 60 + 45, title: '上午主线推进（第二局）', deliverable: '完成本块目标并记录断点', lockMode: 'strict' },
+      lunchBlock,
+      { id: 'blk-mid-3', slot: 'afternoon', startMin: 14 * 60 + 30, endMin: 15 * 60 + 15, title: '下午专项深化块', deliverable: '输出错因规则或岗位投递结果', lockMode: 'strict' },
+      { id: 'blk-mid-4', slot: 'evening', startMin: 19 * 60 + 30, endMin: 20 * 60 + 15, title: '晚间复盘与验收收口', deliverable: '压成 1 张因果卡或明日题库卡', lockMode: 'verify' },
+    ],
+    high: [
+      { id: 'blk-high-1', slot: 'morning', startMin: 8 * 60 + 45, endMin: 9 * 60 + 45, title: '晨间头号硬骨头（深水验收块）', deliverable: '交硬证据或高强度追问过关', lockMode: 'verify' },
+      { id: 'blk-high-2', slot: 'morning', startMin: 10 * 60, endMin: 11 * 60, title: '上午第二深水攻坚块', deliverable: '完成整套训练/核心文稿段落', lockMode: 'strict' },
+      lunchBlock,
+      { id: 'blk-high-3', slot: 'afternoon', startMin: 14 * 60 + 30, endMin: 15 * 60 + 30, title: '下午主线加速与高强度输出', deliverable: '交物理成果并核对验收点', lockMode: 'verify' },
+      { id: 'blk-high-4', slot: 'afternoon', startMin: 16 * 60, endMin: 17 * 60, title: '下午专项巩固与弱项清零', deliverable: '解决 2 个卡点并归档笔记', lockMode: 'strict' },
+      { id: 'blk-high-5', slot: 'evening', startMin: 19 * 60 + 30, endMin: 20 * 60 + 15, title: '晚间知识卡压缩与明日封印', deliverable: '压成题库卡并封好明日菜单', lockMode: 'verify' },
+    ],
+  }
+
+  let rawBlocks = templates[level].map((b) => ({
+    ...b,
+    allowedApps: b.allowedApps || [...apps],
+    status: 'pending',
+    isBreak: Boolean(b.isBreak),
+    updatedAt: now,
+  }))
+
+  let updatedCarries = carries
+  if (fillCarryover && carries.length) {
+    let ci = 0
+    updatedCarries = carries.map((c) => ({ ...c }))
+    rawBlocks = rawBlocks.map((b) => {
+      if (b.isBreak) return b
+      while (ci < updatedCarries.length && updatedCarries[ci].moved) ci += 1
+      if (ci >= updatedCarries.length) return b
+      const c = updatedCarries[ci]
+      updatedCarries[ci] = { ...c, moved: true, movedBlockId: b.id }
+      ci += 1
+      return {
+        ...b,
+        title: `结转：${c.title}`,
+        deliverable: c.deliverable || b.deliverable,
+        allowedApps: c.allowedApps?.length ? c.allowedApps : b.allowedApps,
+      }
+    })
+  }
+
+  const dayBlocks = cleanDayBlocks(rawBlocks)
+  return {
+    ok: true,
+    energyLevel: level,
+    carryoverItems: updatedCarries,
+    dayBlocks,
+    stats: computeDayPlanStats(dayBlocks, { funBudgetMin, energyLevel: level }),
+  }
+}
+
+export function upsertDayBlock(blocksRaw, input = {}, { now = Date.now() } = {}) {
+  const existing = cleanDayBlocks(blocksRaw)
+  const rawObj = input && typeof input === 'object' ? input : {}
+  const rawId = String(rawObj.id || '').trim()
+  const prev = rawId ? existing.find((b) => b.id === rawId) : null
+  const hasExplicitEnd = Object.prototype.hasOwnProperty.call(rawObj, 'endMin') && rawObj.endMin != null
+  const hasExplicitDuration = rawObj.durationMin != null || rawObj.minutes != null
+  const base = {
+    ...(prev || {}),
+    ...rawObj,
+    id: rawId || `blk-${now.toString(36).slice(-5)}-${existing.length + 1}`,
+    updatedAt: now,
+  }
+  if (!hasExplicitEnd && (hasExplicitDuration || (prev && rawObj.startMin != null))) {
+    delete base.endMin
+    if (!hasExplicitDuration && prev) {
+      base.durationMin = Math.max(5, prev.endMin - prev.startMin)
+    }
+  }
+  const merged = cleanDayBlock(base, existing.length)
+
+  if (!merged) {
+    return { ok: false, error: '时间块至少需要有效标题', block: null, dayBlocks: existing }
+  }
+  const replaced = prev
+    ? existing.map((b) => (b.id === merged.id ? merged : b))
+    : [...existing, merged]
+  const dayBlocks = cleanDayBlocks(replaced)
+  return { ok: true, block: dayBlocks.find((b) => b.id === merged.id) || merged, dayBlocks }
+}
+
+export function removeDayBlock(blocksRaw, blockId) {
+  const existing = cleanDayBlocks(blocksRaw)
+  const id = String(blockId || '').trim()
+  const removed = existing.find((b) => b.id === id) || null
+  if (!removed) return { ok: false, error: '未找到指定时间块', removed: null, dayBlocks: existing }
+  return { ok: true, removed, dayBlocks: existing.filter((b) => b.id !== id) }
+}
+
+export function setDayBlockStatus(blocksRaw, blockId, status, { allowMultipleRunning = false, now = Date.now() } = {}) {
+  const existing = cleanDayBlocks(blocksRaw)
+  const id = String(blockId || '').trim()
+  const nextStatus = BLOCK_STATUSES.includes(status) ? status : ''
+  if (!nextStatus) {
+    return { ok: false, error: `无效块状态：${status}`, block: null, dayBlocks: existing }
+  }
+  const target = existing.find((b) => b.id === id)
+  if (!target) {
+    return { ok: false, error: '未找到指定时间块', block: null, dayBlocks: existing }
+  }
+  const next = existing.map((b) => {
+    if (b.id === id) return { ...b, status: nextStatus, updatedAt: now }
+    if (nextStatus === 'running' && !allowMultipleRunning && b.status === 'running') {
+      return { ...b, status: 'pending', updatedAt: now }
+    }
+    return b
+  })
+  return { ok: true, block: next.find((b) => b.id === id), dayBlocks: next }
+}
+
+export function promoteCarryoverToBlock(stateRaw = {}, carryoverId, opts = {}) {
+  const now = Number(opts.now) || Date.now()
+  const carries = cleanCarryoverItems(stateRaw?.carryoverItems ?? stateRaw?.carryover)
+  const blocks = cleanDayBlocks(stateRaw?.dayBlocks)
+  const id = String(carryoverId || '').trim()
+  const item = carries.find((c) => c.id === id)
+  if (!item) {
+    return { ok: false, error: '未找到昨日未完结条目', block: null, carryoverItems: carries, dayBlocks: blocks }
+  }
+
+  const slot = DAY_SLOTS.includes(opts.slot) ? opts.slot : (item.slot || 'morning')
+  const durationMin = clamp(intNum(opts.durationMin ?? item.minutes, 45), 5, 240)
+  const slotDefaults = { morning: 9 * 60, lunch: 12 * 60, afternoon: 14 * 60 + 30, evening: 19 * 60 + 30 }
+  let startMin = opts.startMin !== undefined ? clamp(intNum(opts.startMin, slotDefaults[slot]), 0, 1435) : slotDefaults[slot]
+
+  if (opts.startMin === undefined) {
+    const inSlot = blocks.filter((b) => b.slot === slot && !b.isBreak)
+    if (inSlot.length) {
+      const lastEnd = Math.max(...inSlot.map((b) => b.endMin))
+      startMin = Math.min(1435 - durationMin, lastEnd + 15)
+    }
+  }
+  // 默认不挤进 12:00-14:00 午休放风区（除非显式指明 slot === 'lunch'）
+  if (slot !== 'lunch' && startMin >= LUNCH_BREAK_WINDOW.startMin && startMin < LUNCH_BREAK_WINDOW.endMin) {
+    startMin = LUNCH_BREAK_WINDOW.endMin + 30
+  }
+  const endMin = Math.min(1440, startMin + durationMin)
+  const blockId = `blk-carry-${item.id.slice(0, 18)}-${now.toString(36).slice(-3)}`
+  const up = upsertDayBlock(blocks, {
+    id: blockId,
+    slot: opts.slot || slotFromMinute(startMin),
+    startMin,
+    endMin,
+    title: item.title,
+    deliverable: item.deliverable,
+    lockMode: opts.lockMode || item.lockMode || 'strict',
+    allowedApps: opts.allowedApps || item.allowedApps,
+    status: 'pending',
+    isBreak: false,
+  }, { now })
+
+  const nextCarries = carries.map((c) => (c.id === id ? { ...c, moved: true, movedBlockId: up.block.id } : c))
+  return {
+    ok: up.ok,
+    block: up.block,
+    carryoverItems: nextCarries,
+    dayBlocks: up.dayBlocks,
+    stats: computeDayPlanStats(up.dayBlocks, {
+      funBudgetMin: opts.funBudgetMin ?? 30,
+      energyLevel: stateRaw?.energyLevel || 'mid',
+    }),
+  }
+}
+
+/**
+ * 观看与执行态：计算当前时刻正在进行/命中的时间块、剩余倒计时、偏航警告。
+ */
+export function detectCurrentBlockDeviation(blocksRaw, {
+  minuteOfDay = 0,
+  currentApp = '',
+  currentAppFun = false,
+  boutRunning = false,
+} = {}) {
+  const blocks = cleanDayBlocks(blocksRaw)
+  const m = clamp(intNum(minuteOfDay, 0), 0, 1439)
+  const runningBlock = blocks.find((b) => b.status === 'running') || null
+  const scheduledNow = blocks.find((b) => b.status !== 'skipped' && b.status !== 'done' && m >= b.startMin && m < b.endMin) || null
+  const activeBlock = runningBlock || scheduledNow
+  const nextBlock = blocks.find((b) => b.status === 'pending' && b.startMin > m && !b.isBreak) || null
+
+  if (!activeBlock) {
+    const overduePending = blocks.filter((b) => !b.isBreak && b.status === 'pending' && m >= b.endMin)
+    return {
+      activeBlock: null,
+      nextBlock,
+      remainMin: 0,
+      isLateStart: false,
+      isOffTrack: Boolean(currentAppFun && overduePending.length > 0),
+      overdueCount: overduePending.length,
+      warningText: overduePending.length > 0
+        ? `已有 ${overduePending.length} 个未开启块过点，建议挑 1 个立即开干或标记跳过`
+        : '',
+    }
+  }
+
+  const remainMin = Math.max(0, activeBlock.endMin - m)
+  const elapsedInSlot = Math.max(0, m - activeBlock.startMin)
+  const isLateStart = !activeBlock.isBreak && activeBlock.status === 'pending' && elapsedInSlot >= 5 && !boutRunning
+  const pkg = String(currentApp || '').trim()
+  const appAllowed = !pkg || activeBlock.allowedApps.includes(pkg)
+  const isOffTrack = !activeBlock.isBreak && (Boolean(currentAppFun) || (pkg !== '' && !appAllowed))
+
+  let warningText = ''
+  if (isOffTrack) {
+    warningText = `偏航警告：当前处于「${activeBlock.title}」时段，前台 ${pkg || '娱乐应用'} 不在本块白名单内`
+  } else if (isLateStart) {
+    warningText = `当前块「${activeBlock.title}」已开始 ${elapsedInSlot} 分钟尚未点开干`
+  }
+
+  return {
+    activeBlock,
+    nextBlock,
+    remainMin,
+    isLateStart,
+    isOffTrack,
+    overdueCount: blocks.filter((b) => !b.isBreak && b.status === 'pending' && m >= b.endMin).length,
+    warningText,
+  }
+}
+
+export function buildDayPlanGeminiPrompt({
+  energyLevel = 'mid',
+  carryoverItems = [],
+  dayBlocks = [],
+  funBudgetMin = 30,
+  horizons = null,
+} = {}) {
+  const level = normalizeEnergyLevel(energyLevel)
+  const profile = ENERGY_PROFILES[level]
+  const carries = cleanCarryoverItems(carryoverItems).filter((c) => !c.moved)
+  const blocks = cleanDayBlocks(dayBlocks)
+  const stats = computeDayPlanStats(blocks, { funBudgetMin, energyLevel: level })
+
+  const lines = [
+    '【今日硬骨头共脑规划 · 直接给出 1–3 件主线硬任务】',
+    `- 今日精力档位：${profile.label}（${level}），建议块数 ${profile.recommendedBlocks} 块 × ${profile.blockMinutes} 分钟，默认锁强度 ${profile.defaultLockMode}`,
+    `- 今日娱乐余额预算：${stats.funBudgetMin} 分钟；当前已排专注块总计：${stats.totalFocusMin} 分钟（${stats.focusCount} 块）`,
+  ]
+  if (carries.length) {
+    lines.push(`- 昨日未完结待处理（${carries.length} 项）：${carries.slice(0, 5).map((c) => c.title).join('；')}`)
+  }
+  const med = Array.isArray(horizons?.medium) ? horizons.medium : []
+  if (med.length) {
+    lines.push(`- 中期主线战役：${med.slice(0, 3).map((m) => m.title).filter(Boolean).join('；')}`)
+  }
+  lines.push(
+    '请直接帮我：',
+    '1. 从上面选出今天最值得打掉的 1–3 件硬骨头（不要超过 3 件，严禁放水凑数）；',
+    '2. 每件写清：建议放进上午/下午哪个时段、持续多少分钟、用什么锁强度（gentle/strict/verify）、允许哪几个 App、到点交什么物理交付物；',
+    '3. 如果我今天选的是「低电量保底」，只排最小可启动动作，别一口气列满全天。',
+  )
+  return lines.join('\n')
+}
+
+export function cleanDayPlanState(raw, { day = '', now = Date.now() } = {}) {
+  const s = raw && typeof raw === 'object' ? raw : {}
+  const energyLevel = normalizeEnergyLevel(s.energyLevel)
+  const carryoverItems = cleanCarryoverItems(s.carryoverItems ?? s.carryover)
+  const dayBlocks = cleanDayBlocks(s.dayBlocks)
+  return {
+    v: 1,
+    day: String(s.day || day || ''),
+    energyLevel,
+    carryoverItems,
+    dayBlocks,
+    updatedAt: Number(s.updatedAt) || now,
+  }
+}
+
+export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day = '', funBudgetMin = 30 } = {}) {
+  const cur = cleanDayPlanState(rawState, { day, now })
+  const action = String(body?.action || 'get_day_plan')
+
+  if (action === 'get_day_plan' || action === 'status') {
+    return {
+      ok: true,
+      ...cur,
+      stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+    }
+  }
+  if (action === 'set_energy') {
+    const energyLevel = normalizeEnergyLevel(body?.energyLevel)
+    const next = { ...cur, energyLevel, updatedAt: now }
+    return {
+      ok: true,
+      ...next,
+      stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel }),
+    }
+  }
+  if (action === 'generate_default') {
+    const built = buildDefaultDayPlan({
+      energyLevel: body?.energyLevel ?? cur.energyLevel,
+      carryoverItems: body?.carryoverItems ?? cur.carryoverItems,
+      funBudgetMin,
+      allowedApps: body?.allowedApps,
+      fillCarryover: Boolean(body?.fillCarryover),
+      now,
+    })
+    return {
+      ok: true,
+      v: 1,
+      day: cur.day,
+      energyLevel: built.energyLevel,
+      carryoverItems: built.carryoverItems,
+      dayBlocks: built.dayBlocks,
+      stats: built.stats,
+      updatedAt: now,
+    }
+  }
+  if (action === 'upsert_block') {
+    const up = upsertDayBlock(cur.dayBlocks, body?.block || body, { now })
+    const next = { ...cur, dayBlocks: up.dayBlocks, updatedAt: now }
+    return {
+      ok: up.ok,
+      error: up.error,
+      block: up.block,
+      ...next,
+      stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+    }
+  }
+  if (action === 'delete_block') {
+    const del = removeDayBlock(cur.dayBlocks, body?.blockId ?? body?.id)
+    const next = { ...cur, dayBlocks: del.dayBlocks, updatedAt: now }
+    return {
+      ok: del.ok,
+      error: del.error,
+      removed: del.removed,
+      ...next,
+      stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+    }
+  }
+  if (action === 'set_block_status') {
+    const st = setDayBlockStatus(cur.dayBlocks, body?.blockId ?? body?.id, body?.status, {
+      allowMultipleRunning: Boolean(body?.allowMultipleRunning),
+      now,
+    })
+    const next = { ...cur, dayBlocks: st.dayBlocks, updatedAt: now }
+    return {
+      ok: st.ok,
+      error: st.error,
+      block: st.block,
+      ...next,
+      stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+    }
+  }
+  if (action === 'move_carryover') {
+    const mv = promoteCarryoverToBlock(cur, body?.carryoverId ?? body?.id, {
+      slot: body?.slot,
+      startMin: body?.startMin,
+      durationMin: body?.durationMin,
+      lockMode: body?.lockMode,
+      allowedApps: body?.allowedApps,
+      funBudgetMin,
+      now,
+    })
+    const next = { ...cur, carryoverItems: mv.carryoverItems, dayBlocks: mv.dayBlocks, updatedAt: now }
+    return {
+      ok: mv.ok,
+      error: mv.error,
+      block: mv.block,
+      ...next,
+      stats: mv.stats || computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+    }
+  }
+  if (action === 'set_day_plan') {
+    const next = cleanDayPlanState({
+      ...cur,
+      ...(body?.dayPlan && typeof body.dayPlan === 'object' ? body.dayPlan : body),
+      updatedAt: now,
+    }, { day: cur.day, now })
+    return {
+      ok: true,
+      ...next,
+      stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+    }
+  }
+  return {
+    ok: false,
+    error: `未知 dayPlan action: ${action}`,
+    ...cur,
+    stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
   }
 }
