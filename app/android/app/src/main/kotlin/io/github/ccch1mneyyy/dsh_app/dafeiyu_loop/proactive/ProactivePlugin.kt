@@ -342,6 +342,12 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/covenant", body)
             }
+            "planWeekOp" -> {
+                // 2026-11-22 计划页：view / add / prompt，规矩在插件（本周中只加不减）。
+                val body = linkedMapOf<String, Any?>()
+                (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
+                ProactiveRuntime.fetchPluginRoute(result, "POST", "/plan-week", body)
+            }
             "reviewOp" -> {
                 // 2026-11-21 复习卡（FSRS）：summary / due / list / answer / rate / add / delete，规矩在插件（验过才兑现第二半）。
                 val body = linkedMapOf<String, Any?>()

@@ -34,7 +34,15 @@ String sealSpan(Map<String, dynamic> s) {
 
 String sealHm(int m) => '${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
 
-(StatusTone, String) sealStatus(Map<String, dynamic> s, {required bool locking}) => switch ('${s['status']}') {
+/// 谁定的（和引擎 SOURCE_LABEL 同一套说法）。
+const Map<String, String> kSealSourceLabel = {
+  'night': '你前一晚封的', 'morning': '你开工前定的', 'live': '你当天现加的', 'template': '模板 / 本周计划自动套的',
+  'ai': '两条鱼提议的', 'gemini': 'Gemini 提议的',
+};
+
+(StatusTone, String) sealStatus(Map<String, dynamic> s, {required bool locking}) => s['confirmed'] == false && s['status'] != 'waived'
+    ? (StatusTone.warn, '待你点头')
+    : switch ('${s['status']}') {
       'stretch' => (StatusTone.ok, '过拉伸'),
       'floor' => (StatusTone.ok, '过保底'),
       'waived' => (StatusTone.idle, '豁免'),
@@ -152,6 +160,7 @@ class _SealPageState extends State<SealPage> {
     final unit = kSealKinds[kind]?.$2 ?? '';
     final done = s['status'] == 'floor' || s['status'] == 'stretch' || s['status'] == 'waived';
     final isToday = s['day'] == _data['today'];
+    final proposal = s['confirmed'] == false && s['status'] != 'waived';
     final picked = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -166,8 +175,25 @@ class _SealPageState extends State<SealPage> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-              child: Text('拉伸 ${s['stretch']}$unit · 保底 ${s['floor']}$unit · ${sealSpan(s)}；只能加码。'),
+              child: Text('拉伸 ${s['stretch']}$unit · 保底 ${s['floor']}$unit · ${sealSpan(s)}；只能加码。'
+                  '${kSealSourceLabel['${s['source']}'] == null ? '' : '\n来源：${kSealSourceLabel['${s['source']}']}'}'),
             ),
+            if (proposal)
+              ListTile(
+                key: const ValueKey('seal-act-confirm'),
+                leading: const Icon(AppIcons.success),
+                title: const Text('点头：这条算数'),
+                subtitle: const Text('点头后到点代码判，没过保底就锁；过了发娱乐分钟'),
+                onTap: () => Navigator.of(ctx).pop('confirm'),
+              ),
+            if (proposal)
+              ListTile(
+                key: const ValueKey('seal-act-decline'),
+                leading: const Icon(AppIcons.close),
+                title: const Text('不要'),
+                subtitle: const Text('你没答应过的提议，直接作废，不占紧急解除'),
+                onTap: () => Navigator.of(ctx).pop('decline'),
+              ),
             if (isToday && !done && ((s['openedAt'] as num?)?.toInt() ?? 0) == 0)
               ListTile(
                 key: const ValueKey('seal-act-open'),
@@ -216,6 +242,10 @@ class _SealPageState extends State<SealPage> {
     if (picked == null || !mounted) return;
     final id = '${s['id']}';
     switch (picked) {
+      case 'confirm':
+        await _op({'action': 'confirm', 'id': id}, done: '点头了：从现在起算数');
+      case 'decline':
+        await _op({'action': 'decline', 'id': id}, done: '不要了，作废');
       case 'check':
         await _op({'action': 'check'}, done: '判过了');
       case 'open':

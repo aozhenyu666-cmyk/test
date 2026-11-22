@@ -100,7 +100,7 @@ function parseEvidence(s) {
   return null
 }
 
-function renderEvidence(it) {
+export function renderEvidence(it) {
   switch (it.kind) {
     case 'quiz': return '题库 ' + it.stretch + ' 题'
     case 'bout_minutes': return '局 ' + it.stretch + ' 分钟'
@@ -519,4 +519,36 @@ export function weekPlanToday(plan, { weekday, monday, fallbackApplyAt = null })
   const d = plan.days[weekday]
   if (!d || !d.items.length) return { section: null, stale }
   return { section: { ...d, applyAt: d.applyAt != null ? d.applyAt : fallbackApplyAt }, stale }
+}
+
+/** 一条验收点写成本周计划 / 模板里的那一行。 */
+export function renderTemplateItem(it) {
+  const when = it.relative ? it.relative + ' 分钟内' : (it.startMinute != null ? hm(it.startMinute) + '–' : '') + hm(it.dueMinute)
+  return '- ' + when + ' ' + it.title + ' · ' + renderEvidence(it) + ' · 保底 ' + it.floor
+}
+
+/**
+ * 往本周计划的某一天里插一行（插在那一节最后一条后面；那一天还没有节就在文末补一节）。
+ * 只动这一行，他在 Obsidian 里写的其它东西原样保留。
+ */
+export function insertWeekPlanItem(text, weekday, line) {
+  const lines = String(text || '').split(/\r?\n/)
+  let head = -1
+  let end = lines.length
+  for (let i = 0; i < lines.length; i++) {
+    const h = WEEKDAY_RE.exec(lines[i].trim())
+    if (head < 0) {
+      if (h && WD_NUM[h[1]] === weekday) head = i
+      continue
+    }
+    if (/^#/.test(lines[i].trim())) {
+      end = i
+      break
+    }
+  }
+  if (head < 0) return String(text || '').replace(/\s*$/, '') + '\n\n## ' + WEEKDAY_NAMES[weekday] + '\n\n' + line + '\n'
+  let at = head + 1
+  for (let i = head + 1; i < end; i++) if (lines[i].trim().startsWith('-')) at = i + 1
+  lines.splice(at, 0, line)
+  return lines.join('\n')
 }

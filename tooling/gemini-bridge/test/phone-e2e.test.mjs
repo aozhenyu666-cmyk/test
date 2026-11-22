@@ -113,10 +113,17 @@ test('手机配好桥 → 快照上去；Gemini 交回执、加验收点、提�
     await new Promise((r) => setTimeout(r, 150))
     await call('/gemini-bridge', { action: 'sync' })
     const added = await addP
-    assert.match(added.content[0].text, /加上了：「申论小作文」/)
+    assert.match(added.content[0].text, /提议上了：「申论小作文」/)
+    assert.match(added.content[0].text, /要在手机「验收点」页点头才算数/)
     assert.match(added.content[0].text, /没加的：「没路径的笔记」/)
     const seals2 = JSON.parse(readFileSync(join(dir, 'home', 'companion', 'seals.json'), 'utf8'))
-    assert.equal(seals2.items.find((x) => x.title === '申论小作文').source, 'gemini')
+    const proposed = seals2.items.find((x) => x.title === '申论小作文')
+    assert.equal(proposed.source, 'gemini')
+    assert.equal(proposed.confirmed, false, 'Gemini 加的是提议：点头前不算数')
+    // 他在手机上点头
+    const ok = await call('/seals', { action: 'confirm', id: proposed.id })
+    assert.equal(ok.ok, true, JSON.stringify(ok).slice(0, 200))
+    assert.equal(ok.seal.confirmed, true)
 
     // Gemini 提规矩：进提议，等他批
     const propP = tool('dafeiyu_propose_rule', { chapter: 2, title: '他说「就看一集」', do: '问他看完第一件事做什么，写成验收点', hardness: '默认', why: '这周三次' })

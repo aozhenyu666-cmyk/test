@@ -154,7 +154,7 @@ import { buildLockDecision } from './lock_decision.js'
 import { CHAT_PACKAGES, driveMode, ignite, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
 import {
   SEAL_CUTOFF_MINUTE, SEAL_KINDS, COLD_CUTOFF_MINUTE, addSeal, addSeals, captureBaselines, claimSeal, cleanSeals, lockingSeal,
-  markOpened, nextYmd, raiseSeal, sealPromptLines, settleDeferred, tickSeals, timelineDue, waiveSeal,
+  markOpened, nextYmd, raiseSeal, sealPromptLines, settleDeferred, tickSeals, timelineDue, waiveSeal, confirmSeal, declineSeal, SOURCE_LABEL,
 } from './seal.js'
 import {
   COVENANT_FILE, COVENANT_PENDING_FILE, COVENANT_PROPOSALS_FILE, COVENANT_COOLDOWN_MS, DRAFT_RULES, addProposal, cleanProposal,
@@ -169,7 +169,7 @@ import { addReview, cleanReview, decideReview, parseWeekReview, reviewMarkdown, 
 import {
   DEFAULT_BASE_FUN_MIN, DEFAULT_TEMPLATES, applyNodCardOverrides, buildNodCard, checkSpend, checkStart, dayOutcomes, defaultVerify,
   parseTemplates, recoveryStep, renderTemplates, shouldApplyTemplate, templateSeals, verifyPromptLines, eveningOf, eveningStep,
-  eveningCapFor, setEveningCap, EVENING_END, parseWeekPlan, renderWeekPlan, weekPlanToday,
+  eveningCapFor, setEveningCap, EVENING_END, parseWeekPlan, renderWeekPlan, weekPlanToday, insertWeekPlanItem, renderTemplateItem, renderEvidence, parseTemplateItem, WEEKDAY_NAMES,
 } from './verifier_mode.js'
 import { appendInboxEntry, buildStrategizeBundle, readInboxEntries } from './inbox_dept.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
@@ -7593,7 +7593,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review' || path === '/plan-week')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7676,6 +7676,7 @@ export function apply(ctx) {
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/tiers') return send(res, 200, tiersRoute(body.value))
         if (path === '/seals') return send(res, 200, sealsRoute(body.value))
+        if (path === '/plan-week') return send(res, 200, planWeekRoute(body.value))
         if (path === '/covenant') return send(res, 200, covenantRoute(body.value))
         if (path === '/health') return send(res, 200, { v: 1, ok: true, ...healthNow(Date.now()) })
         if (path === '/review') return send(res, 200, reviewRoute(body.value))
@@ -8263,6 +8264,94 @@ export function apply(ctx) {
     saveVerify({ ...loadVerify(), templates: t, templatesDay: today })
     return t
   }
+  /**
+   * POST /plan-week（计划页）：view（长期主线 + 本周每天的菜单 + 今天是哪天 + 本周执行率）/ add（往某一天加一条）/
+   * prompt（复制给 Gemini：帮我排下周）。本周中只加不减，所以没有删除；今天那一节已经套过了，加的从下周的今天起才生效。
+   */
+  function planWeekRoute(body) {
+    const b = body && typeof body === 'object' ? body : {}
+    const action = String(b.action || 'view')
+    const now = Date.now()
+    const tz = zoneOr(config.timeZone)
+    const t = templatesToday(now, tz)
+    const wp = weekPlanNow(now, tz, t)
+    const weekday = weekdayOf(now, tz)
+    const order = [1, 2, 3, 4, 5, 6, 0]
+    const pos = (wd) => order.indexOf(wd)
+    const kindLabel = (k) => SEAL_KINDS[k]?.label || k
+    const days = order.map((wd) => {
+      const d = wp.plan.days[wd] || { items: [], applyAt: null }
+      return {
+        weekday: wd, name: WEEKDAY_NAMES[wd], applyAt: d.applyAt != null ? sealHm(d.applyAt) : null,
+        isToday: wd === weekday, isPast: pos(wd) < pos(weekday),
+        items: d.items.map((it) => ({ line: renderTemplateItem(it).slice(2), title: it.title, kind: it.kind, kindLabel: kindLabel(it.kind), stretch: it.stretch, floor: it.floor })),
+      }
+    })
+    let horizons = { long: [], medium: [] }
+    try {
+      const h = v4Hub?.horizonsRoute?.({ action: 'list' })?.horizons
+      if (h) horizons = { long: (h.long || []).slice(0, 5).map((x) => ({ id: x.id, title: x.title })), medium: (h.medium || []).slice(0, 5).map((x) => ({ id: x.id, title: x.title })) }
+    } catch {}
+    let longText = ''
+    try {
+      const kb = vaultKb()
+      if (kb) longText = String(readVaultText(join(kb, '长期规划.md')) || '').slice(0, 1200)
+    } catch {}
+    let execRate = null
+    try {
+      execRate = weekPackNow(now).totals.passRate
+    } catch {}
+    const view = (extra = {}) => ({ v: 1, ok: true, monday: wp.monday, weekday, days, horizons, longText, execRate, file: '大肥鱼/本周计划.md', ...extra })
+    if (action === 'view') return view()
+    if (action === 'add') {
+      const wd = Math.round(Number(b.weekday))
+      if (!(wd >= 0 && wd <= 6)) return { v: 1, ok: false, text: '选一天（周一到周日）。' }
+      const it = b.item && typeof b.item === 'object' ? b.item : {}
+      const stretch = Math.max(1, Math.round(Number(it.stretch) || 0))
+      const draft = {
+        title: String(it.title || '').trim().slice(0, 40), kind: String(it.kind || ''), stretch,
+        floor: Math.max(1, Math.min(stretch, Math.round(Number(it.floor) || Math.ceil(stretch / 2)))),
+        startMinute: hmParse(it.start), dueMinute: hmParse(it.due), path: String(it.path || ''), app: String(it.app || ''),
+      }
+      if (!draft.title) return { v: 1, ok: false, text: '写一句交什么。' }
+      if (!SEAL_KINDS[draft.kind] || !renderEvidence(draft)) return { v: 1, ok: false, text: '选一种代码验得了的证据。' }
+      if (draft.dueMinute == null) return { v: 1, ok: false, text: '要有截止时刻。' }
+      if (draft.startMinute != null && draft.startMinute >= draft.dueMinute) return { v: 1, ok: false, text: '开始要在截止之前。' }
+      const line = renderTemplateItem(draft)
+      if (!parseTemplateItem(line)) return { v: 1, ok: false, text: '这一条写不成计划里的格式。' }
+      let text = ''
+      try {
+        text = readVaultText(weekPlanPath()) || ''
+      } catch {}
+      const next = insertWeekPlanItem(text || renderWeekPlan(wp.monday, {}, t), wd, line)
+      try {
+        writeVaultText(weekPlanPath(), next)
+      } catch (error) {
+        return { v: 1, ok: false, text: '写不进笔记库：' + String((error && error.message) || error).slice(0, 80) }
+      }
+      record({ state: 'week-plan-add', at: now, weekday: wd, title: draft.title })
+      // 今天的已经套过了：这一条下周的今天才生效；要今天就去验收点页现加。
+      const note = wd === weekday ? '今天的已经自动套过了：这一条从下周的今天起生效；今天要做就去「验收点」页现加。' : WEEKDAY_NAMES[wd] + '到点会自动套上。'
+      return { ...planWeekRoute({ action: 'view' }), added: line.slice(2), text: '加上了。' + note }
+    }
+    if (action === 'prompt') {
+      const plan = days.map((d) => '## ' + d.name + '\n' + (d.items.length ? d.items.map((x) => '- ' + x.line).join('\n') : '（空）')).join('\n')
+      let week = ''
+      try {
+        week = weekPackNow(now).text
+      } catch {}
+      const text = [
+        '帮我排下周的「本周计划」。下面是我的长期方向、这周的计划和这一周的冷数据。',
+        '', '# 长期', (horizons.long.map((x) => '- ' + x.title).join('\n') || '（主线里没写）'), longText ? '\n' + longText : '',
+        '', '# 这周的计划', plan, '', week ? '# 这一周的冷数据\n' + week.split('\n---')[0] : '',
+        '', '要求：只回一份「本周计划」，按 ## 周一 … ## 周日 分节，每行一个验收点，格式严格是：',
+        '`- 09:00–10:30 标题 · 证据 · 保底 N`；证据只能写：题库 N 题 / 局 N 分钟 / 截图 N 张 / Gemini 回执 N 条 / 笔记 路径 N 字 / App 包名 N 分钟。',
+        '每天不超过 4 条；执行率不到 70% 就先把量往下调，别加码。',
+      ].filter((x) => x !== '').join('\n')
+      return view({ prompt: text })
+    }
+    return { v: 1, ok: false, error: 'bad-action' }
+  }
   const weekPlanPath = () => {
     const kb = vaultKb()
     return kb ? join(kb, '本周计划.md') : stateFile('本周计划.md')
@@ -8663,7 +8752,8 @@ export function apply(ctx) {
       description: '把他定下的安排写成时间轴验收点（到开始时刻自动开局、到截止时刻代码判、没过保底就锁）。' +
         '只在他明确说了要做什么、几点前交的时候用；每条要能被代码验：quiz（DSH 题库答对数）/ external_quiz（外部 App 刷题，要 app 包名）/ ' +
         'file（笔记库里某个文件的字数增量，要 path）/ screenshots（截图张数）/ app_minutes（某 App 用时，要 app）/ ' +
-        'bout_minutes（通过验收的局的分钟数）/ gemini_receipt（Gemini 回执条数）/ study_cards（学习制卡张数：交卡当天发一半，隔天复习答对再发另一半）。你只能加，不能改小、不能删。',
+        'bout_minutes（通过验收的局的分钟数）/ gemini_receipt（Gemini 回执条数）/ study_cards（学习制卡张数：交卡当天发一半，隔天复习答对再发另一半）。你只能加，不能改小、不能删。' +
+        '你加的只是提议：他在手机「验收点」页点头之前不锁、不算数——加完告诉他去点头（你替他点不了）。',
       parameters: {
         type: 'object',
         properties: {
@@ -8979,7 +9069,7 @@ export function apply(ctx) {
       const r = sealsRoute({ action: 'plan-day', target: p.target === 'tomorrow' ? 'tomorrow' : 'today', seals, by: 'gemini' })
       const added = (r.added || []).map((x) => '「' + x.title + '」' + (x.startMinute >= 0 ? sealHm(x.startMinute) + '–' : '') + sealHm(x.dueMinute) + (x.sameDay ? '（现加，七折）' : ''))
       const skipped = (r.skipped || []).map((x) => '「' + x.title + '」' + (x.text || x.error))
-      return { ok: added.length > 0, text: (added.length ? '加上了：' + added.join('、') + '。到开始时刻手机自动开局。' : '一条都没加上。') + (skipped.length ? ' 没加的：' + skipped.join('；') : '') }
+      return { ok: added.length > 0, text: (added.length ? '提议上了：' + added.join('、') + '。他要在手机「验收点」页点头才算数（点头前不锁、不自动开局）——提醒他去点。' : '一条都没加上。') + (skipped.length ? ' 没加的：' + skipped.join('；') : '') }
     }
     if (cmd?.type === 'start_work') {
       return startWork({ hours: p.hours, sprint: p.sprint === true, by: 'gemini' }, now)
@@ -9684,13 +9774,23 @@ export function apply(ctx) {
     const tz = zoneOr(config.timeZone)
     const s = lockingSeal(loadSeals(now, tz), { now, today: dayString(now, tz) })
     if (!s) return null
-    const tier = s.app ? tierFnNow()(s.app) : ''
-    const allow = [...new Set(['md.obsidian', ...(s.app && tier !== 'fun' && tier !== 'game' ? [s.app] : []), ...emergencyPackages(appsOf())])]
+    const tf = tierFnNow()
+    const tier = s.app ? tf(s.app) : ''
+    // 2026-11-22 以前只放 Obsidian + 这一点的 App：要交的是「局的分钟 / Gemini 回执 / 学习制卡」时根本没地方做，
+    // Claude、BOSS 直聘、粉笔全锁。现在放「能把这一点交上」的那一层：学习 App + Gemini + NekoBox + Obsidian + 这一点的 App。
+    const workInstalled = (Array.isArray(lastInstalled) ? lastInstalled : []).map((x) => String(x?.pkg || '')).filter((p) => p && tf(p) === 'work')
+    const allow = [...new Set([
+      'md.obsidian', ...WORK_DEFAULT, ...workInstalled, ...GEMINI_PACKAGES, ...PROXY_PACKAGES,
+      ...(s.app && tier !== 'fun' && tier !== 'game' ? [s.app] : []), ...emergencyPackages(appsOf()),
+    ])]
+    const setAt = s.confirmedAt || s.sealedAt
     return {
       allow,
       until: s.lockUntil,
       topic: s.title,
-      why: '封印「' + s.title + '」到点没过保底（' + s.actual + '/' + s.floor + SEAL_KINDS[s.kind].unit + '）：交够保底就解，最长到 ' + sealHm(Math.round((s.lockUntil - startOfDay(now, config.timeZone)) / 60_000)),
+      why: '验收点「' + s.title + '」到点没过保底（' + s.actual + '/' + s.floor + SEAL_KINDS[s.kind].unit + '）。这条是' + (SOURCE_LABEL[s.source] || '你定的') +
+        (s.confirmedAt ? '（你 ' + zoneHm(s.confirmedAt, tz) + ' 点过头）' : setAt ? '（' + dayString(setAt, tz).slice(5) + ' ' + zoneHm(setAt, tz) + ' 定的）' : '') +
+        '。交够保底就解，最长到 ' + sealHm(Math.round((s.lockUntil - startOfDay(now, config.timeZone)) / 60_000)),
       strict: true,
       graceMs: 0,
       mode: 'ai-work',
@@ -9835,6 +9935,16 @@ export function apply(ctx) {
       saveSeals(r.state, now, tz, { type: 'claim', id: r.seal.id, count: r.seal.claimed })
       sealTick(now, tz, lastPhone)
       return view(loadSeals(now, tz), { seal: r.seal })
+    }
+    // 2026-11-22 AI 提议的验收点：他点头才算数；不要就作废（不占紧急解除）。只能从手机上点，鱼和 Gemini 没有这两个动作。
+    if (action === 'confirm' || action === 'decline') {
+      const r = action === 'confirm'
+        ? confirmSeal(state, String(b.id || ''), { now, minuteOfDay: min, today })
+        : declineSeal(state, String(b.id || ''))
+      if (!r.ok) return { v: 1, ok: false, error: r.error, text: r.text || '没找到这一条。' }
+      saveSeals(r.state, now, tz, { type: action, id: r.seal.id })
+      record({ state: 'seal-' + action, at: now, id: r.seal.id, source: r.seal.source })
+      return { ...view(r.state), seal: r.seal, text: action === 'confirm' ? '点头了：「' + r.seal.title + '」从现在起算数。' : '不要了：「' + r.seal.title + '」作废。' }
     }
     if (action === 'waive') {
       const reason = String(b.reason || '').trim()

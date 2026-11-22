@@ -15,6 +15,7 @@ import 'plan_page.dart';
 import 'seal_page.dart';
 import 'strategy_horizons_page.dart';
 import 'today_cards.dart';
+import 'week_plan_page.dart';
 
 /// 计划：原来散在三处的「今日计划（时间块）」「计划模态 / 契约台」「三层战略」收成一个入口。
 ///
@@ -174,6 +175,16 @@ class _PlanHubPageState extends State<PlanHubPage> {
               subtitleMaxLines: 2,
               chevron: true,
               onTap: () => unawaited(_go(SealPage(channel: _channel))),
+            ),
+            ListPageRow(
+              key: const ValueKey('plan-hub-week'),
+              icon: AppIcons.calendar,
+              iconColor: Theme.of(context).colorScheme.primary,
+              title: '本周计划：这周每天交什么',
+              subtitle: '长期 → 本周 → 到点自动套成今天的验收点；复制给 Gemini 帮排下周',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => unawaited(_go(WeekPlanPage(channel: _channel))),
             ),
             ListPageRow(
               key: const ValueKey('plan-hub-day'),

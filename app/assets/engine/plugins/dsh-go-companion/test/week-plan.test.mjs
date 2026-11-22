@@ -68,3 +68,59 @@ test('周冷数据：带执行率和「连续两周 <70% 要给下调」的要�
   const none = weekPack({ entries: [], seals: { items: [] }, today, dayOf: () => today })
   assert.match(none.text, /本周执行率 —/)
 })
+
+test('/plan-week：看本周、往某一天加一条（只插那一行，别的内容原样留）、生成给 Gemini 的话', async () => {
+  const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { Readable } = await import('node:stream')
+  const { apply, setStatePin } = await import('../lib/index.js')
+  const home = mkdtempSync(join(tmpdir(), 'companion-planweek-'))
+  const old = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try {
+    mkdirSync(join(home, 'companion'), { recursive: true })
+    writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ timeZone: 'Asia/Shanghai', quietStart: 12, quietEnd: 12 }))
+    let handler
+    const ctx = {
+      get: (n) => (n === 'agents' ? { get: () => null, roots: () => [], list: () => [] } : n === 'connection' ? { requestRejection: () => undefined }
+        : n === 'sessionController' ? { resolveAgent: async () => ({ agent: null }) } : n === 'workspaceRegistry' ? { archivedSessionIds: [] } : undefined),
+      on() {}, inject(_d, cb) { cb({ webServer: { register(r) { handler = r.handler } }, effect(fn) { fn() } }) }, effect(fn) { fn() },
+    }
+    setStatePin('standby')
+    apply(ctx)
+    const post = (body) => {
+      const req = Readable.from([Buffer.from(JSON.stringify(body))])
+      req.method = 'POST'
+      req.url = '/dsh-go-companion/v1/plan-week'
+      req.headers = { 'content-type': 'application/json' }
+      const res = { text: '', writeHead() {}, end(c) { this.text = c ? String(c) : '' } }
+      return Promise.resolve(handler(req, res)).then(() => JSON.parse(res.text))
+    }
+    const v = await post({ action: 'view' })
+    assert.equal(v.ok, true)
+    assert.equal(v.days.length, 7)
+    assert.deepEqual(v.days.map((d) => d.name), ['周一', '周二', '周三', '周四', '周五', '周六', '周日'])
+    assert.equal(v.days.filter((d) => d.isToday).length, 1)
+    // 他在 Obsidian 里写的备注：加一条不能把它弄丢
+    const file = join(home, 'companion', '本周计划.md')
+    writeFileSync(file, readFileSync(file, 'utf8').replace('## 周三', '我的备注：周三要早睡\n\n## 周三'))
+    const a = await post({ action: 'add', weekday: 3, item: { title: '申论一篇', kind: 'bout_minutes', stretch: 60, floor: 40, start: '14:00', due: '15:30' } })
+    assert.equal(a.ok, true, a.text)
+    assert.match(a.added, /14:00–15:30 申论一篇 · 局 60 分钟 · 保底 40/)
+    const after = readFileSync(file, 'utf8')
+    assert.match(after, /我的备注：周三要早睡/)
+    assert.ok(a.days.find((d) => d.weekday === 3).items.some((x) => x.title === '申论一篇'))
+    assert.equal((await post({ action: 'add', weekday: 3, item: { title: '', kind: 'quiz', stretch: 5, due: '10:00' } })).ok, false)
+    assert.equal((await post({ action: 'add', weekday: 3, item: { title: 'x', kind: 'nope', stretch: 5, due: '10:00' } })).ok, false)
+    assert.equal((await post({ action: 'add', weekday: 3, item: { title: 'x', kind: 'quiz', stretch: 5 } })).ok, false, '要有截止')
+    const p = await post({ action: 'prompt' })
+    assert.match(p.prompt, /帮我排下周的「本周计划」/)
+    assert.match(p.prompt, /申论一篇/)
+    assert.match(p.prompt, /- 09:00–10:30 标题 · 证据 · 保底 N/)
+  } finally {
+    if (old === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = old
+    rmSync(home, { recursive: true, force: true })
+  }
+})

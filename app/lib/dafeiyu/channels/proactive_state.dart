@@ -963,6 +963,17 @@ class ProactiveChannel {
     }
   }
 
+  /// 本周计划（计划页）：view / add（往某一天加一条）/ prompt（复制给 Gemini 帮排下周）。
+  Future<Map<String, dynamic>?> planWeekOp(Map<String, Object?> body) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('planWeekOp', body);
+      if (raw is! Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   /// 复习卡（FSRS · 验收第二批）：summary / due / list / answer（4 选 1 代码判）/ rate（自己对答案，只改排期）/ add / delete。
   Future<Map<String, dynamic>?> reviewOp(Map<String, Object?> body) async {
     try {

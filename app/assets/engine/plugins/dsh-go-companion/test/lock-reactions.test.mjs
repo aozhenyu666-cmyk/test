@@ -256,3 +256,39 @@ test('睡觉时间（0–8 点）盖过一切局：严格局、温和局、默�
   assert.equal(a.source, 'NIGHT_CURFEW')
   assert.equal(a.priority, 'P1')
 })
+
+test('AI 提议的验收点：没点头不锁不发奖励；点头后到点没过保底才锁；验收点锁放行能交差的 App（学习 / Gemini / NekoBox）', async () => {
+  const min = minuteOfDay(Date.now(), TZ)
+  if (min < 3) return
+  await withHome(async ({ home }) => {
+    const e = boot()
+    const first = await e.call('POST', '/seals', { action: 'list' })
+    const day = first.today
+    const base = { day, kind: 'bout_minutes', stretch: 15, floor: 10, dueMinute: min - 2, estMinutes: 45, sealedAt: Date.now() - 3_600_000 }
+    // 一条鲸澜提议的（没点头）、截止已过、0 分钟
+    writeFileSync(join(home, 'companion', 'seals.json'), JSON.stringify({ v: 1, items: [{ ...base, id: 'seal-ai', title: '今日精力定调（恢复日15m）', source: 'ai' }] }))
+    const l1 = await e.call('POST', '/seals', { action: 'list' })
+    const ai = l1.items.find((x) => x.id === 'seal-ai')
+    assert.equal(ai.confirmed, false)
+    assert.equal(ai.status, 'open', '没点头：不判档')
+    assert.equal(l1.locking, null, '没点头：不锁')
+    const r1 = await plan(e.call, phone(BILI))
+    assert.notEqual(r1.lockArbiter?.source, 'CONTRACT_OVERDUE_STRICT')
+    // 截止已过的提议：点头也来不及；不要 = 作废（不占紧急解除）
+    const late = await e.call('POST', '/seals', { action: 'confirm', id: 'seal-ai' })
+    assert.equal(late.ok, false)
+    const no = await e.call('POST', '/seals', { action: 'decline', id: 'seal-ai' })
+    assert.equal(no.ok, true, JSON.stringify(no))
+    assert.equal(no.seal.status, 'waived')
+    // 他自己前一晚封的同样一条：到点没过保底 → 锁，但放行能交差的 App
+    writeFileSync(join(home, 'companion', 'seals.json'), JSON.stringify({ v: 1, items: [{ ...base, id: 'seal-own', title: '局 15 分钟', source: 'night' }] }))
+    const l2 = await e.call('POST', '/seals', { action: 'list' })
+    assert.equal(l2.locking?.id, 'seal-own')
+    const r2 = await plan(e.call, phone(BILI))
+    assert.ok(r2.session, '验收点锁走 session')
+    for (const pkg of ['md.obsidian', GEMINI]) assert.ok(r2.session.allow.includes(pkg), pkg + ' 要能开（不然交不了差）')
+    assert.ok(!r2.session.allow.includes(BILI))
+    assert.match(r2.session.why, /你前一晚封的/, '锁页写明是谁定的')
+    assert.equal(await e.call('POST', '/seals', { action: 'decline', id: 'seal-own' }).then((x) => x.ok), false, '自己定的不能「不要」，只能豁免')
+  })
+})

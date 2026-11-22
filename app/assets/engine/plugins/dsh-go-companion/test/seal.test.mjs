@@ -145,3 +145,21 @@ test('新证据：通过验收的局分钟数、Gemini 回执；局类奖励减�
   assert.equal(rewardOf2(bout, 'floor'), 15) // round(90/3)=30 × 1 × 0.5
   assert.equal(rewardOf2(rec, 'stretch'), 19) // 默认预计 45 分钟 → 15 × 1.25
 })
+
+test('2026-11-22 AI 提议：两条鱼 / Gemini 加的默认没点头——不判档、不发奖励、不锁、不自动开局；点头后照常', async () => {
+  const { addSeal: add, tickSeals: tick, lockingSeal: locking, confirmSeal, timelineDue: due } = await import('../lib/seal.js')
+  const today = '2026-11-22'
+  const r = add(null, { title: '鱼加的', kind: 'quiz', stretch: 10, floor: 5, dueMinute: 600, startMinute: 540, target: 'today' }, { now: 1, today, minuteOfDay: 500, by: 'ai' })
+  assert.equal(r.seal.confirmed, false)
+  assert.equal(r.seal.source, 'ai')
+  const t = tick(r.state, { bankCorrect: 0 }, { now: 10_000_000, today, dueAtOf: () => 1 })
+  assert.equal(t.state.items[0].status, 'open')
+  assert.equal(t.pays.length, 0)
+  assert.equal(locking(t.state, { now: 2, today }), null)
+  assert.equal(due(r.state, { today, minuteOfDay: 550 }), null, '没点头不自动开局')
+  const c = confirmSeal(r.state, r.seal.id, { now: 5, minuteOfDay: 550, today })
+  assert.equal(c.ok, true)
+  assert.equal(due(c.state, { today, minuteOfDay: 550 })?.kind, 'start')
+  const own = add(null, { title: '自己封的', kind: 'quiz', stretch: 10, dueMinute: 600, target: 'today' }, { now: 1, today, minuteOfDay: 500 })
+  assert.equal(own.seal.confirmed, true)
+})

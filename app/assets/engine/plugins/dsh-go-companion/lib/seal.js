@@ -90,8 +90,20 @@ export function cleanSeal(raw) {
     raisedAt: int(raw.raisedAt, 0),
     deferredPaid: Math.max(0, int(raw.deferredPaid, 0)),
     deferredAt: int(raw.deferredAt, 0),
+    // 2026-11-22 两条鱼 / Gemini 加的只是提议：他在手机上点头之前不锁、不发奖励、不自动开局。
+    // 老数据里 AI 加的没有这个字段 → 当作没点过头（他说过「不知道这条是哪蹦出来的」）。
+    confirmed: AI_SOURCES.includes(SEAL_SOURCES.includes(raw.source) ? raw.source : '') ? raw.confirmed === true : raw.confirmed !== false,
+    confirmedAt: int(raw.confirmedAt, 0),
   }
 }
+
+/** 谁定的：锁页和验收点页都写清楚。 */
+export const SOURCE_LABEL = Object.freeze({
+  night: '你前一晚封的', morning: '你开工前定的', live: '你当天现加的', template: '模板 / 本周计划自动套的',
+  ai: '两条鱼提议的', gemini: 'Gemini 提议的',
+})
+/** 这两种来源要他点头才算数。 */
+export const AI_SOURCES = Object.freeze(['ai', 'gemini'])
 
 export function cleanSeals(raw, today = '') {
   const items = (Array.isArray(raw?.items) ? raw.items : []).map(cleanSeal).filter(Boolean)
@@ -182,7 +194,7 @@ export function markOpened(stateRaw, id, { boutId = '', now = Date.now() } = {})
  */
 export function timelineDue(stateRaw, { today, minuteOfDay, boutRunning = false } = {}) {
   const s = cleanSeals(stateRaw, today)
-  const open = s.items.filter((x) => x.day === today && (x.status === 'open' || x.status === 'below') && x.dueMinute > minuteOfDay)
+  const open = s.items.filter((x) => x.day === today && x.confirmed && (x.status === 'open' || x.status === 'below') && x.dueMinute > minuteOfDay)
     .sort((a, b) => a.dueMinute - b.dueMinute)
   for (const x of open) {
     const left = x.dueMinute - minuteOfDay
@@ -285,6 +297,8 @@ export function tickSeals(stateRaw, facts, { now = Date.now(), today, dueAtOf })
   const items = s.items.map((seal) => {
     if (seal.day !== today || seal.status === 'waived') return seal
     const actual = measure(seal, facts)
+    // 没点头的 AI 提议：只量进度，不判档、不发奖励、不锁。
+    if (!seal.confirmed) return actual !== seal.actual ? (changed = true, { ...seal, actual }) : seal
     const dueAt = dueAtOf(seal)
     const late = now > dueAt + SEAL_GRACE_MS
     const tier = tierFor(seal, actual)
@@ -324,7 +338,28 @@ export function settleDeferred(stateRaw, progressOf, { now = Date.now() } = {}) 
 /** 现在锁着的那一条（到点没过保底、60 分钟还没到、也没交够）。 */
 export function lockingSeal(stateRaw, { now = Date.now(), today }) {
   const s = cleanSeals(stateRaw, today)
-  return s.items.find((x) => x.day === today && x.status === 'below' && x.lockUntil > now) || null
+  return s.items.find((x) => x.day === today && x.confirmed && x.status === 'below' && x.lockUntil > now) || null
+}
+
+/** 他点头：AI 提议的这一条从现在起算数（到点没过保底就锁、过了发奖励）。截止已过的不能再点头。 */
+export function confirmSeal(stateRaw, id, { now = Date.now(), minuteOfDay = 0, today = '' } = {}) {
+  const s = cleanSeals(stateRaw)
+  const cur = s.items.find((x) => x.id === id)
+  if (!cur) return { ok: false, error: 'no-seal', state: s }
+  if (cur.confirmed) return { ok: true, seal: cur, state: s }
+  if (cur.day === today && cur.dueMinute <= minuteOfDay) return { ok: false, error: 'past-due', text: '截止已经过了，点头也来不及了。', state: s }
+  const next = { ...cur, confirmed: true, confirmedAt: now }
+  return { ok: true, seal: next, state: { ...s, items: s.items.map((x) => (x.id === id ? next : x)) } }
+}
+
+/** 他不要：没点过头的 AI 提议直接作废（不占紧急解除——他从没答应过）。点过头的只能走豁免。 */
+export function declineSeal(stateRaw, id) {
+  const s = cleanSeals(stateRaw)
+  const cur = s.items.find((x) => x.id === id)
+  if (!cur) return { ok: false, error: 'no-seal', state: s }
+  if (cur.confirmed) return { ok: false, error: 'confirmed', text: '这条你已经点过头了：要不做只能写理由豁免。', state: s }
+  const next = { ...cur, status: 'waived', waivedReason: '没点头（' + (SOURCE_LABEL[cur.source] || 'AI 提议的') + '）', lockUntil: 0 }
+  return { ok: true, seal: next, state: { ...s, items: s.items.map((x) => (x.id === id ? next : x)) } }
 }
 
 /** 豁免：要写理由；调用方负责扣一次紧急解除。原始数字不动。 */
@@ -357,7 +392,7 @@ export function sealPromptLines(stateRaw, { today, hm = (m) => String(m) }) {
   const todays = s.items.filter((x) => x.day === today)
   if (!todays.length) return []
   const lines = todays.map((x) => {
-    const st = x.status === 'stretch' ? '已过拉伸' : x.status === 'floor' ? '已过保底' : x.status === 'waived' ? '已豁免' : x.status === 'below' ? '到点没过保底（锁着）' : '进行中'
+    const st = !x.confirmed ? '你们提议的、他还没点头（不锁不算数）' : x.status === 'stretch' ? '已过拉伸' : x.status === 'floor' ? '已过保底' : x.status === 'waived' ? '已豁免' : x.status === 'below' ? '到点没过保底（锁着）' : '进行中'
     return '今天的封印「' + x.title + '」：' + x.actual + '/' + x.stretch + SEAL_KINDS[x.kind].unit + '（保底 ' + x.floor + '），' + hm(x.dueMinute) + ' 前，' + st
   })
   lines.push('封印是他前一晚冷静时定的：只能加码，谁都改不了。他想改小、想说「本来只打算做一点」，不要接，也别替他求情——让他去交。')
