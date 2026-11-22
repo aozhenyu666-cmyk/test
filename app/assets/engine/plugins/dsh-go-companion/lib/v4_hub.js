@@ -9,7 +9,7 @@
 
 import { join } from 'node:path'
 import { cleanBankUnlockState, creditReviewAnswer, judgeQuizAnswer, pickNextQuizQuestion, reviewCapFor, SELF_JUDGED_WEIGHT } from './bank_unlock.js'
-import { buildImportPreview, parseBankAny } from './bank_import.js'
+import { buildImportPreview, detectQuestionAnomalies, GEMINI_IMPORT_PROMPT_TEMPLATE, normalizeImages, normalizeQuestionKind, parseBankAny } from './bank_import.js'
 import { answerLockReviewCard } from './review_cards.js'
 import { evaluateAutonomy14d, evaluateAutonomyLevel } from './autonomy.js'
 import {
@@ -140,6 +140,179 @@ export function createV4Hub(deps) {
   const saveRawBank = (b) => writeJson(stateFile('bank.json'), b)
   const loadBankUnlock = () => cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
   const saveBankUnlock = (s) => writeJson(stateFile('bank-unlock.json'), s)
+
+  const CATALOG_FILE = 'bank-catalog.json'
+  const cleanCatalogQuestion = (q, fallbackId) => {
+    if (!q || typeof q !== 'object') return null
+    const stem = String(q.题干 ?? q.stem ?? '').trim()
+    if (!stem) return null
+    const opts = Array.isArray(q.选项)
+      ? q.选项.map((x) => String(x ?? '').trim()).filter(Boolean)
+      : (Array.isArray(q.options) ? q.options.map((x) => String(x ?? '').trim()).filter(Boolean) : [])
+    const type = String(q.题型 ?? q.type ?? '').trim()
+    const rawAns = String(q.答案 ?? q.answer ?? '').trim()
+    const kind = normalizeQuestionKind(q.kind ?? q.形态, opts, type, rawAns)
+    const answer = kind === 'card' ? (rawAns || '已阅读掌握') : rawAns
+    if (!answer) return null
+    const rawAna = Array.isArray(q.解析) ? q.解析.join('；') : String(q.解析 ?? q.analysis ?? '').trim()
+    const analysis = rawAna || (kind === 'card' ? '（知识展示卡）巩固理解核心规律即可' : ('（题库没给解析）参考答案：' + answer))
+    const images = normalizeImages(q.images ?? q.图片)
+    const out = {
+      id: String(q.id || fallbackId).trim() || fallbackId,
+      题干: stem,
+      ...(opts.length >= 2 ? { 选项: opts } : {}),
+      答案: answer,
+      解析: analysis,
+      kind,
+    }
+    if (type) out.题型 = type
+    if (q.定位句) out.定位句 = String(q.定位句).trim()
+    if (q.来源) out.来源 = String(q.来源).trim()
+    if (Number.isInteger(Number(q.年份)) && Number(q.年份) > 0) out.年份 = Number(q.年份)
+    if (images.length) out.images = images
+    return out
+  }
+
+  const cleanCatalogBank = (b, idx = 0, now = Date.now()) => {
+    if (!b || typeof b !== 'object') return null
+    const id = String(b.id || `bank-${idx + 1}`).trim()
+    const name = String(b.name || b.名称 || '未命名题库').trim().slice(0, 60)
+    const rawQs = Array.isArray(b.questions) ? b.questions : (Array.isArray(b.题目) ? b.题目 : [])
+    const questions = []
+    const seenIds = new Set()
+    rawQs.forEach((q, qi) => {
+      const cq = cleanCatalogQuestion(q, `${id}:q-${qi + 1}`)
+      if (!cq) return
+      if (seenIds.has(cq.id)) cq.id = `${id}:q-${qi + 1}-${seenIds.size + 1}`
+      seenIds.add(cq.id)
+      questions.push(cq)
+    })
+    return {
+      id,
+      name,
+      importedAt: Number(b.importedAt) || now,
+      sourceFormat: String(b.sourceFormat || 'unknown'),
+      enabled: b.enabled !== false,
+      questions,
+    }
+  }
+
+  const syncCatalogToLegacyBankJson = (catalog) => {
+    const banks = Array.isArray(catalog?.banks) ? catalog.banks : []
+    const enabledBanks = banks.filter((b) => b && b.enabled !== false)
+    const mergedName = enabledBanks.length === 1
+      ? enabledBanks[0].name
+      : (enabledBanks.length > 1 ? `${enabledBanks[0].name} 等 ${enabledBanks.length} 套` : '未导入题库')
+    const mergedQuestions = []
+    const usedIds = new Set()
+    for (const b of enabledBanks) {
+      for (let i = 0; i < b.questions.length; i += 1) {
+        const q = b.questions[i]
+        let qid = String(q.id || `${b.id}:q-${i + 1}`)
+        if (usedIds.has(qid)) qid = `${b.id}:${qid}`
+        while (usedIds.has(qid)) qid = `${qid}-${usedIds.size + 1}`
+        usedIds.add(qid)
+        const item = {
+          id: qid,
+          题干: q.题干,
+          ...(Array.isArray(q.选项) && q.选项.length >= 2 ? { 选项: q.选项 } : {}),
+          答案: q.答案,
+          解析: q.解析,
+          kind: q.kind || normalizeQuestionKind(q.kind, q.选项, q.题型, q.答案),
+          ...(q.定位句 ? { 定位句: q.定位句 } : {}),
+          ...(q.题型 ? { 题型: q.题型 } : {}),
+          ...(q.来源 ? { 来源: q.来源 } : {}),
+          ...(q.年份 ? { 年份: q.年份 } : {}),
+          ...(Array.isArray(q.images) && q.images.length ? { images: q.images } : {}),
+        }
+        mergedQuestions.push(item)
+      }
+    }
+    saveRawBank({
+      题库版本: 1,
+      id: 'catalog-merged',
+      名称: mergedName,
+      题目: mergedQuestions,
+    })
+  }
+
+  const saveBankCatalog = (catalog) => {
+    const clean = {
+      v: 2,
+      banks: (Array.isArray(catalog?.banks) ? catalog.banks : []).map((b, i) => cleanCatalogBank(b, i)).filter(Boolean),
+    }
+    writeJson(stateFile(CATALOG_FILE), clean)
+    syncCatalogToLegacyBankJson(clean)
+    return clean
+  }
+
+  const loadBankCatalog = (now = Date.now()) => {
+    const stored = readState(stateFile(CATALOG_FILE), null)
+    if (stored && typeof stored === 'object' && Array.isArray(stored.banks)) {
+      return {
+        v: 2,
+        banks: stored.banks.map((b, i) => cleanCatalogBank(b, i, now)).filter(Boolean),
+      }
+    }
+    const legacy = loadRawBank()
+    if (legacy && Array.isArray(legacy.题目) && legacy.题目.length > 0) {
+      const migrated = cleanCatalogBank({
+        id: 'legacy-default',
+        name: String(legacy.名称 || '默认题库').slice(0, 60),
+        importedAt: now,
+        sourceFormat: 'legacy',
+        enabled: true,
+        questions: legacy.题目.map((q, i) => ({ ...q, id: String(q?.id || `q-${i + 1}`) })),
+      }, 0, now)
+      const catalog = { v: 2, banks: migrated ? [migrated] : [] }
+      writeJson(stateFile(CATALOG_FILE), catalog)
+      return catalog
+    }
+    return { v: 2, banks: [] }
+  }
+
+  const summarizeBank = (bank, st) => {
+    const qStats = st?.questionStats || {}
+    const kindCounts = { mcq: 0, card: 0, short_qa: 0 }
+    let seenQuestions = 0
+    let answered = 0
+    let correct = 0
+    let anomalyCount = 0
+    for (const q of bank.questions) {
+      const kind = normalizeQuestionKind(q.kind, q.选项, q.题型, q.答案)
+      kindCounts[kind] = (kindCounts[kind] || 0) + 1
+      const qs = qStats[q.id]
+      if (qs && qs.seenCount > 0) {
+        seenQuestions += 1
+        answered += qs.seenCount
+        correct += qs.correctCount
+      }
+      if (detectQuestionAnomalies(q).length > 0) anomalyCount += 1
+    }
+    const total = bank.questions.length
+    return {
+      id: bank.id,
+      name: bank.name,
+      importedAt: bank.importedAt,
+      sourceFormat: bank.sourceFormat,
+      enabled: bank.enabled !== false,
+      total,
+      kindCounts,
+      seenCount: seenQuestions,
+      coveragePct: total > 0 ? Math.round((seenQuestions * 100) / total) : 0,
+      answered,
+      correct,
+      accuracyPct: answered > 0 ? Math.round((correct * 100) / answered) : null,
+      anomalyCount,
+    }
+  }
+
+  const summarizeCatalog = (catalog, st) => (Array.isArray(catalog?.banks) ? catalog.banks : []).map((b) => summarizeBank(b, st))
+
+  const countEnabledQuestions = (catalog) =>
+    (Array.isArray(catalog?.banks) ? catalog.banks : [])
+      .filter((b) => b && b.enabled !== false)
+      .reduce((s, b) => s + b.questions.length, 0)
 
   const loadHistoryStore = () => normalizeHistoryStore(readState(stateFile('history-365.json'), null))
   const saveHistoryStore = (s) => writeJson(stateFile('history-365.json'), normalizeHistoryStore(s))
@@ -365,13 +538,151 @@ export function createV4Hub(deps) {
   function bankRoute(body = {}) {
     const now = Date.now()
     const action = String(body?.action || 'status')
-    const rawBank = loadRawBank()
+    const catalog = loadBankCatalog(now)
     const st = loadBankUnlock()
 
+    if (action === 'gemini_template') {
+      return { v: 1, ok: true, template: GEMINI_IMPORT_PROMPT_TEMPLATE }
+    }
+
+    if (action === 'list_banks') {
+      const banks = summarizeCatalog(catalog, st)
+      const enabledBanks = catalog.banks.filter((b) => b.enabled !== false)
+      const bankTotal = countEnabledQuestions(catalog)
+      const bankName = enabledBanks.length === 1
+        ? enabledBanks[0].name
+        : (enabledBanks.length > 1 ? `${enabledBanks[0].name} 等 ${enabledBanks.length} 套` : '未导入')
+      return {
+        v: 1,
+        ok: true,
+        banks,
+        bankName,
+        bankTotal,
+        wrongCount: st.wrongIds.length,
+        config: st.config,
+        stats: st.stats,
+      }
+    }
+
+    if (action === 'get_bank') {
+      const bankId = String(body?.bankId || body?.id || '').trim()
+      const target = catalog.banks.find((b) => b.id === bankId)
+      if (!target) return { v: 1, ok: false, error: '找不到指定题库' }
+      const wrongSet = new Set(st.wrongIds)
+      const qStats = st.questionStats || {}
+      const questions = target.questions.map((q, i) => {
+        const qs = qStats[q.id] || qStats[`${target.id}:${q.id}`] || null
+        const kind = normalizeQuestionKind(q.kind, q.选项, q.题型, q.答案)
+        return {
+          id: q.id,
+          index: i + 1,
+          kind,
+          stem: String(q.题干 || ''),
+          options: Array.isArray(q.选项) ? q.选项 : [],
+          answer: String(q.答案 || ''),
+          analysis: Array.isArray(q.解析) ? q.解析.join('\n') : String(q.解析 || ''),
+          type: String(q.题型 || ''),
+          images: Array.isArray(q.images) ? q.images : [],
+          inWrongPool: wrongSet.has(q.id),
+          anomalyReasons: detectQuestionAnomalies(q),
+          stats: {
+            seenCount: Number(qs?.seenCount || 0),
+            correctCount: Number(qs?.correctCount || 0),
+            wrongCount: Number(qs?.wrongCount || 0),
+            lastSeenAt: Number(qs?.lastSeenAt || 0),
+          },
+        }
+      })
+      return {
+        v: 1,
+        ok: true,
+        bank: summarizeBank(target, st),
+        questions,
+      }
+    }
+
+    if (action === 'toggle_bank') {
+      const bankId = String(body?.bankId || body?.id || '').trim()
+      const target = catalog.banks.find((b) => b.id === bankId)
+      if (!target) return { v: 1, ok: false, error: '找不到指定题库' }
+      target.enabled = body?.enabled === undefined ? !target.enabled : Boolean(body.enabled)
+      const saved = saveBankCatalog(catalog)
+      if (!target.enabled && target.questions.some((q) => q.id === st.session.currentId)) {
+        saveBankUnlock({ ...st, session: { ...st.session, currentId: '' } })
+      }
+      const bankTotal = countEnabledQuestions(saved)
+      return {
+        v: 1,
+        ok: true,
+        bank: summarizeBank(target, st),
+        banks: summarizeCatalog(saved, st),
+        bankTotal,
+      }
+    }
+
+    if (action === 'delete_bank') {
+      const bankId = String(body?.bankId || body?.id || '').trim()
+      const idx = catalog.banks.findIndex((b) => b.id === bankId)
+      if (idx < 0) return { v: 1, ok: false, error: '找不到指定题库' }
+      const [removed] = catalog.banks.splice(idx, 1)
+      const removedIds = new Set(removed.questions.map((q) => q.id))
+      const saved = saveBankCatalog(catalog)
+      const nextSt = {
+        ...st,
+        wrongIds: st.wrongIds.filter((id) => !removedIds.has(id)),
+        session: {
+          ...st.session,
+          seenIds: st.session.seenIds.filter((id) => !removedIds.has(id)),
+          currentId: removedIds.has(st.session.currentId) ? '' : st.session.currentId,
+        },
+        lastQuestionId: removedIds.has(st.lastQuestionId) ? '' : st.lastQuestionId,
+      }
+      saveBankUnlock(nextSt)
+      return {
+        v: 1,
+        ok: true,
+        deletedBankId: bankId,
+        banks: summarizeCatalog(saved, nextSt),
+        bankTotal: countEnabledQuestions(saved),
+      }
+    }
+
+    if (action === 'delete_question') {
+      const bankId = String(body?.bankId || body?.id || '').trim()
+      const questionId = String(body?.questionId || '').trim()
+      const target = catalog.banks.find((b) => b.id === bankId)
+      if (!target) return { v: 1, ok: false, error: '找不到指定题库' }
+      const qIdx = target.questions.findIndex((q) => q.id === questionId)
+      if (qIdx < 0) return { v: 1, ok: false, error: '找不到指定题目' }
+      target.questions.splice(qIdx, 1)
+      const saved = saveBankCatalog(catalog)
+      const nextSt = {
+        ...st,
+        wrongIds: st.wrongIds.filter((id) => id !== questionId),
+        session: {
+          ...st.session,
+          seenIds: st.session.seenIds.filter((id) => id !== questionId),
+          currentId: st.session.currentId === questionId ? '' : st.session.currentId,
+        },
+        lastQuestionId: st.lastQuestionId === questionId ? '' : st.lastQuestionId,
+      }
+      saveBankUnlock(nextSt)
+      const updated = saved.banks.find((b) => b.id === bankId)
+      return {
+        v: 1,
+        ok: true,
+        bankId,
+        questionId,
+        bank: updated ? summarizeBank(updated, nextSt) : null,
+        banks: summarizeCatalog(saved, nextSt),
+        bankTotal: countEnabledQuestions(saved),
+      }
+    }
+
     if (action === 'status' || action === 'quiz_session') {
-      const card = serveReviewCard(st, now)
-      if (card) return { v: 1, ok: true, ...card.payload }
-      const preview = pickNextQuizQuestion(rawBank, st)
+      const card = serveReviewCard(st, now, catalog)
+      if (card) return { v: 1, ok: true, banks: summarizeCatalog(catalog, st), ...card.payload }
+      const preview = pickNextQuizQuestion(catalog, st)
       if (preview.state) saveBankUnlock(preview.state)
       return {
         v: 1,
@@ -379,8 +690,9 @@ export function createV4Hub(deps) {
         config: st.config,
         stats: st.stats,
         wrongCount: st.wrongIds.length,
-        bankName: preview.bankName || String(rawBank?.名称 || '未导入'),
+        bankName: preview.bankName || '未导入',
         bankTotal: preview.bankTotal,
+        banks: summarizeCatalog(catalog, st),
         solved: preview.solved,
         required: preview.required,
         unlockMinutes: preview.unlockMinutes,
@@ -431,8 +743,17 @@ export function createV4Hub(deps) {
       return { v: 1, ok: true, index: idx }
     }
     const importText = (raw, opts = {}) => {
-      const merge = Boolean(opts.append && rawBank && Array.isArray(rawBank.题目))
-      const offset = merge ? rawBank.题目.length : 0
+      const requestedName = String(opts.name || '').trim().slice(0, 60)
+      const requestedBankId = String(opts.bankId || opts.id || '').trim()
+      const targetForAppend = opts.append && catalog.banks.length > 0
+        ? (
+            (requestedBankId && catalog.banks.find((b) => b.id === requestedBankId)) ||
+            (requestedName && catalog.banks.find((b) => b.name === requestedName)) ||
+            (!requestedName ? catalog.banks[catalog.banks.length - 1] : null)
+          )
+        : null
+      const merge = Boolean(targetForAppend)
+      const offset = merge ? targetForAppend.questions.length : 0
       const previewOnly = Boolean(opts.previewOnly)
       const uploadId = opts.uploadId ? String(opts.uploadId) : undefined
       const parsed = parseBankAny(raw, { offset })
@@ -468,7 +789,7 @@ export function createV4Hub(deps) {
       // 追加时按题干去重（Gemini / BrainOS 反复推同一批题不生双份）。
       if (merge) {
         const norm = (t) => String(t || '').replace(/[\s\p{P}\p{S}]/gu, '').toLowerCase().slice(0, 120)
-        const seen = new Set(rawBank.题目.map((q) => norm(q.题干)))
+        const seen = new Set(targetForAppend.questions.map((q) => norm(q.题干)))
         const fresh = []
         for (const q of parsed.questions) {
           const k = norm(q.题干)
@@ -478,25 +799,88 @@ export function createV4Hub(deps) {
             fresh.push(q)
           }
         }
-        if (!fresh.length) return { v: 1, ok: true, importedCount: 0, bankTotal: rawBank.题目.length, bankName: rawBank.名称, format: parsed.format, skipped: parsed.skipped.slice(0, 30), skippedCount: parsed.skipped.length, warnings: ['全部 ' + parsed.questions.length + ' 题题库里都有了'] }
+        if (!fresh.length) {
+          return {
+            v: 1,
+            ok: true,
+            importedCount: 0,
+            bankId: targetForAppend.id,
+            bankTotal: countEnabledQuestions(catalog),
+            bankName: targetForAppend.name,
+            format: parsed.format,
+            skipped: parsed.skipped.slice(0, 30),
+            skippedCount: parsed.skipped.length,
+            warnings: ['全部 ' + parsed.questions.length + ' 题题库里都有了'],
+          }
+        }
         parsed.questions = fresh
       }
-      const name = String(opts.name || (merge ? rawBank.名称 : '') || '备考题库').slice(0, 60)
-      const mergedBank = {
-        题库版本: 1,
-        id: merge ? (rawBank.id || 'custom-bank') : (opts.id || `bank-${now.toString(36).slice(-4)}`),
-        名称: name,
-        题目: merge ? [...rawBank.题目, ...parsed.questions] : parsed.questions,
+
+      let activeBank = null
+      if (merge) {
+        const usedIds = new Set(targetForAppend.questions.map((q) => q.id))
+        const scoped = parsed.questions.map((q, idx) => {
+          let qid = `${targetForAppend.id}:q-${targetForAppend.questions.length + idx + 1}`
+          while (usedIds.has(qid)) qid = `${targetForAppend.id}:q-${usedIds.size + 1}`
+          usedIds.add(qid)
+          return cleanCatalogQuestion({ ...q, id: qid }, qid)
+        }).filter(Boolean)
+        targetForAppend.questions.push(...scoped)
+        targetForAppend.importedAt = now
+        activeBank = targetForAppend
+      } else {
+        const existingOverwrite = opts.overwrite
+          ? catalog.banks.find((b) => (requestedBankId && b.id === requestedBankId) || (requestedName && b.name === requestedName))
+          : null
+        const baseId = requestedBankId || `bank-${now.toString(36)}-${catalog.banks.length + 1}`
+        let bankId = existingOverwrite ? existingOverwrite.id : baseId
+        if (!existingOverwrite) {
+          let seq = 1
+          while (catalog.banks.some((b) => b.id === bankId)) {
+            bankId = `${baseId}-${seq++}`
+          }
+        }
+        const name = requestedName || '备考题库'
+        const scoped = parsed.questions.map((q, idx) => {
+          const rawQid = String(q.id || `q-${idx + 1}`)
+          const qid = rawQid.startsWith(`${bankId}:`) ? rawQid : `${bankId}:${rawQid}`
+          return cleanCatalogQuestion({ ...q, id: qid }, qid)
+        }).filter(Boolean)
+        const bankEntry = {
+          id: bankId,
+          name,
+          importedAt: now,
+          sourceFormat: parsed.format,
+          enabled: true,
+          questions: scoped,
+        }
+        if (opts.replaceAll === true) {
+          catalog.banks = [bankEntry]
+        } else if (existingOverwrite) {
+          const i = catalog.banks.indexOf(existingOverwrite)
+          catalog.banks[i] = bankEntry
+        } else {
+          catalog.banks.push(bankEntry)
+        }
+        activeBank = bankEntry
       }
-      saveRawBank(mergedBank)
-      saveBankUnlock({ ...st, session: { solved: 0, seenIds: [], currentId: '' }, wrongIds: merge ? st.wrongIds : [] })
-      record({ state: 'bank-imported', at: now, name: mergedBank.名称, total: mergedBank.题目.length, added: parsed.questions.length, skipped: parsed.skipped.length, format: parsed.format })
+
+      const saved = saveBankCatalog(catalog)
+      const totalEnabled = countEnabledQuestions(saved)
+      saveBankUnlock({
+        ...st,
+        session: { solved: 0, reviewDone: 0, currentCard: '', seenIds: [], currentId: '' },
+        wrongIds: opts.replaceAll === true ? [] : st.wrongIds,
+      })
+      record({ state: 'bank-imported', at: now, name: activeBank.name, total: totalEnabled, added: parsed.questions.length, skipped: parsed.skipped.length, format: parsed.format })
       return {
         v: 1,
         ok: true,
         importedCount: parsed.questions.length,
-        bankTotal: mergedBank.题目.length,
-        bankName: mergedBank.名称,
+        bankId: activeBank.id,
+        bankTotal: totalEnabled,
+        bankName: activeBank.name,
+        banks: summarizeCatalog(saved, st),
         format: parsed.format,
         skipped: parsed.skipped.slice(0, 30),
         skippedCount: parsed.skipped.length,
@@ -519,12 +903,12 @@ export function createV4Hub(deps) {
           } catch {}
         }
       }
-      return importText(raw, { append: body?.append, name: body?.name, id: body?.id, previewOnly, uploadId: id })
+      return importText(raw, { append: body?.append, name: body?.name, id: body?.id, bankId: body?.bankId, overwrite: body?.overwrite, replaceAll: body?.replaceAll, previewOnly, uploadId: id })
     }
     if (action === 'import' || action === 'preview') {
       const raw = body?.raw ?? body?.text ?? body?.bank
       const previewOnly = action === 'preview' || Boolean(body?.previewOnly)
-      return importText(raw, { append: body?.append, name: body?.name, id: body?.id, previewOnly })
+      return importText(raw, { append: body?.append, name: body?.name, id: body?.id, bankId: body?.bankId, overwrite: body?.overwrite, replaceAll: body?.replaceAll, previewOnly })
     }
 
     if (action === 'quiz_answer' && String(body?.questionId || '').startsWith('rc:') && reviewCards) {
@@ -532,7 +916,7 @@ export function createV4Hub(deps) {
     }
 
     if (action === 'quiz_answer') {
-      const judged = judgeQuizAnswer(rawBank, st, {
+      const judged = judgeQuizAnswer(catalog, st, {
         questionId: body?.questionId,
         answer: body?.answer,
         now,
@@ -543,10 +927,10 @@ export function createV4Hub(deps) {
       let bankRes = null
       if (judged.unlocked) bankRes = unlockByQuiz(judged, now)
       if (judged.unlocked && bankRes?.earnedOnly) {
-        const card = serveReviewCard(judged.state, now)
+        const card = serveReviewCard(judged.state, now, catalog)
         let nextQuestion = card ? card.payload.question : null
         if (!nextQuestion) {
-          const preview = pickNextQuizQuestion(loadRawBank(), judged.state)
+          const preview = pickNextQuizQuestion(loadBankCatalog(now), judged.state)
           if (preview.state) saveBankUnlock(preview.state)
           nextQuestion = preview.question
         }
@@ -567,7 +951,7 @@ export function createV4Hub(deps) {
       }
       // 下一题：这一轮的复习卡名额还没用完、又有到期卡，先出卡。
       if (!judged.unlocked) {
-        const card = serveReviewCard(judged.state, now)
+        const card = serveReviewCard(judged.state, now, catalog)
         if (card) return { v: 1, ...judged, question: card.payload.question, state: undefined }
       }
       return { v: 1, ...judged, state: undefined }
@@ -577,7 +961,7 @@ export function createV4Hub(deps) {
   }
 
   /** 锁屏这一轮该先出的到期复习卡（名额 = 要求题数的一半）；出了就记在 session 里，答完才换。 */
-  function serveReviewCard(st, now) {
+  function serveReviewCard(st, now, catalogArg = null) {
     if (!reviewCards) return null
     const cap = reviewCapFor(st.config.requiredCount)
     let card = null
@@ -589,7 +973,11 @@ export function createV4Hub(deps) {
     }
     if (!card) return null
     if (card.id !== st.session.currentCard) saveBankUnlock({ ...st, session: { ...st.session, currentCard: card.id } })
-    const rawBank = loadRawBank()
+    const catalog = catalogArg || loadBankCatalog(now)
+    const enabledBanks = catalog.banks.filter((b) => b.enabled !== false)
+    const bankName = enabledBanks.length === 1
+      ? enabledBanks[0].name
+      : (enabledBanks.length > 1 ? `${enabledBanks[0].name} 等 ${enabledBanks.length} 套` : '个人复习卡')
     const choice = card.options.length > 0
     return {
       card,
@@ -597,8 +985,8 @@ export function createV4Hub(deps) {
         config: st.config,
         stats: st.stats,
         wrongCount: st.wrongIds.length,
-        bankName: String(rawBank?.名称 || '个人复习卡'),
-        bankTotal: Array.isArray(rawBank?.题目) ? rawBank.题目.length : 0,
+        bankName,
+        bankTotal: countEnabledQuestions(catalog),
         solved: st.session.solved,
         required: st.config.requiredCount,
         unlockMinutes: st.config.unlockMinutes,
@@ -641,11 +1029,12 @@ export function createV4Hub(deps) {
     let bankRes = null
     if (r.unlocked) bankRes = unlockByQuiz(r, now)
     const needNext = !r.unlocked || Boolean(bankRes?.earnedOnly)
-    const next = needNext ? serveReviewCard(r.unlockState, now) : null
+    const catalog = loadBankCatalog(now)
+    const next = needNext ? serveReviewCard(r.unlockState, now, catalog) : null
     let question = next ? next.payload.question : null
-    let bankTotal = Array.isArray(loadRawBank()?.题目) ? loadRawBank().题目.length : 0
+    let bankTotal = countEnabledQuestions(catalog)
     if (needNext && !next) {
-      const preview = pickNextQuizQuestion(loadRawBank(), r.unlockState)
+      const preview = pickNextQuizQuestion(catalog, r.unlockState)
       if (preview.state) saveBankUnlock(preview.state)
       question = preview.question
       bankTotal = preview.bankTotal

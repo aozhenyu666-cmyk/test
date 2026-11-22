@@ -4,6 +4,7 @@
 // 2) 锁屏闯关：默认答对 10 题解锁 5 分钟（题数与分钟数可配置），答错即时展示解析并收入错题池。
 
 import { parseBank, BANK_VERSION } from './bank.js'
+import { normalizeImages, normalizeQuestionKind } from './bank_import.js'
 
 export const DEFAULT_QUIZ_REQUIRED = 10
 export const DEFAULT_UNLOCK_MINUTES = 5
@@ -51,6 +52,8 @@ export function parseBankSmart(rawInput, { name = '我的备考题库', id = 'cu
               解析: q.analysis.join('；'),
               ...(q.locate ? { 定位句: q.locate } : {}),
               ...(q.type ? { 题型: q.type } : {}),
+              ...(q.kind ? { kind: q.kind } : {}),
+              ...(q.images?.length ? { images: q.images } : {}),
             })),
           },
           count: res.bank.questions.length,
@@ -158,6 +161,27 @@ function parseLooseBlock(block, index) {
   }
 }
 
+function cleanQuestionStats(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const entries = []
+  for (const [k, v] of Object.entries(raw)) {
+    const qid = String(k || '').trim()
+    if (!qid || !v || typeof v !== 'object') continue
+    entries.push([qid, {
+      seenCount: Math.max(0, Number(v.seenCount) || 0),
+      correctCount: Math.max(0, Number(v.correctCount) || 0),
+      wrongCount: Math.max(0, Number(v.wrongCount) || 0),
+      lastSeenAt: Math.max(0, Number(v.lastSeenAt) || 0),
+    }])
+  }
+  // 防止极端长周期无限膨胀，保留最近刷过的最多 10000 条记录
+  if (entries.length > 10000) {
+    entries.sort((a, b) => b[1].lastSeenAt - a[1].lastSeenAt)
+    entries.length = 10000
+  }
+  return Object.fromEntries(entries)
+}
+
 export function cleanBankUnlockState(raw) {
   const s = raw && typeof raw === 'object' ? raw : {}
   const cfg = s.config && typeof s.config === 'object' ? s.config : {}
@@ -175,7 +199,9 @@ export function cleanBankUnlockState(raw) {
       seenIds: Array.isArray(session.seenIds) ? session.seenIds.map(String).slice(-120) : [],
       currentId: String(session.currentId || ''),
     },
-    wrongIds: Array.isArray(s.wrongIds) ? [...new Set(s.wrongIds.map(String))].slice(-200) : [],
+    wrongIds: Array.isArray(s.wrongIds) ? [...new Set(s.wrongIds.map(String))].slice(-500) : [],
+    lastQuestionId: String(s.lastQuestionId || ''),
+    questionStats: cleanQuestionStats(s.questionStats),
     stats: {
       answered: Math.max(0, Number(stats.answered) || 0),
       correct: Math.max(0, Number(stats.correct) || 0),
@@ -191,55 +217,177 @@ export function normalizeAnswerToken(ans) {
   return String(ans || '').trim().toUpperCase().replace(/^[（(]/, '').replace(/[）).、．\s]+$/g, '')
 }
 
-export function pickNextQuizQuestion(rawBank, stateRaw) {
+function resolveKind(q) {
+  const opts = Array.isArray(q?.选项) ? q.选项 : (Array.isArray(q?.options) ? q.options : [])
+  return normalizeQuestionKind(q?.kind ?? q?.形态, opts, q?.题型 ?? q?.type, q?.答案 ?? q?.answer)
+}
+
+function extractQuestionPool(rawOrCatalog) {
+  if (Array.isArray(rawOrCatalog)) {
+    const pool = rawOrCatalog.map((q, i) => ({
+      qid: String(q?.id || `idx-${i}`),
+      bankId: String(q?._bankId || ''),
+      bankName: String(q?._bankName || '我的题库'),
+      raw: q,
+    }))
+    return { pool, defaultBankName: pool[0]?.bankName || '我的题库' }
+  }
+  if (Array.isArray(rawOrCatalog?.banks)) {
+    const enabledBanks = rawOrCatalog.banks.filter((b) => b && b.enabled !== false)
+    const pool = []
+    for (const b of enabledBanks) {
+      const qs = Array.isArray(b.questions) ? b.questions : (Array.isArray(b.题目) ? b.题目 : [])
+      const bName = String(b.name || b.名称 || '我的题库')
+      const bId = String(b.id || '')
+      qs.forEach((q, i) => {
+        pool.push({
+          qid: String(q?.id || `${bId || 'bank'}:idx-${i}`),
+          bankId: bId,
+          bankName: bName,
+          raw: q,
+        })
+      })
+    }
+    const defaultBankName = enabledBanks.length === 1
+      ? String(enabledBanks[0].name || enabledBanks[0].名称 || '我的题库')
+      : (enabledBanks.length > 1 ? `${enabledBanks[0].name || enabledBanks[0].名称} 等 ${enabledBanks.length} 套` : '未启用题库')
+    return { pool, defaultBankName }
+  }
+  const list = Array.isArray(rawOrCatalog?.题目) ? rawOrCatalog.题目 : []
+  const bName = String(rawOrCatalog?.名称 || '我的题库')
+  return {
+    pool: list.map((q, i) => ({
+      qid: String(q?.id || `idx-${i}`),
+      bankId: String(rawOrCatalog?.id || ''),
+      bankName: bName,
+      raw: q,
+    })),
+    defaultBankName: bName,
+  }
+}
+
+function fisherYatesPick(items, rng = Math.random) {
+  if (!items.length) return null
+  if (items.length === 1) return items[0]
+  const copy = items.slice()
+  const rand = typeof rng === 'function' ? rng : Math.random
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const raw = Number(rand())
+    const u = Number.isFinite(raw) ? Math.min(0.999999999999, Math.max(0, raw)) : Math.random()
+    const j = Math.floor(u * (i + 1))
+    const tmp = copy[i]
+    copy[i] = copy[j]
+    copy[j] = tmp
+  }
+  return copy[0]
+}
+
+function pickFromStaleSlice(items, questionStats, rng) {
+  if (items.length <= 1) return items[0] || null
+  const sorted = items
+    .map((item) => ({ item, lastSeenAt: Number(questionStats[item.qid]?.lastSeenAt || 0) }))
+    .sort((a, b) => a.lastSeenAt - b.lastSeenAt)
+  const minSeen = sorted[0].lastSeenAt
+  const tiedAtMin = sorted.filter((x) => x.lastSeenAt === minSeen).map((x) => x.item)
+  if (tiedAtMin.length >= 2) {
+    return fisherYatesPick(tiedAtMin, rng)
+  }
+  const sliceCount = Math.min(sorted.length, Math.max(2, Math.ceil(sorted.length / 2)))
+  return fisherYatesPick(sorted.slice(0, sliceCount).map((x) => x.item), rng)
+}
+
+export function pickNextQuizQuestion(rawOrCatalog, stateRaw, { rng = Math.random } = {}) {
   const state = cleanBankUnlockState(stateRaw)
-  const list = Array.isArray(rawBank?.题目) ? rawBank.题目 : []
-  if (!list.length) {
+  const { pool, defaultBankName } = extractQuestionPool(rawOrCatalog)
+  if (!pool.length) {
     return {
       ok: true,
       bankTotal: 0,
+      bankName: defaultBankName,
       solved: state.session.solved,
       required: state.config.requiredCount,
       unlockMinutes: state.config.unlockMinutes,
+      wrongCount: state.wrongIds.length,
       question: null,
     }
   }
   const seen = new Set(state.session.seenIds)
   const wrongSet = new Set(state.wrongIds)
-  // 优先抽错题或未刷过的题，防止原地重复同一题
-  let pool = list.filter((q) => !seen.has(String(q.id || '')))
-  if (!pool.length) pool = list
-  const prioritized = pool.find((q) => wrongSet.has(String(q.id || ''))) || pool[0]
-  const qid = String(prioritized.id || `idx-${list.indexOf(prioritized)}`)
+  const qStats = state.questionStats || {}
+
+  // 题池大于 1 题时优先避开刚刚出过的 lastQuestionId
+  let candidates = pool.length > 1 && state.lastQuestionId
+    ? pool.filter((x) => x.qid !== state.lastQuestionId)
+    : pool
+  if (!candidates.length) candidates = pool
+
+  const roundUnseen = candidates.filter((x) => !seen.has(x.qid))
+  if (roundUnseen.length) candidates = roundUnseen
+
+  // 3 级优先 + Fisher-Yates 真随机：
+  // ① 从未刷过（seenCount === 0）→ 随机抽取
+  // ② 错题 / 不熟卡（wrongIds 或 wrongCount > correctCount）→ 最久未刷 + 随机抽取
+  // ③ 全部刷过后 → 最久未刷梯队中随机抽取
+  const tier1 = candidates.filter((x) => !((qStats[x.qid]?.seenCount || 0) > 0))
+  let chosen = null
+  if (tier1.length) {
+    chosen = fisherYatesPick(tier1, rng)
+  } else {
+    const tier2 = candidates.filter((x) => {
+      const st = qStats[x.qid]
+      return wrongSet.has(x.qid) || (st && st.wrongCount > st.correctCount)
+    })
+    if (tier2.length) {
+      chosen = pickFromStaleSlice(tier2, qStats, rng)
+    } else {
+      chosen = pickFromStaleSlice(candidates, qStats, rng)
+    }
+  }
+
+  const q = chosen.raw
+  const opts = Array.isArray(q.选项) ? q.选项 : (Array.isArray(q.options) ? q.options : [])
+  const kind = resolveKind(q)
+  const isCodeMcq = kind === 'mcq' && opts.length >= 2
+  const images = normalizeImages(q.images ?? q.图片)
+  const analysis = Array.isArray(q.解析) ? q.解析.join('\n') : String(q.解析 || q.analysis || '')
+
   const nextState = {
     ...state,
     session: {
       ...state.session,
-      currentId: qid,
+      currentId: chosen.qid,
     },
   }
   return {
     ok: true,
-    bankTotal: list.length,
-    bankName: String(rawBank?.名称 || '我的题库'),
+    bankTotal: pool.length,
+    bankName: chosen.bankName || defaultBankName,
     solved: state.session.solved,
     required: state.config.requiredCount,
     unlockMinutes: state.config.unlockMinutes,
     wrongCount: state.wrongIds.length,
     question: {
-      id: qid,
-      stem: String(prioritized.题干 || ''),
-      options: Array.isArray(prioritized.选项) ? prioritized.选项 : [],
-      answer: Array.isArray(prioritized.选项) && prioritized.选项.length ? undefined : String(prioritized.答案 || ''),
-      type: String(prioritized.题型 || ''),
+      id: chosen.qid,
+      kind,
+      stem: String(q.题干 || q.stem || ''),
+      options: opts,
+      answer: isCodeMcq ? undefined : String(q.答案 || q.answer || ''),
+      analysis,
+      ...(images.length ? { images } : {}),
+      bankName: chosen.bankName || defaultBankName,
+      type: String(q.题型 || q.type || ''),
+      ...(isCodeMcq ? {} : { selfWeight: SELF_JUDGED_WEIGHT }),
     },
     state: nextState,
   }
 }
 
-export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = Date.now() } = {}) {
+const SELF_POSITIVE_TOKENS = new Set(['PASS', 'REMEMBER', 'KNOWN', 'UNDERSTOOD', 'READ', 'YES', 'OK', '我读懂了', '答上了', '记得'])
+const SELF_NEGATIVE_TOKENS = new Set(['FORGOT', 'UNKNOWN', 'UNFAMILIAR', 'MISSED', 'FAIL', 'NO', '还不熟', '没答上', '忘了'])
+
+export function judgeQuizAnswer(rawOrCatalog, stateRaw, { questionId, answer, now = Date.now(), rng = Math.random } = {}) {
   const state = cleanBankUnlockState(stateRaw)
-  const list = Array.isArray(rawBank?.题目) ? rawBank.题目 : []
+  const { pool } = extractQuestionPool(rawOrCatalog)
   const submittedId = String(questionId ?? '').trim()
   if ((state.session.currentId && submittedId !== state.session.currentId) || (!state.session.currentId && state.session.currentCard)) {
     return {
@@ -250,27 +398,35 @@ export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = D
       unlocked: false,
       solved: state.session.solved,
       required: state.config.requiredCount,
-      bankTotal: list.length,
+      bankTotal: pool.length,
       state,
     }
   }
-  const target = list.find((q, idx) => String(q.id || `idx-${idx}`) === String(submittedId || state.session.currentId))
-  if (!target) {
+  const wantId = String(submittedId || state.session.currentId)
+  const targetEntry = pool.find((x) => x.qid === wantId)
+  if (!targetEntry) {
     return { ok: false, error: '题库里找不到这道题', state }
   }
-  const qid = String(target.id || questionId)
-  const expectedRaw = String(target.答案 || '').trim()
+  const target = targetEntry.raw
+  const qid = targetEntry.qid
+  const expectedRaw = String(target.答案 || target.answer || '').trim()
   const expectedNorm = normalizeAnswerToken(expectedRaw)
   const gotNorm = normalizeAnswerToken(answer)
-  const opts = Array.isArray(target.选项) ? target.选项 : []
+  const opts = Array.isArray(target.选项) ? target.选项 : (Array.isArray(target.options) ? target.options : [])
+  const kind = resolveKind(target)
+  const selfJudged = kind !== 'mcq' || !opts.length
 
-  // 支持按字母（A/B/C/D）或按选项正文命中；无选项题传入 PASS/原文均可
+  // 支持按字母（A-H）或按选项正文命中；知识卡/小问题/无选项简答自评 REMEMBER/KNOWN/PASS 与 FORGOT/UNFAMILIAR
   let correct = false
-  if (!opts.length && (gotNorm === 'PASS' || gotNorm === expectedNorm)) {
-    correct = true
+  if (selfJudged) {
+    if (SELF_NEGATIVE_TOKENS.has(gotNorm)) {
+      correct = false
+    } else if (SELF_POSITIVE_TOKENS.has(gotNorm) || (gotNorm && expectedNorm && gotNorm === expectedNorm)) {
+      correct = true
+    }
   } else if (gotNorm && gotNorm === expectedNorm) {
     correct = true
-  } else if (opts.length && /^[A-F]$/.test(gotNorm)) {
+  } else if (opts.length && /^[A-H]$/.test(gotNorm)) {
     const idx = gotNorm.charCodeAt(0) - 65
     if (opts[idx] && normalizeAnswerToken(opts[idx]) === expectedNorm) correct = true
   }
@@ -278,13 +434,25 @@ export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = D
   const nextSeen = [...state.session.seenIds.filter((x) => x !== qid), qid].slice(-120)
   const nextWrong = correct
     ? state.wrongIds.filter((x) => x !== qid)
-    : [...new Set([...state.wrongIds, qid])].slice(-200)
-  const selfJudged = !opts.length
-  const nextSolved = round1(state.session.solved + (correct ? (selfJudged ? SELF_JUDGED_WEIGHT : 1) : 0))
+    : [...new Set([...state.wrongIds, qid])].slice(-500)
+  const prevQStat = state.questionStats[qid] || { seenCount: 0, correctCount: 0, wrongCount: 0, lastSeenAt: 0 }
+  const nextQuestionStats = {
+    ...state.questionStats,
+    [qid]: {
+      seenCount: prevQStat.seenCount + 1,
+      correctCount: prevQStat.correctCount + (correct ? 1 : 0),
+      wrongCount: prevQStat.wrongCount + (correct ? 0 : 1),
+      lastSeenAt: now,
+    },
+  }
+
+  const weight = correct ? (selfJudged ? SELF_JUDGED_WEIGHT : 1) : 0
+  const nextSolved = round1(state.session.solved + weight)
   const unlocked = nextSolved >= state.config.requiredCount
   const unlockMinutes = state.config.unlockMinutes
   const unlockUntil = unlocked ? now + unlockMinutes * 60_000 : 0
 
+  // 完成一轮解锁时绝不清空 questionStats 与 lastQuestionId，仅重置当轮 session 计数与去重窗
   const nextState = {
     config: state.config,
     session: {
@@ -295,6 +463,8 @@ export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = D
       currentId: '',
     },
     wrongIds: nextWrong,
+    lastQuestionId: qid,
+    questionStats: nextQuestionStats,
     stats: {
       ...state.stats,
       answered: state.stats.answered + 1,
@@ -305,20 +475,21 @@ export function judgeQuizAnswer(rawBank, stateRaw, { questionId, answer, now = D
     },
   }
 
-  const preview = pickNextQuizQuestion(rawBank, nextState)
+  const preview = pickNextQuizQuestion(rawOrCatalog, nextState, { rng })
   return {
     ok: true,
+    kind,
     correct,
     selfJudged,
-    weight: correct ? (selfJudged ? SELF_JUDGED_WEIGHT : 1) : 0,
+    weight,
     unlocked,
     unlockUntil,
     unlockMinutes,
     correctAnswer: expectedRaw,
-    explain: String(target.解析 || ''),
+    explain: Array.isArray(target.解析) ? target.解析.join('\n') : String(target.解析 || target.analysis || ''),
     solved: nextSolved,
     required: state.config.requiredCount,
-    bankTotal: list.length,
+    bankTotal: pool.length,
     wrongCount: nextWrong.length,
     question: unlocked ? null : preview.question,
     state: unlocked ? nextState : preview.state,

@@ -101,3 +101,40 @@ test('统计按题型和年份数，取题按 id', () => {
   assert.equal(questionOf(r.bank, 'q2').type, '判断推理')
   assert.equal(questionOf(r.bank, '没有这个'), null)
 })
+
+test('支持 kind (mcq/card/short_qa) 与 images 白名单及校验', () => {
+  const r = parseBank({
+    题库版本: 1,
+    id: 'mixed',
+    名称: '混合卡库',
+    题目: [
+      {
+        id: 'c1',
+        kind: 'card',
+        题干: '复利思维卡：把一次性输入沉淀成可复用规则。',
+        答案: '已阅读掌握',
+        解析: '知识卡巩固理解',
+        images: [{ path: 'assets/chart1.png', role: 'stem', caption: '复利曲线' }],
+      },
+      {
+        id: 's1',
+        kind: 'short_qa',
+        题干: '总结：为什么需要双盲验证？\n小问题：如何避免自测偏差？',
+        答案: '由独立验证者检查证据',
+        解析: '交叉校验避免确认偏误',
+      },
+    ],
+  })
+  assert.equal(r.ok, true, JSON.stringify(r.errors))
+  assert.equal(r.bank.questions[0].kind, 'card')
+  assert.deepEqual(r.bank.questions[0].images, [{ path: 'assets/chart1.png', role: 'stem', caption: '复利曲线' }])
+  assert.equal(r.bank.questions[1].kind, 'short_qa')
+
+  const badKind = cleanQuestion({ ...Q, kind: 'unknown_kind' })
+  assert.equal(badKind.ok, false)
+  assert.ok(badKind.errors.some((e) => e.code === 'bad-kind'))
+
+  const badImg = cleanQuestion({ ...Q, images: [{ caption: 'missing path' }] })
+  assert.equal(badImg.ok, false)
+  assert.ok(badImg.errors.some((e) => e.code === 'bad-images'))
+})

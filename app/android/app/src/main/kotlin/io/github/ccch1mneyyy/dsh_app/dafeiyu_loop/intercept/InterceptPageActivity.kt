@@ -4,14 +4,18 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import java.io.File
 import android.text.InputType
 import android.text.TextUtils
 import android.util.TypedValue
@@ -80,6 +84,104 @@ object QuizAntiDoubleTapPolicy {
         action == QuizResponseAction.ADVANCE_NEXT
 }
 
+data class QuizImageSpec(
+    val path: String,
+    val role: String = "stem",
+    val caption: String = "",
+)
+
+/** Pure JVM-testable formatter and safe local image resolver for mixed mcq/card/short_qa/review lockscreen cards. */
+object QuizCardDisplayPolicy {
+    fun resolveKind(question: Map<*, *>?, rawOptions: List<*>): String {
+        val rawKind = (question?.get("kind") as? String)?.trim()?.lowercase().orEmpty()
+        if (rawKind in setOf("mcq", "card", "short_qa", "review")) return rawKind
+        return if (rawOptions.isEmpty()) "short_qa" else "mcq"
+    }
+
+    fun badgeLabel(kind: String, bankName: String?): String {
+        val bank = bankName?.trim().orEmpty()
+        val suffix = if (bank.isNotEmpty()) " · $bank" else ""
+        return when (kind) {
+            "card" -> "知识展示卡 · 自评计 0.7 题进度$suffix"
+            "short_qa" -> "小问题卡 · 自评计 0.7 题进度$suffix"
+            "review" -> "个人复习卡$suffix"
+            else -> if (bank.isNotEmpty()) "选择题 · $bank" else "选择题 · 答对计 1 题"
+        }
+    }
+
+    fun formatAnswerFeedback(res: Map<*, *>, kind: String): Pair<Boolean, String> {
+        val correct = res["correct"] == true
+        val selfJudged = res["selfJudged"] == true || kind == "card" || kind == "short_qa"
+        val explain = (res["explain"] as? String).orEmpty().trim()
+        val correctAns = (res["correctAnswer"] as? String).orEmpty().trim()
+        if (correct) {
+            val text = if (selfJudged) {
+                "✓ 已记录掌握（+0.7 题进度）" + (if (explain.isNotBlank() && !explain.startsWith("（知识展示卡）")) "\n$explain" else "")
+            } else {
+                "✓ 回答正确！" + (if (explain.isNotBlank()) " $explain" else "")
+            }
+            return true to text
+        }
+        val text = when {
+            kind == "card" -> "已记入错题/待复习池，稍后会再巩固。" +
+                (if (explain.isNotBlank() && !explain.startsWith("（知识展示卡）")) "\n补充说明：$explain" else "")
+            selfJudged -> "已记入待复习池。" +
+                (if (correctAns.isNotBlank()) " 参考答案：$correctAns。" else "") +
+                (if (explain.isNotBlank()) "\n解析：$explain" else "")
+            else -> "✗ 正确答案：$correctAns。" + (if (explain.isNotBlank()) "\n解析：$explain" else "")
+        }
+        return false to text
+    }
+
+    fun extractImageSpecs(rawImages: Any?): List<QuizImageSpec> {
+        if (rawImages !is List<*>) return emptyList()
+        val out = ArrayList<QuizImageSpec>(rawImages.size)
+        for (item in rawImages) {
+            when (item) {
+                is String -> {
+                    val p = item.trim()
+                    if (p.isNotEmpty()) out.add(QuizImageSpec(path = p))
+                }
+                is Map<*, *> -> {
+                    val p = (item["path"] ?: item["url"] ?: item["src"])?.toString()?.trim().orEmpty()
+                    if (p.isNotEmpty()) {
+                        val role = (item["role"] as? String)?.trim()?.lowercase().takeIf { it == "option" } ?: "stem"
+                        val caption = (item["caption"] ?: item["alt"])?.toString()?.trim().orEmpty()
+                        out.add(QuizImageSpec(path = p, role = role, caption = caption))
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    fun resolveSafeLocalImageFile(rawPath: String, searchRoots: List<File>): File? {
+        val path = rawPath.trim()
+        if (path.isEmpty()) return null
+        val lower = path.lowercase()
+        if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("data:")) {
+            return null
+        }
+        val direct = File(path)
+        if (direct.isAbsolute) {
+            return if (direct.isFile && direct.canRead()) direct else null
+        }
+        if (path.split('/', '\\').any { it == ".." }) {
+            return null
+        }
+        for (root in searchRoots) {
+            val candidates = listOf(File(root, path), File(root, "companion/bank-assets/$path"))
+            for (f in candidates) {
+                val okCanonical = runCatching {
+                    f.canonicalPath.startsWith(root.canonicalPath)
+                }.getOrDefault(false)
+                if (okCanonical && f.isFile && f.canRead()) return f
+            }
+        }
+        return null
+    }
+}
+
 /**
  * DSH Go V4 专属锁屏与专注直达页（彻底取代假退出/按数字/走 150 步/冲刺摆设）。
  *
@@ -127,12 +229,16 @@ class InterceptPageActivity : Activity() {
     private var quizPreviewStemView: TextView? = null
     private var quizStartBtn: Button? = null
     private var quizProgressView: TextView? = null
+    private var quizKindBadgeView: TextView? = null
     private var quizStemView: TextView? = null
+    private var quizImagesBox: LinearLayout? = null
+    private var quizRevealView: TextView? = null
     private var quizStemScroll: ScrollView? = null
     private var quizFeedbackView: TextView? = null
     private var quizSpendShortcutBtn: Button? = null
     private var quizOptionsBox: LinearLayout? = null
     private var currentQuestionId: String? = null
+    private var currentQuestionKind: String = "mcq"
     private var quizBusy = false
     private var pendingQuizAdvance: Runnable? = null
 
@@ -200,6 +306,7 @@ class InterceptPageActivity : Activity() {
         pendingQuizAdvance = null
         inFullQuizMode = false
         currentQuestionId = null
+        currentQuestionKind = "mcq"
         quizBusy = false
         live[id] = this
         setContentView(content(label))
@@ -656,6 +763,87 @@ class InterceptPageActivity : Activity() {
         }
     }
 
+    private fun decodeSampledBitmap(file: File, maxDim: Int = 1080): Bitmap? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+        var sample = 1
+        while (bounds.outWidth / sample > maxDim || bounds.outHeight / sample > maxDim) {
+            sample *= 2
+        }
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        BitmapFactory.decodeFile(file.absolutePath, opts)
+    }.getOrNull()
+
+    private fun renderQuizImages(rawImages: Any?) {
+        val box = quizImagesBox ?: return
+        box.removeAllViews()
+        val specs = QuizCardDisplayPolicy.extractImageSpecs(rawImages)
+        if (specs.isEmpty()) {
+            box.visibility = View.GONE
+            return
+        }
+        val roots = buildList {
+            add(filesDir)
+            getExternalFilesDir(null)?.let { add(it) }
+            runCatching { Environment.getExternalStorageDirectory() }.getOrNull()?.let { ext ->
+                add(ext)
+                add(File(ext, "Documents/DSH"))
+            }
+        }
+        val ctx = this
+        for (spec in specs) {
+            val file = QuizCardDisplayPolicy.resolveSafeLocalImageFile(spec.path, roots)
+            val bitmap = file?.let { decodeSampledBitmap(it) }
+            if (bitmap != null) {
+                val frame = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(12).toFloat()
+                        setColor(palette.fill)
+                        setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                    }
+                    addView(ImageView(ctx).apply {
+                        setImageBitmap(bitmap)
+                        adjustViewBounds = true
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        maxHeight = dp(220)
+                        contentDescription = spec.caption.ifBlank { "题目配图" }
+                    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+                    if (spec.caption.isNotBlank()) {
+                        addView(TextView(ctx).apply {
+                            text = spec.caption
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                            setTextColor(palette.muted)
+                            setPadding(0, dp(4), 0, 0)
+                        })
+                    }
+                }
+                box.addView(frame, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(8)
+                })
+            } else {
+                val label = spec.caption.ifBlank { spec.path }
+                val placeholder = TextView(ctx).apply {
+                    text = "🖼 图片占位（未找到本地可读图片）：$label"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                    setTextColor(palette.muted)
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(12).toFloat()
+                        setColor(palette.fill)
+                        setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                    }
+                }
+                box.addView(placeholder, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(8)
+                })
+            }
+        }
+        box.visibility = View.VISIBLE
+    }
+
     private fun renderQuizPayload(res: Map<*, *>, keepFeedback: Boolean = false) {
         if (!keepFeedback) {
             quizFeedbackView?.visibility = View.GONE
@@ -669,11 +857,16 @@ class InterceptPageActivity : Activity() {
         val bankTotal = (res["bankTotal"] as? Number)?.toInt() ?: 0
         if (bankTotal <= 0 && res["question"] == null) {
             currentQuestionId = null
+            currentQuestionKind = "mcq"
             val msg = "请先在 DSH Go 的「题库中心」粘贴或导入题目；之后遇到娱乐锁屏，只要做对 $required 题即可挣 ${unlockMin} 分钟余额。"
             quizProgressView?.text = "题库为空（0 题）"
             quizPreviewProgressView?.text = "题库为空（0 题）"
+            quizKindBadgeView?.visibility = View.GONE
             quizStemView?.text = msg
             quizPreviewStemView?.text = msg
+            quizImagesBox?.removeAllViews()
+            quizImagesBox?.visibility = View.GONE
+            quizRevealView?.visibility = View.GONE
             quizStartBtn?.visibility = View.GONE
             quizFeedbackView?.visibility = View.GONE
             quizSpendShortcutBtn?.visibility = View.GONE
@@ -684,32 +877,55 @@ class InterceptPageActivity : Activity() {
         val q = res["question"] as? Map<*, *>
         if (q == null) {
             currentQuestionId = null
+            currentQuestionKind = "mcq"
             val msg = "题库已全部刷完，可点「回到 DSH Go」补充新题库。"
             quizProgressView?.text = "今日进度 $solved / $required 题"
             quizPreviewProgressView?.text = "今日进度 $solved / $required 题"
+            quizKindBadgeView?.visibility = View.GONE
             quizStemView?.text = msg
             quizPreviewStemView?.text = msg
+            quizImagesBox?.removeAllViews()
+            quizImagesBox?.visibility = View.GONE
+            quizRevealView?.visibility = View.GONE
             quizStartBtn?.visibility = View.GONE
             quizOptionsBox?.removeAllViews()
             quizBusy = false
             return
         }
         currentQuestionId = q["id"] as? String
+        val rawOptions = q["options"] as? List<*> ?: emptyList<Any?>()
+        val kind = QuizCardDisplayPolicy.resolveKind(q, rawOptions)
+        currentQuestionKind = kind
+        val bankName = (q["bankName"] as? String)?.takeIf { it.isNotBlank() } ?: (res["bankName"] as? String)
         val progressText = "刷题挣余额 $solved / $required 题 · 达标 +$unlockMin 分钟"
         val stemText = (q["stem"] as? String).orEmpty()
+        val analysisText = (q["analysis"] as? String).orEmpty().trim()
         quizProgressView?.text = progressText
         quizPreviewProgressView?.text = progressText
+        quizKindBadgeView?.apply {
+            text = QuizCardDisplayPolicy.badgeLabel(kind, bankName)
+            visibility = View.VISIBLE
+        }
         quizStemView?.text = stemText
         quizPreviewStemView?.text = stemText
+        renderQuizImages(q["images"])
+        quizRevealView?.apply {
+            if (kind == "card" && analysisText.isNotBlank() && !analysisText.startsWith("（知识展示卡）") && !analysisText.startsWith("（题库没给解析）")) {
+                text = "补充说明：$analysisText"
+                visibility = View.VISIBLE
+            } else {
+                text = ""
+                visibility = View.GONE
+            }
+        }
         quizStemScroll?.scrollTo(0, 0)
         quizStartBtn?.visibility = View.VISIBLE
-        val rawOptions = q["options"] as? List<*> ?: emptyList<Any?>()
         val optBox = quizOptionsBox ?: run {
             quizBusy = false
             return
         }
         optBox.removeAllViews()
-        if (rawOptions.isEmpty() && q["kind"] == "review") {
+        if (rawOptions.isEmpty() && kind == "review") {
             // 2026-11-21 个人复习卡（没有选项）：先在心里答，再看答案，自己判「记得 / 忘了」。
             // 自判只改复习排期、只算 0.7 题；不算题库答对数。
             val ans = (q["answer"] as? String).orEmpty()
@@ -728,14 +944,48 @@ class InterceptPageActivity : Activity() {
                         LinearLayout.LayoutParams(0, dp(48), 1f))
                 })
             })
+        } else if (kind == "card" && rawOptions.isEmpty()) {
+            // 知识展示/规律卡：直接展示正文，底部「还不熟 / 我读懂了」双按钮（自评计 0.7 题进度）。
+            optBox.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(pillButton("还不熟", secondary = true, weight = 1f) { submitQuizChoice("UNFAMILIAR") },
+                    LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+                addView(pillButton("我读懂了（+0.7）", primary = true, weight = 1.2f) { submitQuizChoice("KNOWN") },
+                    LinearLayout.LayoutParams(0, dp(48), 1.2f))
+            })
         } else if (rawOptions.isEmpty()) {
-            // 无预设选项的简答题：只能自己核对答案——2026-11-21 起只算 0.7 题、不进题库答对数（题库类验收点不认）。
-            val ansHint = (q["answer"] as? String).orEmpty()
-            optBox.addView(pillButton("查看标准答案并记作已过（只算 0.7 题）", secondary = false) {
-                submitQuizChoice(ansHint.ifBlank { "PASS" })
+            // 总结+小问题卡（short_qa）或无预设选项简答题：先展示正文与问题，点「查看参考答案」再自评「没答上 / 答上了」（计 0.7 题进度）。
+            val ansHint = (q["answer"] as? String).orEmpty().trim()
+            optBox.addView(pillButton("查看参考答案（自评计 0.7 题）", primary = true) {
+                val revealContent = buildString {
+                    append("参考答案：")
+                    append(ansHint.ifBlank { "无单独参考答案" })
+                    if (analysisText.isNotBlank() && !analysisText.startsWith("（题库没给解析）")) {
+                        append("\n解析：")
+                        append(analysisText)
+                    }
+                }
+                if (quizRevealView != null) {
+                    quizRevealView?.text = revealContent
+                    quizRevealView?.visibility = View.VISIBLE
+                } else {
+                    quizFeedbackView?.apply {
+                        visibility = View.VISIBLE
+                        setTextColor(palette.muted)
+                        text = revealContent
+                    }
+                }
+                optBox.removeAllViews()
+                optBox.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(pillButton("没答上", secondary = true, weight = 1f) { submitQuizChoice("FORGOT") },
+                        LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+                    addView(pillButton("答上了（+0.7）", primary = true, weight = 1.2f) { submitQuizChoice("REMEMBER") },
+                        LinearLayout.LayoutParams(0, dp(48), 1.2f))
+                })
             })
         } else {
-            val labels = listOf("A", "B", "C", "D", "E", "F")
+            val labels = listOf("A", "B", "C", "D", "E", "F", "G", "H")
             rawOptions.forEachIndexed { idx, opt ->
                 val text = opt?.toString()?.trim().orEmpty()
                 if (text.isEmpty()) return@forEachIndexed
@@ -843,16 +1093,15 @@ class InterceptPageActivity : Activity() {
                     }
                     QuizResponseAction.ADVANCE_NEXT -> {
                         val correct = res?.get("correct") == true
-                        val explain = (res?.get("explain") as? String).orEmpty()
-                        val correctAns = (res?.get("correctAnswer") as? String).orEmpty()
+                        val (isPositiveColor, feedbackText) = if (res != null) {
+                            QuizCardDisplayPolicy.formatAnswerFeedback(res, currentQuestionKind)
+                        } else {
+                            false to ""
+                        }
                         quizFeedbackView?.apply {
                             visibility = View.VISIBLE
-                            setTextColor(if (correct) Color.parseColor("#1D8F63") else Color.parseColor("#C94A4A"))
-                            text = if (correct) {
-                                "✓ 回答正确！" + (if (explain.isNotBlank()) " $explain" else "")
-                            } else {
-                                "✗ 正确答案：$correctAns。" + (if (explain.isNotBlank()) "\n解析：$explain" else "")
-                            }
+                            setTextColor(if (isPositiveColor) Color.parseColor("#1D8F63") else Color.parseColor("#C94A4A"))
+                            text = feedbackText
                         }
                         // 保持 quizBusy = true 且按钮禁用，直到 postDelayed 渲染完下一题再解锁（1.1 防连点空窗）。
                         val r = Runnable {
@@ -1361,7 +1610,7 @@ class InterceptPageActivity : Activity() {
                 bottomMargin = dp(10)
             })
 
-            // 中间独立可滚动题干/材料区
+            // 中间独立可滚动题干/材料/图片/卡片解析区
             addView(ScrollView(ctx).apply {
                 quizStemScroll = this
                 isFillViewport = false
@@ -1372,12 +1621,51 @@ class InterceptPageActivity : Activity() {
                     setColor(palette.pressed)
                     setStroke(dp(1).coerceAtLeast(1), palette.stroke)
                 }
-                addView(TextView(ctx).apply {
-                    quizStemView = this
-                    text = ""
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
-                    setTextColor(palette.ink)
-                    setLineSpacing(0f, 1.38f)
+                addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(TextView(ctx).apply {
+                        quizKindBadgeView = this
+                        visibility = View.GONE
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                        setTypeface(typeface, Typeface.BOLD)
+                        setTextColor(palette.onTonal)
+                        setPadding(dp(10), dp(4), dp(10), dp(4))
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(999).toFloat()
+                            setColor(palette.tonal)
+                        }
+                    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(8)
+                    })
+                    addView(TextView(ctx).apply {
+                        quizStemView = this
+                        text = ""
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+                        setTextColor(palette.ink)
+                        setLineSpacing(0f, 1.38f)
+                    })
+                    addView(LinearLayout(ctx).apply {
+                        quizImagesBox = this
+                        orientation = LinearLayout.VERTICAL
+                        visibility = View.GONE
+                    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(6)
+                    })
+                    addView(TextView(ctx).apply {
+                        quizRevealView = this
+                        visibility = View.GONE
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                        setTextColor(palette.ink)
+                        setLineSpacing(0f, 1.32f)
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(12).toFloat()
+                            setColor(palette.fill)
+                            setStroke(dp(1).coerceAtLeast(1), palette.stroke)
+                        }
+                    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(10)
+                    })
                 })
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 

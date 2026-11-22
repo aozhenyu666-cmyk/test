@@ -36,7 +36,8 @@
 
 export const BANK_VERSION = 1
 
-const QUESTION_KEYS = new Set(['id', '题干', '选项', '答案', '解析', '定位句', '题型', '来源', '年份'])
+const QUESTION_KEYS = new Set(['id', '题干', '选项', '答案', '解析', '定位句', '题型', '来源', '年份', 'kind', 'images'])
+const QUESTION_KINDS = new Set(['mcq', 'card', 'short_qa'])
 const TOP_KEYS = new Set(['题库版本', 'id', '名称', '题目'])
 
 function isPlainObject(v) {
@@ -97,6 +98,32 @@ export function cleanQuestion(raw, index = 0) {
     locate = ''
   }
 
+  let kind = ''
+  if (raw.kind !== undefined) {
+    kind = text(raw.kind).toLowerCase()
+    if (kind && !QUESTION_KINDS.has(kind)) err('bad-kind', '题目[' + index + '].kind', '不支持的形态：' + kind)
+  }
+
+  const images = []
+  if (raw.images !== undefined) {
+    if (!Array.isArray(raw.images)) err('bad-images', '题目[' + index + '].images', 'images 必须是数组')
+    else {
+      for (const item of raw.images) {
+        if (typeof item === 'string' && text(item)) {
+          images.push({ path: text(item), role: 'stem', caption: '' })
+        } else if (isPlainObject(item) && text(item.path)) {
+          images.push({
+            path: text(item.path),
+            role: text(item.role) === 'option' ? 'option' : 'stem',
+            caption: text(item.caption),
+          })
+        } else {
+          err('bad-images', '题目[' + index + '].images', '每张图片必须含有效的 path')
+        }
+      }
+    }
+  }
+
   if (errors.length) return { ok: false, errors }
   return {
     ok: true,
@@ -111,6 +138,8 @@ export function cleanQuestion(raw, index = 0) {
       type: text(raw['题型']),
       source: text(raw['来源']),
       year: Number.isInteger(Number(raw['年份'])) && Number(raw['年份']) > 0 ? Number(raw['年份']) : 0,
+      ...(kind ? { kind } : {}),
+      ...(images.length ? { images } : {}),
     },
   }
 }
