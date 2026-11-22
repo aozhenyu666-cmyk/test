@@ -216,6 +216,23 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             "bossBrief" -> ProactiveRuntime.fetchPluginRoute(
                 result, "GET", "/wall/boss-brief?timeZone=${BeijingClock.ZONE.id}", null,
             )
+            // [Boss-Wall Path B] 端内独立冷血主管会话质询室（GET/POST /wall/boss-chat）。
+            "wallBossChat" -> {
+                val args = (call.arguments as? Map<*, *>)?.entries
+                    ?.mapNotNull { (k, v) -> (k as? String)?.let { it to v } }
+                    ?.toMap()
+                val action = (args?.get("action") as? String)?.trim().orEmpty()
+                if (args.isNullOrEmpty() || action == "status") {
+                    ProactiveRuntime.fetchPluginRoute(
+                        result, "GET", "/wall/boss-chat?timeZone=${BeijingClock.ZONE.id}", null,
+                    )
+                } else {
+                    val body = LinkedHashMap<String, Any?>()
+                    body["timeZone"] = BeijingClock.ZONE.id
+                    args.forEach { (k, v) -> if (k != "timeZone") body[k] = v }
+                    ProactiveRuntime.fetchPluginRoute(result, "POST", "/wall/boss-chat", body)
+                }
+            }
             // A3：申诉。只收「一条具体判定 + 新的物理证据」，每天 2 次；判还是由插件里的墙算。
             "wallAppeal" -> {
                 val body = LinkedHashMap<String, Any?>()

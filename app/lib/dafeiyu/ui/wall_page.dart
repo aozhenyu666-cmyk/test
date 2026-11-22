@@ -2,11 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../l10n/l10n.dart';
+import '../../state/sessions_state.dart' show sessionsProvider;
 import '../channels/proactive_state.dart';
+import '../../ui/common/app_sheet.dart';
 import '../../ui/common/list_page_row.dart';
+import '../../ui/common/segmented_pill.dart';
 import '../../ui/common/status_chip.dart';
+import '../../ui/features/feature_widgets.dart' show openSessionInChat;
 import 'companion_hub_page.dart';
 import 'bank_manager_page.dart';
 import 'deposit_page.dart';
@@ -17,14 +22,11 @@ import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../dafeiyu_strings.dart';
 
-/// A3：墙的对话界面。
+/// A3：墙的对话界面（含路径 A 全局审视卡 + 路径 B 主管质询室 Tab）。
 ///
-/// **它不是一个聊天窗。** 墙不是第三个人格（`wall_auditor.js` 头注释已定），所以这一页
-/// 长得像对话但只能做两件事：查已经落账的审查记录、针对一条判定申诉。
-/// 用户不能在这里跟墙说话，墙也不接话——每一句话都是插件用模板生成的判定和依据。
-///
-/// 三种气泡：提交 / 判定 / 规则变更。没有第四种。
-class WallPage extends StatefulWidget {
+/// Tab 0「客观证据台账」维持纯证据裁决主流程（只收证据和申诉）+ 路径 A 简报；
+/// Tab 1「主管质询室」连接第 3 个物理隔离会话 `wallSessionId`，只挂客观账本与只读审计工具。
+class WallPage extends ConsumerStatefulWidget {
   const WallPage({super.key, this.channel, this.asTab = false});
 
   /// 测试用：塞一个假的 channel，免得每个用例都要起引擎。
@@ -34,24 +36,69 @@ class WallPage extends StatefulWidget {
   final bool asTab;
 
   @override
-  State<WallPage> createState() => _WallPageState();
+  ConsumerState<WallPage> createState() => _WallPageState();
 }
 
-class _WallPageState extends State<WallPage> {
+class _WallPageState extends ConsumerState<WallPage> {
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
   WallThread? _thread;
   Map<String, Object?>? _status;
   Map<String, dynamic>? _today;
   Map<String, dynamic>? _seals;
   Map<String, dynamic>? _bossBrief;
+  Map<String, dynamic>? _bossChat;
+  int _tabIndex = 0;
   bool _loading = true;
   bool _failed = false;
+  bool _bossSending = false;
   String _failedWhy = '';
+  final TextEditingController _bossInput = TextEditingController();
+  Timer? _bossPollTimer;
+  int _bossPollCount = 0;
 
   @override
   void initState() {
     super.initState();
     unawaited(_refresh());
+  }
+
+  @override
+  void dispose() {
+    _bossPollTimer?.cancel();
+    _bossPollTimer = null;
+    _bossInput.dispose();
+    super.dispose();
+  }
+
+  void _syncBossPolling() {
+    final active = (_bossChat?['inFlight'] == true || _bossSending) && _tabIndex == 1;
+    if (!active) {
+      _bossPollTimer?.cancel();
+      _bossPollTimer = null;
+      _bossPollCount = 0;
+      return;
+    }
+    if (_bossPollTimer != null) return;
+    _bossPollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+      if (!mounted || _bossPollCount >= 40) {
+        _bossPollTimer?.cancel();
+        _bossPollTimer = null;
+        _bossPollCount = 0;
+        return;
+      }
+      _bossPollCount++;
+      unawaited(_refreshBossChatOnly());
+    });
+  }
+
+  Future<void> _refreshBossChatOnly() async {
+    final bc = await _channel.wallBossChat();
+    if (!mounted || bc == null) return;
+    setState(() {
+      _bossChat = bc;
+      if (bc['inFlight'] != true) _bossSending = false;
+    });
+    _syncBossPolling();
   }
 
   Future<void> _refresh() async {
@@ -67,6 +114,15 @@ class _WallPageState extends State<WallPage> {
     // 老板全局审视简报：若接口暂未挂载，页面用 _today/_seals/_status 合成兜底。
     unawaited(_channel.bossBrief().then((b) {
       if (mounted && b != null) setState(() => _bossBrief = b);
+    }).catchError((_) {}));
+    // [Boss-Wall Path B] 主管质询室独立会话状态与历史记录
+    unawaited(_channel.wallBossChat().then((bc) {
+      if (!mounted || bc == null) return;
+      setState(() {
+        _bossChat = bc;
+        if (bc['inFlight'] != true) _bossSending = false;
+      });
+      _syncBossPolling();
     }).catchError((_) {}));
     final thread = await _channel.wallThread();
     final status = await _channel.wallStatus();
@@ -204,57 +260,79 @@ class _WallPageState extends State<WallPage> {
         GlassIconButton(icon: AppIcons.refresh, tooltip: DafeiyuStrings.fromL10n(l).wallRefresh, onPressed: () => unawaited(_refresh())),
       ],
       children: [
-        _statusHero(l),
-        _bossAuditCard(),
-        if (_loading)
-          const ListPageCard(children: [ListPageRow(icon: AppIcons.loading, title: '正在读墙的记录…')])
-        else if (_failed)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: SegmentedPill<int>(
+            key: const ValueKey('wall-mode-switcher'),
+            segments: const [
+              PillSegment(0, '客观证据台账'),
+              PillSegment(1, '主管质询室'),
+            ],
+            selected: _tabIndex,
+            onChanged: (idx) {
+              setState(() => _tabIndex = idx);
+              if (idx == 1 && _bossChat == null) {
+                unawaited(_refreshBossChatOnly());
+              }
+              _syncBossPolling();
+            },
+          ),
+        ),
+        if (_tabIndex == 1) ...[
+          ..._bossRoomChildren(),
+        ] else ...[
+          _statusHero(l),
+          _bossAuditCard(),
+          if (_loading)
+            const ListPageCard(children: [ListPageRow(icon: AppIcons.loading, title: '正在读墙的记录…')])
+          else if (_failed)
+            ListPageCard(
+              children: [
+                ListPageRow(
+                  icon: AppIcons.warning,
+                  title: DafeiyuStrings.fromL10n(l).wallThreadFailed.replaceAll('{reason}', _failedWhy),
+                  titleMaxLines: 3,
+                ),
+              ],
+            )
+          else if (_thread == null || _thread!.isEmpty)
+            ListPageCard(
+              title: '审查记录',
+              children: [
+                ListPageRow(icon: AppIcons.info, title: DafeiyuStrings.fromL10n(l).wallThreadEmpty, titleMaxLines: 3),
+              ],
+            )
+          else
+            ListPageCard(
+              title: '审查记录 · ${_thread!.bubbles.length} 条（点判定可申诉）',
+              children: [for (final b in _thread!.bubbles) _bubble(l, b)],
+            ),
+          const SizedBox(height: 20),
+          _dueToday(),
+          _wayOut(),
+          const SizedBox(height: 20),
+          _actions(l),
+          const SizedBox(height: 20),
           ListPageCard(
+            title: '验收',
             children: [
               ListPageRow(
-                icon: AppIcons.warning,
-                title: DafeiyuStrings.fromL10n(l).wallThreadFailed.replaceAll('{reason}', _failedWhy),
-                titleMaxLines: 3,
+                icon: AppIcons.planMode,
+                title: '交视频提炼 / 高强度问答验收',
+                subtitle: '在 AI 计划模态里提交总结、触发主线检查点',
+                subtitleMaxLines: 2,
+                chevron: true,
+                onTap: () => unawaited(PlanModalityPage.open(context, channel: _channel)),
               ),
             ],
-          )
-        else if (_thread == null || _thread!.isEmpty)
-          ListPageCard(
-            title: '审查记录',
-            children: [
-              ListPageRow(icon: AppIcons.info, title: DafeiyuStrings.fromL10n(l).wallThreadEmpty, titleMaxLines: 3),
-            ],
-          )
-        else
-          ListPageCard(
-            title: '审查记录 · ${_thread!.bubbles.length} 条（点判定可申诉）',
-            children: [for (final b in _thread!.bubbles) _bubble(l, b)],
           ),
-        const SizedBox(height: 20),
-        _dueToday(),
-        _wayOut(),
-        const SizedBox(height: 20),
-        _actions(l),
-        const SizedBox(height: 20),
-        ListPageCard(
-          title: '验收',
-          children: [
-            ListPageRow(
-              icon: AppIcons.planMode,
-              title: '交视频提炼 / 高强度问答验收',
-              subtitle: '在 AI 计划模态里提交总结、触发主线检查点',
-              subtitleMaxLines: 2,
-              chevron: true,
-              onTap: () => unawaited(PlanModalityPage.open(context, channel: _channel)),
-            ),
-          ],
-        ),
-        const SizedBox(height: 24),
+          const SizedBox(height: 24),
+        ],
       ],
     );
   }
 
-  /// 顶部紧凑「老板全局审视 · 喂给 Gemini」卡片（不干扰只收证据和申诉主流程）。
+  /// 顶部紧凑「老板全局审视 · 喂给 Gemini」卡片（路径 A，不干扰只收证据和申诉主流程）。
   Widget _bossAuditCard() {
     final theme = Theme.of(context);
     final colors = DshColors.of(context);
@@ -290,6 +368,11 @@ class _WallPageState extends State<WallPage> {
                     label: brief['fallback'] == true ? '现场合成' : '全局账本',
                   ),
                 ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '路径 A：已打通 Gemini 桥只读工具 dafeiyu_boss_brief（同步后 Gemini 可直读全局账本）；也可切上方「主管质询室」体验路径 B。',
+                style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
               ),
               if (headline.isNotEmpty) ...[
                 const SizedBox(height: 6),
@@ -687,6 +770,307 @@ class _WallPageState extends State<WallPage> {
     if (at <= 0) return '';
     final d = DateTime.fromMillisecondsSinceEpoch(at);
     return '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+
+  // ── [Boss-Wall Path B] 主管质询室 UI 与操作 ────────────────────────────────────
+
+  Future<void> _runBossChatOp(Map<String, Object?> body, {bool markSending = false}) async {
+    if (markSending && mounted) setState(() => _bossSending = true);
+    final res = await _channel.wallBossChat(body);
+    if (!mounted) return;
+    if (res == null) {
+      setState(() => _bossSending = false);
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('连不上伴侣引擎，请先确认引擎与插件在线')),
+      );
+      _syncBossPolling();
+      return;
+    }
+    setState(() {
+      _bossChat = res;
+      if (res['ok'] == false || (res['pending'] != true && res['inFlight'] != true)) {
+        _bossSending = false;
+      }
+    });
+    _syncBossPolling();
+    if (res['ok'] == false && '${res['text'] ?? ''}'.trim().isNotEmpty) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('${res['text']}')),
+      );
+    }
+  }
+
+  Future<void> _createAndBindBossSession() async {
+    try {
+      final id = await ref.read(sessionsProvider.notifier).create();
+      if (!mounted) return;
+      await _runBossChatOp({'action': 'bind', 'sessionId': id});
+    } on Object catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('新建主管会话失败：$e')),
+      );
+    }
+  }
+
+  Future<void> _pickAndBindBossSession() async {
+    final sessions = await _channel.agentSessions();
+    if (!mounted) return;
+    if (!sessions.ready) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('伴侣引擎未就绪，暂无法读取会话列表')),
+      );
+      return;
+    }
+    final sisId = sessions.sessionId ?? '';
+    final stratId = sessions.config['strategistSessionId'] as String? ?? '';
+    final candidates = [
+      for (final a in sessions.agents)
+        if (a.id != sisId && a.id != stratId) a,
+    ];
+    final picked = await showAppSheet<String>(
+      context,
+      heightFactor: 0.55,
+      builder: (sheetCtx) => Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Text('选择第 3 个独立主管墙会话', style: Theme.of(sheetCtx).textTheme.titleMedium),
+          ),
+          Expanded(
+            child: ListView(
+              children: [
+                for (final a in candidates)
+                  ListTile(
+                    leading: Icon(a.idle ? AppIcons.chat : AppIcons.queued),
+                    title: Text(a.id),
+                    subtitle: Text(a.idle ? '空闲可绑定' : '当前运行中'),
+                    onTap: () => Navigator.pop(sheetCtx, a.id),
+                  ),
+                if (candidates.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('暂无可用非姐妹会话，建议直接点「一键新建并绑定主管会话」。'),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (picked == null || picked.isEmpty || !mounted) return;
+    await _runBossChatOp({'action': 'bind', 'sessionId': picked});
+  }
+
+  Future<void> _sendBossMessage() async {
+    final txt = _bossInput.text.trim();
+    if (txt.isEmpty || _bossSending) return;
+    _bossInput.clear();
+    await _runBossChatOp({'action': 'send', 'text': txt}, markSending: true);
+  }
+
+  List<Widget> _bossRoomChildren() {
+    final theme = Theme.of(context);
+    final colors = DshColors.of(context);
+    final chat = _bossChat;
+    final bound = chat?['bound'] == true;
+    final sid = '${chat?['wallSessionId'] ?? ''}'.trim();
+    final online = chat?['agentOnline'] == true;
+    final inFlight = chat?['inFlight'] == true || _bossSending;
+    final rawMsgs = chat?['messages'];
+    final messages = rawMsgs is List
+        ? [for (final m in rawMsgs) if (m is Map) Map<String, dynamic>.from(m)]
+        : const <Map<String, dynamic>>[];
+    final remoteBrief = chat?['bossBrief'] is Map ? Map<String, dynamic>.from(chat!['bossBrief'] as Map) : null;
+    final brief = (remoteBrief != null && '${remoteBrief['headline'] ?? ''}'.isNotEmpty) ? remoteBrief : _resolvedBossBrief();
+    final headline = '${brief['headline'] ?? ''}'.trim();
+    final gapsRaw = brief['keyGaps'];
+    final gaps = gapsRaw is List ? [for (final g in gapsRaw) '$g'.trim()].where((s) => s.isNotEmpty).toList() : const <String>[];
+
+    return [
+      Padding(
+        key: const ValueKey('wall-boss-room-view'),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: GlassSurface(
+          tier: GlassTier.card,
+          borderRadius: AppShape.radiusLg,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(AppIcons.lock, size: 18, color: bound ? colors.info : colors.warning),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '主管质询室 · 路径 B（独立第 3 会话）',
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    StatusChip(
+                      tone: !bound ? StatusTone.warn : (online ? StatusTone.ok : StatusTone.idle),
+                      label: !bound ? '未绑定' : (online ? '会话在线' : '待唤醒'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  bound
+                      ? '已绑定独立会话 $sid：与鱼丸/鲸澜完全隔离，只挂载冷血主管人设、全局账本与 4 个只读审计工具（零解锁/豁免/减压权限）。'
+                      : '路径 B 将在端内新建或绑定第 3 个独立 AI 会话，与两条鱼人设/静音/主动插话物理隔离，专门盯防全局兑现率、娱乐时间比与跳票模式。',
+                  style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                ),
+                const SizedBox(height: 12),
+                if (!bound)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          key: const ValueKey('wall-boss-create-bind'),
+                          onPressed: () => unawaited(_createAndBindBossSession()),
+                          icon: const Icon(AppIcons.add, size: 16),
+                          label: const Text('一键新建并绑定主管会话'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          key: const ValueKey('wall-boss-pick-session'),
+                          onPressed: () => unawaited(_pickAndBindBossSession()),
+                          icon: const Icon(AppIcons.chat, size: 16),
+                          label: const Text('绑定已有会话'),
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.tonalIcon(
+                        key: const ValueKey('wall-boss-audit-now'),
+                        onPressed: inFlight
+                            ? null
+                            : () => unawaited(_runBossChatOp({'action': 'audit_now'}, markSending: true)),
+                        icon: const Icon(AppIcons.askAi, size: 16),
+                        label: Text(inFlight ? '主管审计中…' : '发起全局质询'),
+                      ),
+                      OutlinedButton.icon(
+                        key: const ValueKey('wall-boss-open-chat'),
+                        onPressed: sid.isEmpty ? null : () => openSessionInChat(context, ref, sid),
+                        icon: const Icon(AppIcons.openExternal, size: 16),
+                        label: const Text('主对话打开'),
+                      ),
+                      OutlinedButton(
+                        onPressed: inFlight ? null : () => unawaited(_runBossChatOp({'action': 'clear'})),
+                        child: const Text('清空记录'),
+                      ),
+                      TextButton(
+                        key: const ValueKey('wall-boss-unbind'),
+                        onPressed: inFlight ? null : () => unawaited(_runBossChatOp({'action': 'unbind'})),
+                        child: const Text('解绑'),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      if (headline.isNotEmpty || gaps.isNotEmpty)
+        ListPageCard(
+          title: '实时投喂给主管的客观全局账本',
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          children: [
+            if (headline.isNotEmpty)
+              ListPageRow(
+                icon: AppIcons.report,
+                title: headline,
+                titleMaxLines: 3,
+              ),
+            for (final g in gaps.take(3))
+              ListPageRow(
+                icon: AppIcons.warning,
+                iconColor: colors.warning,
+                title: g,
+                titleMaxLines: 2,
+              ),
+          ],
+        ),
+      ListPageCard(
+        title: '主管质询对话记录 · ${messages.length} 条',
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          if (messages.isEmpty && !inFlight)
+            ListPageRow(
+              icon: AppIcons.info,
+              title: bound ? '尚未发起质询' : '请先在上方绑定第 3 个独立主管会话',
+              subtitle: bound ? '点击上方「发起全局质询」，或在下方直接输入你要接受审视的问题' : null,
+              subtitleMaxLines: 2,
+            ),
+          for (final m in messages)
+            () {
+              final role = '${m['role'] ?? 'assistant'}';
+              final text = '${m['text'] ?? ''}';
+              final atMs = m['at'] is num ? (m['at'] as num).toInt() : 0;
+              final isUser = role == 'user';
+              final isErr = role == 'system' || m['error'] == true;
+              return ListPageRow(
+                icon: isUser ? AppIcons.edit : (isErr ? AppIcons.warning : AppIcons.lock),
+                iconColor: isUser ? colors.info : (isErr ? colors.danger : theme.colorScheme.primary),
+                title: isUser ? '你' : (isErr ? '系统提示' : '主管墙'),
+                subtitle: text,
+                subtitleMaxLines: 30,
+                value: _hhmm(atMs),
+              );
+            }(),
+          if (inFlight)
+            const ListPageRow(
+              icon: AppIcons.loading,
+              title: '主管墙正在核查全局账本并生成质询…',
+              subtitle: '独立会话后台生成中，通常数秒内自动回传',
+            ),
+        ],
+      ),
+      if (bound)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          child: GlassSurface(
+            tier: GlassTier.card,
+            borderRadius: AppShape.radiusLg,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    key: const ValueKey('wall-boss-input'),
+                    controller: _bossInput,
+                    maxLines: 3,
+                    minLines: 1,
+                    enabled: !inFlight,
+                    decoration: const InputDecoration(
+                      labelText: '向主管墙汇报或回应追问',
+                      hintText: '汇报实质产出、物理证据或回答主管追问（只收事实，不批求情）',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  FilledButton.icon(
+                    key: const ValueKey('wall-boss-send'),
+                    onPressed: inFlight ? null : () => unawaited(_sendBossMessage()),
+                    icon: const Icon(AppIcons.send, size: 16),
+                    label: Text(inFlight ? '正在等待回复…' : '发送给主管墙'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+    ];
   }
 }
 

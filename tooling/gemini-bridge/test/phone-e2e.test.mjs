@@ -91,6 +91,11 @@ test('手机配好桥 → 快照上去；Gemini 交回执、加验收点、提�
     const week = await tool('dafeiyu_week', {})
     assert.match(week.content[0].text, /周冷数据/)
     assert.match(week.content[0].text, /【周验收】/)
+    const boss = await tool('dafeiyu_boss_brief', {})
+    assert.ok(!boss.isError)
+    assert.equal(boss.structuredContent.synced, true)
+    assert.equal(boss.structuredContent.source, 'engine')
+    assert.match(boss.content[0].text, /老板全局审视/)
 
     // Gemini 交回执：工具在等，手机这边同步一次就把它处理了
     const pending = tool('dafeiyu_submit_receipt', { checkpoint_id: sealId, topic: '资料分析抽背', did: '讲清了增长率和基期', next: '下午开刷 30 题', verdict: 'pass',

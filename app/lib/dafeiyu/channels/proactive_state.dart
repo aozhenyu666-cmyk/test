@@ -496,6 +496,18 @@ class ProactiveChannel {
     }
   }
 
+  /// 主管质询室（路径 B · 端内独立 `wallSessionId` 会话，`GET/POST /wall/boss-chat`）。
+  Future<Map<String, dynamic>?> wallBossChat([Map<String, Object?>? body]) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('wallBossChat', body);
+      if (raw is! Map) return null;
+      if (raw['error'] is Map) return null;
+      return {for (final e in raw.entries) if (e.key is String) e.key as String: e.value};
+    } on Exception {
+      return null;
+    }
+  }
+
   /// 第九轮 B1：今天的计划（插件 `GET /plan/day`）。
   ///
   /// 回 `plan`（今天的计划文档）/ `min`（当前分钟）/ `recent`（最近用过的包名，给选择器排序）。

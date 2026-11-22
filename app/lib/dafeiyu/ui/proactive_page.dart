@@ -166,6 +166,31 @@ class _ProactivePageState extends State<ProactivePage> {
     await _companion({'strategistSessionId': picked.isEmpty ? null : picked});
   }
 
+  /// [Boss-Wall Path B] 选端内独立主管墙会话（禁止与陪伴/谋士会话重合），写入 `wallSessionId`。
+  Future<void> _pickWallBoss() async {
+    final sessions = await _channel.agentSessions();
+    if (!mounted) return;
+    setState(() => _sessions = sessions);
+    if (!sessions.ready) return;
+    final picked = await showAppSheet<String>(
+      context,
+      heightFactor: 0.6,
+      builder: (sheet) => _SessionList(sessions: sessions),
+    );
+    if (picked == null) return;
+    final sisId = sessions.sessionId;
+    final stratId = sessions.config['strategistSessionId'] as String?;
+    if (picked.isNotEmpty && (picked == sisId || picked == stratId)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('主管墙必须使用第 3 个独立会话，不能与鱼丸或鲸澜共用')),
+        );
+      }
+      return;
+    }
+    await _companion({'wallSessionId': picked.isEmpty ? null : picked});
+  }
+
   Future<void> _save(ProactiveConfig next) async {
     await _channel.setConfig(next);
     await _refresh();
@@ -550,6 +575,15 @@ class _ProactivePageState extends State<ProactivePage> {
                 subtitleMaxLines: 3,
                 value: _sessions.config['strategistSessionId'] is String ? '已选' : '未选',
                 onTap: () => unawaited(_pickStrategist()),
+              ),
+            if (pluginOnline)
+              ListPageRow(
+                icon: AppIcons.lock,
+                title: '主管墙会话（路径 B）',
+                subtitle: '端内第 3 个独立冷血审计会话：与鱼丸/鲸澜完全隔离，只挂全局账本与只读工具，绝不解锁',
+                subtitleMaxLines: 2,
+                value: _sessions.config['wallSessionId'] is String ? '已选' : '未选',
+                onTap: () => unawaited(_pickWallBoss()),
               ),
             ListPageRow(
               icon: AppIcons.send,

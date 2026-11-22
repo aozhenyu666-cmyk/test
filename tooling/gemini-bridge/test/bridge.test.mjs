@@ -142,7 +142,7 @@ test('MCP：initialize / tools/list / 通知回 202；没同步过时 today 说�
     assert.equal((await rpc(http, tk, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202)
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()
     const names = list.result.tools.map((t) => t.name)
-    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_read_inbox', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule'])
+    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_read_inbox', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule', 'dafeiyu_boss_brief'])
     assert.ok(!names.some((n) => /unlock|quota|waive|lower|delete/.test(n)), '没有放松类工具')
     assert.equal(list.result.tools[0].annotations.readOnlyHint, true)
     const today = await (await rpc(http, tk, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dafeiyu_today', arguments: {} } })).json()
@@ -203,7 +203,7 @@ test('笔记库只读：能搜能读；日记 / 越界不读', async () => {
     const { access_token: tk } = await connect(http, store)
     const call = async (name, args) => (await (await rpc(http, tk, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } })).json()).result
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()
-    assert.equal(list.result.tools.length, 17)
+    assert.equal(list.result.tools.length, 18)
     assert.match((await call('dafeiyu_search_notes', { query: '增长率' })).content[0].text, /学习\/行测\.md/)
     assert.doesNotMatch((await call('dafeiyu_search_notes', { query: '不该被读到' })).content[0].text, /私事/)
     assert.match((await call('dafeiyu_read_note', { path: '学习/行测.md' })).content[0].text, /现期\/基期/)
@@ -453,6 +453,81 @@ test('四部门 dafeiyu_read_inbox（MCP）与 GET /bridge/local/inbox（本机�
     assert.equal(toolResult.structuredContent.vaultInbox.entries.length, 2)
     assert.equal(toolResult.structuredContent.phone.belowFloor[0].id, 'seal-low')
     assert.equal(toolResult.structuredContent.phone.review.dueCount, 2)
+  } finally {
+    pub.close()
+    loc.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('[Boss-Wall Path A] dafeiyu_boss_brief（未同步/兜底合成/引擎账本/Obsidian防私密）与 GET /bridge/local/boss-brief', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfy-boss-a-'))
+  const vaultDir = join(dir, 'vault')
+  mkdirSync(join(vaultDir, '学习'), { recursive: true })
+  mkdirSync(join(vaultDir, '日记'), { recursive: true })
+  writeFileSync(join(vaultDir, '学习', '行测.md'), '# 行测\n增长率资料分析速算方法。')
+  writeFileSync(join(vaultDir, '日记', '私事.md'), '绝对不能暴露在 boss_brief 里的日记')
+
+  const store = createStore(join(dir, 'state.json'))
+  const bridge = createBridge({ store, vaultDir, resultWaitMs: 600 })
+  const pub = createServer(bridge.handler)
+  const loc = createServer(bridge.localHandler)
+  await new Promise((r) => pub.listen(0, '127.0.0.1', r))
+  await new Promise((r) => loc.listen(0, '127.0.0.1', r))
+  const P = 'http://127.0.0.1:' + pub.address().port
+  const L = 'http://127.0.0.1:' + loc.address().port
+  const http = (path, init = {}) => fetch(P + path, { redirect: 'manual', ...init })
+  const auth = (k) => ({ authorization: 'Bearer ' + k })
+  const key = store.state.secret.localKey
+  try {
+    const { access_token: tk } = await connect(http, store)
+    const call = (args = {}, id = 21) =>
+      rpc(http, tk, { jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'dafeiyu_boss_brief', arguments: args } }).then((r) => r.json())
+
+    // 1. 未同步前明确提示，不泄露私密日记
+    const unsynced = (await call()).result
+    assert.ok(!unsynced.isError)
+    assert.match(unsynced.content[0].text, /还没跟桥同步过/)
+    assert.equal(unsynced.structuredContent.synced, false)
+    assert.ok(unsynced.structuredContent.recentNotes.some((n) => n.rel === '学习/行测.md'))
+    assert.ok(!unsynced.structuredContent.recentNotes.some((n) => n.rel.includes('私事')))
+    assert.doesNotMatch(unsynced.content[0].text, /私事\.md/)
+
+    // 2. 仅有基础快照、无 bossBrief 字段时自动合成兜底
+    await fetch(P + '/bridge/sync', json({ snapshot: SNAP }, auth(store.state.secret.phoneKey)))
+    const synth = (await call({ days: 3 })).result
+    assert.equal(synth.structuredContent.synced, true)
+    assert.equal(synth.structuredContent.source, 'synthesized')
+    assert.match(synth.content[0].text, /今日时间轴 0\/1/)
+
+    // 3. 带入引擎 bossBrief 完整快照
+    const richSnap = {
+      ...SNAP,
+      bossBrief: {
+        day: '2026-11-22',
+        headline: '7日兑现 35%（3/8） · 今日正事 20m / 娱乐 70m · 拦/急 4/2 · 悬空承诺 2',
+        keyGaps: ['近 7 天计划/封印兑现率仅 35%', '今日纯娱乐 70m 已逼近或反超工作推进 20m'],
+        snapshot: { fulfillmentRatePct: 35, todayWorkMin: 20, todayFunMin: 70, blockedCount: 4, emergencyPassCount: 2 },
+        bossPrompt: '【角色指令：冷血直属主管 / 老板全局审视】\n1. 定性；\n2. 3 个直击全局逃避模式的尖锐追问；',
+      },
+    }
+    await fetch(P + '/bridge/sync', json({ snapshot: richSnap }, auth(store.state.secret.phoneKey)))
+    const rich = (await call()).result
+    assert.equal(rich.structuredContent.source, 'engine')
+    assert.equal(rich.structuredContent.brief.snapshot.fulfillmentRatePct, 35)
+    assert.match(rich.content[0].text, /35%/)
+    assert.match(rich.content[0].text, /学习\/行测\.md/)
+    assert.doesNotMatch(rich.content[0].text, /私事\.md/)
+
+    // 4. GET /bridge/local/boss-brief 校验
+    assert.equal((await fetch(L + '/bridge/local/boss-brief')).status, 401)
+    assert.equal((await fetch(L + '/bridge/local/boss-brief', { headers: auth(store.state.secret.phoneKey) })).status, 401)
+    const locRes = await fetch(L + '/bridge/local/boss-brief?days=5', { headers: auth(key) })
+    assert.equal(locRes.status, 200)
+    const locBody = await locRes.json()
+    assert.equal(locBody.ok, true)
+    assert.equal(locBody.source, 'engine')
+    assert.match(locBody.bossBriefText, /7日兑现 35%/)
   } finally {
     pub.close()
     loc.close()

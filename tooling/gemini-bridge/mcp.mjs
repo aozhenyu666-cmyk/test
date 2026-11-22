@@ -28,6 +28,7 @@ export const INSTRUCTIONS = [
   '聊透一个知识点 / 讲完一道错题，用 dafeiyu_push_cards 沉成复习卡（手机按遗忘曲线 12 小时后开始问他）；他丢真题 / 拍错题给你，洗成标准结构用 dafeiyu_import_questions 灌进手机题库。',
   '开聊或空闲时看一眼 dafeiyu_review_due，顺手考他 1–2 张到期卡（别给提示，让他先说）；交回执时把评分放进 reviewed_cards——你判的才算数，他说「记得」不算。',
   '当用户说“看收件箱/整理碎片/卡住了”时调用 dafeiyu_read_inbox，合并看电脑端收件箱与手机卡壳、未过保底和到期复习摘要；聊透后用 dafeiyu_push_cards 沉卡或 dafeiyu_submit_receipt 交回执。',
+  '当用户要求做全局复盘、老板视角审视或追问一周虚耗时，调用 dafeiyu_boss_brief 获取近 7 天宏观账本与结构缺口（以及可选的近期改动笔记索引），零寒暄零迎合，先核事实再提 3 个直击逃避模式的追问与 1 条 24 小时止损硬指令。',
 ].join('\n')
 
 const KIND_ENUM = ['quiz', 'external_quiz', 'file', 'screenshots', 'app_minutes', 'bout_minutes', 'gemini_receipt', 'study_cards']
@@ -279,6 +280,19 @@ export function toolDefs({ vault = false } = {}) {
         additionalProperties: false,
       },
       annotations: add,
+    },
+    {
+      name: 'dafeiyu_boss_brief',
+      title: '老板全局审视账本',
+      description: '只读获取近 7 天宏观全局审视账本：计划/封印兑现率、今日正事 vs 娱乐 vs 折腾耗时、撞锁与紧急放行次数、悬空承诺、跳票计划块与系统判出的结构性逃避缺口（配置了 Obsidian 笔记库时附带近期非私密改动笔记索引）。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          days: { type: 'integer', minimum: 1, maximum: 14, description: '附加查看电脑端最近几天改动的笔记（默认 7，仅配置了笔记库时生效）' },
+        },
+        additionalProperties: false,
+      },
+      annotations: ro,
     },
   ]
   if (vault) {
@@ -539,6 +553,130 @@ export function inboxText(summary) {
   return lines.join('\n')
 }
 
+// ---------------------------------------------------------------- [Boss-Wall Path A] 老板/主管全局审视账本
+
+export function bossBriefSummary(store, vaultDir = '', { days = 7 } = {}) {
+  const safeDays = Math.max(1, Math.min(14, Math.floor(Number(days) || 7)))
+  const effectiveVault = String(vaultDir || process.env.DAFEIYU_VAULT || '').trim()
+  const snap = store?.state?.snapshot || null
+  const now = store?.now ? store.now() : Date.now()
+  const syncedAt = Number(store?.state?.snapshotAt || snap?.receivedAt || snap?.at || 0)
+  const phoneOnline = Boolean(snap) && now - syncedAt < PHONE_STALE_MS
+
+  let recentVaultNotes = []
+  let inboxTotal = 0
+  if (effectiveVault) {
+    recentVaultNotes = recentNotes(effectiveVault, { limit: 8, days: safeDays, now }).map((f) => ({
+      rel: f.rel,
+      day: new Date(f.mtime).toISOString().slice(0, 10),
+    }))
+    try {
+      const ib = readInbox(effectiveVault, { limit: 5 })
+      inboxTotal = Number(ib?.total || 0) || 0
+    } catch {
+      inboxTotal = 0
+    }
+  }
+
+  if (!snap) {
+    return {
+      ok: true,
+      synced: false,
+      phoneOnline: false,
+      syncedAt: 0,
+      source: 'unsynced',
+      days: safeDays,
+      vaultConfigured: Boolean(effectiveVault),
+      recentNotes: recentVaultNotes,
+      inboxTotal,
+      brief: null,
+    }
+  }
+
+  const raw = snap.bossBrief && typeof snap.bossBrief === 'object' ? snap.bossBrief : null
+  let brief
+  let source
+  if (raw && (raw.headline || raw.bossPrompt || raw.snapshot)) {
+    source = 'engine'
+    brief = {
+      day: String(raw.day || snap.day || ''),
+      headline: String(raw.headline || ''),
+      keyGaps: Array.isArray(raw.keyGaps) ? raw.keyGaps.map(String) : [],
+      snapshot: raw.snapshot && typeof raw.snapshot === 'object' ? raw.snapshot : {},
+      bossPrompt: String(raw.bossPrompt || ''),
+    }
+  } else {
+    source = 'synthesized'
+    const tl = Array.isArray(snap.timeline) ? snap.timeline : []
+    const doneCount = tl.filter((x) => x && (x.status === 'floor' || x.status === 'stretch' || x.status === 'waived')).length
+    const belowCount = tl.filter((x) => x && (x.status === 'below' || x.status === 'overdue_locked')).length
+    const ratePct = tl.length > 0 ? Math.round((doneCount / tl.length) * 100) : null
+    const funLeft = snap.balance?.funLeft ?? null
+    const gaps = []
+    if (ratePct !== null && ratePct < 60) gaps.push(`今日时间轴兑现 ${ratePct}%（${doneCount}/${tl.length}）`)
+    if (belowCount > 0) gaps.push(`仍有 ${belowCount} 条验收点未过保底`)
+    if (snap.locking) gaps.push(`当前正因「${snap.locking.title}」逾期锁定（${snap.locking.actual}/${snap.locking.floor}）`)
+    if (snap.verify?.recovery) gaps.push('处于连续未过保底后的恢复日状态')
+    if (!gaps.length) gaps.push('快照未带完整 7 日细账，先核今日时间轴实际产出与未交验收点')
+    brief = {
+      day: String(snap.day || ''),
+      headline: `今日时间轴 ${doneCount}/${tl.length}${ratePct !== null ? `（${ratePct}%）` : ''}${funLeft !== null ? ` · 娱乐余额 ${funLeft}m` : ''}${snap.locking ? ' · 逾期严锁中' : ''}`,
+      keyGaps: gaps,
+      snapshot: {
+        day: String(snap.day || ''),
+        fulfillmentRatePct: ratePct,
+        fulfillmentDone: doneCount,
+        fulfillmentTotal: tl.length,
+        availableFunMin: funLeft,
+        locking: Boolean(snap.locking),
+      },
+      bossPrompt: '',
+    }
+  }
+
+  return {
+    ok: true,
+    synced: true,
+    phoneOnline,
+    syncedAt,
+    source,
+    days: safeDays,
+    vaultConfigured: Boolean(effectiveVault),
+    recentNotes: recentVaultNotes,
+    inboxTotal,
+    brief,
+  }
+}
+
+export function bossBriefText(summary) {
+  if (!summary?.synced || !summary?.brief) {
+    const lines = ['手机还没跟桥同步过：先在手机 DSH Go 的「Gemini 桥」页完成一次同步，才能拉取老板全局审视账本。']
+    if (summary?.vaultConfigured && summary.recentNotes?.length) {
+      lines.push(`【电脑端近 ${summary.days} 天改动笔记】`)
+      for (const n of summary.recentNotes) lines.push(`- ${n.day} ${n.rel}`)
+    }
+    return lines.join('\n')
+  }
+  const b = summary.brief
+  const lines = [
+    `【老板全局审视账本 · ${b.day || '最近同步'}${summary.phoneOnline ? ' · 在线' : ' · 离线快照'}】`,
+    b.headline ? `总览：${b.headline}` : '',
+    ...(b.keyGaps?.length ? ['结构缺口：', ...b.keyGaps.map((g) => `- ${g}`)] : []),
+    ...(b.bossPrompt ? ['', b.bossPrompt] : []),
+  ].filter(Boolean)
+
+  if (summary.vaultConfigured) {
+    if (summary.recentNotes?.length) {
+      lines.push(`【电脑端近 ${summary.days} 天非私密笔记改动（${summary.recentNotes.length} 篇）】`)
+      for (const n of summary.recentNotes) lines.push(`- ${n.day} ${n.rel}`)
+    } else {
+      lines.push(`【电脑端笔记】近 ${summary.days} 天无非私密笔记改动。`)
+    }
+    if (summary.inboxTotal > 0) lines.push(`电脑端收件箱累计条目：${summary.inboxTotal} 条。`)
+  }
+  return lines.join('\n')
+}
+
 // ---------------------------------------------------------------- 命令队列
 
 export function enqueue(store, type, payload) {
@@ -636,6 +774,10 @@ export async function callTool(ctx, name, args = {}) {
     case 'dafeiyu_read_inbox': {
       const summary = inboxSummary(store, vaultDir, { limit: args.limit })
       return text(inboxText(summary), { structuredContent: summary })
+    }
+    case 'dafeiyu_boss_brief': {
+      const summary = bossBriefSummary(store, vaultDir, { days: args.days })
+      return text(bossBriefText(summary), { structuredContent: summary })
     }
     case 'dafeiyu_push_cards': {
       const cards = (Array.isArray(args.cards) ? args.cards : []).slice(0, 10)

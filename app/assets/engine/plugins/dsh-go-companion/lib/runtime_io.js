@@ -54,6 +54,8 @@ export const DEFAULTS = Object.freeze({
   // 姐妹双人格：陪伴（妹妹，sessionId）+ 谋士（姐姐，strategistSessionId）。关掉就回到单人格大肥鱼。
   dual: true,
   strategistSessionId: undefined,
+  // [Boss-Wall Path B] 端内第 3 独立主管/老板审计会话（与两条鱼完全隔离）
+  wallSessionId: undefined,
   companionName: '鱼丸',
   strategistName: '鲸澜',
   // 他给了高权限：主动找他的那一轮也能动手（设提醒、退出 App、调手机）。DSH 自己的审批照常生效。
@@ -472,6 +474,15 @@ export function mergeConfig(current, body) {
     if (typeof body.driveVoice === 'boolean') next.driveVoice = body.driveVoice
     if (body.strategistSessionId === null) next.strategistSessionId = undefined
     else if (typeof body.strategistSessionId === 'string' && body.strategistSessionId.length <= 256) next.strategistSessionId = body.strategistSessionId || undefined
+    // [Boss-Wall Path B] 端内独立主管墙会话：空值清零；禁止与陪伴/谋士会话重合
+    if (body.wallSessionId === null || body.wallSessionId === '') next.wallSessionId = undefined
+    else if (typeof body.wallSessionId === 'string' && body.wallSessionId.length <= 256) {
+      const wSid = body.wallSessionId.trim()
+      if (!wSid) next.wallSessionId = undefined
+      else if (wSid !== String(next.sessionId || '') && wSid !== String(next.strategistSessionId || '')) {
+        next.wallSessionId = wSid
+      }
+    }
     for (const k of ['companionName', 'strategistName']) if (typeof body[k] === 'string' && body[k].trim()) next[k] = body[k].trim().slice(0, 20)
     for (const k of ['companionCard', 'strategistCard']) if (typeof body[k] === 'string') next[k] = body[k].slice(0, 4000)
     if (typeof body.owner === 'string' && body.owner.trim()) next.owner = body.owner.trim().slice(0, 40)

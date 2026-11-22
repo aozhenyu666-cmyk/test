@@ -16,7 +16,7 @@ import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync, exi
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { DEFAULT_LIMITS, Desk, SOURCE_KIND } from './core.js'
+import { assistantText, DEFAULT_LIMITS, Desk, SOURCE_KIND } from './core.js'
 import { BACKGROUND_LIMIT, backgroundFacts, loadCandidates, loadLorebookFacts, openMemoryDb } from './topics.js'
 import { buildPrompt } from './prompt.js'
 import { appendLedger, readLedger, summarize } from './ledger.js'
@@ -244,6 +244,15 @@ import {
   SCREENSHOT_DIRS, auditSixDiceSlot, auditStrokeSlot, auditTask, baselineFor, buildBossAuditBrief, buildSixDicePlan, buildStrokePlan, checkMorningTasks, evidenceType,
   listScreenshots, loadWallMemory, noteDone, notePromised, pruneMemory, recentRate, statOf, wallText,
 } from './wall_auditor.js'
+import {
+  appendWallBossMessage,
+  buildWallBossLedgerText,
+  isWallBossSession,
+  normalizeWallBossHistory,
+  validateWallSessionId,
+  WALL_BOSS_AUDIT_TRIGGER_TEXT,
+  WALL_BOSS_PERSONA_TEXT,
+} from './wall_boss_session.js'
 import { executeCapability } from './capabilities.js'
 import { matchLorebook } from '../../dsh-go-memory/lib/lorebook.js'
 import {
@@ -903,6 +912,64 @@ export function apply(ctx) {
     },
   })
 
+  // [Boss-Wall Path B] 端内第 3 独立主管会话历史与独立回合机（完全隔离双鱼与主动打扰流程）
+  const wallBossHistoryPath = () => stateFile('wall-boss-history.json')
+  const loadWallBossHistory = () => normalizeWallBossHistory(readState(wallBossHistoryPath(), []))
+  const saveWallBossHistory = (items) => {
+    try {
+      writeJson(wallBossHistoryPath(), normalizeWallBossHistory(items))
+    } catch {}
+  }
+  const appendWallBossEntry = (entry) => {
+    const next = appendWallBossMessage(loadWallBossHistory(), entry)
+    saveWallBossHistory(next)
+    return next
+  }
+  const wallBossDesk = new Desk({
+    resolveAgent: (id) => resolveAgent(ctx, id, config),
+    compose: async (req) => ({ text: req.payload.text, prompt: req.payload.text }),
+    allowTools: () => true,
+    makeMessage: (text) => ({
+      id: randomUUID(),
+      role: 'user',
+      content: [{ type: 'text', text }],
+      source: {
+        kind: 'user',
+        rpcId: 'dsh-go-companion-wallboss-' + randomUUID(),
+        clientTimeZone: requestZone(sayZone, config),
+      },
+    }),
+    isArchived: (id) => isArchived(ctx, id),
+    defaultSession: () => config.wallSessionId,
+    limits: { ...DEFAULT_LIMITS, maxPayloadValue: 3_000, maxText: 4_000 },
+    allowBusy: true,
+    onChange: (r) => {
+      const now = Date.now()
+      if (r.state === 'generated') {
+        const clean = String(r.text || '').trim()
+        if (clean) {
+          appendWallBossEntry({
+            id: 'a-' + r.requestId,
+            role: 'assistant',
+            text: clean,
+            at: now,
+            requestId: r.requestId,
+          })
+          record({ state: 'wall-boss-reply', at: now, sessionId: r.sessionId, requestId: r.requestId })
+        }
+      } else if (r.state === 'failed') {
+        appendWallBossEntry({
+          id: 'e-' + r.requestId,
+          role: 'system',
+          text: '主管质询调用失败：' + String(r.failure?.detail || r.failure?.code || r.failure || 'agent-error'),
+          at: now,
+          requestId: r.requestId,
+          error: true,
+        })
+      }
+    },
+  })
+
   const desk = new Desk({
     resolveAgent: (id) => resolveAgent(ctx, id, config),
     compose,
@@ -1023,8 +1090,50 @@ export function apply(ctx) {
     try {
       desk.onSessionEvent(session?.id, event)
       chat.onSessionEvent(session?.id, event)
+      wallBossDesk.onSessionEvent(session?.id, event)
     } catch {
       // never disturb the session
+    }
+    // [Boss-Wall Path B] 主管墙独立会话物理隔离：不进入双鱼的静音/模式/拒绝/做题/判球/故事线链路
+    if (isWallBossSession(session?.id, config)) {
+      try {
+        if (event?.type === 'user/message') {
+          const rpcId = String(event.data?.source?.rpcId || '')
+          const kind = event.data?.source?.kind
+          if (!rpcId.startsWith('dsh-go-companion-wallboss-') && (!kind || kind === 'user')) {
+            const uText = stripInjection(messageText(event.data)).replace(/\s+/g, ' ').trim().slice(0, 2000)
+            if (uText) {
+              appendWallBossEntry({
+                id: String(event.data?.id || ('u-ext-' + Date.now())),
+                role: 'user',
+                text: uText,
+                at: Date.now(),
+              })
+            }
+          }
+        } else if (event?.type === 'assistant/message') {
+          const ownedByDesk = [...wallBossDesk.records.values()].some(
+            (r) => r.sessionId === session?.id && r.state === 'claimed' && r.turn === event.data?.turn,
+          )
+          if (!ownedByDesk) {
+            const aText = (assistantText(event.data) || messageText(event.data)).trim().slice(0, 4000)
+            if (aText) {
+              const hist = loadWallBossHistory()
+              const prev = hist[hist.length - 1]
+              const now = Date.now()
+              if (!(prev && prev.role === 'assistant' && prev.text === aText && now - Number(prev.at || 0) < 5000)) {
+                appendWallBossEntry({
+                  id: String(event.data?.id || ('a-ext-' + now)),
+                  role: 'assistant',
+                  text: aText,
+                  at: now,
+                })
+              }
+            }
+          }
+        }
+      } catch {}
+      return
     }
     try {
       if (event?.type === 'user/message') {
@@ -1219,6 +1328,7 @@ export function apply(ctx) {
       if (agent?.id) {
         desk.onAgentGone(agent.id)
         chat.onAgentGone(agent.id)
+        wallBossDesk.onAgentGone(agent.id)
       }
     } catch {
       // ignore
@@ -5913,6 +6023,101 @@ export function apply(ctx) {
       }),
     }
   }
+  // [Boss-Wall Path B] 端内第 3 独立主管质询室路由（status/bind/unbind/clear/audit_now/send）
+  function wallBossStatusSnapshot(tzBody = {}) {
+    const rawSid = String(config.wallSessionId || '').trim()
+    const valid = Boolean(
+      rawSid &&
+      rawSid !== String(config.sessionId || '').trim() &&
+      (config.dual === false || rawSid !== String(config.strategistSessionId || '').trim()),
+    )
+    const sid = valid ? rawSid : ''
+    const agent = sid ? liveAgent(ctx, sid) : null
+    const bossBrief = (() => { try { return wallBossBriefRoute(tzBody) } catch { return { ok: false } } })()
+    return {
+      v: 1,
+      ok: true,
+      wallSessionId: sid || null,
+      bound: Boolean(sid),
+      agentOnline: Boolean(agent),
+      agentStatus: agent?.status || null,
+      inFlight: wallBossDesk.inFlight(),
+      messages: loadWallBossHistory(),
+      bossBrief,
+    }
+  }
+  async function wallBossChatRoute(body = {}, method = 'GET') {
+    const b = body && typeof body === 'object' ? body : {}
+    const action = String(b.action || (method === 'GET' ? 'status' : 'status')).trim()
+    if (action === 'status') return wallBossStatusSnapshot(b)
+    if (action === 'bind') {
+      const check = validateWallSessionId(b.sessionId, {
+        sessionId: config.sessionId || '',
+        strategistSessionId: config.dual === false ? '' : (config.strategistSessionId || ''),
+      })
+      if (!check.ok) {
+        return { ...wallBossStatusSnapshot(b), ok: false, error: check.error, text: check.text }
+      }
+      config = mergeConfig(config, { wallSessionId: check.sessionId })
+      try { writeConfig(config) } catch {}
+      record({ state: 'wall-boss-bind', at: Date.now(), sessionId: check.sessionId })
+      try { mountPersona() } catch {}
+      return { ...wallBossStatusSnapshot(b), text: '已绑定主管墙独立会话。' }
+    }
+    if (action === 'unbind') {
+      config = mergeConfig(config, { wallSessionId: null })
+      try { writeConfig(config) } catch {}
+      record({ state: 'wall-boss-unbind', at: Date.now() })
+      try { mountPersona() } catch {}
+      return { ...wallBossStatusSnapshot(b), text: '已解绑主管墙独立会话。' }
+    }
+    if (action === 'clear') {
+      saveWallBossHistory([])
+      record({ state: 'wall-boss-clear', at: Date.now() })
+      return { ...wallBossStatusSnapshot(b), text: '已清空主管质询室记录。' }
+    }
+    if (action === 'send' || action === 'audit_now') {
+      const st = wallBossStatusSnapshot(b)
+      if (!st.bound) {
+        return { ...st, ok: false, error: 'no-wall-session', text: '尚未绑定主管墙独立会话（wallSessionId），请先一键新建或选择已有会话。' }
+      }
+      const rawText = action === 'audit_now'
+        ? (String(b.text || '').trim() || WALL_BOSS_AUDIT_TRIGGER_TEXT)
+        : String(b.text || '').trim()
+      if (!rawText) {
+        return { ...st, ok: false, error: 'empty', text: '请输入要质询或回答的内容。' }
+      }
+      const requestId = 'wb-' + randomUUID().replace(/-/g, '').slice(0, 14)
+      const now = Date.now()
+      const text = rawText.slice(0, 2500)
+      appendWallBossEntry({ id: 'u-' + requestId, role: 'user', text: text.slice(0, 2000), at: now, requestId })
+      record({ state: 'wall-boss-send', at: now, sessionId: st.wallSessionId, requestId, action })
+      const r = await wallBossDesk.request({
+        v: 1,
+        requestId,
+        eventId: requestId,
+        kind: 'wall_boss',
+        payload: { text },
+        deadlineMs: 120_000,
+        sessionId: st.wallSessionId,
+      })
+      if (r.status >= 400) {
+        const code = String(r.body?.error?.code || 'wall-boss-failed')
+        const detail = String(r.body?.error?.message || code)
+        appendWallBossEntry({
+          id: 'e-' + requestId,
+          role: 'system',
+          text: `主管会话暂时不可用（${detail}）`,
+          at: Date.now(),
+          requestId,
+          error: true,
+        })
+        return { ...wallBossStatusSnapshot(b), ok: false, error: code, text: '主管会话当前不可用（请检查会话是否存在或引擎已就绪）' }
+      }
+      return { ...wallBossStatusSnapshot(b), ok: true, pending: true, requestId }
+    }
+    return { ...wallBossStatusSnapshot(b), ok: false, error: 'bad-action', text: '不支持的操作：' + action }
+  }
   /**
    * 本周还剩几天放风额度——四部门没交齐的当天归零。
    *
@@ -7294,11 +7499,107 @@ export function apply(ctx) {
       }
     }
   }
+  // [Boss-Wall Path B] 端内第 3 独立冷血主管会话（仅挂载 4 个只读审计工具 + 独立冷血人设与全局账本，彻底隔离双鱼与解锁入口）
+  let wallBossMount = { sid: '', agent: null, off: null, toolOff: null }
+  function wallBossAuditTool() {
+    return {
+      name: 'wall_boss_brief',
+      description: '只读获取近 7 天计划/封印兑现率、今日正事与娱乐耗时对比、撞锁与紧急放行次数、悬空承诺与结构性逃避缺口。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => {
+        const b = wallBossBriefRoute()
+        const snap = b.snapshot || {}
+        return {
+          ok: true,
+          text: [
+            `[老板全局账本 · ${b.day || '今日'}]`,
+            `总览：${b.headline || ''}`,
+            `今日：正事 ${snap.todayWorkMin ?? 0}m（主线 ${snap.todayMainlineMin ?? 0}m / 网课 ${snap.todayVideoStudyMin ?? 0}m / Gemini ${snap.todayGeminiMin ?? 0}m） vs 纯娱乐 ${snap.todayFunMin ?? 0}m vs 折腾工具 ${snap.todayTinkerMin ?? 0}m`,
+            `缺口：${Array.isArray(b.keyGaps) && b.keyGaps.length ? b.keyGaps.join('；') : '无'}`,
+            b.bossPrompt || '',
+          ].filter(Boolean).join('\n'),
+        }
+      },
+    }
+  }
+  function wallLocksTruthTool() {
+    return {
+      name: 'wall_locks_truth',
+      description: '只读获取此刻锁机裁决真相（胜出主发力手、优先级、模式、剩余时长、放行 App 及最近一次拦截）。没有任何解锁或改锁权限。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: toolOutput,
+      execute: () => ({ ok: true, text: buildLockTruthContext() }),
+    }
+  }
+  function mountWallBoss(rawSid) {
+    let sid = typeof rawSid === 'string' ? rawSid.trim() : ''
+    if (sid && (sid === String(config.sessionId || '') || (config.dual !== false && sid === String(config.strategistSessionId || '')))) {
+      sid = ''
+    }
+    const agent = sid ? liveAgent(ctx, sid) : null
+    if (wallBossMount.agent === (agent || null) && wallBossMount.sid === sid) return
+    try { wallBossMount.off?.() } catch {}
+    try { wallBossMount.toolOff?.() } catch {}
+    wallBossMount = { sid, agent: agent || null, off: null, toolOff: null }
+    if (!agent) return
+    if (agent.ctx?.tools && typeof agent.ctx.tools.register === 'function') {
+      const offs = []
+      const roTools = [
+        wallBossAuditTool(),
+        wallLocksTruthTool(),
+        { ...vaultSearchTool(), name: 'wall_vault_search' },
+        { ...vaultRecentTool(), name: 'wall_vault_recent' },
+      ]
+      for (const tool of roTools) {
+        try {
+          const off = agent.ctx.tools.register(tool)
+          if (typeof off === 'function') offs.push(off)
+        } catch (error) {
+          console.error('[companion] 主管墙工具 ' + tool.name + ' 挂不上：' + String((error && error.message) || error))
+        }
+      }
+      if (offs.length) wallBossMount.toolOff = () => offs.forEach((f) => f())
+    }
+    if (agent.ctx?.systemPrompt?.context) {
+      const ctxOffs = []
+      try {
+        const offP = agent.ctx.systemPrompt.context({
+          name: 'dafeiyu-wall-boss',
+          order: 850,
+          interpolate: false,
+          text: () => WALL_BOSS_PERSONA_TEXT,
+        })
+        if (typeof offP === 'function') ctxOffs.push(offP)
+      } catch (error) {
+        console.error('[companion] 主管墙人设挂不上：' + String((error && error.message) || error))
+      }
+      try {
+        const offL = agent.ctx.systemPrompt.context({
+          name: 'dafeiyu-wall-boss-ledger',
+          order: 860,
+          interpolate: false,
+          text: () => buildWallBossLedgerText(wallBossBriefRoute(), buildLocksOverview()),
+        })
+        if (typeof offL === 'function') ctxOffs.push(offL)
+      } catch (error) {
+        console.error('[companion] 主管墙账本挂不上：' + String((error && error.message) || error))
+      }
+      if (ctxOffs.length) {
+        wallBossMount.off = () => {
+          for (const fn of ctxOffs) {
+            try { fn() } catch {}
+          }
+        }
+      }
+    }
+  }
   function mountPersona() {
     mountOne('companion', config.sessionId || '')
     const strat = config.dual === false ? '' : config.strategistSessionId || ''
     // 两个角色指向同一个会话时，只挂陪伴那一份，别让模型同时拿到两套人设。
     mountOne('strategist', strat && strat !== config.sessionId ? strat : '')
+    mountWallBoss(config.wallSessionId || '')
   }
   /**
    * R7 P0-3：主状态变了就把工具子集换掉。
@@ -7366,6 +7667,7 @@ export function apply(ctx) {
 
   const sweeper = setInterval(() => {
     desk.sweep()
+    wallBossDesk.sweep()
     const now = Date.now()
     try {
       const ckRes = clockKernel.tick(now)
@@ -7801,7 +8103,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/wall/boss-brief' || path === '/wall/boss-chat' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -7883,6 +8185,7 @@ export function apply(ctx) {
         if (path === '/wall') return send(res, 200, await wallRoute(body.value))
         if (path === '/wall/thread') return send(res, 200, wallThreadRoute(body.value))
         if (path === '/wall/boss-brief') return send(res, 200, wallBossBriefRoute(body.value))
+        if (path === '/wall/boss-chat') return send(res, 200, await wallBossChatRoute(body.value, 'POST'))
         if (path === '/tiers') return send(res, 200, tiersRoute(body.value))
         if (path === '/seals') return send(res, 200, sealsRoute(body.value))
         if (path === '/covenant') return send(res, 200, covenantRoute(body.value))
@@ -8247,6 +8550,9 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/wall/boss-brief') {
         return send(res, 200, wallBossBriefRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
       }
+      if (req.method === 'GET' && path === '/wall/boss-chat') {
+        return send(res, 200, await wallBossChatRoute({ action: 'status', timeZone: url.searchParams.get('timeZone') || undefined }, 'GET'))
+      }
       // C1：挂载卡的只读视图（浮层小卡打开时先 GET 一次）。写操作走 POST。
       if (req.method === 'GET' && path === '/mount') {
         return send(res, 200, mountRoute({ timeZone: url.searchParams.get('timeZone') || undefined }))
@@ -8312,6 +8618,7 @@ export function apply(ctx) {
       dual: config.dual !== false,
       proactiveTools: config.proactiveTools !== false,
       strategistSessionId: config.strategistSessionId ?? null,
+      wallSessionId: config.wallSessionId ?? null,
       companionName: roleNames(config).companion,
       strategistName: roleNames(config).strategist,
       companionCard: config.companionCard || '',
@@ -9071,9 +9378,9 @@ export function apply(ctx) {
   const BRIDGE_GEMINI_INTERVAL_MS = 10_000
   const BRIDGE_INTERVAL_MS = 20_000
   const BRIDGE_IDLE_INTERVAL_MS = 120_000
-  // 快照分三段，只传变了的（服务端合并）；每 10 分钟全量一次兜底。
+  // [Boss-Wall Path A] 快照分四段，只传变了的（服务端合并）；每 10 分钟全量一次兜底。
   const BRIDGE_FULL_EVERY_MS = 10 * 60_000
-  let bridgeSent = { core: '', covenant: '', week: '', fullAt: 0 }
+  let bridgeSent = { core: '', covenant: '', week: '', bossBrief: '', fullAt: 0 }
   const BRIDGE_TIMEOUT_MS = 10_000
   const bridgeConf = () => {
     const b = config.bridge && typeof config.bridge === 'object' ? config.bridge : {}
@@ -9197,6 +9504,22 @@ export function apply(ctx) {
           return { count: 0, recent: [], stuckCount: 0, stuckItems: [] }
         }
       })(),
+      // [Boss-Wall Path A] 老板全局审视快照（省略 generatedAt 避免 20s 心跳哈希抖动）
+      bossBrief: (() => {
+        try {
+          const b = wallBossBriefRoute()
+          if (!b || b.ok === false) return null
+          return {
+            day: b.day,
+            headline: b.headline,
+            keyGaps: b.keyGaps,
+            snapshot: b.snapshot,
+            bossPrompt: b.bossPrompt,
+          }
+        } catch {
+          return null
+        }
+      })(),
       names: sisterNames(),
     }
   }
@@ -9309,13 +9632,14 @@ export function apply(ctx) {
       /** 只带变了的段（时间戳、钟点不算变化：服务端按 tzOffsetMin 自己算现在几点）。 */
       const delta = (snap, full) => {
         const h = (v) => createHash('sha256').update(JSON.stringify(v ?? null)).digest('hex').slice(0, 16)
-        const { covenant, weekText, at, hm, ...core } = snap
-        const hashes = { core: h(core), covenant: h(covenant), week: h(weekText) }
+        const { covenant, weekText, bossBrief, at, hm, ...core } = snap
+        const hashes = { core: h(core), covenant: h(covenant), week: h(weekText), bossBrief: h(bossBrief) }
         const all = full || Date.now() - bridgeSent.fullAt >= BRIDGE_FULL_EVERY_MS
         const out = { v: snap.v, at: snap.at, hm: snap.hm, day: snap.day, tzOffsetMin: snap.tzOffsetMin }
         if (all || hashes.core !== bridgeSent.core) Object.assign(out, core)
         if (all || hashes.covenant !== bridgeSent.covenant) out.covenant = covenant
         if (all || hashes.week !== bridgeSent.week) out.weekText = weekText
+        if (all || hashes.bossBrief !== bridgeSent.bossBrief) out.bossBrief = bossBrief
         return { out, hashes, all }
       }
       const sendSnap = async (results, full = false) => {
@@ -9401,7 +9725,7 @@ export function apply(ctx) {
       }
       const key = b.key === undefined ? String(config.bridge?.key || '') : String(b.key).trim()
       commit({ bridge: { url, key, enabled: b.enabled === undefined ? true : b.enabled !== false } })
-      bridgeSent = { core: '', covenant: '', week: '', fullAt: 0 }
+      bridgeSent = { core: '', covenant: '', week: '', bossBrief: '', fullAt: 0 }
       ensureBridgeTimer()
       const r = url && key ? await bridgeSync({ force: true }) : { ok: false }
       return view({ synced: r.ok === true, error: r.error || '' })

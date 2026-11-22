@@ -13,7 +13,7 @@
 // 这里同样没有任何解锁、加额度、豁免、改小、删除的口子。
 
 import { safeEqual } from './store.mjs'
-import { enqueue, todayText, reviewText, inboxSummary, inboxText, PHONE_STALE_MS, RESULT_WAIT_MS } from './mcp.mjs'
+import { enqueue, todayText, reviewText, inboxSummary, inboxText, bossBriefSummary, bossBriefText, PHONE_STALE_MS, RESULT_WAIT_MS } from './mcp.mjs'
 
 export const LOCAL_PORT = 8788
 const MAX_BODY = 1_000_000
@@ -131,6 +131,15 @@ export function createLocalApi({ store, events, vaultDir = '', resultWaitMs = RE
         return send(res, 200, {
           ...summary,
           inboxText: inboxText(summary),
+        })
+      }
+      if (req.method === 'GET' && path === '/bridge/local/boss-brief') {
+        const rawDays = Number(url.searchParams.get('days'))
+        const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(14, Math.max(1, Math.floor(rawDays))) : 7
+        const summary = bossBriefSummary(store, resolvedVaultDir, { days })
+        return send(res, 200, {
+          ...summary,
+          bossBriefText: bossBriefText(summary),
         })
       }
       if (req.method !== 'POST') return send(res, 404, { ok: false, error: 'not_found' })

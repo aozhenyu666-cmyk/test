@@ -19,7 +19,14 @@ final int at = DateTime(2026, 11, 10, 9, 5).millisecondsSinceEpoch;
 
 /// 顶替 `dsh/proactive`：不起引擎，只回答这一页会问的三件事。
 class FakeWall extends ProactiveChannel {
-  FakeWall({this.thread, this.statusBody, this.reply, this.bossBriefData, this.todayData});
+  FakeWall({
+    this.thread,
+    this.statusBody,
+    this.reply,
+    this.bossBriefData,
+    this.todayData,
+    this.wallBossChatData,
+  });
 
   WallThread? thread;
 
@@ -28,10 +35,12 @@ class FakeWall extends ProactiveChannel {
   WallAppeal? reply;
   Map<String, dynamic>? bossBriefData;
   Map<String, dynamic>? todayData;
+  Map<String, dynamic>? wallBossChatData;
 
   int threadCalls = 0;
   final appeals = <({int at, String evidence, String? task})>[];
   final geminiLaunches = <({String topic, String brief})>[];
+  final bossChatCalls = <Map<String, Object?>>[];
 
   @override
   Future<WallThread?> wallThread() async {
@@ -44,6 +53,12 @@ class FakeWall extends ProactiveChannel {
 
   @override
   Future<Map<String, dynamic>?> bossBrief() async => bossBriefData;
+
+  @override
+  Future<Map<String, dynamic>?> wallBossChat([Map<String, Object?>? body]) async {
+    if (body != null) bossChatCalls.add(Map<String, Object?>.from(body));
+    return wallBossChatData;
+  }
 
   @override
   Future<Map<String, dynamic>?> todayStatus() async => todayData;
@@ -321,5 +336,73 @@ void main() {
 
     expect(find.text('现场合成'), findsOneWidget);
     expect(find.textContaining('今日正事 25m / 娱乐 50m'), findsOneWidget);
+  });
+
+  testWidgets('W22 路径 B 主管质询室（未绑定态）：切到质询室展示第 3 会话隔离说明与一键新建/选已有按钮', (tester) async {
+    final wall = FakeWall(
+      thread: threeBubbles(),
+      statusBody: {'locked': false},
+      wallBossChatData: {
+        'ok': true,
+        'bound': false,
+        'wallSessionId': null,
+        'messages': <Object?>[],
+      },
+    );
+    await pumpWall(tester, wall);
+    await frames(tester);
+
+    expect(find.byKey(const ValueKey('wall-mode-switcher')), findsOneWidget);
+    await tester.tap(find.text('主管质询室'));
+    await frames(tester);
+
+    expect(find.byKey(const ValueKey('wall-boss-room-view')), findsOneWidget);
+    expect(find.textContaining('第 3 个独立 AI 会话'), findsOneWidget);
+    expect(find.byKey(const ValueKey('wall-boss-create-bind')), findsOneWidget);
+    expect(find.byKey(const ValueKey('wall-boss-pick-session')), findsOneWidget);
+  });
+
+  testWidgets('W23 路径 B 主管质询室（已绑定态）：展示账本与记录，支持发起全局质询及文本发送', (tester) async {
+    final wall = FakeWall(
+      thread: threeBubbles(),
+      statusBody: {'locked': true, 'why': '逾期未交'},
+      wallBossChatData: {
+        'ok': true,
+        'bound': true,
+        'wallSessionId': 'wall-boss-3',
+        'agentOnline': true,
+        'inFlight': false,
+        'bossBrief': {
+          'headline': '7日兑现 30% · 今日正事 20m / 娱乐 70m',
+          'keyGaps': ['近 7 天计划/封印兑现率仅 30%'],
+        },
+        'messages': [
+          {'id': 'u1', 'role': 'user', 'text': '我准备交材料了', 'at': at},
+          {'id': 'a1', 'role': 'assistant', 'text': '把文件增量和截图拿出来，不说空话。', 'at': at + 60000},
+        ],
+      },
+    );
+    await pumpWall(tester, wall);
+    await frames(tester);
+
+    await tester.tap(find.text('主管质询室'));
+    await frames(tester);
+
+    expect(find.textContaining('已绑定独立会话 wall-boss-3'), findsOneWidget);
+    expect(find.textContaining('7日兑现 30%'), findsOneWidget);
+    expect(find.textContaining('把文件增量和截图拿出来'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('wall-boss-audit-now')));
+    await frames(tester);
+    expect(wall.bossChatCalls.any((c) => c['action'] == 'audit_now'), isTrue);
+
+    await tester.enterText(find.byKey(const ValueKey('wall-boss-input')), '刚交完 20 道资料分析截图');
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('wall-boss-send')));
+    await frames(tester);
+    expect(
+      wall.bossChatCalls.any((c) => c['action'] == 'send' && c['text'] == '刚交完 20 道资料分析截图'),
+      isTrue,
+    );
   });
 }

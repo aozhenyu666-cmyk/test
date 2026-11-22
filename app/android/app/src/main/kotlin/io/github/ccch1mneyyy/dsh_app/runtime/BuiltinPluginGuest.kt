@@ -140,6 +140,7 @@ object BuiltinPluginGuest {
                 "lib/rhythm.js",
                 "lib/wall.js",
                 "lib/wall_auditor.js",
+                "lib/wall_boss_session.js",
                 "lib/wall_eye.js",
                 "lib/app_resolver.js",
                 "lib/behavior_radar.js",
