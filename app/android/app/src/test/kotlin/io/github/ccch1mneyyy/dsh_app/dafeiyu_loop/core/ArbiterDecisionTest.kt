@@ -52,4 +52,19 @@ class ArbiterDecisionTest {
         assertFalse(ArbiterDecision.isFresh(0L, now))
         assertFalse(ArbiterDecision.isFresh(now + 60_000L, now))
     }
+
+    @Test
+    fun wireCarriesTheLockNameForTheLockPage() {
+        val d = ArbiterDecision.fromWire(
+            mapOf(
+                "mode" to "allowlist", "allow" to listOf("md.obsidian"), "why" to "w", "unlockHow" to "u",
+                "priority" to "P1", "label" to "深夜睡眠护栏", "source" to "NIGHT_CURFEW",
+            ),
+        )!!
+        assertEquals("深夜睡眠护栏", d.label)
+        assertEquals("NIGHT_CURFEW", d.source)
+        // 旧引擎不发 label：照样能读，名字为空（锁页退回旧说法）
+        val old = ArbiterDecision.fromWire(mapOf("mode" to "free"))!!
+        assertEquals("", old.label)
+    }
 }

@@ -156,6 +156,22 @@ export function renderTemplates(t) {
   return out.join('\n')
 }
 
+/** 一行验收点：`- 开始–截止 标题 · 证据 · 保底 N`（模板和本周计划共用）。认不出就 null。 */
+export function parseTemplateItem(line) {
+  const m = /^-\s*(?:(\d{1,2}[:：]\d{2})\s*[–\-~～至]\s*)?(\d{1,2}[:：]\d{2}|\d{1,3}\s*分钟内)\s+(.+?)\s*·\s*(.+?)\s*·\s*保底\s*(\d+)\s*$/.exec(String(line || '').trim())
+  if (!m) return null
+  const ev = parseEvidence(m[4])
+  if (!ev) return null
+  const rel = /^(\d{1,3})\s*分钟内$/.exec(m[2])
+  const item = {
+    title: m[3].slice(0, 80), ...ev, floor: Math.max(1, Math.min(ev.stretch, Number(m[5]))),
+    startMinute: m[1] ? toMin(m[1]) : null, dueMinute: rel ? null : toMin(m[2]), estMinutes: 60,
+    ...(rel ? { relative: Number(rel[1]) } : {}),
+  }
+  if (item.startMinute != null && item.dueMinute != null) item.estMinutes = Math.max(10, Math.min(240, item.dueMinute - item.startMinute))
+  return item
+}
+
 /** 解析 大肥鱼/模板.md；某一节写坏了就用默认的那一节（不因为一处手误整份作废）。 */
 export function parseTemplates(text) {
   const t = JSON.parse(JSON.stringify(DEFAULT_TEMPLATES))
@@ -174,18 +190,8 @@ export function parseTemplates(text) {
       continue
     }
     if (!key || !line.startsWith('-')) continue
-    const m = /^-\s*(?:(\d{1,2}[:：]\d{2})\s*[–\-~～至]\s*)?(\d{1,2}[:：]\d{2}|\d{1,3}\s*分钟内)\s+(.+?)\s*·\s*(.+?)\s*·\s*保底\s*(\d+)\s*$/.exec(line)
-    if (!m) continue
-    const ev = parseEvidence(m[4])
-    if (!ev) continue
-    const rel = /^(\d{1,3})\s*分钟内$/.exec(m[2])
-    const item = {
-      title: m[3].slice(0, 80), ...ev, floor: Math.max(1, Math.min(ev.stretch, Number(m[5]))),
-      startMinute: m[1] ? toMin(m[1]) : null, dueMinute: rel ? null : toMin(m[2]), estMinutes: 60,
-      ...(rel ? { relative: Number(rel[1]) } : {}),
-    }
-    if (item.startMinute != null && item.dueMinute != null) item.estMinutes = Math.max(10, Math.min(240, item.dueMinute - item.startMinute))
-    if (seen[key].items.length < 8) seen[key].items.push(item)
+    const item = parseTemplateItem(line)
+    if (item && seen[key].items.length < 8) seen[key].items.push(item)
   }
   for (const [k, v] of Object.entries(seen)) if (v.items.length) t[k] = v
   return t
@@ -441,4 +447,76 @@ export function applyNodCardOverrides(baseItems = [], edits = []) {
     })
   })
   return out
+}
+
+// ---------------------------------------------------------------- 2026-11-22 本周计划（计划模态第一步）
+// 大肥鱼/本周计划.md：周日晚周验收时和 Gemini 一起定，按周一到周日分节，一行一个验收点（格式和模板一样）。
+// 到点自动套的就是今天那一节；没写今天那一节就退回模板。本周中只加不减（改了第二天生效，和模板一样）。
+// 到了新的一周还没换：照抄上周那份顺延（标题日期换成这周一），计划不断档；体检会提醒该做周验收了。
+
+export const WEEKDAY_NAMES = Object.freeze(['周日', '周一', '周二', '周三', '周四', '周五', '周六'])
+const WEEKDAY_RE = /^##\s*(?:周|星期)([一二三四五六日天])(?:\s*[（(]\s*(\d{1,2}[:：]\d{2})\s*自动套\s*[)）])?/
+const WD_NUM = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 }
+
+export const WEEK_PLAN_HEAD = (start) => [
+  '# 本周计划（' + start + ' 起）',
+  '',
+  '> 周日晚做周验收时和 Gemini 一起定：长期规划（长期规划.md）→ 这周每天交什么。到点自动套今天那一节；没写的那天用 模板.md。',
+  '> 一行一个验收点：`- 开始–截止 标题 · 证据 · 保底 N`（证据写法同 模板.md）。本周中只加不减；改了第二天生效。',
+  '',
+].join('\n')
+
+/** 解析本周计划：{ start: 'YYYY-MM-DD' | '', days: { 0..6: { name, applyAt, items } } }。 */
+export function parseWeekPlan(text) {
+  const out = { start: '', days: {} }
+  let wd = -1
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim()
+    const head = /^#\s*本周计划\s*[（(]\s*(\d{4}-\d{2}-\d{2})/.exec(line)
+    if (head) {
+      out.start = head[1]
+      continue
+    }
+    const h = WEEKDAY_RE.exec(line)
+    if (h) {
+      wd = WD_NUM[h[1]]
+      out.days[wd] = { name: '本周·' + WEEKDAY_NAMES[wd], applyAt: h[2] ? toMin(h[2]) : null, items: [] }
+      continue
+    }
+    if (/^#/.test(line)) {
+      wd = -1
+      continue
+    }
+    if (wd < 0 || !line.startsWith('-')) continue
+    const item = parseTemplateItem(line)
+    if (item && out.days[wd].items.length < 8) out.days[wd].items.push(item)
+  }
+  return out
+}
+
+/** 写出本周计划：days 缺的那天按模板（周一到周五工作日、周六周日休息日）补。 */
+export function renderWeekPlan(start, days = {}, templates = DEFAULT_TEMPLATES) {
+  const out = [WEEK_PLAN_HEAD(start)]
+  for (const wd of [1, 2, 3, 4, 5, 6, 0]) {
+    const base = wd >= 1 && wd <= 5 ? templates.workday : templates.restday
+    const d = days[wd] && days[wd].items.length ? days[wd] : { applyAt: base.applyAt, items: base.items }
+    out.push('## ' + WEEKDAY_NAMES[wd] + (d.applyAt != null ? '（' + hm(d.applyAt) + ' 自动套）' : ''), '')
+    for (const it of d.items) {
+      const when = it.relative ? it.relative + ' 分钟内' : (it.startMinute != null ? hm(it.startMinute) + '–' : '') + hm(it.dueMinute)
+      out.push('- ' + when + ' ' + it.title + ' · ' + renderEvidence(it) + ' · 保底 ' + it.floor)
+    }
+    out.push('')
+  }
+  return out.join('\n')
+}
+
+/**
+ * 今天用哪一节：本周计划写了今天那一节（有验收点）就用它（自动套的钟点没写就用模板的）；否则 null（调用方退回模板）。
+ * stale：计划的起始日不是这周一（上周的没换），调用方会顺延重写。
+ */
+export function weekPlanToday(plan, { weekday, monday, fallbackApplyAt = null }) {
+  const stale = Boolean(plan.start) && plan.start !== monday
+  const d = plan.days[weekday]
+  if (!d || !d.items.length) return { section: null, stale }
+  return { section: { ...d, applyAt: d.applyAt != null ? d.applyAt : fallbackApplyAt }, stale }
 }

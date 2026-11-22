@@ -264,6 +264,7 @@ function isSystemVaultFile(rel) {
     rel.startsWith(KB_DIR + '/' + IMPORT_DIR + '/') ||
     rel === KB_DIR + '/记忆.md' ||
     rel === KB_DIR + '/长期规划.md' ||
+    rel === KB_DIR + '/本周计划.md' ||
     rel === KB_DIR + '/' + SELF_FILE ||
     rel === KB_DIR + '/' + JUDGE_FILE ||
     rel === KB_DIR + '/思维碎记.md' ||

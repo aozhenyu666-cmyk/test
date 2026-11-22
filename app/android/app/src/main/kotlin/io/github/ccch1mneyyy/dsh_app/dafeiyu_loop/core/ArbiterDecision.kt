@@ -14,6 +14,9 @@ data class ArbiterDecision(
     val why: String = "",
     val unlockHow: String = "",
     val priority: String = "",
+    /** 2026-11-22 这一刻管着他的是哪条锁（「深夜睡眠护栏」「严格局护栏」「封印没过保底」…），锁页标题用它。 */
+    val label: String = "",
+    val source: String = "",
 ) {
     data class Verdict(val lock: Boolean, val why: String, val needPass: Boolean = false)
 
@@ -62,6 +65,8 @@ data class ArbiterDecision(
                 why = (m["why"] as? String).orEmpty(),
                 unlockHow = (m["unlockHow"] as? String).orEmpty(),
                 priority = (m["priority"] as? String).orEmpty(),
+                label = (m["label"] as? String).orEmpty(),
+                source = (m["source"] as? String).orEmpty(),
             )
         }
     }

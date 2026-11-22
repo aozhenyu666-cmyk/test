@@ -95,6 +95,10 @@ class InterceptPageActivity : Activity() {
     private var packageName: String? = null
     private var why: String? = null
     private var unlockHow: String? = null
+    /** 2026-11-22 此刻管着他的那条锁叫什么（来自裁决器），锁页标题用它；空 = 没有新鲜裁决，退回旧说法。 */
+    private var lockLabel: String = ""
+    private var chipView: TextView? = null
+    private var whyView: TextView? = null
     private var lockMode: String = InterceptRules.MODE_TRAINING
     private var todayCount: Int = 1
     private var reported = false
@@ -184,11 +188,10 @@ class InterceptPageActivity : Activity() {
         packageName = start.getStringExtra(EXTRA_PACKAGE)
         why = start.getStringExtra(EXTRA_WHY)?.takeIf { it.isNotBlank() }
         unlockHow = start.getStringExtra(EXTRA_UNLOCK_HOW)?.takeIf { it.isNotBlank() }
-        if (ArbiterShadow.enforceEnabled(this)) {
-            val arbiter = ArbiterShadow.current()
-            if (why.isNullOrBlank()) why = arbiter?.why?.takeIf { it.isNotBlank() }
-            if (unlockHow.isNullOrBlank()) unlockHow = arbiter?.unlockHow?.takeIf { it.isNotBlank() }
-        }
+        lockLabel = ""
+        // 2026-11-22 锁页只认「此刻唯一的锁结论」：这页可能是几个小时前那次锁重新弹出来的，带的说明是旧的。
+        // 有新鲜裁决就整段用它（原因、解法、锁名）；它说这个 App 现在其实不锁了，这页就自己收掉。
+        if (closeIfNoLongerLocked()) return
         lockMode = InterceptRules.normalizeLockMode(
             start.getStringExtra(EXTRA_LOCK_MODE) ?: InterceptRuntime.effectiveLockMode(),
         )
@@ -210,7 +213,45 @@ class InterceptPageActivity : Activity() {
     override fun onResume() {
         super.onResume()
         onScreenId = eventId
+        // 回到这页时再对一次表：锁已经换了 / 解了，就跟着换说法 / 收掉，不显示过时的那一条。
+        if (!reported && eventId != null && closeIfNoLongerLocked()) return
+        chipView?.text = lockLabel.ifBlank { modeChipText() }
+        whyView?.text = whyUnlockText()
         if (!reported && !shown) awaitVisible()
+    }
+
+    /**
+     * 按裁决器此刻的结论刷新 why / unlockHow / lockLabel。这个 App 现在已经不锁（锁解了、换成不管它的锁、放行中），
+     * 就把这次拦截记成结束、关页，返回 true。没有新鲜裁决（引擎断了 / 执法关着）就什么都不改，返回 false。
+     */
+    private fun closeIfNoLongerLocked(): Boolean {
+        val pkg = packageName ?: return false
+        if (!ArbiterShadow.enforceEnabled(this)) return false
+        val d = ArbiterShadow.currentFresh() ?: return false
+        val out = runCatching { ArbiterShadow.evaluateForEnforce(this, pkg) }.getOrNull() ?: return false
+        if (!out.shouldLock && out.reasonTag != "shadow") {
+            val id = eventId
+            reported = true
+            main.removeCallbacks(proof)
+            if (id != null) InterceptRuntime.onDismissed(id, "arbiter_open")
+            if (!isFinishing) finish()
+            return true
+        }
+        lockLabel = d.label
+        out.why.takeIf { it.isNotBlank() }?.let { why = it }
+        out.unlockHow.takeIf { it.isNotBlank() }?.let { unlockHow = it }
+        return false
+    }
+
+    private fun whyUnlockText(): String = buildString {
+        val w = why
+        val u = unlockHow
+        if (!w.isNullOrBlank()) append(AppStrings.get(this@InterceptPageActivity, R.string.proactive_overlay_reply, w))
+        if (!u.isNullOrBlank()) {
+            if (isNotEmpty()) append("\n")
+            append("解锁方式：")
+            append(u)
+        }
     }
 
     override fun onPause() {
@@ -989,7 +1030,8 @@ class InterceptPageActivity : Activity() {
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 })
                 addView(TextView(ctx).apply {
-                    text = modeChipText()
+                    chipView = this
+                    text = lockLabel.ifBlank { modeChipText() }
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
                     setTextColor(if (isStrict) palette.onAccent else palette.onTonal)
                     setTypeface(typeface, Typeface.BOLD)
@@ -1023,10 +1065,10 @@ class InterceptPageActivity : Activity() {
                 setTypeface(typeface, Typeface.BOLD)
             })
             addView(TextView(ctx).apply {
-                text = if (isStrict) {
-                    "当前契约正在严格保护期：下面列出了此刻可用正事 App；若真有急事或需要临时放松，可刷导入题库或长按紧急退出回 DSH。"
-                } else {
-                    "已屏蔽娱乐入口。可直接点上方正事 App 继续干活，或答对导入题库解锁 5 分钟。"
+                text = when {
+                    lockLabel.isNotBlank() -> "此刻管着你的只有这一条：「$lockLabel」。下面是现在能直接打开的 App。"
+                    isStrict -> "当前契约正在严格保护期：下面列出了此刻可用正事 App；若真有急事或需要临时放松，可刷导入题库或长按紧急退出回 DSH。"
+                    else -> "已屏蔽娱乐入口。可直接点下方正事 App 继续干活，或答对导入题库解锁 5 分钟。"
                 }
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 setTextColor(palette.muted)
@@ -1034,20 +1076,10 @@ class InterceptPageActivity : Activity() {
                 setPadding(0, dp(6), 0, dp(10))
             })
 
-            val whyLine = why
-            val unlockLine = unlockHow
-            if (!whyLine.isNullOrBlank() || !unlockLine.isNullOrBlank()) {
-                val combined = buildString {
-                    if (!whyLine.isNullOrBlank()) {
-                        append(AppStrings.get(ctx, R.string.proactive_overlay_reply, whyLine))
-                    }
-                    if (!unlockLine.isNullOrBlank()) {
-                        if (isNotEmpty()) append("\n")
-                        append("解锁方式：")
-                        append(unlockLine)
-                    }
-                }
+            val combined = whyUnlockText()
+            if (combined.isNotBlank()) {
                 addView(TextView(ctx).apply {
+                    whyView = this
                     text = combined
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                     setTextColor(palette.onTonal)
@@ -1079,7 +1111,8 @@ class InterceptPageActivity : Activity() {
                 })
             }
 
-            ProactiveRuntime.panelText()?.let { panel ->
+            // 旧面板（现在 / 义务 / 额度）只在没有裁决结论时显示：有结论时它会和上面那条打架。
+            if (lockLabel.isBlank()) ProactiveRuntime.panelText()?.let { panel ->
                 addView(TextView(ctx).apply {
                     panelLabel = this
                     text = panel
@@ -1091,7 +1124,7 @@ class InterceptPageActivity : Activity() {
             }
 
             // 1. 当前可用 App 专属直达区（无需回桌面）
-            val allowed = ProactiveRuntime.allowedAppsForFocus()
+            val allowed = ProactiveRuntime.allowedAppsNow() ?: ProactiveRuntime.allowedAppsForFocus()
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(10), dp(12), dp(10))

@@ -112,6 +112,8 @@ test('严格局：B 站锁住；引擎重启后照锁（局锁落盘），GET /b
     assert.ok(locked(r1, BILI), 'B 站被锁')
     if (!isNight()) assert.ok(!locked(r1, 'md.obsidian'), '本局 App 放行')
     assert.ok(r1.session.until <= Date.now() + 30 * 60_000 + 5000, '到点（30 分钟）解，不是 6 小时')
+    // 锁页标题用的锁名：白天是「严格局」，睡觉时间是深夜锁
+    assert.equal(r1.lock?.label, isNight() ? '深夜睡眠护栏' : '严格局')
 
     // 引擎重启：同一个 home 再起一次
     e = boot()
@@ -147,6 +149,7 @@ test('硬干预上限用满：系统不再主动打扰，但他自己开的严�
     const g = await plan(e.call, phone(BILI))
     assert.equal(g.lock?.mode, 'allowlist')
     assert.ok(locked(g, BILI), '温和局：娱乐锁着')
+    assert.equal(g.lock?.label, isNight() ? '深夜睡眠护栏' : '温和局')
     if (!isNight()) {
       assert.ok(!locked(g, GEMINI), '温和局：Gemini 能用')
       assert.ok(!locked(g, 'md.obsidian'))
@@ -214,6 +217,7 @@ test('Gemini 模态：余额用完、不在干活 → 只剩学习、Gemini、Ne
   })
   assert.equal(d.mode, 'allowlist')
   assert.equal(d.geminiMode, true)
+  assert.equal(d.label, 'Gemini 模态（娱乐余额用完）')
   assert.equal(decideApp(d, BILI).lock, true)
   assert.equal(decideApp(d, 'com.android.chrome').lock, true)
   assert.equal(decideApp(d, GEMINI).lock, false)

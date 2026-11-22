@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply, setStatePin } from '../lib/index.js'
-import { minuteOfDay } from '../lib/tz.js'
+import { minuteOfDay, weekdayOf } from '../lib/tz.js'
 
 const PREFIX = '/dsh-go-companion/v1'
 const SIS = 'session-sis'
@@ -139,6 +139,27 @@ test('到点没定今天：自动套模板（大肥鱼/模板.md 他自己改的
     await plan(h, { app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 4, screenOn: true })
     assert.equal(json(home, 'seals.json').items.filter((x) => x.title === '晚到的一套').length, 1)
   }, ALL_DAY)
+})
+
+test('本周计划（大肥鱼/本周计划.md）写了今天那一节：今天套它，不套模板；上周的没换就顺延到这周', async () => {
+  const wd = weekdayOf(Date.now(), TZ)
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date())
+  const monday = new Date(Date.parse(today + 'T00:00:00Z') - ((wd + 6) % 7) * 86_400_000).toISOString().slice(0, 10)
+  const lastMonday = new Date(Date.parse(monday + 'T00:00:00Z') - 7 * 86_400_000).toISOString().slice(0, 10)
+  const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'].map((d) => '## ' + d + '（00:00 自动套）\n- 23:58 本周的一套 · 题库 12 题 · 保底 6\n').join('\n')
+  for (const start of [monday, lastMonday]) {
+    await withHome(async ({ h, home }) => {
+      writeFileSync(join(home, 'companion', 'bank.json'), JSON.stringify({ 题库版本: 1, id: 'b', 名称: '行测', 题目: [{ id: 'q-1', 题干: '题', 选项: ['甲', '乙'], 答案: 'A', 解析: '甲' }] }))
+      writeFileSync(join(home, 'companion', '模板.md'), '## 工作日（00:00 自动套）\n- 23:58 模板的一套 · 题库 15 题 · 保底 5\n\n## 休息日（00:00 自动套）\n- 23:58 模板的一套 · 题库 15 题 · 保底 5\n')
+      writeFileSync(join(home, 'companion', '本周计划.md'), '# 本周计划（' + start + ' 起）\n\n' + days)
+      await plan(h, { app: 'md.obsidian', label: 'Obsidian', fun: false, minutes: 3, screenOn: true })
+      const st = json(home, 'seals.json')
+      assert.ok(st.items.some((x) => x.title === '本周的一套' && x.stretch === 12 && x.source === 'template'), JSON.stringify(st).slice(0, 300))
+      assert.ok(!st.items.some((x) => x.title === '模板的一套'), '本周计划写了就不套模板')
+      const file = readFileSync(join(home, 'companion', '本周计划.md'), 'utf8')
+      assert.match(file, new RegExp('本周计划（' + monday), start === lastMonday ? '上周的顺延成这周' : '这周的不动')
+    }, ALL_DAY)
+  }
 })
 
 /** 挑一个此刻当地正好是晚上（18:00–22:30）的时区：晚间这条任何时候都真跑，不靠运气。 */

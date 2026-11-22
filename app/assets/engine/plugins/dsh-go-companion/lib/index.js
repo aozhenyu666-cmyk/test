@@ -161,7 +161,7 @@ import {
   cleanRule, covenantBlock, insertRuleInText, nextIdIn, parseCovenant, renderCovenant, renderPendingCovenant, renderProposals,
   replaceRuleInText, syncCovenant,
 } from './covenant.js'
-import { weekPack } from './week_pack.js'
+import { weekPack, prevYmd } from './week_pack.js'
 import { healthItems, healthSummary, healthText } from './health.js'
 import { addCards, cleanPool, dueCards, rateCard, deleteCard, delayedRecall, deferredProgress, reviewSummary, reviewWeekLine, receiptToCards, mirrorLine, MAX_CARDS } from './review_cards.js'
 import { previewIntervals } from './fsrs.js'
@@ -169,7 +169,7 @@ import { addReview, cleanReview, decideReview, parseWeekReview, reviewMarkdown, 
 import {
   DEFAULT_BASE_FUN_MIN, DEFAULT_TEMPLATES, applyNodCardOverrides, buildNodCard, checkSpend, checkStart, dayOutcomes, defaultVerify,
   parseTemplates, recoveryStep, renderTemplates, shouldApplyTemplate, templateSeals, verifyPromptLines, eveningOf, eveningStep,
-  eveningCapFor, setEveningCap, EVENING_END,
+  eveningCapFor, setEveningCap, EVENING_END, parseWeekPlan, renderWeekPlan, weekPlanToday,
 } from './verifier_mode.js'
 import { appendInboxEntry, buildStrategizeBundle, readInboxEntries } from './inbox_dept.js'
 import { buildHandoff, handoffLive, recentDialog, rotationStatus } from './rotate.js'
@@ -8254,9 +8254,51 @@ export function apply(ctx) {
         writeVaultText(templatesPath(), text)
       } catch {}
     }
-    const t = parseTemplates(text)
+    let t = parseTemplates(text)
+    // 2026-11-22 计划模态第一步：本周计划（大肥鱼/本周计划.md）写了今天那一节，今天就套它；模板只兜底。
+    try {
+      const wp = weekPlanNow(now, tz, t)
+      if (wp.section) t = { ...t, workday: wp.section, restday: wp.section, fromWeekPlan: true }
+    } catch {}
     saveVerify({ ...loadVerify(), templates: t, templatesDay: today })
     return t
+  }
+  const weekPlanPath = () => {
+    const kb = vaultKb()
+    return kb ? join(kb, '本周计划.md') : stateFile('本周计划.md')
+  }
+  /**
+   * 读本周计划（没有就按模板生成一份让他和 Gemini 改）；上周的没换就照抄顺延到这周（标题日期改成这周一），计划不断档。
+   */
+  function weekPlanNow(now, tz, templates) {
+    const today = dayString(now, tz)
+    const weekday = weekdayOf(now, tz)
+    const monday = prevYmd(today, (weekday + 6) % 7)
+    let text = null
+    try {
+      text = readVaultText(weekPlanPath())
+    } catch {}
+    if (text === null) {
+      text = renderWeekPlan(monday, {}, templates)
+      try {
+        writeVaultText(weekPlanPath(), text)
+        record({ state: 'week-plan-created', at: now, monday })
+      } catch {}
+    }
+    let plan = parseWeekPlan(text)
+    const fallbackApplyAt = (weekday >= 1 && weekday <= 5 ? templates.workday : templates.restday)?.applyAt ?? null
+    let r = weekPlanToday(plan, { weekday, monday, fallbackApplyAt })
+    if (r.stale) {
+      // 上周的计划：照抄顺延（他周验收时再改）；写不进笔记库也照用。
+      const next = renderWeekPlan(monday, plan.days, templates)
+      try {
+        writeVaultText(weekPlanPath(), next)
+        record({ state: 'week-plan-rolled', at: now, from: plan.start, monday })
+      } catch {}
+      plan = parseWeekPlan(next)
+      r = weekPlanToday(plan, { weekday, monday, fallbackApplyAt })
+    }
+    return { ...r, monday, plan }
   }
   /** 关默认验收是放松：明天才生效（今天的照旧）。开是收紧：立即。 */
   function verifyEnabled(now = Date.now(), tz = zoneOr(config.timeZone)) {
@@ -10114,6 +10156,7 @@ export function apply(ctx) {
       work: {
         active: workActive,
         why,
+        label: bl ? (bl.mode === 'strict' ? '严格局' : '温和局') : run ? '局进行中' : contract ? '计划契约' : busy ? '忙时' : '专时',
         allow: [
           ...(Array.isArray(contract?.allow) ? contract.allow : []),
           ...(Array.isArray(config.defaultAllow) ? config.defaultAllow : []),

@@ -78,6 +78,7 @@ export const WEEK_PROMPT = [
   '调整3：（可选）',
   '下周盯：一个数字',
   '最多 3 条调整。不要安慰，不要建议「多休息」之类的空话；数字支持不了的结论不要下。',
+  '执行率 ≥85% 合格；连续两周 <70% 必须给一条「下调哪一项、调到多少」。调整写进下周的 本周计划.md（周一到周日每天交什么），他点头后下周生效。',
 ].join('\n')
 
 function packText(t, rows, waivers, reviewLine = '') {
@@ -85,6 +86,9 @@ function packText(t, rows, waivers, reviewLine = '') {
   lines.push('## 总数')
   lines.push('- 验收点 ' + t.checkpoints + ' 个：过拉伸 ' + t.stretch + '，过保底 ' + t.floor + '，没过保底 ' + t.below + '，豁免 ' + t.waived +
     '；判过的里面通过率 ' + (t.passRate === null ? '—' : t.passRate + '%') + '；开工后现加的 ' + t.live + ' 个')
+  // 2026-11-22 计划模态：执行率 = 过了保底的 ÷ 判过的（豁免不算分母）。≥85% 合格；连续两周 <70% 说明本周计划定高了。
+  lines.push('- 本周执行率 ' + (t.passRate === null ? '—（还没有判过的验收点）' : t.passRate + '%' +
+    (t.passRate >= 85 ? '（合格）' : t.passRate < 70 ? '（不到 70%：计划可能定高了）' : '（偏低）')))
   lines.push('- 一个验收点都没有的天：' + t.emptyDays + ' 天')
   lines.push('- 挣到的娱乐分钟（验收点）：' + t.paid + '；开局 ' + t.bouts + ' 次')
   lines.push('- Gemini 回执 ' + t.receipts + ' 条（判「过」' + t.receiptsPass + '）')

@@ -1061,6 +1061,27 @@ object ProactiveRuntime {
     }
 
     /** 专注舱 / 锁屏页可用 App 直达清单（聚合 sessionAllow + Focus 允许列表 + taskPackage），去重后返回 (pkg, label)。 */
+    /**
+     * 2026-11-22 锁页「现在能用的 App」：只认此刻唯一的锁结论（裁决器）。
+     * 白名单模式就是它的放行名单（去掉底座：电话短信这些本来就不锁，不用占按钮）；自由态 / 没有新鲜结论时返回 null，调用方退回旧名单。
+     * 以前这里拼的是另一份名单（专时 / 会话），凌晨睡觉锁生效时按钮全打不开。
+     */
+    fun allowedAppsNow(): List<Pair<String, String>>? {
+        if (!::app.isInitialized || !ArbiterShadow.enforceEnabled(app)) return null
+        val d = ArbiterShadow.currentFresh() ?: return null
+        if (d.mode != io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.ArbiterDecision.MODE_ALLOWLIST) return null
+        val pm = app.packageManager
+        return d.allow.filter { pkg ->
+            pkg.isNotBlank() &&
+                !io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.isSelfPackage(pkg, app.packageName) &&
+                !ArbiterShadow.isBase(app, pkg) &&
+                runCatching { pm.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
+        }.take(16).map { pkg ->
+            val label = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrNull()?.takeIf { it.isNotBlank() } ?: pkg
+            pkg to label
+        }
+    }
+
     fun allowedAppsForFocus(): List<Pair<String, String>> {
         if (!::app.isInitialized) return emptyList()
         loadSession()
