@@ -16,6 +16,7 @@ import '../../ui/common/status_chip.dart';
 import '../../ui/pets/pet_settings_page.dart';
 import 'app_tiers_page.dart';
 import 'bank_manager_page.dart';
+import 'bout_voice_page.dart';
 import 'covenant_page.dart';
 import 'gemini_bridge_page.dart';
 import 'health_page.dart';
@@ -53,6 +54,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
   bool _actionBusy = false;
   bool _lowFreqHubExpanded = false;
   bool _lowFreqFishExpanded = false;
+  bool _quickJumpExpanded = false;
   Map<String, Object?>? _wallStatus;
   ProactiveStatus? _proactive;
   DepositView? _deposit;
@@ -678,6 +680,15 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
             onTap: () => _openPage(const VoiceSettingsPage()),
           ),
           ListPageRow(
+            key: const ValueKey('hub-bout-voice'),
+            icon: AppIcons.voice,
+            title: '局官念题与作答语音',
+            subtitle: '开局自动语音播报与实时朗读设置（原首页语音入口已归位至此）',
+            subtitleMaxLines: 2,
+            chevron: true,
+            onTap: () => _openPage(const BoutVoicePage()),
+          ),
+          ListPageRow(
             icon: AppIcons.pet,
             title: '双姐妹桌宠皮肤（.zip 导入）',
             subtitle: '导入鱼丸 yuwan-girl.zip / 鲸澜 jinglan-girl.zip，发球时自动换肤',
@@ -916,54 +927,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
           onFooterTap: () => _openPage(const WallPage()),
         ),
         ListPageCard(
-          key: const ValueKey('hub-quick-entries'),
-          title: '高频总控入口',
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-          children: [
-            ListPageRow(
-              key: const ValueKey('hub-entry-locks'),
-              icon: AppIcons.balance,
-              iconColor: colors.warning,
-              title: '锁与余额总控台',
-              subtitle: '8 道锁实时裁决 · 手机可用余额大盘 · 分时花余额 · 双鱼轨迹',
-              subtitleMaxLines: 2,
-              chevron: true,
-              onTap: () => _openPage(LocksBalancePage(channel: _channel)),
-            ),
-            ListPageRow(
-              key: const ValueKey('hub-entry-strategy'),
-              icon: AppIcons.planMode,
-              iconColor: Theme.of(context).colorScheme.primary,
-              title: '三层战略作战室（长期/中期/今日验收锁）',
-              subtitle: '长期北极星 · 中期战役 · 今日时间轴与验收锁 · Gemini 联调',
-              subtitleMaxLines: 2,
-              chevron: true,
-              onTap: () => _openPage(StrategyHorizonsPage(channel: _channel)),
-            ),
-            ListPageRow(
-              key: const ValueKey('hub-entry-bank'),
-              icon: AppIcons.skill,
-              iconColor: colors.info,
-              title: '题库中心',
-              subtitle: '导入真题/知识卡 · 刷题挣余额与锁屏解锁设置',
-              subtitleMaxLines: 2,
-              chevron: true,
-              onTap: () => _openPage(BankManagerPage(channel: _channel)),
-            ),
-            ListPageRow(
-              key: const ValueKey('hub-entry-analytics'),
-              icon: AppIcons.chart,
-              iconColor: colors.success,
-              title: '每日使用时长统计',
-              subtitle: '24h 时间切片 · 90 天趋势 · Gemini 共脑 · 晚间 AI 总报',
-              subtitleMaxLines: 2,
-              chevron: true,
-              onTap: () => _openPage(UsageAnalyticsPage(channel: _channel)),
-            ),
-          ],
-        ),
-        ListPageCard(
-          title: '设置',
+          title: '设置（4 组清晰归档）',
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
           children: [
             ListPageRow(
@@ -971,7 +935,7 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               icon: AppIcons.team,
               iconColor: colors.info,
               title: '两条鱼',
-              subtitle: '姐妹与记忆 · 主动搭话 · Gemini · 声线 · 桌宠',
+              subtitle: '姐妹与记忆 · 主动搭话 · Gemini · 声线 · 局官语音 · 桌宠',
               subtitleMaxLines: 2,
               value: _proactive == null ? null : (_proactive!.config.enabled ? '主动开' : '主动关'),
               chevron: true,
@@ -988,13 +952,6 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               chevron: true,
               onTap: () => _openGroup('锁', '落不落得下来、落多重、锁谁放谁', _lockGroup),
             ),
-          ],
-        ),
-        ListPageCard(
-          key: const ValueKey('hub-low-freq-card'),
-          title: '低频维护与底层工具',
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-          children: [
             ListPageRow(
               key: const ValueKey('hub-group-data'),
               icon: AppIcons.files,
@@ -1013,6 +970,64 @@ class _CompanionHubPageState extends ConsumerState<CompanionHubPage> {
               chevron: true,
               onTap: () => _openGroup('诊断', '卡住了怎么办、出过什么事', _diagGroup),
             ),
+          ],
+        ),
+        ListPageCard(
+          key: const ValueKey('hub-low-freq-card'),
+          title: '快捷跳转与低频维护',
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          children: [
+            ListPageRow(
+              key: const ValueKey('hub-quick-toggle'),
+              icon: AppIcons.allFeatures,
+              title: '快捷跳转到日常总控（锁 / 战略 / 题库 / 统计）',
+              subtitle: _quickJumpExpanded ? '点击收起（日常功能均已在「局」首页直达）' : '点击展开跨页快捷直达',
+              subtitleMaxLines: 2,
+              trailing: Icon(_quickJumpExpanded ? AppIcons.collapse : AppIcons.expand, size: 18, color: colors.textTertiary),
+              onTap: () => setState(() => _quickJumpExpanded = !_quickJumpExpanded),
+            ),
+            if (_quickJumpExpanded) ...[
+              ListPageRow(
+                key: const ValueKey('hub-entry-locks'),
+                icon: AppIcons.balance,
+                iconColor: colors.warning,
+                title: '锁与余额总控台',
+                subtitle: '6 只手实时裁决 · 手机可用余额大盘 · 分时花余额 · 双鱼轨迹',
+                subtitleMaxLines: 2,
+                chevron: true,
+                onTap: () => _openPage(LocksBalancePage(channel: _channel)),
+              ),
+              ListPageRow(
+                key: const ValueKey('hub-entry-strategy'),
+                icon: AppIcons.planMode,
+                iconColor: Theme.of(context).colorScheme.primary,
+                title: '三层战略作战室（长期/中期/今日验收锁）',
+                subtitle: '长期北极星 · 中期战役 · 今日时间轴与验收锁 · Gemini 联调',
+                subtitleMaxLines: 2,
+                chevron: true,
+                onTap: () => _openPage(StrategyHorizonsPage(channel: _channel)),
+              ),
+              ListPageRow(
+                key: const ValueKey('hub-entry-bank'),
+                icon: AppIcons.skill,
+                iconColor: colors.info,
+                title: '题库中心',
+                subtitle: '导入真题/知识卡 · 刷题挣余额与锁屏解锁设置',
+                subtitleMaxLines: 2,
+                chevron: true,
+                onTap: () => _openPage(BankManagerPage(channel: _channel)),
+              ),
+              ListPageRow(
+                key: const ValueKey('hub-entry-analytics'),
+                icon: AppIcons.chart,
+                iconColor: colors.success,
+                title: '每日使用时长统计',
+                subtitle: '24h 时间切片 · 90 天趋势 · Gemini 共脑 · 晚间 AI 总报',
+                subtitleMaxLines: 2,
+                chevron: true,
+                onTap: () => _openPage(UsageAnalyticsPage(channel: _channel)),
+              ),
+            ],
             ListPageRow(
               key: const ValueKey('hub-low-freq-toggle'),
               icon: AppIcons.diagnostics,

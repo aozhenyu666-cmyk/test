@@ -364,8 +364,8 @@ test('H1 硬边界一：情绪不改锁/额度/判定——wall*.js / force.js /
   const files = readdirSync(LIB).filter((f) => f.endsWith('.js'))
   const forbade = files.filter((f) => /^wall.*\.js$/.test(f) || f === 'force.js' || f === 'machine.js')
   // 第八轮 W2 新增的两个墙面板文件同样在这条线以内。
-  // 2026-11 新增墙的眼睛（wall_eye.js）与主管墙（wall_boss_session.js）：同样不许碰情绪。
-  assert.deepEqual(forbade.sort(), ['force.js', 'machine.js', 'wall.js', 'wall_auditor.js', 'wall_boss_session.js', 'wall_eye.js', 'wall_panel.js', 'wall_view.js', 'wall_voice.js'])
+  // 2026-11 新增墙的眼睛（wall_eye.js）与主管墙（wall_boss_session.js / wall_boss_runtime.js）：同样不许碰情绪。
+  assert.deepEqual(forbade.sort(), ['force.js', 'machine.js', 'wall.js', 'wall_auditor.js', 'wall_boss_runtime.js', 'wall_boss_session.js', 'wall_eye.js', 'wall_panel.js', 'wall_view.js', 'wall_voice.js'])
   for (const f of forbade) {
     const src = readFileSync(join(LIB, f), 'utf8')
     assert.equal(/from\s+['"]\.\/emotion\.js['"]/.test(src), false, f + ' 不许 import emotion.js')

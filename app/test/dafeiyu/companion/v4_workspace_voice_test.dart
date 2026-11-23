@@ -177,8 +177,10 @@ void main() {
     expect(ch.boutCommands.last['action'], 'allow');
     expect((ch.boutCommands.last['allow'] as List), containsAll(['md.obsidian', 'org.mozilla.firefox']));
 
-    // 进入二级「系统明细 -> 时钟核」验证原工程能力完整保留
-    await tester.tap(find.byTooltip('系统明细（队列 / 协议库 / 时钟核）'));
+    // 进入二级「更多工具 -> 系统明细」验证原工程能力完整保留
+    await tester.tap(find.byKey(const ValueKey('today-more-tools-btn')));
+    await settlePhone(tester);
+    await tester.tap(find.text('系统明细（队列 / 协议库 / 时钟核）'));
     await settlePhone(tester);
     expect(find.text('25/5 核心番茄'), findsOneWidget);
     await tester.tap(find.byTooltip('暂停'));
@@ -297,7 +299,9 @@ void main() {
     expect(find.text('契约：看网课提炼因果卡'), findsOneWidget);
     expect(find.text('去验收'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('常用 AI 话术剧本（点即复制）'));
+    await tester.tap(find.byKey(const ValueKey('today-more-tools-btn')));
+    await settlePhone(tester);
+    await tester.tap(find.text('常用 AI 话术剧本（点即复制）'));
     await settlePhone(tester);
     expect(find.text('常用 AI 话术剧本表（免自己打字）'), findsOneWidget);
     await tester.tap(find.text('关闭'));

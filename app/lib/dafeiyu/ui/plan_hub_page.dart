@@ -117,8 +117,8 @@ class _PlanHubPageState extends State<PlanHubPage> {
         : ledgerFallback?.funLeft;
     final activeLockLabel = '${activeLockMap['label'] ?? ''}'.trim();
     final locksSubtitle = availMin != null
-        ? '可用余额 ${availMin}m${activeLockLabel.isNotEmpty ? ' · $activeLockLabel' : ''} · 分时花余额与 8 道锁裁决'
-        : '8 道锁实时裁决 · 手机可用余额大盘 · 急事 3 分钟通道';
+        ? '可用余额 ${availMin}m${activeLockLabel.isNotEmpty ? ' · $activeLockLabel' : ''} · 分时花余额与 6 只手裁决'
+        : '6 只手实时裁决 · 手机可用余额大盘 · 急事 3 分钟通道';
 
     return AppPage.list(
       title: '计划',
@@ -176,19 +176,56 @@ class _PlanHubPageState extends State<PlanHubPage> {
           onLocked: () => unawaited(_refresh()),
         ),
         ListPageCard(
-          title: '作战与总控入口',
+          title: '主力计划入口',
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
           children: [
+            ListPageRow(
+              key: const ValueKey('plan-hub-contract'),
+              icon: AppIcons.verified,
+              iconColor: colors.success,
+              title: '计划与托管（三态工作台）',
+              subtitle: contract == null ? '准备 → 构建时间盒 → 观看红线验收 · 自动哨兵与托管冲刺' : '「${contract['title'] ?? ''}」还有 $pending 个验收点',
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => unawaited(_go(PlanModalityPage(channel: _channel, loopChannel: widget.loopChannel))),
+            ),
             ListPageRow(
               key: const ValueKey('plan-hub-horizons'),
               icon: AppIcons.planMode,
               iconColor: Theme.of(context).colorScheme.primary,
-              title: '三层战略作战室（含今日验收锁）',
+              title: '三层战略作战室（长期 / 中期）',
               subtitle: '长期北极星 · 中期战役 · 今日时间轴与验收锁 · Gemini 联调',
               subtitleMaxLines: 2,
               value: '${long.length} 长 · ${med.length} 中',
               chevron: true,
               onTap: () => unawaited(_go(StrategyHorizonsPage(channel: _channel))),
+            ),
+            ListPageRow(
+              key: const ValueKey('plan-hub-seal'),
+              icon: AppIcons.lock,
+              iconColor: colors.warning,
+              title: '封印与验收点明细',
+              subtitle: _sealLine(),
+              subtitleMaxLines: 2,
+              chevron: true,
+              onTap: () => unawaited(_go(SealPage(channel: _channel))),
+            ),
+          ],
+        ),
+        ListPageCard(
+          title: '关联总控与排程明细',
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            ListPageRow(
+              key: const ValueKey('plan-hub-day'),
+              icon: AppIcons.calendar,
+              iconColor: colors.info,
+              title: '今天：时间块排程',
+              subtitle: '按时间块排今天几局，每块写清必需 / 允许的 App',
+              subtitleMaxLines: 2,
+              value: tasks.isEmpty ? null : '${tasks.length} 项',
+              chevron: true,
+              onTap: () => unawaited(_go(const PlanPage())),
             ),
             ListPageRow(
               key: const ValueKey('plan-hub-locks'),
@@ -210,43 +247,6 @@ class _PlanHubPageState extends State<PlanHubPage> {
               subtitleMaxLines: 2,
               chevron: true,
               onTap: () => unawaited(_go(UsageAnalyticsPage(channel: _channel))),
-            ),
-          ],
-        ),
-        ListPageCard(
-          title: '时间块、验收点与契约细节（辅助）',
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-          children: [
-            ListPageRow(
-              key: const ValueKey('plan-hub-seal'),
-              icon: AppIcons.lock,
-              iconColor: colors.warning,
-              title: '验收点：今天的时间轴 · 明天的封印',
-              subtitle: _sealLine(),
-              subtitleMaxLines: 2,
-              chevron: true,
-              onTap: () => unawaited(_go(SealPage(channel: _channel))),
-            ),
-            ListPageRow(
-              key: const ValueKey('plan-hub-day'),
-              icon: AppIcons.calendar,
-              iconColor: colors.info,
-              title: '今天：时间块排程',
-              subtitle: '按时间块排今天几局，每块写清必需 / 允许的 App',
-              subtitleMaxLines: 2,
-              value: tasks.isEmpty ? null : '${tasks.length} 项',
-              chevron: true,
-              onTap: () => unawaited(_go(const PlanPage())),
-            ),
-            ListPageRow(
-              key: const ValueKey('plan-hub-contract'),
-              icon: AppIcons.verified,
-              iconColor: colors.success,
-              title: '契约：怎么验收',
-              subtitle: contract == null ? '和 AI 共创契约，设验收点；到点没交就转严格锁' : '「${contract['title'] ?? ''}」还有 $pending 个验收点',
-              subtitleMaxLines: 2,
-              chevron: true,
-              onTap: () => unawaited(_go(PlanModalityPage(channel: _channel, loopChannel: widget.loopChannel))),
             ),
           ],
         ),

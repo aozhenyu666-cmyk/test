@@ -289,6 +289,11 @@ object BuiltinPluginGuest {
                 "lib/work_store.js",
                 // 2026-11-21 四部门收件箱纯模块（4.10）
                 "lib/inbox_dept.js",
+                // 2026-11-23 Wave B：从 index.js 拆出的 4 个运行态模块
+                "lib/locks_overview_runtime.js",
+                "lib/bridge_runtime.js",
+                "lib/review_runtime.js",
+                "lib/wall_boss_runtime.js",
             ),
         ),
     )

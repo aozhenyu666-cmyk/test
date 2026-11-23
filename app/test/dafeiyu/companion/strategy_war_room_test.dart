@@ -262,9 +262,27 @@ void main() {
     expect(find.byType(LocksBalancePage), findsOneWidget);
   });
 
-  testWidgets('CompanionHubPage 置顶高频总控入口且低频维护可折叠', (tester) async {
+  testWidgets('CompanionHubPage 保持纯设置 4 组与声音入口，导航快捷跳与低频运维默认折叠', (tester) async {
     final ch = _FakeWarRoomChannel();
     await pumpPhone(tester, CompanionHubPage(channel: ch));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('hub-group-fish')), findsOneWidget);
+    expect(find.byKey(const ValueKey('hub-group-lock')), findsOneWidget);
+    expect(find.byKey(const ValueKey('hub-group-data')), findsOneWidget);
+    expect(find.byKey(const ValueKey('hub-group-diag')), findsOneWidget);
+    expect(find.byKey(const ValueKey('hub-entry-locks')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('hub-group-fish')));
+    await settlePhone(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('hub-bout-voice')));
+    expect(find.byKey(const ValueKey('hub-bout-voice')), findsOneWidget);
+    Navigator.of(tester.element(find.byKey(const ValueKey('hub-bout-voice')))).pop();
+    await settlePhone(tester);
+
+    // 快捷跳转与低频维护默认收起
+    expect(find.text('底层存储与权限体检'), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('hub-quick-toggle')));
+    await tester.tap(find.byKey(const ValueKey('hub-quick-toggle')));
     await settlePhone(tester);
     expect(find.byKey(const ValueKey('hub-entry-locks')), findsOneWidget);
     expect(find.byKey(const ValueKey('hub-entry-strategy')), findsOneWidget);
@@ -272,12 +290,12 @@ void main() {
     expect(find.byKey(const ValueKey('hub-entry-analytics')), findsOneWidget);
     expect(find.text('真锁'), findsOneWidget);
 
-    // 折叠的低频工程维护入口默认收起，点开后展示底层诊断
-    expect(find.text('底层存储与权限体检'), findsNothing);
+    await tester.ensureVisible(find.byKey(const ValueKey('hub-low-freq-toggle')));
     await tester.tap(find.byKey(const ValueKey('hub-low-freq-toggle')));
     await settlePhone(tester);
     expect(find.text('底层存储与权限体检'), findsOneWidget);
 
+    await tester.ensureVisible(find.byKey(const ValueKey('hub-entry-bank')));
     await tester.tap(find.byKey(const ValueKey('hub-entry-bank')));
     await settlePhone(tester);
     expect(find.byType(BankManagerPage), findsOneWidget);
