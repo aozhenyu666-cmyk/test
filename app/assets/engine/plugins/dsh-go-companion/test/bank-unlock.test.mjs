@@ -338,3 +338,25 @@ test('向后兼容：老 state 只有 wrongIds 时仍接入 wrongBook，锁屏�
   assert.ok(wrongLock.state.wrongBookIds.includes('q1'))
   assert.equal(wrongLock.state.stats.dailyHistory['2026-11-22'].answered, 1)
 })
+
+test('recordPracticeAnswer：独立累计专练轮次、达标触发 roundComplete 且不污染锁屏 session', () => {
+  const catalog = makeCatalog()
+  let st = cleanBankUnlockState({
+    config: { requiredCount: 2, unlockMinutes: 5 },
+    session: { solved: 4, currentId: 'lock-q' },
+  })
+  const r1 = recordPracticeAnswer(catalog, st, { questionId: 'b-main:q1', answer: 'B', now: T0 })
+  assert.equal(r1.ok, true)
+  assert.equal(r1.practiceSolved, 1)
+  assert.equal(r1.roundComplete, false)
+  assert.equal(r1.state.practiceSession.solved, 1)
+  assert.equal(r1.state.session.solved, 4, '专练进度不得篡改锁屏解锁进度')
+
+  const r2 = recordPracticeAnswer(catalog, r1.state, { questionId: 'b-main:q2', answer: 'A', now: T0 + 2000 })
+  assert.equal(r2.ok, true)
+  assert.equal(r2.practiceSolved, 2)
+  assert.equal(r2.roundComplete, true)
+  assert.equal(r2.unlockMinutes, 5)
+  assert.equal(r2.state.practiceSession.solved, 0, '满轮次后专练轮次清零重开')
+  assert.equal(r2.state.session.solved, 4, '达标后依然不影响锁屏解锁计数')
+})

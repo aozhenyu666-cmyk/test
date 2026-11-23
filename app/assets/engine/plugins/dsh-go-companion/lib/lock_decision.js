@@ -83,6 +83,19 @@ export function buildLockDecision({ arbiter = null, work = null, installed = [],
     return { ...base, mode: 'open', allow: [], deny: [], needPass: [], why: nonEmpty(a.why, '紧急放行中'), unlockHow: nonEmpty(a.unlockHow, '倒计时结束后恢复') }
   }
 
+  if (a.source === 'SISTER_BREAK') {
+    const gameDeny = ofTier('game').map((app) => ({ app, why: '纯游戏硬规矩拦截' }))
+    return {
+      ...base,
+      mode: 'free',
+      allow: [],
+      deny: gameDeny,
+      needPass: [],
+      why: nonEmpty(a.why, '双鱼审核放风中'),
+      unlockHow: nonEmpty(a.unlockHow, '放风倒计时结束后自动恢复原护栏状态'),
+    }
+  }
+
   // P1–P4（含 P3.5 接管）：裁决器已经给了「只许哪些」。连麦舱（P2/GEMINI_LIVE_CELL）补上 Gemini 和代理；接管（P3.5/TAKEOVER_STRICT）补工作应用。
   if (['P1', 'P2', 'P3', 'P3.5', 'P4'].includes(a.priority)) {
     const strictSources = new Set(['NIGHT_CURFEW', 'GEMINI_LIVE_CELL', 'CONTRACT_OVERDUE_STRICT', 'TAKEOVER_STRICT', 'BOUT_STRICT'])

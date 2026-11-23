@@ -157,13 +157,14 @@ test('[4.3 & 4.2] 开局零手选自动带预设放行范围 + 自动关联今�
   await withHome(async ({ home, get, post }) => {
     const today = dayStringOf(Date.now(), DAY_TZ)
 
+    const nextDueMin = Math.min(20 * 60, Math.max(16 * 60, minuteOfDayOf(Date.now(), DAY_TZ) + 90))
     // 预置 3 条今日验收点：1 条已过保底、1 条最早未交、1 条较晚未交
     writeFileSync(join(home, 'companion', 'seals.json'), JSON.stringify({
       v: 1,
       items: [
         { id: 's-done', day: today, title: '早间背词已完成', kind: 'app_minutes', stretch: 20, floor: 10, dueMinute: 9 * 60, status: 'floor', actual: 12 },
         { id: 's-late', day: today, title: '晚间申论写作', kind: 'file', stretch: 800, floor: 400, dueMinute: 21 * 60, status: 'open', actual: 0 },
-        { id: 's-next', day: today, title: '下午行测刷题 30 道', kind: 'external_quiz', stretch: 30, floor: 15, dueMinute: 16 * 60, status: 'open', actual: 0 },
+        { id: 's-next', day: today, title: '下午行测刷题 30 道', kind: 'external_quiz', stretch: 30, floor: 15, dueMinute: nextDueMin, status: 'open', actual: 0 },
       ],
     }))
 

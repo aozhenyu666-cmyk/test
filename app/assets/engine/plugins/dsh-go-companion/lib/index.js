@@ -1786,9 +1786,22 @@ export function apply(ctx) {
     normalizeTimeLedger(readState(stateFile('time-ledger.json'), null), dayString(now, tz))
   const saveTimeLedger = (s) => writeJson(stateFile('time-ledger.json'), s)
 
+  const EARN_LEDGER_KINDS = new Set(['earned_bank', 'earned_bout', 'earned_seal', 'earned_review'])
   function recordTimeEntryNow({ kind, minutes = 0, reason = '', at = Date.now(), tz = zoneOr(config.timeZone) } = {}) {
     const day = dayString(at, tz)
-    const next = appendTimeEntry(loadTimeLedger(at, tz), { kind, minutes, reason, at, day })
+    let baseState = loadTimeLedger(at, tz)
+    const mins = Math.max(0, Math.round(Number(minutes) || 0))
+    if (EARN_LEDGER_KINDS.has(String(kind || '')) && mins > 0) {
+      const tlBefore = timeLedgerNow(at, tz, lastPhone)
+      const availBefore = (Number(tlBefore.carry) || 0) + (Number(tlBefore.funQuota) || 0) + (Number(tlBefore.earned) || 0) - (Number(tlBefore.penaltyApplied) || 0)
+      const usedBefore = (Number(tlBefore.funUsed) || 0) + (Number(tlBefore.gameUsed) || 0)
+      const effectiveUsedBefore = Math.max(0, usedBefore - (Number(baseState.deficitOffset) || 0))
+      const shortfall = Math.max(0, effectiveUsedBefore - availBefore)
+      if (shortfall > 0) {
+        baseState = { ...baseState, deficitOffset: (Number(baseState.deficitOffset) || 0) + shortfall }
+      }
+    }
+    const next = appendTimeEntry(baseState, { kind, minutes, reason, at, day })
     saveTimeLedger(next)
     return next
   }
@@ -2251,6 +2264,7 @@ export function apply(ctx) {
     const p = String(arb?.priority || 'P6')
     if (p === 'P0' || ctxInfo.emActive) return { id: 'EMERGENCY_SUSPEND', name: '急事 3 分钟通行证' }
     if (p === 'P1' || ctxInfo.nightLocked || ctxInfo.evLock) return { id: 'NIGHT_CURFEW', name: '深夜睡眠 & 晚间上限锁' }
+    if (arb?.source === 'SISTER_BREAK' || p === 'P1.2') return { id: 'SISTER_BREAK', name: '双鱼审核放风中' }
     if (p === 'P2' || ctxInfo.gemSessionActive) return { id: 'GEMINI_LIVE_CELL', name: 'Gemini 连麦舱' }
     if (p === 'P3' || p === 'P3.5' || ctxInfo.overdueOrTakeover) {
       return { id: 'CONTRACT_OVERDUE_STRICT', name: '验收锁（计划块/封印/主管指令）' }
@@ -3002,6 +3016,18 @@ export function apply(ctx) {
       })
     },
     getTimeLedger: (now = Date.now()) => timeLedgerNow(now, zoneOr(config.timeZone), lastPhone),
+    getAvailableFunLeft: (now = Date.now()) => Number(timeLedgerNow(now, zoneOr(config.timeZone), lastPhone).funLeft) || 0,
+    getBreakPass: (now = Date.now()) => {
+      if (!onBreak(now)) return null
+      const wdNow = wallDecision(wallCfgNow(), now, zoneOr(config.timeZone))
+      if (wdNow.locked && wdNow.kind === 'night') return null
+      return {
+        active: true,
+        until: Number(config.breakUntil) || 0,
+        by: String(config.breakBy || 'sister'),
+        reason: String(config.breakReason || '双鱼审核放风中'),
+      }
+    },
     getEmergencyPassActive: (now = Date.now()) => activeEmergencyInfo(now, zoneOr(config.timeZone)),
     getWorkStore: (now = Date.now()) => workStoreNow(now, zoneOr(config.timeZone)),
     tierOf: (pkg) => tierFnNow()(pkg),
@@ -3084,6 +3110,7 @@ export function apply(ctx) {
       if (added > 0) {
         recordTimeEntryNow({ kind: 'earned_bank', minutes: added, reason: `题库挣余额 ${solved || 10} 题`, at: now, tz })
       }
+      const tlAfter = timeLedgerNow(now, tz, lastPhone)
       return {
         earnedOnly: true,
         needSpend: true,
@@ -3091,6 +3118,7 @@ export function apply(ctx) {
         dailyBankEarned: todayBankEarned + added,
         dailyBankCap: BANK_EARN_DAILY_CAP,
         capped: added < mins,
+        availableFunLeft: Number(tlAfter.funLeft) || 0,
       }
     },
     requestGeminiGate: (opts) => requestGeminiViaGate(opts),
@@ -3255,7 +3283,7 @@ export function apply(ctx) {
         const reason = String(args.reason || '').trim().slice(0, 160)
         const hm = zoneHm(until, zoneOr(config.timeZone))
         if (args.mode === 'refuse') {
-          config = { ...config, refuseUntil: Math.max(until, Number(config.refuseUntil) || 0), refuseBy: 'ai' }
+          config = { ...config, refuseUntil: Math.max(until, Number(config.refuseUntil) || 0), refuseBy: 'ai', breakUntil: 0, breakBy: '', breakReason: '' }
           try {
             writeConfig(config)
           } catch {
@@ -3272,6 +3300,8 @@ export function apply(ctx) {
           record({ state: 'task-refused', at: now, by: role, missing })
           return { ok: false, code: 'field-missing', missing, text: answerPrompt(missing) }
         }
+        config = { ...config, breakUntil: 0, breakBy: '', breakReason: '' }
+        try { writeConfig(config) } catch {}
         setGear({ gear: 'busy', until, what: goal.slice(0, 20), task: { goal, by: role, reason, domain: String(args.domain).trim().slice(0, 120), breakAt: String(args.breakAt).trim().slice(0, 60) } }, 'ai-' + role)
         record({ state: 'task-start', at: now, mode: 'task', minutes, by: role, goal, reason })
         wallCloseOnStart(now)
@@ -4115,25 +4145,13 @@ export function apply(ctx) {
           return { ok: true, text: '记下了：没通过，任务继续。' }
         }
         const goal = config.taskGoal
-        setGear({ gear: 'free' }, 'ai-' + role)
-        const patch = {
-          aiWorkSession: null,
-          taskLease: null,
-        }
-        if (config.refuseBy === 'ai') {
-          patch.refuseUntil = 0
-          patch.refuseBy = undefined
-        }
-        if (Array.isArray(config.blockExtra) && config.blockExtra.length) {
-          patch.blockExtra = config.blockExtra.filter((b) => b && b.by !== 'ai' && b.by !== 'tool' && b.by !== 'ladder' && b.by !== 'companion' && b.by !== 'strategist')
-        }
-        commit(patch)
-        presetRt.strictOff(now, 'ai-' + role)
-        const ld = loadLadderDoc()
-        if (ld.cell || ld.cellUntil || ld.planUntil) {
-          saveLadderDoc({ ...ld, cell: '', cellUntil: 0, planUntil: 0 })
-        }
-        forceUnlockUntil = now + 90_000
+        clearActiveLocksForUnlock({
+          now,
+          callerRole: 'ai-' + role,
+          breakMinutes: 0,
+          clearAllBlockExtra: false,
+          clearBreak: false,
+        })
         // 提前验收通过：到点那一下"任务到点"的验收就不用再来了。
         saveGearState({ ...loadGearState(), doneFor: Number(config.gearUntil) })
         record({ state: 'task-done', at: now, by: role, goal, summary })
@@ -4223,14 +4241,24 @@ export function apply(ctx) {
         })
         if (plRes.ok) savePassLedger(plRes.state)
         recordTimeEntryNow({ kind: 'break', minutes, reason, at: now, tz })
-        config = { ...config, breakUntil: until, breakSince: now, breakChecked: false }
+        const breakHm = zoneHm(until, tz)
+        const nightNow = wallDecision(wallCfgNow(), now, tz)
+        const isNightNow = Boolean(nightNow.locked && nightNow.kind === 'night')
+        config = { ...config, breakUntil: until, breakSince: now, breakChecked: false, breakBy: role, breakReason: reason }
         try {
           writeConfig(config)
         } catch {
           // 这一轮照样生效
         }
+        try { lockBus.clear({ keepSources: ['night'], now }) } catch {}
+        forceUnlockUntil = Math.max(forceUnlockUntil, now + 90_000)
+        refreshPanels()
         record({ state: 'grant-break', at: now, by: role, minutes, reason })
-        return { ok: true, text: '放风 ' + minutes + ' 分钟，到 ' + new Date(until).toTimeString().slice(0, 5) + '；到点我提醒你回来。' }
+        return {
+          ok: true,
+          text: '放风 ' + minutes + ' 分钟，到 ' + breakHm + '；到点我提醒你回来。' +
+            (isNightNow ? '（注：00:30-07:00 深夜宵禁仍在生效，非宵禁段生效）' : ''),
+        }
       },
     }
   }
@@ -4785,6 +4813,108 @@ export function apply(ctx) {
     }
   }
 
+  function resolveAppsOrPkg(names = []) {
+    const installedApps = Array.isArray(lastPhone?.installedApps)
+      ? lastPhone.installedApps
+      : (Array.isArray(lastInstalled) ? lastInstalled : [])
+    const base = resolveAppNames(names, { installedApps, declaredApps: appsOf() })
+    const rawPkgRe = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)+$/
+    const extraPkgs = []
+    const stillUnresolved = []
+    for (const item of base.unresolved || []) {
+      const s = String(item || '').trim()
+      if (rawPkgRe.test(s) && !base.resolved.includes(s) && !extraPkgs.includes(s)) extraPkgs.push(s)
+      else stillUnresolved.push(item)
+    }
+    return {
+      resolved: [...base.resolved, ...extraPkgs],
+      unresolved: stillUnresolved,
+    }
+  }
+  function syncAppListMembership(pkgs = [], mode = 'unblock', now = Date.now()) {
+    const cleanPkgs = [...new Set((pkgs || []).filter(Boolean))]
+    if (!cleanPkgs.length) return {}
+    const patch = {}
+    if (mode === 'allow' || mode === 'unblock') {
+      const curExtra = Array.isArray(config.blockExtra) ? config.blockExtra : []
+      patch.blockExtra = curExtra.filter((b) => b && Number(b.until) > now && !cleanPkgs.includes(b.app))
+      for (const pkg of cleanPkgs) {
+        try { lockBus.revokeByApp(pkg, { now }) } catch {}
+      }
+      try {
+        const pending = loadTierPending()
+        let changed = false
+        for (const pkg of cleanPkgs) {
+          if (pending && Object.prototype.hasOwnProperty.call(pending, pkg)) {
+            delete pending[pkg]
+            changed = true
+          }
+        }
+        if (changed) saveTierPending(pending)
+      } catch {}
+    }
+    if (mode === 'allow') {
+      patch.defaultAllow = [...new Set([...defaultAllowApps(), ...cleanPkgs])]
+    } else if (mode === 'restrict' && Array.isArray(config.defaultAllow)) {
+      patch.defaultAllow = config.defaultAllow.filter((a) => !cleanPkgs.includes(a))
+    }
+    return patch
+  }
+  function clearActiveLocksForUnlock({
+    now = Date.now(),
+    callerRole = 'strategist',
+    breakMinutes = 0,
+    reason = '',
+    clearAllBlockExtra = true,
+    clearBreak = false,
+  } = {}) {
+    setGear({ gear: 'free' }, callerRole)
+    try { lockBus.clear({ keepSources: ['night'], now }) } catch {}
+    try {
+      const d = loadDrive()
+      if (d?.takeover?.active) saveDrive({ ...d, takeover: null })
+      lastTakeover = null
+    } catch {}
+    const patch = {
+      aiWorkSession: null,
+      taskLease: null,
+      verifyStartUntil: 0,
+    }
+    if (clearAllBlockExtra) {
+      patch.refuseUntil = 0
+      patch.refuseBy = undefined
+      patch.blockExtra = []
+    } else {
+      if (config.refuseBy === 'ai') {
+        patch.refuseUntil = 0
+        patch.refuseBy = undefined
+      }
+      if (Array.isArray(config.blockExtra) && config.blockExtra.length) {
+        patch.blockExtra = config.blockExtra.filter((b) => b && b.by !== 'ai' && b.by !== 'tool' && b.by !== 'ladder' && b.by !== 'companion' && b.by !== 'strategist')
+      }
+    }
+    if (breakMinutes > 0) {
+      patch.breakUntil = now + breakMinutes * 60_000
+      patch.breakSince = now
+      patch.breakChecked = false
+      patch.breakBy = callerRole
+      patch.breakReason = reason || '双鱼审核解锁放风'
+    } else if (clearBreak) {
+      patch.breakUntil = 0
+      patch.breakBy = ''
+      patch.breakReason = ''
+    }
+    commit(patch)
+    presetRt.strictOff(now, callerRole)
+    const g = loadGemini()
+    if (g.session) saveGemini({ ...g, session: null })
+    const ld = loadLadderDoc()
+    if (ld.cell || ld.cellUntil || ld.planUntil) {
+      saveLadderDoc({ ...ld, cell: '', cellUntil: 0, planUntil: 0 })
+    }
+    forceUnlockUntil = Math.max(forceUnlockUntil, now + 90_000)
+  }
+
   /**
    * 统一超级调度器工具（全时段挂载给小鱼与大鱼，支持中文应用名模糊解析）。
    */
@@ -4795,16 +4925,19 @@ export function apply(ctx) {
         '大肥鱼核心手机调度器：支持中文应用名（如「微信」「小红书」「Obsidian」「王者」「浏览器」）或包名。' +
         'focus_lock=开启严格专时铁笼（仅 apps 列表内的 App 可用，其余立即拦截）；' +
         'block_apps=把特定 App 临时拉黑禁开；' +
-        'tag_app=给未收录 App 永久打标（fun/work/tool）；' +
-        'unlock_focus=结束当前 AI 专时/严格/升级锁（仅鲸澜可用，纯游戏禁止解除）；' +
+        'allow_apps=把非游戏 App 加入工作白名单（默认 work，可传 tier=dual）并立即解除拦截；' +
+        'unblock_apps=把非游戏 App 移出临时封禁名单（blockExtra/惩罚锁）；' +
+        'tag_app=给 App 永久打标（fun/work/tool）并同步白名单；' +
+        'unlock_focus=双鱼审核解锁（解除当前专时/严格/接管/契约非夜间锁并默认放风 30 分钟，深夜 00:30-07:00 与纯游戏红线除外）；' +
         'unlock_gemini=强制关闭 Gemini 连麦舱与连带铁笼（两姐妹都可用）。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['focus_lock', 'block_apps', 'tag_app', 'unlock_focus', 'unlock_gemini'] },
+          action: { type: 'string', enum: ['focus_lock', 'block_apps', 'allow_apps', 'unblock_apps', 'tag_app', 'unlock_focus', 'unlock_gemini'] },
           apps: { type: 'array', items: { type: 'string' }, description: '中文应用名或包名列表（如 ["Obsidian", "微信"]）' },
-          minutes: { type: 'integer', minimum: 5, maximum: 720, description: '持续分钟数（默认 focus_lock 45 / block_apps 120）' },
+          minutes: { type: 'integer', minimum: 0, maximum: 720, description: '持续分钟数（focus_lock 45 / block_apps 120 / unlock_focus 默认放风 30，传 0 只清锁）' },
           tag: { type: 'string', enum: ['fun', 'work', 'tool'], description: 'tag_app 时填写角色分类' },
+          tier: { type: 'string', enum: ['work', 'dual'], description: 'allow_apps 时可选目标分层（默认 work）' },
           why: { type: 'string', description: '锁机或操作原因（直接展示在锁屏页）' },
         },
         required: ['action'],
@@ -4815,9 +4948,7 @@ export function apply(ctx) {
         const now = Date.now()
         const callerSid = execCtx?.agent?.session?.id || execCtx?.agent?.id || execCtx?.sessionId || ''
         const callerRole = role === 'global' ? (callerSid ? speakerOf(callerSid) : (args.callerRole || 'companion')) : role
-        const installedApps = Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : []
-        const declaredApps = appsOf()
-        const { resolved, unresolved } = resolveAppNames(args.apps || [], { installedApps, declaredApps })
+        const { resolved, unresolved } = resolveAppsOrPkg(args.apps || [])
         const why = String(args.why || '').trim().slice(0, 80)
 
         if (args.action === 'focus_lock') {
@@ -4827,6 +4958,9 @@ export function apply(ctx) {
           const mins = Math.max(5, Math.min(720, Math.round(Number(args.minutes) || 45)))
           const until = now + mins * 60_000
           commit({
+            breakUntil: 0,
+            breakBy: '',
+            breakReason: '',
             aiWorkSession: {
               allow: resolved,
               until,
@@ -4859,34 +4993,102 @@ export function apply(ctx) {
           return { ok: true, text: `已封禁 ${apps.join('、')} ${mins} 分钟，一开即锁。` }
         }
 
+        if (args.action === 'allow_apps') {
+          if (!resolved.length) {
+            return { ok: false, text: '没识别出要放行的应用（' + (unresolved.join('、') || '请传中文名或完整包名') + '）。' }
+          }
+          const allowed = resolved.filter((pkg, idx) => !isPureGame(pkg, (args.apps || [])[idx] || pkg))
+          const games = resolved.filter((pkg, idx) => isPureGame(pkg, (args.apps || [])[idx] || pkg))
+          if (!allowed.length) {
+            return { ok: false, text: '硬规矩拦回：纯游戏（' + games.join('、') + '）不可加入白名单。' }
+          }
+          const targetTier = args.tier === 'dual' ? 'dual' : 'work'
+          const nextTiers = { ...(config.appTiers || {}) }
+          for (const pkg of allowed) nextTiers[pkg] = targetTier
+          const patch = {
+            appTiers: nextTiers,
+            ...syncAppListMembership(allowed, targetTier === 'work' ? 'allow' : 'unblock', now),
+          }
+          commit(patch)
+          writeTierFile()
+          refreshPanels()
+          record({ state: 'dispatch-allow-apps', at: now, by: callerRole, apps: allowed, tier: targetTier, why })
+          return {
+            ok: true,
+            text: `已将 ${allowed.join('、')} 设为「${TIER_LABEL[targetTier]}」${targetTier === 'work' ? '并加入白名单' : '并解除临时封禁'}。` +
+              (games.length ? `（纯游戏 ${games.join('、')} 已被硬规矩拦截）` : ''),
+          }
+        }
+
+        if (args.action === 'unblock_apps') {
+          if (!resolved.length) {
+            return { ok: false, text: '没识别出要解封的应用（' + (unresolved.join('、') || '请传中文名或完整包名') + '）。' }
+          }
+          const allowed = resolved.filter((pkg, idx) => !isPureGame(pkg, (args.apps || [])[idx] || pkg))
+          const games = resolved.filter((pkg, idx) => isPureGame(pkg, (args.apps || [])[idx] || pkg))
+          if (!allowed.length) {
+            return { ok: false, text: '硬规矩拦回：纯游戏（' + games.join('、') + '）不可通过名单解封。' }
+          }
+          const patch = syncAppListMembership(allowed, 'unblock', now)
+          commit(patch)
+          refreshPanels()
+          const stillFun = allowed.filter((pkg) => {
+            const t = tierFnNow()(pkg)
+            return t === 'fun' || t === 'game'
+          })
+          record({ state: 'dispatch-unblock-apps', at: now, by: callerRole, apps: allowed, why })
+          return {
+            ok: true,
+            text: `已将 ${allowed.join('、')} 移出临时封禁名单。` +
+              (stillFun.length ? `（注：${stillFun.join('、')} 当前仍属娱乐/受限分层，如需长期放行请调 allow_apps 或 app_tier）` : '') +
+              (games.length ? `（纯游戏 ${games.join('、')} 已拦回）` : ''),
+          }
+        }
+
         if (args.action === 'tag_app') {
           const pkg = resolved[0]
           if (!pkg) return { ok: false, text: '没找到要打标的应用。' }
           const nextRole = args.tag || 'fun'
+          if ((nextRole === 'work' || nextRole === 'tool') && isPureGame(pkg, (args.apps && args.apps[0]) || pkg)) {
+            return { ok: false, text: '硬规矩拦回：纯游戏不可分类为 work/tool。' }
+          }
           const cur = cleanApps(config.apps).filter((a) => a.pkg !== pkg)
           cur.push({ pkg, role: nextRole, label: String((args.apps && args.apps[0]) || '').slice(0, 20) })
-          commit({ apps: cur })
+          const nextTier = nextRole === 'fun' ? 'fun' : 'work'
+          const patch = {
+            apps: cur,
+            appTiers: { ...(config.appTiers || {}), [pkg]: nextTier },
+            ...syncAppListMembership([pkg], nextRole === 'fun' ? 'restrict' : 'allow', now),
+          }
+          commit(patch)
+          writeTierFile()
+          refreshPanels()
           record({ state: 'dispatch-tag-app', at: now, by: callerRole, pkg, roleTag: nextRole })
-          return { ok: true, text: `已将 ${pkg} 永久分类为「${nextRole}」。` }
+          return { ok: true, text: `已将 ${pkg} 永久分类为「${nextRole}」，分层与白名单已同步更新。` }
         }
 
         if (args.action === 'unlock_focus') {
-          if (callerRole !== 'strategist') {
-            return { ok: false, text: '小鱼无权解除专时或放行锁；要调整范围或申领任务短租约请找鲸澜。' }
-          }
-          setGear({ gear: 'free' }, 'strategist')
-          commit({ aiWorkSession: null, taskLease: null, refuseUntil: 0, refuseBy: undefined, blockExtra: [] })
-          presetRt.strictOff(now, 'strategist')
-          const g = loadGemini()
-          if (g.session) saveGemini({ ...g, session: null })
-          const ld = loadLadderDoc()
-          if (ld.cell || ld.cellUntil || ld.planUntil) {
-            saveLadderDoc({ ...ld, cell: '', cellUntil: 0, planUntil: 0 })
-          }
-          forceUnlockUntil = now + 90_000
-          record({ state: 'dispatch-unlock-focus', at: now, by: callerRole, why })
+          const mins = args.minutes === 0 ? 0 : Math.max(5, Math.min(180, Math.round(Number(args.minutes) || 30)))
+          clearActiveLocksForUnlock({
+            now,
+            callerRole,
+            breakMinutes: mins,
+            reason: why || '双鱼审核解锁放风',
+            clearAllBlockExtra: true,
+            clearBreak: mins === 0,
+          })
+          const tz = zoneOr(config.timeZone)
+          const nightNow = wallDecision(wallCfgNow(), now, tz)
+          const isNightNow = Boolean(nightNow.locked && nightNow.kind === 'night')
+          record({ state: 'dispatch-unlock-focus', at: now, by: callerRole, minutes: mins, why })
           refreshPanels()
-          return { ok: true, text: '已解除当前 AI 专时、严格模式、Gemini 连麦舱及临时封禁锁。' }
+          return {
+            ok: true,
+            text: (mins > 0
+              ? `已解除当前专时、接管、契约及临时封禁锁，并开启 ${mins} 分钟审核放风`
+              : '已解除当前 AI 专时、接管、严格模式、Gemini 连麦舱及临时封禁锁') +
+              (isNightNow ? '（注：00:30-07:00 深夜宵禁仍在生效，其余非夜间锁已清除）。' : '。'),
+          }
         }
 
         if (args.action === 'unlock_gemini') {
@@ -4894,9 +5096,11 @@ export function apply(ctx) {
           if (g.session) saveGemini({ ...g, session: null })
           const ld = loadLadderDoc()
           if (ld.cell || ld.cellUntil) saveLadderDoc({ ...ld, cell: '', cellUntil: 0 })
+          try { lockBus.revokeBySource('gemini', { now }) } catch {}
+          try { lockBus.revokeBySource('ai', { now }) } catch {}
           presetRt.strictOff(now, callerRole)
           commit({ aiWorkSession: null, taskLease: null })
-          forceUnlockUntil = now + 90_000
+          forceUnlockUntil = Math.max(forceUnlockUntil, now + 90_000)
           record({ state: 'gemini-end', at: now, by: callerRole, reason: why || 'unlock_gemini' })
           refreshPanels()
           return { ok: true, text: '已关闭 Gemini 连麦舱及连带铁笼，手机恢复正常使用。' }
@@ -4908,22 +5112,21 @@ export function apply(ctx) {
   }
 
   /**
-   * 仅鲸澜（strategist）专享的双用途 App 短租约（≤20 分钟，纯游戏硬拒）。
+   * 2026-11-23 App 分层：双鱼审核位均可直接收严或放宽非纯游戏分层（纯游戏仍硬编码禁止放宽为 work/dual）。
    */
-  /** 2026-11-18 App 分层：改严直接做；改松（挪到 work）要引他刚说过的同意原话。 */
   function appTierTool() {
     return {
       name: 'app_tier',
       description: '调整一个 App 在大肥鱼里的分层（工作 work / 双用途 dual / 娱乐 fun / 游戏 game）。' +
-        '往更严挪（例如浏览器总被拿来刷 → dual 或 fun）直接生效；往 work 挪是放松，必须先问他，quote 填他刚才同意的原话（30 分钟内说的），否则不生效。' +
-        '系统页面（桌面、相册、文件、选图选文件、分享、相机、输入法、NekoBox、电话支付）永远不锁，不在这里管。',
+        '双鱼审核位均可在核实理由后直接调整（包括放宽为 dual/work 并同步白名单与待生效队列）；' +
+        '纯游戏硬编码禁止放宽为 work/dual，系统页面（桌面、相册、文件、分享、相机、输入法、NekoBox、电话支付）永远不锁。',
       parameters: {
         type: 'object',
         properties: {
-          app: { type: 'string', description: '中文名或包名' },
+          app: { type: 'string', description: '中文名或完整包名' },
           tier: { type: 'string', enum: ['work', 'dual', 'fun', 'game'] },
-          why: { type: 'string', description: '为什么（一句话，最好带数：昨天用了多久、通行证对不上几次）' },
-          quote: { type: 'string', description: '放松时必填：他同意的原话' },
+          why: { type: 'string', description: '为什么调整（一句话，写清核实依据）' },
+          quote: { type: 'string', description: '可选：用户原文说明' },
         },
         required: ['app', 'tier', 'why'],
         additionalProperties: false,
@@ -4933,31 +5136,28 @@ export function apply(ctx) {
         const now = Date.now()
         const callerSid = execCtx?.agent?.session?.id || execCtx?.agent?.id || execCtx?.sessionId || ''
         const by = callerSid ? speakerOf(callerSid) : (args.by || 'sister')
-        const { resolved } = resolveAppNames([args.app], {
-          installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : lastInstalled,
-          declaredApps: appsOf(),
-        })
+        const { resolved } = resolveAppsOrPkg([args.app])
         const pkg = resolved[0]
-        if (!pkg) return { ok: false, text: '没认出是哪个 App。' }
+        if (!pkg) return { ok: false, text: '没认出是哪个 App（请传中文名或完整包名）。' }
         const tier = String(args.tier || '')
         if (!TIER_RANK[tier] && tier !== 'work') return { ok: false, text: 'tier 只能是 work / dual / fun / game。' }
         const before = tierFnNow()(pkg)
         if (before === 'base') return { ok: false, text: '这是系统页面，永远不锁，不用分层。' }
         if (before === tier) return { ok: true, text: pkg + ' 本来就在「' + TIER_LABEL[tier] + '」。' }
         const loosen = (TIER_RANK[tier] ?? 1) < (TIER_RANK[before] ?? 1)
-        if (loosen) {
-          const quote = String(args.quote || '').trim()
-          const recent = recentHuman.filter((h) => now - h.at <= 30 * 60_000)
-          const said = quote && recent.some((h) => h.text.includes(quote) || quote.includes(h.text))
-          if (!said || !AGREE_RE.test(quote)) {
-            return { ok: false, text: '这是放松（' + TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '），要先问他；他说「行」之后把那句原话填进 quote。' }
-          }
+        if (loosen && isPureGame(pkg, args.app)) {
+          return { ok: false, text: '硬规矩拦回：纯游戏不可放宽为工作或双用途白名单。' }
         }
-        commit({ appTiers: { ...(config.appTiers || {}), [pkg]: tier } })
+        const membershipMode = tier === 'work' ? 'allow' : (tier === 'dual' ? 'unblock' : 'restrict')
+        commit({
+          appTiers: { ...(config.appTiers || {}), [pkg]: tier },
+          ...syncAppListMembership([pkg], membershipMode, now),
+        })
         writeTierFile()
+        refreshPanels()
         const label = appDisplayLabel(pkg, args.app)
         record({ state: 'app-tier-set', at: now, by, pkg, label, from: before, to: tier, loosen, why: String(args.why || '').slice(0, 120) })
-        return { ok: true, text: pkg + '：' + TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '（' + (loosen ? '他同意的放松' : '改严，立即生效') + '）。他也可以在 大肥鱼/墙/App分层.md 里改。' }
+        return { ok: true, text: pkg + '：' + TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '（' + (loosen ? '审核放宽，已立即生效并同步名单' : '改严，立即生效') + '）。' }
       },
     }
   }
@@ -4965,13 +5165,13 @@ export function apply(ctx) {
   function grantTaskLeaseTool(role) {
     return {
       name: 'grant_task_lease',
-      description: '（仅鲸澜）通行证：为他批一段 ≤30 分钟（默认 15）的双用途 App（浏览器 / 夸克 / 微信 / B 站等）正事租约，干活时双用途 App 只能这样用。' +
+      description: '（双鱼审核可用）通行证：为他批一段 ≤30 分钟（默认 15）的双用途 App（浏览器 / 夸克 / 微信 / B 站等）正事租约，干活时双用途 App 只能这样用。' +
         '一天超过 8 张要填 whyAgain（他亲口给的理由），申请次数进当晚判决。' +
         '纯游戏（王者/原神/游戏中心等）硬编码绝对拒绝；租约期手机持续巡检 screenText，偏航进娱乐流立即吊销重锁。',
       parameters: {
         type: 'object',
         properties: {
-          app: { type: 'string', description: '双用途应用中文名或包名' },
+          app: { type: 'string', description: '双用途应用中文名或完整包名' },
           minutes: { type: 'integer', minimum: 5, maximum: 30, description: '通行证时长，默认 15，上限 30 分钟' },
           whyAgain: { type: 'string', description: '今天第 9 张起必填：他给的理由（原话）' },
           taskGoal: { type: 'string', description: '具体要在里面办什么正事' },
@@ -4983,17 +5183,13 @@ export function apply(ctx) {
       output: toolOutput,
       execute: (args = {}, execCtx = {}) => {
         const callerSid = execCtx?.agent?.session?.id || execCtx?.agent?.id || execCtx?.sessionId || ''
-        if (callerSid && speakerOf(callerSid) !== 'strategist') {
-          return { ok: false, text: '只有鲸澜可以签发双用途任务租约。' }
-        }
-        if (!callerSid && role !== 'strategist') return { ok: false, text: '只有鲸澜可以签发双用途任务租约。' }
+        const callerRole = role === 'global'
+          ? (callerSid ? speakerOf(callerSid) : (args.callerRole || 'companion'))
+          : (callerSid ? speakerOf(callerSid) : role)
         const now = Date.now()
-        const { resolved } = resolveAppNames([args.app], {
-          installedApps: Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : [],
-          declaredApps: appsOf(),
-        })
+        const { resolved } = resolveAppsOrPkg([args.app])
         const pkg = resolved[0]
-        if (!pkg) return { ok: false, text: '没认出要租约的应用名。' }
+        if (!pkg) return { ok: false, text: '没认出要租约的应用名（请传中文名或完整包名）。' }
         if (isPureGame(pkg, args.app)) {
           return { ok: false, text: '硬规矩拦回：纯游戏绝不可通过聊天租约当场放行。' }
         }
@@ -5019,7 +5215,7 @@ export function apply(ctx) {
           goal: args.taskGoal,
           whyAgain: args.whyAgain,
           verifyHints: args.verifyHints,
-          by: role,
+          by: callerRole,
           now,
           day,
         })
@@ -5034,7 +5230,7 @@ export function apply(ctx) {
             until: plRes.until,
             goal: plRes.lease.goal,
             verifyHints: plRes.lease.verifyHints,
-            by: role,
+            by: callerRole,
           },
         })
         record({ state: 'grant-task-lease', at: now, pkg, minutes: mins, goal: args.taskGoal, n: plRes.countToday, whyAgain: args.whyAgain ? String(args.whyAgain).slice(0, 80) : undefined })
@@ -11183,12 +11379,21 @@ export function apply(ctx) {
     const nightLocked = Boolean(wdRaw.locked && wdRaw.kind === 'night')
     const contractOverdue = Boolean(v4ContractTick.forceStrictByContract)
     const spendPassActive = Boolean(config.spendPass && Number(config.spendPass.until) > now)
-    const wd = ((!dayWorkWallEnabled || spendPassActive) && !nightLocked && !contractOverdue && wdRaw.kind !== 'night')
-      ? { ...wdRaw, locked: false, kind: null, openUntil: Math.max(Number(wdRaw.openUntil) || 0, Number(config.spendPass?.until) || 0) }
+    const breakActive = onBreak(now) && !nightLocked
+    const breakPassObj = breakActive
+      ? {
+          active: true,
+          until: Number(config.breakUntil) || 0,
+          by: String(config.breakBy || 'sister'),
+          reason: String(config.breakReason || '双鱼审核放风中'),
+        }
+      : null
+    const wd = ((!dayWorkWallEnabled || spendPassActive || breakActive) && !nightLocked && (!contractOverdue || breakActive) && wdRaw.kind !== 'night')
+      ? { ...wdRaw, locked: false, kind: null, openUntil: Math.max(Number(wdRaw.openUntil) || 0, Number(config.spendPass?.until) || 0, breakActive ? (Number(config.breakUntil) || 0) : 0) }
       : wdRaw
     const hardCapDowngrade = hardCapped && !nightLocked && !contractOverdue
 
-    const effectiveForceLevel = (emergencyActive || hardCapDowngrade)
+    const effectiveForceLevel = (emergencyActive || breakActive || hardCapDowngrade)
       ? 0
       : Math.max(force.level, radar.triggered ? radar.forceLevel : 0, contractOverdue ? 4 : 0)
     const effectiveForceWhy = contractOverdue
@@ -11196,7 +11401,7 @@ export function apply(ctx) {
       : (hardCapDowngrade
           ? '今天硬干预已经用满，改为温和提醒'
           : (radar.triggered ? (radar.forceWhy || force.why) : force.why))
-    const mediaAction = !emergencyActive && !hardCapDowngrade && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
+    const mediaAction = !emergencyActive && !breakActive && !hardCapDowngrade && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     const speakerOut = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
     const takeoverActiveSession = !hardCapDowngrade && driveRes?.takeover?.active
       ? {
@@ -11210,8 +11415,9 @@ export function apply(ctx) {
     // 他自己选的锁——局（温和 / 严格）、深夜、默认验收、验收点保底、晚间上限、连麦舱、墙——用满了也照锁。
     // 以前用满后把墙（含深夜）和他自己开的严格局一起降成「只提醒」：白天被折腾满 12 次，晚上开局就锁不住。
     let lockArbiter = v4Hub.computeLockArbiter(now, {
+      breakPass: breakPassObj,
       autonomy: v4ContractTick.autonomy,
-      wall: { locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
+      wall: { locked: (emergencyActive || breakActive) ? false : wd.locked, kind: (emergencyActive || breakActive) ? null : (wd.kind || null) },
       takeoverSession: takeoverActiveSession,
       ...(hardCapDowngrade ? { takeoverSession: null, ...(config.aiWorkSession?.by === 'takeover' ? { aiWorkSession: null } : {}) } : {}),
     })
@@ -11228,9 +11434,9 @@ export function apply(ctx) {
       }
     }
     lastLockActive = Boolean(lockArbiter?.active)
-    const wantReleaseNow = emergencyActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && Number(mind.brain.graceUntil) > now)))
-    const forceLockedNow = !emergencyActive && !hardCapDowngrade && effectiveForceLevel >= 3
-    const arbiterLockedNow = !emergencyActive && Boolean(lockArbiter?.active)
+    const wantReleaseNow = emergencyActive || breakActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && Number(mind.brain.graceUntil) > now)))
+    const forceLockedNow = !emergencyActive && !breakActive && !hardCapDowngrade && effectiveForceLevel >= 3
+    const arbiterLockedNow = !emergencyActive && !breakActive && Boolean(lockArbiter?.active)
     const forceJustReleased = prevForceLocked && !forceLockedNow
     const arbiterJustReleased = prevArbiterLocked && !arbiterLockedNow
     const effectiveForceRelease = wantReleaseNow && (forceJustReleased || arbiterJustReleased)
@@ -11429,7 +11635,7 @@ export function apply(ctx) {
     })
     const liveBoutId = String(live?.official?.view?.()?.boutId || '')
     const liveSealId = String(live?.sealId || '')
-    const rawSessionOut = emergencyActive ? null : (hardCapDowngrade ? verifySessNow : sessionNow(now))
+    const rawSessionOut = (emergencyActive || breakActive) ? null : (hardCapDowngrade ? verifySessNow : sessionNow(now))
     const sessionOut = rawSessionOut
       ? {
           ...rawSessionOut,
@@ -11487,7 +11693,7 @@ export function apply(ctx) {
       trust: { score: trust.score, band: trust.band },
       penalty: penaltyNow,
       // 临时封禁名单：手机把这些也当娱乐 App 管。
-      block: (emergencyActive || hardCapDowngrade) ? [] : blockedNow(now),
+      block: (emergencyActive || breakActive || hardCapDowngrade) ? [] : blockedNow(now),
       // A6：每个锁都要能解释。这是「哪个 App 被哪条预案锁的」那一句，锁页直接显示。
       blockWhy: (Array.isArray(config.blockExtra) ? config.blockExtra : [])
         .filter((b) => b && Number(b.until) > now && !NEVER_BLOCK.includes(b.app) && b.why)
@@ -11495,13 +11701,13 @@ export function apply(ctx) {
       // 第九轮 B1：今天还没有计划 → 手机的浮层/首页挂一张「去定计划」，三个角色谁在场都同一张。
       planGate: planGateNow(now, tz),
       // 通知防波堤：忙时 / 任务模式期间，非白名单通知收进缓存（手机端 NotificationShield）。
-      shield: !emergencyActive && !hardCapDowngrade && (effectiveGear(config, now) === 'busy' || aiTask(config, now)) ? { until: Math.max(Number(config.gearUntil) || 0, now + ROLL_MS) } : null,
+      shield: !emergencyActive && !breakActive && !hardCapDowngrade && (effectiveGear(config, now) === 'busy' || aiTask(config, now)) ? { until: Math.max(Number(config.gearUntil) || 0, now + ROLL_MS) } : null,
       // 拒绝模式：手机记住到期时间，自己在每次切到娱乐 App 的那一刻就锁，不等这一问。
-      refuse: !emergencyActive && !hardCapDowngrade && refuseUntilAt(now) > now ? { until: refuseUntilAt(now) } : null,
+      refuse: !emergencyActive && !breakActive && !hardCapDowngrade && refuseUntilAt(now) > now ? { until: refuseUntilAt(now) } : null,
       gear: effectiveGear(config, now),
       // Gemini / 外部 Agent 租约互动舱：这段时间只许白名单包，其余 App 由手机直接锁；应急通行时让路。
       session: sessionOut,
-      ...(forceUnlockUntil > now || onBreak(now) ? { clearWorkSession: true } : {}),
+      ...(!nightLocked && (forceUnlockUntil > now || breakActive) ? { clearWorkSession: true } : {}),
       // D4：预约的下一场连麦（手机据此 arm 闹钟；到点调 /gemini/due 取 launch）。
       geminiSchedule: (() => {
         const s = loadGeminiSchedule()
@@ -11515,7 +11721,7 @@ export function apply(ctx) {
       obligations: obligationsView(config.obligations, now),
       // 第二轮·墙：此刻娱乐锁/开、申请窗口开没开、本周还剩几天放松额度（面板和手机据此显示）。
       wall: {
-        locked: (emergencyActive || hardCapDowngrade) ? false : wd.locked, kind: (emergencyActive || hardCapDowngrade) ? null : (wd.kind || null), openUntil: wd.openUntil || 0,
+        locked: (emergencyActive || breakActive || hardCapDowngrade) ? false : wd.locked, kind: (emergencyActive || breakActive || hardCapDowngrade) ? null : (wd.kind || null), openUntil: wd.openUntil || 0,
         applyWindowOpen: applyWindowOpen(config.applyWindow, now),
         applyWindowCloseAt: Number(config.applyWindow?.closeAt) || 0,
         relaxRemaining: relaxRemainingNow(now, tz),

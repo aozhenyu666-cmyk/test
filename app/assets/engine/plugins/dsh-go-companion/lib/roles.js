@@ -262,9 +262,11 @@ export function capabilityLines(role, { notesDir = '', allowTools = true } = {})
   const lines = [
     '全部工具与系统权限已为你敞开（需要就直接调，调不通老实说权限没给）：',
     '- 手机、锁机、时钟、记忆、文件（含 /sdcard/DCIM）及 Gemini 连麦均可自由调用：' +
-      '如 mcp__phone__screen / mcp__phone__intent / open_bout / grant_break / request_relax / submit_verdict / submit_to_wall 等。',
+      '如 mcp__phone__screen / mcp__phone__intent / open_bout / grant_break / dispatch_control / grant_task_lease / app_tier / submit_verdict / submit_to_wall 等。',
     notesHint + '。' +
-      (strategist ? '你站他这边，审他的是墙。读他的笔记和日程再推演。' : '你站他这边，不催、不告状——审他的是墙。'),
+      (strategist
+        ? '你站他这边，也是双鱼审核位之一：有权直接用 grant_break / dispatch_control(unlock_focus|allow_apps|unblock_apps|tag_app) / app_tier / grant_task_lease 为他放行与调整名单（深夜 00:30-07:00 红线与纯游戏除外）；读他的笔记和日程再推演。'
+        : '你站他这边，不催、不告状，也是双鱼审核位之一：有权直接用 grant_break / dispatch_control(unlock_focus|allow_apps|unblock_apps|tag_app) / app_tier / grant_task_lease 为他放行与调名单（深夜 00:30-07:00 红线与纯游戏除外）。'),
   ]
   if (!allowTools) lines.push('（这一次是主动找他：不要调用工具。）')
   return lines.join('\n')
@@ -283,7 +285,7 @@ const JUDGE_AGENDA =
 export function agendaLines(state) {
   const id = String(state || '')
   const lines = [
-    '规则由墙执行，过不过关也由墙按证据判：你能帮他收紧，但不能放，也替他说不动墙。你是他这边的人，帮他把证据凑齐，用 submit_to_wall 交给墙；' +
+    '规则由墙执行，凌晨 00:30-07:00 宵禁与纯游戏红线不能放；其余白天锁机、临时放风与工具名单由你双鱼审核位按理由直接调 dispatch_control / grant_break / grant_task_lease / app_tier 放行或调整；同时继续帮他把证据凑齐，用 submit_to_wall 交给墙验收；' +
       '工具调不通就如实说调不通，别编，也别假装已经交了。',
   ]
   if (id === 'morning') lines.push('现在在晨间立项：' + JUDGE_AGENDA + '今天 1–3 件事，每件都要有一个晚上查得到的完成物。')

@@ -434,6 +434,24 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
         'dueAt': record.nextDueAt,
       };
     });
+
+    if (res != null && res['ok'] == true && res['roundComplete'] == true) {
+      final earnedAdded = (res['earnedAdded'] as num?)?.toInt() ?? 0;
+      final reqCount = (res['required'] as num?)?.toInt() ?? 10;
+      final avail = (res['availableFunLeft'] as num?)?.toInt();
+      final msg = earnedAdded > 0
+          ? (avail != null
+              ? '✓ 专练满 $reqCount 题，已入账 +$earnedAdded 分钟娱乐余额（当前可用 $avail 分钟）'
+              : '✓ 专练满 $reqCount 题，已入账 +$earnedAdded 分钟娱乐余额')
+          : (res['capped'] == true
+              ? '✓ 本轮已答满！今日题库挣余额已达上限（${res['dailyBankEarned'] ?? 60}/${res['dailyBankCap'] ?? 60} 分钟）'
+              : null);
+      if (msg != null) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(msg)));
+      }
+    }
   }
 
   Future<void> _toggleStar(Map<String, dynamic> q) async {

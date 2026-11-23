@@ -32,6 +32,7 @@ export function emptyTimeLedger(day = '') {
   return {
     v: 1,
     day: String(day || ''),
+    deficitOffset: 0,
     entries: [],
   }
 }
@@ -48,6 +49,7 @@ export function normalizeTimeLedger(raw, day = '') {
   return {
     v: 1,
     day: String(s.day || d),
+    deficitOffset: posInt(s.deficitOffset),
     entries,
   }
 }
@@ -141,8 +143,10 @@ export function computeTimeLedger({
   // 扣罚先扣今天挣来的，再扣结转；保底不扣。
   const penaltyApplied = Math.min(earned + carryIn, sumPenalty)
   const earnedNet = Math.max(0, earned - sumPenalty)
+  const deficitOffset = posInt(s.deficitOffset)
+  const effectiveUsed = Math.max(0, funUsed + gameUsed - deficitOffset)
   const avail = carryIn + baseFun + earned - penaltyApplied
-  const balance = Math.max(0, avail - funUsed - gameUsed)
+  const balance = Math.max(0, avail - effectiveUsed)
   const gameLeft = Math.min(Math.max(0, gameCap - gameUsed), balance)
   const funLeft = balance
   const carryOut = Math.min(posInt(carryCap) || CARRY_CAP_MIN, balance)
@@ -181,6 +185,7 @@ export function computeTimeLedger({
     gameUsed,
     converted: 0,
     balance,
+    deficitOffset,
     funLeft,
     gameLeft,
     funOut: funLeft <= 0,

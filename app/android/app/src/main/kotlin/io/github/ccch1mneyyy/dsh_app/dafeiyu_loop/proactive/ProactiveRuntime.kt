@@ -99,6 +99,31 @@ interface NotificationPort {
     fun cancelAll()
 }
 
+/** Pure JVM-testable cache & extractor for synced fun-time balance (availableFunLeft / timeLedger.funLeft). */
+object FunBalanceCache {
+    @Volatile private var lastFunLeft: Int? = null
+
+    fun cached(): Int? = lastFunLeft
+
+    fun update(value: Int?) {
+        if (value != null && value >= 0) {
+            lastFunLeft = value
+        }
+    }
+
+    fun syncFromResponse(m: Map<*, *>?): Int? {
+        val direct = (m?.get("availableFunLeft") as? Number)?.toInt()
+        val ledger = ((m?.get("timeLedger") as? Map<*, *>)?.get("funLeft") as? Number)?.toInt()
+        val next = direct ?: ledger
+        update(next)
+        return next
+    }
+
+    fun clear() {
+        lastFunLeft = null
+    }
+}
+
 /**
  * Pure JVM-testable tracker for companion lock -> release transitions (1.4).
  * Prevents repeated per-tick releaseCompanionLock() calls when no active companion lock exists
@@ -862,7 +887,6 @@ object ProactiveRuntime {
     private val companionReleaseTracker = CompanionReleaseTracker()
     @Volatile private var activeBoutScopeKey: String? = null
     @Volatile private var lastSessionBy: String? = null
-    @Volatile private var lastFunLeft: Int? = null
 
     fun inEmergencyPass(now: Long = System.currentTimeMillis()): Boolean {
         if (!::app.isInitialized) return false
@@ -891,7 +915,13 @@ object ProactiveRuntime {
         return runCatching { InterceptRuntime.isBoutBufferActive() }.getOrDefault(false)
     }
 
-    fun cachedFunLeft(): Int? = lastFunLeft
+    fun cachedFunLeft(): Int? = FunBalanceCache.cached()
+
+    fun updateCachedFunLeft(value: Int?) = FunBalanceCache.update(value)
+
+    private fun syncFunLeftFromResponse(m: Map<*, *>?) {
+        FunBalanceCache.syncFromResponse(m)
+    }
 
     fun currentBoutBufferKey(): String {
         val explicit = activeBoutScopeKey?.takeIf { it.isNotBlank() }
@@ -1150,7 +1180,10 @@ object ProactiveRuntime {
     fun fetchBankQuizSession(done: (Map<*, *>?) -> Unit) {
         if (!::app.isInitialized) { done(null); return }
         main.post {
-            fetchPluginRoute(routeCallback { m -> done(m) }, "POST", "/bank", linkedMapOf("action" to "quiz_session"))
+            fetchPluginRoute(routeCallback { m ->
+                syncFunLeftFromResponse(m)
+                done(m)
+            }, "POST", "/bank", linkedMapOf("action" to "quiz_session"))
         }
     }
 
@@ -1159,6 +1192,7 @@ object ProactiveRuntime {
         if (!::app.isInitialized) { done(null); return }
         main.post {
             fetchPluginRoute(routeCallback { m ->
+                syncFunLeftFromResponse(m)
                 val ok = m["ok"] == true
                 val duplicate = m["duplicate"] == true || m["ignored"] == true
                 val unlocked = m["unlocked"] == true
@@ -1194,6 +1228,7 @@ object ProactiveRuntime {
         val why = reason.trim().take(120)
         main.post {
             fetchPluginRoute(routeCallback { m ->
+                syncFunLeftFromResponse(m)
                 val okFlag = m["ok"] == true
                 val verifySpendUntil = (((m["verify"] as? Map<*, *>)?.get("spend") as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L
                 val rawUntil = (m["until"] as? Number)?.toLong() ?: verifySpendUntil
@@ -1201,6 +1236,7 @@ object ProactiveRuntime {
                 if (okFlag) {
                     val effectiveUntil = if (rawUntil > now) rawUntil else now + mins * 60_000L
                     applyTempRelease(effectiveUntil, "花余额放行：${why.take(24)}")
+                    tick("spend_balance", force = true)
                     done(true, effectiveUntil, m["text"] as? String)
                 } else {
                     val errMap = m["error"] as? Map<*, *>
@@ -2037,7 +2073,7 @@ object ProactiveRuntime {
         // Gemini 互动舱：插件给 allow 就进入"只许 Gemini"，null 就退出（插件明示解锁时可强清 AI 工作模式）。
         val sessionMap = map["session"] as? Map<*, *>
         lastSessionBy = sessionMap?.get("by") as? String
-        lastFunLeft = ((map["timeLedger"] as? Map<*, *>)?.get("funLeft") as? Number)?.toInt()
+        FunBalanceCache.update(((map["timeLedger"] as? Map<*, *>)?.get("funLeft") as? Number)?.toInt())
         activeBoutScopeKey = ((map["bout"] as? Map<*, *>)?.get("id") as? String)?.takeIf { it.isNotBlank() }
             ?: (sessionMap?.get("boutId") as? String)?.takeIf { it.isNotBlank() }
             ?: (sessionMap?.get("sealId") as? String)?.takeIf { it.isNotBlank() }

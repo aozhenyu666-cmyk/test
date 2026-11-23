@@ -506,9 +506,11 @@ export function createLocksOverviewRuntime(deps) {
 
     const effArb = emActive
       ? { priority: 'P0', source: 'EMERGENCY_SUSPEND', label: '紧急放行中', why: emInfo?.reason || '紧急放行中', unlockHow: '倒计时结束后恢复' }
-      : (!dayWorkWallEnabled && lockArbiter.subSource === 'DAY_WORK_WALL'
-          ? { priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自主推进态', why: '工作时段默认防分心锁已关闭', allow: ['*'], unlockHow: '当前无拦截' }
-          : lockArbiter)
+      : (lockArbiter?.source === 'SISTER_BREAK'
+          ? lockArbiter
+          : (!dayWorkWallEnabled && lockArbiter.subSource === 'DAY_WORK_WALL'
+              ? { priority: 'P6', source: 'AUTONOMY_RELAXED', label: '自主推进态', why: '工作时段默认防分心锁已关闭', allow: ['*'], unlockHow: '当前无拦截' }
+              : lockArbiter))
     const effRaw = (() => {
       try {
         return lockDecisionNow(now, tz, lastPhone, effArb, ext)

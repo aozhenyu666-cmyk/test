@@ -142,6 +142,8 @@ export function createV4Hub(deps) {
     getIntensityInfo = () => ({ intensity: 'standard', effectiveIntensity: 'standard', autonomyShift: 0, pendingIntensity: null, emergencyDisarmDailyCap: 3, hardInterventions: { count: 0, cap: 12, capped: false, left: 12 } }),
     getPassLedgerSummary = () => null,
     getTimeLedger = () => null,
+    getBreakPass = null,
+    getAvailableFunLeft = null,
     onBankUnlock = null,
     requestGeminiGate = null,
     getEmergencyPassActive = null,
@@ -1205,7 +1207,27 @@ export function createV4Hub(deps) {
         tz: tz(),
       })
       if (r.ok && r.state) saveBankUnlock(r.state)
-      return { v: 1, ...r, state: undefined }
+      let bankRes = null
+      if (r.ok && r.roundComplete) {
+        bankRes = unlockByQuiz({ unlockMinutes: r.unlockMinutes, solved: r.practiceSolved, unlockUntil: 0 }, now)
+      }
+      const avail = bankRes?.availableFunLeft ?? availableFunLeftNow(now)
+      return {
+        v: 1,
+        ...r,
+        state: undefined,
+        ...(r.roundComplete
+          ? {
+              earnedOnly: true,
+              needSpend: true,
+              earnedAdded: bankRes?.earnedAdded ?? 0,
+              dailyBankEarned: bankRes?.dailyBankEarned,
+              dailyBankCap: bankRes?.dailyBankCap,
+              capped: Boolean(bankRes?.capped),
+            }
+          : {}),
+        ...(avail !== undefined ? { availableFunLeft: avail } : {}),
+      }
     }
 
     if (action === 'toggle_star') {
@@ -1231,8 +1253,18 @@ export function createV4Hub(deps) {
     }
 
     if (action === 'status' || action === 'quiz_session') {
+      const avail = availableFunLeftNow(now)
       const card = serveReviewCard(st, now, catalog)
-      if (card) return { v: 1, ok: true, banks: summarizeCatalog(catalog, st), stats7d: build7dQuizStats(st, now, tz(), catalog), ...card.payload }
+      if (card) {
+        return {
+          v: 1,
+          ok: true,
+          banks: summarizeCatalog(catalog, st),
+          stats7d: build7dQuizStats(st, now, tz(), catalog),
+          ...(avail !== undefined ? { availableFunLeft: avail } : {}),
+          ...card.payload,
+        }
+      }
       const preview = pickNextQuizQuestion(catalog, st)
       if (preview.state) saveBankUnlock(preview.state)
       return {
@@ -1248,6 +1280,7 @@ export function createV4Hub(deps) {
         solved: preview.solved,
         required: preview.required,
         unlockMinutes: preview.unlockMinutes,
+        ...(avail !== undefined ? { availableFunLeft: avail } : {}),
         question: preview.question,
       }
     }
@@ -1486,27 +1519,31 @@ export function createV4Hub(deps) {
           if (preview.state) saveBankUnlock(preview.state)
           nextQuestion = preview.question
         }
+        const avail = bankRes.availableFunLeft ?? availableFunLeftNow(now)
         return {
           v: 1,
           ...judged,
           state: undefined,
           unlocked: false,
           roundComplete: true,
+          nextRoundSolved: 0,
           earnedOnly: true,
           needSpend: true,
           earnedAdded: bankRes.earnedAdded,
           dailyBankEarned: bankRes.dailyBankEarned,
           dailyBankCap: bankRes.dailyBankCap,
           capped: bankRes.capped,
+          ...(avail !== undefined ? { availableFunLeft: avail } : {}),
           question: nextQuestion,
         }
       }
+      const avail = bankRes?.availableFunLeft ?? availableFunLeftNow(now)
       // 下一题：这一轮的复习卡名额还没用完、又有到期卡，先出卡。
       if (!judged.unlocked) {
         const card = serveReviewCard(judged.state, now, catalog)
-        if (card) return { v: 1, ...judged, question: card.payload.question, state: undefined }
+        if (card) return { v: 1, ...judged, ...(avail !== undefined ? { availableFunLeft: avail } : {}), question: card.payload.question, state: undefined }
       }
-      return { v: 1, ...judged, state: undefined }
+      return { v: 1, ...judged, ...(avail !== undefined ? { availableFunLeft: avail } : {}), state: undefined }
     }
 
     return { v: 1, ok: false, error: `未知 action: ${action}` }
@@ -1591,6 +1628,7 @@ export function createV4Hub(deps) {
       question = preview.question
       bankTotal = preview.bankTotal
     }
+    const avail = bankRes?.availableFunLeft ?? availableFunLeftNow(now)
     if (r.unlocked && bankRes?.earnedOnly) {
       return {
         v: 1,
@@ -1601,12 +1639,14 @@ export function createV4Hub(deps) {
         weight: r.weight,
         unlocked: false,
         roundComplete: true,
+        nextRoundSolved: 0,
         earnedOnly: true,
         needSpend: true,
         earnedAdded: bankRes.earnedAdded,
         dailyBankEarned: bankRes.dailyBankEarned,
         dailyBankCap: bankRes.dailyBankCap,
         capped: bankRes.capped,
+        ...(avail !== undefined ? { availableFunLeft: avail } : {}),
         unlockUntil: r.unlockUntil,
         unlockMinutes: r.unlockMinutes,
         correctAnswer: r.correctAnswer,
@@ -1623,7 +1663,18 @@ export function createV4Hub(deps) {
       unlocked: r.unlocked, unlockUntil: r.unlockUntil, unlockMinutes: r.unlockMinutes,
       correctAnswer: r.correctAnswer,
       explain: r.explain,
-      solved: r.solved, required: r.required, bankTotal, wrongCount: st.wrongIds.length, question,
+      solved: r.solved, required: r.required, bankTotal, wrongCount: st.wrongIds.length,
+      ...(avail !== undefined ? { availableFunLeft: avail } : {}),
+      question,
+    }
+  }
+
+  function availableFunLeftNow(now = Date.now()) {
+    try {
+      const v = getAvailableFunLeft?.(now)
+      return Number.isFinite(Number(v)) ? Math.max(0, Math.round(Number(v))) : undefined
+    } catch {
+      return undefined
     }
   }
 
@@ -1933,8 +1984,10 @@ export function createV4Hub(deps) {
     const wall = overrides.wall !== undefined ? overrides.wall : getWallDecision?.(now)
     const autonomy = overrides.autonomy || computeAutonomy(now)
     const lockRequests = overrides.lockRequests !== undefined ? overrides.lockRequests : (getLockRequests?.(now) || [])
+    const breakPass = overrides.breakPass !== undefined ? overrides.breakPass : getBreakPass?.(now)
     return computeUnifiedLockArbiter({
       emergencyPass,
+      breakPass,
       geminiSession,
       aiWorkSession,
       takeoverSession: overrides.takeoverSession,

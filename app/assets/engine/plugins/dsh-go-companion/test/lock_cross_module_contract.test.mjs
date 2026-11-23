@@ -58,6 +58,7 @@ function agentOf(id) {
 
 function host(agents) {
   let handler
+  const globalTools = {}
   const ctx = {
     get(name) {
       if (name === 'agents') return { get: (id) => agents[id], roots: () => Object.values(agents), list: () => Object.values(agents) }
@@ -65,6 +66,14 @@ function host(agents) {
       if (name === 'sessionController') return { resolveAgent: async (id) => ({ agent: agents[id] }) }
       if (name === 'workspaceRegistry') return { archivedSessionIds: [] }
       return undefined
+    },
+    tools: {
+      register(def) {
+        globalTools[def.name] = def
+        return () => {
+          delete globalTools[def.name]
+        }
+      },
     },
     on() {},
     inject(_d, cb) {
@@ -76,7 +85,9 @@ function host(agents) {
   }
   setStatePin('standby')
   apply(ctx)
-  return () => handler
+  const getHandler = () => handler
+  getHandler.globalTools = globalTools
+  return getHandler
 }
 
 function call(handler, method, path, body) {
@@ -828,6 +839,218 @@ test('Contract 9 (Path 1 + Path 2 + Tri-Node Snapshot): 自动开局哨兵跨夜
     })
   } finally {
     globalThis.fetch = origFetch
+    tc.mock.timers.reset()
+  }
+})
+
+test('Contract 10: 双鱼（鱼丸+鲸澜）审核解锁（grant_break / unlock_focus）与改名单权限完整贯通，且不穿刺深夜宵禁与纯游戏红线', async (tc) => {
+  // 2026-11-23 10:00:00 Asia/Shanghai
+  const T_1000 = Date.UTC(2026, 10, 23, 2, 0, 0)
+  tc.mock.timers.enable({ apis: ['Date'], now: T_1000 })
+  try {
+    await withHome(async () => {
+      const sis = agentOf(SIS)
+      const big = agentOf(BIG)
+      const h = host({ [SIS]: sis, [BIG]: big })
+      const sisCtx = { agent: { session: { id: SIS } } }
+      const bigCtx = { agent: { session: { id: BIG } } }
+
+      const installedApps = [
+        { pkg: 'md.obsidian', label: 'Obsidian' },
+        { pkg: 'com.xingin.xhs', label: '小红书' },
+        { pkg: 'com.ss.android.ugc.aweme', label: '抖音' },
+        { pkg: 'com.tencent.tmgp.sgame', label: '王者荣耀' },
+        { pkg: 'tv.danmaku.bili', label: 'B站' },
+      ]
+
+      // 0) 同步手机端已装 App，随后开启 strict bout -> 处于 P4 严锁态
+      await call(h(), 'POST', '/plan', {
+        v: 1,
+        timeZone: TZ,
+        phone: { app: 'md.obsidian', label: 'Obsidian', minutes: 1, fun: false, screenOn: true, installedApps },
+      })
+      const openRes = await call(h(), 'POST', '/bouts', {
+        action: 'open',
+        protocolId: 'execute',
+        apps: { need: ['md.obsidian'], allow: ['md.obsidian'] },
+        strict: true,
+        minutes: 45,
+      })
+      assert.equal(openRes.body.ok, true)
+      const lockedPlan = (await call(h(), 'POST', '/plan', {
+        v: 1,
+        timeZone: TZ,
+        phone: { app: 'com.xingin.xhs', label: '小红书', minutes: 1, fun: true, screenOn: true, installedApps },
+      })).body
+      assert.equal(lockedPlan.lockArbiter.active, true)
+
+      // 1) 鱼丸调用 grant_break 放风 10m -> SISTER_BREAK 放行非游戏，纯游戏仍在 deny
+      const gb = sis.tools.grant_break.execute({ minutes: 10, reason: '鱼丸核准短暂放风休息' })
+      assert.equal(gb.ok, true, gb.text)
+      const breakPlan = (await call(h(), 'POST', '/plan', {
+        v: 1,
+        timeZone: TZ,
+        phone: { app: 'com.xingin.xhs', label: '小红书', minutes: 1, fun: true, screenOn: true, installedApps },
+      })).body
+      assert.equal(breakPlan.lockArbiter.source, 'SISTER_BREAK')
+      assert.equal(breakPlan.lockArbiter.active, false)
+      assert.equal(breakPlan.lock.mode, 'free')
+      assert.equal(breakPlan.lock.deny.some((d) => d.app === 'com.xingin.xhs'), false, '非游戏小红书放行')
+      assert.equal(breakPlan.lock.deny.some((d) => d.app === 'com.tencent.tmgp.sgame'), true, '纯游戏硬禁仍在')
+
+      // 2) focus_lock 重新收紧立即清除放风恢复严锁；随后鱼丸 & 鲸澜均可 unlock_focus
+      const fl = h.globalTools.dispatch_control.execute({ action: 'focus_lock', apps: ['Obsidian'], minutes: 20, why: '重新专注' }, sisCtx)
+      assert.equal(fl.ok, true, fl.text)
+      const reLockedPlan = (await call(h(), 'POST', '/plan', {
+        v: 1,
+        timeZone: TZ,
+        phone: { app: 'com.xingin.xhs', label: '小红书', minutes: 1, fun: true, screenOn: true, installedApps },
+      })).body
+      assert.equal(reLockedPlan.lockArbiter.active, true)
+
+      const ufSis = h.globalTools.dispatch_control.execute({ action: 'unlock_focus', minutes: 15, why: '鱼丸审核解锁' }, sisCtx)
+      assert.equal(ufSis.ok, true, ufSis.text)
+      const afterSisUnlock = (await call(h(), 'POST', '/plan', {
+        v: 1,
+        timeZone: TZ,
+        phone: { app: 'md.obsidian', label: 'Obsidian', minutes: 1, fun: false, screenOn: true, installedApps },
+      })).body
+      assert.equal(afterSisUnlock.lockArbiter.source, 'SISTER_BREAK')
+      assert.equal(afterSisUnlock.session, null)
+
+      const ufBig = h.globalTools.dispatch_control.execute({ action: 'unlock_focus', why: '鲸澜复核解锁' }, bigCtx)
+      assert.equal(ufBig.ok, true, ufBig.text)
+
+      // 3) 两鱼均可改名单：allow_apps / block_apps / unblock_apps / tag_app / app_tier(无AGREE_RE放松) / grant_task_lease
+      assert.equal(h.globalTools.dispatch_control.execute({ action: 'allow_apps', apps: ['com.custom.reader'], why: '加入学习白名单' }, sisCtx).ok, true)
+      assert.equal(h.globalTools.dispatch_control.execute({ action: 'allow_apps', apps: ['王者荣耀'], why: '想玩游戏' }, sisCtx).ok, false)
+
+      assert.equal(h.globalTools.dispatch_control.execute({ action: 'block_apps', apps: ['com.custom.reader'], minutes: 30, why: '临时拦截' }, bigCtx).ok, true)
+      assert.equal(h.globalTools.dispatch_control.execute({ action: 'unblock_apps', apps: ['com.custom.reader'], why: '审核解封' }, sisCtx).ok, true)
+      assert.equal(h.globalTools.dispatch_control.execute({ action: 'unblock_apps', apps: ['王者荣耀'], why: '解封游戏' }, bigCtx).ok, false)
+
+      const tierLoosen = h.globalTools.app_tier.execute({ app: '小红书', tier: 'work', why: '审核用于查备考攻略' }, sisCtx)
+      assert.equal(tierLoosen.ok, true, tierLoosen.text)
+      assert.equal(h.globalTools.app_tier.execute({ app: '王者荣耀', tier: 'work', why: '放松游戏' }, bigCtx).ok, false)
+
+      assert.equal(h.globalTools.grant_task_lease.execute({ app: 'B站', minutes: 15, taskGoal: '看资料分析网课' }, sisCtx).ok, true)
+      assert.equal(h.globalTools.grant_task_lease.execute({ app: '王者荣耀', minutes: 10, taskGoal: '玩游戏' }, sisCtx).ok, false)
+
+      // 4) 即使处于放风窗口内，凌晨 02:00 深夜宵禁（P1 NIGHT_CURFEW）依然不可绕过
+      const T_0200 = Date.UTC(2026, 10, 23, 18, 0, 0)
+      tc.mock.timers.setTime(T_0200)
+      h.globalTools.dispatch_control.execute({ action: 'unlock_focus', minutes: 60, why: '半夜想解锁' }, bigCtx)
+      const nightPlan = (await call(h(), 'POST', '/plan', {
+        v: 1,
+        timeZone: TZ,
+        phone: { app: 'com.xingin.xhs', label: '小红书', minutes: 1, fun: true, screenOn: true, installedApps },
+      })).body
+      assert.equal(nightPlan.lockArbiter.priority, 'P1')
+      assert.equal(nightPlan.lockArbiter.source, 'NIGHT_CURFEW')
+      assert.equal(nightPlan.lockArbiter.active, true)
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
+})
+
+test('Contract 11: 历史娱乐欠账场景下做满 10 题（锁屏与专练）均通过 deficitOffset 净增 +5m 且立即可 POST /seals spend', async (tc) => {
+  // 2026-11-23 14:30:00 Asia/Shanghai
+  const T_1430 = Date.UTC(2026, 10, 23, 6, 30, 0)
+  tc.mock.timers.enable({ apis: ['Date'], now: T_1430 })
+  try {
+    await withHome(async () => {
+      const sis = agentOf(SIS)
+      const big = agentOf(BIG)
+      const h = host({ [SIS]: sis, [BIG]: big })
+
+      // 1) 制造历史 40m 娱乐透支（funQuota=0, funUsed=40 -> funLeft=0）
+      const initPlan = (await call(h(), 'POST', '/plan', {
+        v: 1,
+        timeZone: TZ,
+        phone: {
+          app: 'com.ss.android.ugc.aweme',
+          label: '抖音',
+          minutes: 5,
+          fun: true,
+          screenOn: true,
+          today: [{ app: 'com.ss.android.ugc.aweme', label: '抖音', minutes: 40, fun: true }],
+        },
+      })).body
+      assert.equal(initPlan.timeLedger.funLeft, 0, '做题前历史欠账导致余额为 0')
+
+      // 2) 导入 20 道单选题
+      const questions = Array.from({ length: 20 }, (_, i) => ({
+        id: `q-${i + 1}`,
+        kind: 'mcq',
+        stem: `欠账补偿测试第 ${i + 1} 题`,
+        options: ['正确答案', '干扰B', '干扰C', '干扰D'],
+        answer: 'A',
+        explain: '选 A',
+      }))
+      const imp = (await call(h(), 'POST', '/bank', {
+        action: 'import',
+        name: '契约测试库',
+        text: JSON.stringify({ name: '契约测试库', questions }),
+      })).body
+      assert.equal(imp.ok, true, JSON.stringify(imp))
+
+      // 3) 锁屏做满 10 题：第 10 题结束触发 roundComplete，deficitOffset 抵消历史 40m 透支，可用余额精确 = 5
+      let q10Res = null
+      for (let step = 0; step < 10; step++) {
+        tc.mock.timers.setTime(T_1430 + step * 5_000)
+        const sess = (await call(h(), 'POST', '/bank', { action: 'quiz_session' })).body
+        assert.ok(sess.question?.id, `第 ${step + 1} 题应成功出题`)
+        const ans = (await call(h(), 'POST', '/bank', {
+          action: 'quiz_answer',
+          questionId: sess.question.id,
+          answer: 'A',
+        })).body
+        assert.equal(ans.ok, true)
+        assert.equal(ans.correct, true)
+        if (step < 9) {
+          assert.equal(ans.roundComplete || false, false)
+        } else {
+          q10Res = ans
+        }
+      }
+      assert.equal(q10Res.roundComplete, true)
+      assert.equal(q10Res.earnedAdded, 5)
+      assert.equal(q10Res.availableFunLeft, 5, '10 题挣来的 5 分钟不得被做题前 40m 欠账吞掉')
+
+      const nextSess = (await call(h(), 'POST', '/bank', { action: 'quiz_session' })).body
+      assert.equal(nextSess.solved, 0, '上一轮满 10 题后新轮次从 0 开始')
+      assert.equal(nextSess.availableFunLeft, 5)
+
+      // 4) 立刻花这 5 分钟余额 -> 必须放行成功，不得报错"余额只有 0 分钟"
+      const spendRes = (await call(h(), 'POST', '/seals', {
+        action: 'spend',
+        minutes: 5,
+        reason: '刷满十题换五分钟放松',
+      })).body
+      assert.equal(spendRes.ok, true, JSON.stringify(spendRes))
+      assert.equal(spendRes.minutes, 5)
+
+      // 5) 应用内专练做满 10 题同样触发 roundComplete + 入账 +5m（总可用余额升至 10m）
+      const ps = (await call(h(), 'POST', '/bank', { action: 'practice_session', limit: 20 })).body
+      assert.equal(ps.ok, true)
+      assert.ok(ps.questions.length >= 10)
+      let p10Res = null
+      for (let step = 0; step < 10; step++) {
+        tc.mock.timers.setTime(T_1430 + 100_000 + step * 5_000)
+        const sub = (await call(h(), 'POST', '/bank', {
+          action: 'submit_practice_answer',
+          questionId: ps.questions[step].id,
+          answer: 'A',
+        })).body
+        assert.equal(sub.ok, true)
+        if (step === 9) p10Res = sub
+      }
+      assert.equal(p10Res.roundComplete, true)
+      assert.equal(p10Res.earnedAdded, 5)
+      assert.equal(p10Res.availableFunLeft, 10)
+    })
+  } finally {
     tc.mock.timers.reset()
   }
 })

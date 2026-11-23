@@ -133,6 +133,42 @@ object QuizCardDisplayPolicy {
         return false to text
     }
 
+    fun formatProgress(solvedRaw: Double, required: Int, unlockMin: Int): String {
+        val req = required.coerceAtLeast(1)
+        val solved = if (solvedRaw % 1.0 == 0.0) {
+            solvedRaw.toInt().toString()
+        } else {
+            String.format(java.util.Locale.US, "%.1f", solvedRaw)
+        }
+        val ordinal = (kotlin.math.floor(solvedRaw).toInt() + 1).coerceIn(1, req)
+        return "本轮已答对 $solved / $req 题（第 $ordinal 题）· 满 $req 题挣 +$unlockMin 分钟"
+    }
+
+    fun defaultSpendMinutes(availableFunLeft: Int?): Int =
+        if (availableFunLeft != null && availableFunLeft >= 10) 10 else 5
+
+    fun formatEarnedSummary(res: Map<*, *>?): Triple<Boolean, String, Int?> {
+        val required = ((res?.get("required") as? Number)?.toInt() ?: 10).coerceAtLeast(1)
+        val earnedAdded = (res?.get("earnedAdded") as? Number)?.toInt() ?: 0
+        val capped = res?.get("capped") == true
+        val dailyEarned = (res?.get("dailyBankEarned") as? Number)?.toInt() ?: 60
+        val dailyCap = (res?.get("dailyBankCap") as? Number)?.toInt() ?: 60
+        val avail = (res?.get("availableFunLeft") as? Number)?.toInt()?.coerceAtLeast(0)
+        val availSuffix = if (avail != null) "（当前可用娱乐余额 $avail 分钟）" else ""
+        if (capped && earnedAdded <= 0) {
+            return Triple(
+                false,
+                "✓ 本轮已答满 $required 题！今日题库挣余额已达每日上限（$dailyEarned/$dailyCap 分钟），本次未新增$availSuffix。",
+                avail,
+            )
+        }
+        return Triple(
+            true,
+            "✓ 本轮 $required 题全部答对！已入账 +$earnedAdded 分钟娱乐余额$availSuffix。可直接花余额放行，或手动开始下一轮。",
+            avail,
+        )
+    }
+
     fun extractImageSpecs(rawImages: Any?): List<QuizImageSpec> {
         if (rawImages !is List<*>) return emptyList()
         val out = ArrayList<QuizImageSpec>(rawImages.size)
@@ -581,7 +617,7 @@ class InterceptPageActivity : Activity() {
         val ctx = this
         val durations = listOf(5, 10, 15, 30)
         val cachedLeft = ProactiveRuntime.cachedFunLeft()
-        var selectedMinutes = if (cachedLeft != null && cachedLeft in 5..9) 5 else 10
+        var selectedMinutes = QuizCardDisplayPolicy.defaultSpendMinutes(cachedLeft)
         val column = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(18))
@@ -897,7 +933,7 @@ class InterceptPageActivity : Activity() {
         val kind = QuizCardDisplayPolicy.resolveKind(q, rawOptions)
         currentQuestionKind = kind
         val bankName = (q["bankName"] as? String)?.takeIf { it.isNotBlank() } ?: (res["bankName"] as? String)
-        val progressText = "刷题挣余额 $solved / $required 题 · 达标 +$unlockMin 分钟"
+        val progressText = QuizCardDisplayPolicy.formatProgress(solvedRaw, required, unlockMin)
         val stemText = (q["stem"] as? String).orEmpty()
         val analysisText = (q["analysis"] as? String).orEmpty().trim()
         quizProgressView?.text = progressText
@@ -1068,27 +1104,49 @@ class InterceptPageActivity : Activity() {
                         return@post
                     }
                     QuizResponseAction.EARNED_NEED_SPEND -> {
-                        val earnedAdded = (res?.get("earnedAdded") as? Number)?.toInt() ?: 0
-                        val unlockMin = (res?.get("unlockMinutes") as? Number)?.toInt() ?: 5
-                        val addedMin = if (earnedAdded > 0) earnedAdded else unlockMin
+                        val required = ((res?.get("required") as? Number)?.toInt() ?: 10).coerceAtLeast(1)
+                        val (isPositive, summaryText, avail) = QuizCardDisplayPolicy.formatEarnedSummary(res)
+                        val progressDoneText = if (avail != null) {
+                            "✓ 本轮已答满 $required / $required 题 · 可用余额 $avail 分钟"
+                        } else {
+                            "✓ 本轮已答满 $required / $required 题"
+                        }
+                        quizProgressView?.text = progressDoneText
+                        quizPreviewProgressView?.text = progressDoneText
                         quizFeedbackView?.apply {
                             visibility = View.VISIBLE
-                            setTextColor(Color.parseColor("#1D8F63"))
-                            text = "✓ 已答满目标题数！已挣得 +$addedMin 分钟娱乐余额（本次不自动发通行证），点击下方即可花余额放行。"
+                            setTextColor(Color.parseColor(if (isPositive) "#1D8F63" else "#B45309"))
+                            text = summaryText
                         }
-                        quizSpendShortcutBtn?.visibility = View.VISIBLE
+                        quizSpendShortcutBtn?.apply {
+                            visibility = View.VISIBLE
+                            if (avail != null && avail < 5) {
+                                isEnabled = false
+                                alpha = 0.5f
+                                text = "当前可用余额不足 5 分钟（$avail 分钟），可继续刷下一轮"
+                            } else {
+                                isEnabled = true
+                                alpha = 1f
+                                text = if (avail != null) "立即花余额放行（当前可用 $avail 分钟）" else "一键花余额放行"
+                            }
+                        }
+                        quizOptionsBox?.let { box ->
+                            box.removeAllViews()
+                            box.addView(pillButton("继续刷下一轮（0 / $required 题）", secondary = true) {
+                                quizSpendShortcutBtn?.visibility = View.GONE
+                                val nextQ = res?.get("question")
+                                if (nextQ is Map<*, *> && res != null) {
+                                    val nextRes = HashMap<Any?, Any?>()
+                                    res.forEach { (k, v) -> nextRes[k] = v }
+                                    nextRes["solved"] = 0
+                                    renderQuizPayload(nextRes)
+                                } else {
+                                    loadQuizQuestion()
+                                }
+                            })
+                        }
                         quizBusy = false
                         setQuizOptionsEnabled(true)
-                        if (res?.get("question") is Map<*, *>) {
-                            val r = Runnable {
-                                pendingQuizAdvance = null
-                                if (!isFinishing && !isDestroyed && currentQuestionId == qid) {
-                                    renderQuizPayload(res, keepFeedback = true)
-                                }
-                            }
-                            pendingQuizAdvance = r
-                            main.postDelayed(r, 1_300L)
-                        }
                         return@post
                     }
                     QuizResponseAction.ADVANCE_NEXT -> {

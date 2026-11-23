@@ -10,6 +10,7 @@ const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d)
 export const LOCK_PRIORITIES = Object.freeze([
   'EMERGENCY_SUSPEND',
   'NIGHT_CURFEW',
+  'SISTER_BREAK',
   'GEMINI_LIVE_CELL',
   'CONTRACT_OVERDUE_STRICT',
   'TAKEOVER_STRICT',
@@ -20,6 +21,7 @@ export const LOCK_PRIORITIES = Object.freeze([
 
 export function computeUnifiedLockArbiter({
   emergencyPass = null,
+  breakPass = null,
   geminiSession = null,
   aiWorkSession = null,
   takeoverSession = null,
@@ -62,6 +64,20 @@ export function computeUnifiedLockArbiter({
       why: String(wall?.why || nightReq?.why || '已进入深夜催睡时段，娱乐类应用全面锁定'),
       allow: Array.isArray(wall?.allow) ? wall.allow : (Array.isArray(nightReq?.allow) ? nightReq.allow : []),
       unlockHow: String(nightReq?.unlockHow || '次日晨间 07:00 自动解封（电话/短信/地图/支付始终放行）'),
+    }
+  }
+
+  if (breakPass && breakPass.active) {
+    return {
+      active: false,
+      priority: 'P1.2',
+      source: 'SISTER_BREAK',
+      label: '双鱼审核放风中',
+      why: String(breakPass.reason || breakPass.byLabel || '双鱼审核已放行'),
+      allow: ['*'],
+      unlockHow: '放风倒计时结束后自动恢复原护栏状态',
+      until: Number(breakPass.until) || 0,
+      by: String(breakPass.by || ''),
     }
   }
 

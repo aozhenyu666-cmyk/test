@@ -218,12 +218,13 @@ test('Gemini 训练模式永不自锁 Gemini，且 unlock_focus / unlock_gemini 
     const ug = dc.execute({ action: 'unlock_gemini', why: '用户让小鱼关掉' }, { sessionId: SIS })
     assert.equal(ug.ok, true, ug.text)
 
-    // 再开一个 strict bout + focus_lock，由大鱼用 dispatch_control(unlock_focus) 一并解掉
+    // 再开一个 strict bout + focus_lock，由大鱼用 dispatch_control(unlock_focus) 一并解掉，且鱼丸同样拥有审核解锁权
     await call(t.h.handler(), 'POST', '/bouts', { action: 'open', protocolId: 'execute', apps: { need: ['md.obsidian'], allow: ['md.obsidian'] }, strict: true })
     const u = dc.execute({ action: 'unlock_focus', why: '用户收工' }, { sessionId: BIG })
     assert.equal(u.ok, true, u.text)
-    // 小鱼调 unlock_focus 仍按非对称权限被拒绝
-    assert.equal(dc.execute({ action: 'unlock_focus' }, { sessionId: SIS }).ok, false)
+    await call(t.h.handler(), 'POST', '/bouts', { action: 'open', protocolId: 'execute', apps: { need: ['md.obsidian'], allow: ['md.obsidian'] }, strict: true })
+    const uSis = dc.execute({ action: 'unlock_focus', why: '鱼丸复核放行' }, { sessionId: SIS })
+    assert.equal(uSis.ok, true, uSis.text)
     const after = await t.plan({ app: 'md.obsidian', label: 'Obsidian', minutes: 1, fun: false, screenOn: true, local: '10:40' })
     assert.equal(after.body.session, null, '所有 session 锁应当已清零')
     assert.equal(after.body.clearWorkSession, true, '应当下发 clearWorkSession 让手机释放工作锁')

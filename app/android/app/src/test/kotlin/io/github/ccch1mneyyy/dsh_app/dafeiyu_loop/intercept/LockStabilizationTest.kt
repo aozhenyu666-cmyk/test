@@ -383,4 +383,55 @@ class LockStabilizationTest {
             tempDir.deleteRecursively()
         }
     }
+
+    @Test
+    fun quizProgressSpendDefaultsAndCachedFunLeftSync() {
+        val p0 = QuizCardDisplayPolicy.formatProgress(0.0, 10, 5)
+        assertTrue(p0.contains("0 / 10"))
+        assertTrue(p0.contains("第 1 题"))
+
+        val p9 = QuizCardDisplayPolicy.formatProgress(9.0, 10, 5)
+        assertTrue(p9.contains("9 / 10"))
+        assertTrue(p9.contains("第 10 题"))
+
+        assertEquals(5, QuizCardDisplayPolicy.defaultSpendMinutes(null))
+        assertEquals(5, QuizCardDisplayPolicy.defaultSpendMinutes(0))
+        assertEquals(5, QuizCardDisplayPolicy.defaultSpendMinutes(4))
+        assertEquals(5, QuizCardDisplayPolicy.defaultSpendMinutes(5))
+        assertEquals(5, QuizCardDisplayPolicy.defaultSpendMinutes(9))
+        assertEquals(10, QuizCardDisplayPolicy.defaultSpendMinutes(10))
+        assertEquals(10, QuizCardDisplayPolicy.defaultSpendMinutes(25))
+
+        val normalSummary = QuizCardDisplayPolicy.formatEarnedSummary(
+            mapOf("required" to 10, "earnedAdded" to 5, "availableFunLeft" to 5),
+        )
+        assertTrue(normalSummary.first)
+        assertEquals(5, normalSummary.third)
+        assertTrue(normalSummary.second.contains("+5 分钟娱乐余额"))
+        assertTrue(normalSummary.second.contains("可用娱乐余额 5 分钟"))
+
+        val cappedSummary = QuizCardDisplayPolicy.formatEarnedSummary(
+            mapOf(
+                "required" to 10,
+                "earnedAdded" to 0,
+                "capped" to true,
+                "dailyBankEarned" to 60,
+                "dailyBankCap" to 60,
+                "availableFunLeft" to 0,
+            ),
+        )
+        assertFalse(cappedSummary.first)
+        assertEquals(0, cappedSummary.third)
+        assertTrue(cappedSummary.second.contains("上限"))
+        assertFalse(cappedSummary.second.contains("+5"))
+
+        val funCache = io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive.FunBalanceCache
+        funCache.clear()
+        funCache.syncFromResponse(mapOf("availableFunLeft" to 5))
+        assertEquals(5, funCache.cached())
+        funCache.update(null)
+        assertEquals(5, funCache.cached())
+        funCache.syncFromResponse(mapOf("timeLedger" to mapOf("funLeft" to 10)))
+        assertEquals(10, funCache.cached())
+    }
 }

@@ -194,11 +194,12 @@ test('dispatch_control / grant_task_lease 非对称权限 + 敷衍触发真实 r
     assert.ok(h.globalTools.grant_task_lease, '全局注册租约工具（运行时校验角色）')
     assert.equal(sis.tools.grant_task_lease, undefined, '会话工具预算保持不变')
 
-    // 小鱼调用 grant_task_lease 必须被 runtime 拦截；解锁必须被拒；小鱼锁定必须立刻生效并同步给 /plan session
+    // 双鱼（小鱼 + 大鱼）均为审核位：都可签发双用途租约与解锁 focus，同时硬拒纯游戏；focus_lock 重新锁定覆盖放风
     const sisCtx = { agent: { session: { id: 'sis' } } }
     const bigCtx = { agent: { session: { id: 'big' } } }
-    assert.equal(h.globalTools.grant_task_lease.execute({ app: 'B站', minutes: 10, taskGoal: '摸鱼' }, sisCtx).ok, false)
-    assert.equal(h.globalTools.dispatch_control.execute({ action: 'unlock_focus' }, sisCtx).ok, false)
+    assert.equal(h.globalTools.grant_task_lease.execute({ app: 'B站', minutes: 10, taskGoal: '查学习视频' }, sisCtx).ok, true)
+    assert.equal(h.globalTools.grant_task_lease.execute({ app: '王者荣耀', minutes: 10, taskGoal: '打一局' }, sisCtx).ok, false)
+    assert.equal(h.globalTools.dispatch_control.execute({ action: 'unlock_focus', why: '鱼丸审核放风' }, sisCtx).ok, true)
     const lockRes = h.globalTools.dispatch_control.execute({ action: 'focus_lock', apps: ['Obsidian'], minutes: 30, why: '写完方案' }, sisCtx)
     assert.equal(lockRes.ok, true)
 

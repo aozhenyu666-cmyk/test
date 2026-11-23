@@ -268,6 +268,7 @@ export function cleanBankUnlockState(raw) {
   const s = raw && typeof raw === 'object' ? raw : {}
   const cfg = s.config && typeof s.config === 'object' ? s.config : {}
   const session = s.session && typeof s.session === 'object' ? s.session : {}
+  const practiceSession = s.practiceSession && typeof s.practiceSession === 'object' ? s.practiceSession : {}
   const stats = s.stats && typeof s.stats === 'object' ? s.stats : {}
   const wrongIds = Array.isArray(s.wrongIds)
     ? [...new Set(s.wrongIds.map((x) => String(x || '').trim()).filter(Boolean))].slice(-500)
@@ -297,6 +298,9 @@ export function cleanBankUnlockState(raw) {
       currentCard: String(session.currentCard || ''),
       seenIds: Array.isArray(session.seenIds) ? session.seenIds.map(String).slice(-120) : [],
       currentId: String(session.currentId || ''),
+    },
+    practiceSession: {
+      solved: Math.max(0, Number(practiceSession.solved) || 0),
     },
     wrongIds,
     wrongBookIds,
@@ -833,8 +837,16 @@ export function recordPracticeAnswer(
     },
   }
 
+  const weight = correct ? (selfJudged ? SELF_JUDGED_WEIGHT : 1) : 0
+  const prevPracticeSolved = Math.max(0, Number(state.practiceSession?.solved) || 0)
+  const nextPracticeSolved = round1(prevPracticeSolved + weight)
+  const roundComplete = nextPracticeSolved >= state.config.requiredCount
+
   const nextState = {
     ...state,
+    practiceSession: {
+      solved: roundComplete ? 0 : nextPracticeSolved,
+    },
     wrongIds: nextWrongIds,
     wrongBookIds: nextWrongBookIds,
     lastQuestionId: qid,
@@ -855,6 +867,11 @@ export function recordPracticeAnswer(
     kind,
     correct,
     selfJudged,
+    weight,
+    practiceSolved: nextPracticeSolved,
+    required: state.config.requiredCount,
+    unlockMinutes: state.config.unlockMinutes,
+    roundComplete,
     expectedAnswer: expectedRaw,
     correctAnswer: expectedRaw,
     explain,
