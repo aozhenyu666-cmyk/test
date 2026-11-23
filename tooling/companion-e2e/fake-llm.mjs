@@ -31,8 +31,8 @@ http.createServer((req, res) => {
     const a = req.url.includes('chat/completions') || req.url.includes('/messages') ? answer(body) : null
     // 主动发球和判球的完整输入另记一份，验收时核对"这一球到底带了什么"。
     if (a && (a.kind === 'serve' || a.kind === 'judge' || a.kind === 'chat')) {
-      appendFileSync(LOG.replace(/llm\.log$/, 'prompts.jsonl'), JSON.stringify({ at: Date.now(), kind: a.kind, text: lastUser(body.messages || []), system: textOf(body.system).slice(0, 4000),
-        all: (textOf(body.system) + '\n' + (body.messages || []).map((m) => textOf(m.content)).join('\n')).slice(-8000) }) + '\n')
+      appendFileSync(LOG.replace(/llm\.log$/, 'prompts.jsonl'), JSON.stringify({ at: Date.now(), kind: a.kind, text: lastUser(body.messages || []), system: textOf(body.system).slice(0, 8000),
+        all: (textOf(body.system) + '\n' + (body.messages || []).map((m) => textOf(m.content)).join('\n')).slice(-20000) }) + '\n')
     }
     if (a && req.url.includes('/messages')) {
       appendFileSync(LOG, JSON.stringify({ at: new Date().toISOString(), url: req.url, kind: a.kind, lastUser: lastUser(body.messages || []).slice(0, 120), tools: (body.tools || []).length }) + '\n')
