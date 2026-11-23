@@ -8,9 +8,10 @@ import '../../phone/harness.dart';
 
 /// Gemini 桥页：没配时说清楚怎么搭；填地址和密钥 → 发 config；连着时显示在线和处理过几条。
 class _Bridge extends ProactiveChannel {
-  _Bridge({this.configured = false});
+  _Bridge({this.configured = false, this.lastError = ''});
 
   bool configured;
+  String lastError;
   final List<Map<String, Object?>> calls = [];
   final List<Map<String, Object?>> launches = [];
 
@@ -20,9 +21,9 @@ class _Bridge extends ProactiveChannel {
         'enabled': configured,
         'url': configured ? 'https://pc.tail.ts.net' : '',
         'keyTail': configured ? 'ab12' : '',
-        'healthy': configured,
+        'healthy': configured && lastError.isEmpty,
         'lastOkAt': configured ? DateTime.now().millisecondsSinceEpoch - 5000 : 0,
-        'lastError': '',
+        'lastError': lastError,
         'applied': configured ? 3 : 0,
         'receiptsToday': configured ? 2 : 0,
       };
@@ -140,5 +141,48 @@ void main() {
     await settlePhone(tester);
     expect(ch.launches.last['topic'], '老板全局审视质询');
     expect(copied, contains('老板全局审视测试'));
+  });
+
+  testWidgets('一键粘贴电脑桥配置自动剥离 /mcp 并解析密钥；401 报错显示排查建议', (tester) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.getData') {
+          return <String, Object?>{
+            'text': '电脑桥地址：https://pc.tail.ts.net:8443/mcp\n手机密钥：dfy_tok123456',
+          };
+        }
+        return null;
+      },
+    );
+    addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+
+    final ch = _Bridge();
+    await pumpPhone(tester, GeminiBridgePage(channel: ch));
+    await settlePhone(tester);
+
+    final pasteBtn = find.byKey(const ValueKey('bridge-paste-bundle-btn'));
+    await tester.ensureVisible(pasteBtn);
+    await tester.tap(pasteBtn);
+    await settlePhone(tester);
+
+    expect(
+      ch.calls.any(
+        (c) =>
+            c['action'] == 'config' &&
+            c['url'] == 'https://pc.tail.ts.net:8443' &&
+            c['key'] == 'dfy_tok123456',
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets('最近一次没连上：401 与超时错误显示可操作排查建议', (tester) async {
+    final errBridge = _Bridge(configured: true, lastError: 'HTTP 401 unauthorized');
+    await pumpPhone(tester, GeminiBridgePage(channel: errBridge));
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('bridge-error')), findsOneWidget);
+    expect(find.textContaining('排查：密钥和电脑桥不一致'), findsOneWidget);
   });
 }

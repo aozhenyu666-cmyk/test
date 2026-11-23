@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../ui/common/dispose_after_route.dart';
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
 import '../../ui/common/status_chip.dart';
@@ -117,6 +118,110 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(r?['synced'] == true ? '同步好了' : '没连上：${r?['lastError'] ?? '引擎没应答'}'),
     ));
+  }
+
+  ({String url, String key}) _parseBridgeBundle(String raw) {
+    final text = raw.trim();
+    var url = '';
+    final urlMatch = RegExp(r'https?://[^\s\x27"<>]+', caseSensitive: false).firstMatch(text);
+    if (urlMatch != null) {
+      url = urlMatch.group(0)!
+          .replaceFirst(RegExp(r'[.,;)\]}]+$'), '')
+          .replaceFirst(RegExp(r'(/mcp|/bridge/sync|/bridge/local/today|/healthz)?/*$', caseSensitive: false), '');
+    }
+    var key = '';
+    final dfyMatch = RegExp(r'dfy_[A-Za-z0-9_-]{6,}').firstMatch(text);
+    if (dfyMatch != null) {
+      key = dfyMatch.group(0)!;
+    } else {
+      final tokenMatch = RegExp(r'(?:key|token|密钥)\s*[:=]\s*([^\s\x27"]+)', caseSensitive: false).firstMatch(text);
+      if (tokenMatch != null) key = tokenMatch.group(1)!.trim();
+    }
+    return (url: url, key: key);
+  }
+
+  Future<void> _applyBridgeBundle(String raw) async {
+    final parsed = _parseBridgeBundle(raw);
+    if (parsed.url.isEmpty && parsed.key.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没识别出桥地址（https://...）或手机密钥（dfy_...）')),
+      );
+      return;
+    }
+    setState(() {
+      if (parsed.url.isNotEmpty) _url.text = parsed.url;
+      if (parsed.key.isNotEmpty) _key.text = parsed.key;
+    });
+    final hasKeyNow = parsed.key.isNotEmpty || _key.text.trim().isNotEmpty || ('${_data['keyTail'] ?? ''}'.isNotEmpty);
+    if (_url.text.trim().isNotEmpty && hasKeyNow) {
+      await _save();
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(parsed.url.isNotEmpty ? '已填入桥地址，还缺手机密钥（dfy_...）' : '已填入密钥，还缺桥地址（https://...）')),
+      );
+    }
+  }
+
+  Future<void> _pasteBridgeConfig() async {
+    final clip = await Clipboard.getData(Clipboard.kTextPlain);
+    final raw = (clip?.text ?? '').trim();
+    if (raw.isNotEmpty) {
+      final parsed = _parseBridgeBundle(raw);
+      if (parsed.url.isNotEmpty || parsed.key.isNotEmpty) {
+        await _applyBridgeBundle(raw);
+        return;
+      }
+    }
+    if (!mounted) return;
+    final pasteCtl = TextEditingController(text: raw);
+    final submitted = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('一键导入电脑桥配置'),
+        content: TextField(
+          key: const ValueKey('bridge-paste-dialog-input'),
+          controller: pasteCtl,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            hintText: '粘贴电脑终端输出的桥地址（https://...:8443）和手机密钥（dfy_...）',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, pasteCtl.text.trim()),
+            child: const Text('识别并连接'),
+          ),
+        ],
+      ),
+    );
+    disposeAfterRoute(pasteCtl);
+    if (submitted != null && submitted.isNotEmpty) {
+      await _applyBridgeBundle(submitted);
+    }
+  }
+
+  String _diagnoseBridgeError(String err) {
+    final lower = err.toLowerCase();
+    if (lower.contains('401') || lower.contains('unauthorized') || lower.contains('token') || lower.contains('key')) {
+      return '$err\n排查：密钥和电脑桥不一致，请重新点击「一键粘贴电脑桥配置」导入最新 dfy_ 密钥。';
+    }
+    if (lower.contains('404')) {
+      return '$err\n排查：桥地址不要带 /mcp 或路径尾巴，填域名（如 https://xxx.ts.net:8443）即可。';
+    }
+    if (lower.contains('timeout') ||
+        lower.contains('timed out') ||
+        lower.contains('socket') ||
+        lower.contains('connection') ||
+        lower.contains('refused') ||
+        lower.contains('handshake') ||
+        lower.contains('failed host')) {
+      return '$err\n排查：请确认电脑端 gemini-bridge 在运行，且 Tailscale Funnel 端口（常见为 :8443）与桥地址一致。';
+    }
+    return err;
   }
 
   String _ago(Object? at) {
@@ -254,8 +359,8 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
                 icon: AppIcons.warning,
                 iconColor: colors.warning,
                 title: '最近一次没连上',
-                subtitle: err,
-                subtitleMaxLines: 3,
+                subtitle: _diagnoseBridgeError(err),
+                subtitleMaxLines: 5,
               ),
             ],
           ),
@@ -270,7 +375,7 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
                 controller: _url,
                 keyboardType: TextInputType.url,
                 autocorrect: false,
-                decoration: const InputDecoration(labelText: '桥的地址', hintText: 'https://你的电脑名.你的tailnet.ts.net', isDense: true),
+                decoration: const InputDecoration(labelText: '桥的地址', hintText: 'https://你的电脑名.你的tailnet.ts.net:8443', isDense: true),
               ),
             ),
             Padding(
@@ -290,10 +395,23 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-              child: FilledButton(
-                key: const ValueKey('bridge-save'),
-                onPressed: _busy ? null : () => unawaited(_save()),
-                child: Text(_busy ? '连接中…' : '保存并连接'),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  FilledButton(
+                    key: const ValueKey('bridge-save'),
+                    onPressed: _busy ? null : () => unawaited(_save()),
+                    child: Text(_busy ? '连接中…' : '保存并连接'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('bridge-paste-bundle-btn'),
+                    onPressed: _busy ? null : () => unawaited(_pasteBridgeConfig()),
+                    icon: const Icon(Icons.content_paste_go, size: 18),
+                    label: const Text('一键粘贴电脑桥配置'),
+                  ),
+                ],
               ),
             ),
           ],

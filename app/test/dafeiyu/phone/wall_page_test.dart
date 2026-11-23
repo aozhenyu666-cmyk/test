@@ -472,4 +472,64 @@ void main() {
     );
     expect(wall.tickCalls, greaterThanOrEqualTo(1));
   });
+
+  testWidgets('W25 路径 B 主管质询室：展示托管冲刺横幅并支持三档预设签发串联托管冲刺轨', (tester) async {
+    final wall = FakeWall(
+      thread: threeBubbles(),
+      statusBody: {'locked': false},
+      wallBossChatData: {
+        'ok': true,
+        'bound': true,
+        'wallSessionId': 'wall-boss-3',
+        'agentOnline': true,
+        'inFlight': false,
+        'verifyLockCenter': {
+          'totalVerify': 2,
+          'passedVerify': 0,
+          'overdueCount': 0,
+          'pendingReviewCount': 0,
+          'adaptiveSplitsToday': 1,
+          'custody': {
+            'active': true,
+            'title': '早间双飞轮',
+            'untilHm': '11:30',
+          },
+          'overdueBlocks': const <Object?>[],
+          'pendingReviewBlocks': const <Object?>[],
+        },
+        'messages': const <Object?>[],
+      },
+    );
+    await pumpWall(tester, wall);
+    await frames(tester);
+
+    await tester.tap(find.text('主管质询室'));
+    await frames(tester);
+
+    expect(find.byKey(const ValueKey('wall-boss-custody-banner')), findsOneWidget);
+    expect(find.textContaining('早间双飞轮'), findsOneWidget);
+    expect(find.textContaining('自动缩块 1 次'), findsOneWidget);
+
+    await tester.ensureVisible(find.byKey(const ValueKey('wall-boss-sprint-custody-btn')));
+    await tester.tap(find.byKey(const ValueKey('wall-boss-sprint-custody-btn')));
+    await frames(tester);
+    expect(find.byKey(const ValueKey('wall-custody-dialog')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('wall-custody-preset-deep_90')));
+    await frames(tester);
+    await tester.tap(find.byKey(const ValueKey('wall-custody-submit')));
+    await frames(tester);
+
+    final custodyCall = wall.bossChatCalls.firstWhere(
+      (c) => c['action'] == 'issue_sprint_custody',
+      orElse: () => <String, Object?>{},
+    );
+    expect(custodyCall['title'], '90m 深水托管冲刺');
+    expect(custodyCall['armAutoKickoff'], isTrue);
+    final blocks = custodyCall['blocks'] as List<dynamic>;
+    expect(blocks.length, 2);
+    expect((blocks[0] as Map)['minutes'], 45);
+    expect((blocks[1] as Map)['minutes'], 45);
+    expect(wall.tickCalls, greaterThanOrEqualTo(1));
+  });
 }

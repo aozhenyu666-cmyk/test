@@ -17,9 +17,17 @@ class _FakeLoop extends LoopChannel {
 }
 
 class _FakePlanModalityChannel extends ProactiveChannel {
-  _FakePlanModalityChannel({this.legacyOnly = false});
+  _FakePlanModalityChannel({
+    this.legacyOnly = false,
+    this.custody,
+    this.custodyPolicy,
+    this.adaptiveLog,
+  });
 
   final bool legacyOnly;
+  final Map<String, dynamic>? custody;
+  final Map<String, dynamic>? custodyPolicy;
+  final List<Map<String, dynamic>>? adaptiveLog;
   final List<Map<String, Object?>> planOps = [];
   final List<Map<String, Object?>> todayStarts = [];
   final List<Map<String, Object?>> geminiLaunches = [];
@@ -54,6 +62,9 @@ class _FakePlanModalityChannel extends ProactiveChannel {
       },
       'dayPlan': {
         'energyLevel': 'mid',
+        if (custody != null) 'custody': custody,
+        'custodyPolicy': custodyPolicy ?? const {'autoKickoffEnabled': true, 'adaptiveSplitEnabled': true},
+        if (adaptiveLog != null) 'adaptiveLog': adaptiveLog,
         'carryoverItems': [
           {
             'id': 'y-1',
@@ -262,5 +273,77 @@ void main() {
     await settlePhone(tester);
     expect(find.byKey(const ValueKey('watch-24h-timeline'), skipOffstage: false), findsOneWidget);
     expect(find.byKey(const ValueKey('watch-now-redline'), skipOffstage: false), findsOneWidget);
+  });
+
+  testWidgets('PlanModalityPage 托管哨兵策略切换、托管横幅与 Re-brief 校验弹窗', (tester) async {
+    final ch = _FakePlanModalityChannel(
+      custodyPolicy: const {'autoKickoffEnabled': true, 'adaptiveSplitEnabled': true},
+      custody: {
+        'active': true,
+        'id': 'cus-1',
+        'title': '早间双飞轮冲刺',
+        'untilHm': '11:30',
+        'rebriefCount': 0,
+      },
+      adaptiveLog: const [
+        {'splitBlockId': 'blk-1'},
+      ],
+    );
+    await pumpPhone(tester, PlanModalityPage(channel: ch, loopChannel: _FakeLoop()));
+    await settlePhone(tester);
+
+    final policyCard = find.byKey(const ValueKey('plan-custody-policy-card'));
+    await tester.scrollUntilVisible(
+      policyCard,
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(policyCard, findsOneWidget);
+    expect(find.byKey(const ValueKey('plan-custody-active-banner')), findsOneWidget);
+    expect(find.textContaining('早间双飞轮冲刺'), findsOneWidget);
+    expect(find.textContaining('11:30'), findsAtLeastNWidgets(1));
+
+    final kickSwitch = find.byKey(const ValueKey('plan-auto-kickoff-switch'));
+    await tester.ensureVisible(kickSwitch);
+    await tester.tap(kickSwitch);
+    await settlePhone(tester);
+    expect(
+      ch.planOps.any((op) => op['action'] == 'set_custody_policy' && op['autoKickoffEnabled'] == false),
+      isTrue,
+    );
+
+    final adaptSwitch = find.byKey(const ValueKey('plan-adaptive-split-switch'));
+    await tester.ensureVisible(adaptSwitch);
+    await tester.tap(adaptSwitch);
+    await settlePhone(tester);
+    expect(
+      ch.planOps.any((op) => op['action'] == 'set_custody_policy' && op['adaptiveSplitEnabled'] == false),
+      isTrue,
+    );
+
+    final rebriefBtn = find.byKey(const ValueKey('plan-custody-rebrief-btn'));
+    await tester.ensureVisible(rebriefBtn);
+    await tester.tap(rebriefBtn);
+    await settlePhone(tester);
+    expect(find.byKey(const ValueKey('plan-custody-rebrief-dialog')), findsOneWidget);
+
+    await tester.enterText(find.byKey(const ValueKey('plan-custody-rebrief-reason')), '太短');
+    await tester.tap(find.byKey(const ValueKey('plan-custody-rebrief-confirm')));
+    await settlePhone(tester);
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(find.textContaining('至少 6 个字'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('plan-custody-rebrief-reason')),
+      '临时有线下面试冲突需改切25分钟保底推进',
+    );
+    await tester.tap(find.byKey(const ValueKey('plan-custody-rebrief-confirm')));
+    await settlePhone(tester);
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(
+      ch.planOps.any((op) => op['action'] == 'rebrief_custody' && '${op['reason']}'.contains('线下面试')),
+      isTrue,
+    );
+    expect(ch.tickCalls, greaterThanOrEqualTo(3));
   });
 }

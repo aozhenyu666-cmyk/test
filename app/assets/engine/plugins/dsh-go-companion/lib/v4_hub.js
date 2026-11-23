@@ -39,20 +39,25 @@ import {
 import { commitBoutOutcomeToNode, compileBoutFromNode, dossierSummary } from './plan_compiler.js'
 import {
   AI_PROMPT_SCRIPTS,
+  applyAdaptiveIntensity,
   applyDayPlanAction,
   cleanDayPlanState,
   cleanPlanContract,
   COMMON_PLAN_PRESETS,
   computeDayPlanStats,
   DAYBLOCK_LOCK_CAP_MS,
+  evaluateAutoKickoffTick,
   evaluateCheckpointSubmission,
   evaluateContractTick,
   evaluateDayBlocksTick,
   inspectScenarioApps,
   issueBossDirectiveBlock,
+  issueSprintCustody,
   judgeDayBlockDelivery,
   OVERDUE_GRACE_MS,
+  rebriefSprintCustody,
   resolveContractSessionAllow,
+  setCustodyPolicy,
   submitDayBlockDelivery,
   summarizeDayBlocksVerify,
 } from './plan_modality.js'
@@ -402,6 +407,7 @@ export function createV4Hub(deps) {
     'set_block_status',
     'move_carryover',
     'set_day_plan',
+    'set_custody_policy',
   ])
 
   function loadDayPlan(now = Date.now()) {
@@ -409,7 +415,7 @@ export function createV4Hub(deps) {
     const today = dayString(now, tzName)
     const raw = readState(stateFile('plan-daybox.json'), null)
     if (raw && typeof raw === 'object' && raw.day && raw.day !== today && Array.isArray(raw.dayBlocks)) {
-      // 跨天自动将昨日未完成的非休息时间块带入今日准备态待选列表
+      // 跨天自动将昨日未完成的非休息时间块带入今日准备态待选列表，保留托管与破冰哨策略
       const carried = raw.dayBlocks
         .filter((b) => b && !b.isBreak && b.status !== 'done')
         .map((b, i) => ({
@@ -423,7 +429,12 @@ export function createV4Hub(deps) {
           moved: false,
         }))
         .filter((c) => c.title)
-      return cleanDayPlanState({ energyLevel: raw.energyLevel || 'mid', carryoverItems: carried, dayBlocks: [] }, { day: today, now })
+      return cleanDayPlanState({
+        energyLevel: raw.energyLevel || 'mid',
+        carryoverItems: carried,
+        dayBlocks: [],
+        custodyPolicy: raw.custodyPolicy,
+      }, { day: today, now })
     }
     return cleanDayPlanState(raw, { day: today, now })
   }
@@ -470,11 +481,25 @@ export function createV4Hub(deps) {
     const tzName = tz()
     const dayStartMs = tzStartOfDay(now, tzName)
     const min = tzMinuteOfDay(now, tzName)
-    const cur = loadDayPlan(now)
+    let cur = loadDayPlan(now)
+    const kick = evaluateAutoKickoffTick(cur, { now, minuteOfDay: min })
+    if (kick.fired) {
+      cur = saveDayPlan(kick.state, now)
+      record({ state: 'dayblock-auto-kickoff', at: now, blockId: kick.block.id, slotHm: kick.slotHm, title: kick.block.title })
+      recordStoryline({
+        kind: 'auto_kickoff',
+        actor: 'strategist',
+        summary: `无人破冰哨(${kick.slotHm})自动钉入起手硬验收块「${kick.block.title}」`,
+        at: now,
+      }, now)
+      try { onDayPlanMutated?.(now) } catch {}
+    }
+
     const seals = Array.isArray(sealsOpt) ? sealsOpt : (typeof getSealsNow === 'function' ? (getSealsNow(now) || []) : [])
     const res = evaluateDayBlocksTick(cur, { now, dayStartMs, minuteOfDay: min, seals })
+    let finalState = res.state
     if (res.changed) {
-      saveDayPlan(res.state, now)
+      finalState = saveDayPlan(res.state, now)
     }
     for (const blk of res.newlyEscalated) {
       record({ state: 'dayblock-overdue-locked', at: now, blockId: blk.id, title: blk.title, lockedByBoss: Boolean(blk.lockedByBoss) })
@@ -493,6 +518,13 @@ export function createV4Hub(deps) {
         summary: `违约记账：「${blk.title}」超 60m 未交货`,
         at: now,
       }, now)
+      const ad = applyAdaptiveIntensity(finalState, { triggerBlockId: blk.id, triggerReason: 'breach', now })
+      if (ad.adapted) {
+        finalState = saveDayPlan(ad.state, now)
+        record({ state: 'dayblock-adaptive-split', at: now, triggerBlockId: blk.id, splitBlockId: ad.origBlock.id, reason: 'breach' })
+        recordStoryline({ kind: 'adaptive_split', actor: 'wall_boss', summary: ad.note, at: now }, now)
+        try { onDayPlanMutated?.(now) } catch {}
+      }
     }
     for (const p of res.newlyPassed) {
       record({ state: 'dayblock-auto-passed', at: now, blockId: p.block.id, title: p.block.title })
@@ -500,7 +532,14 @@ export function createV4Hub(deps) {
         markWorkStatusNow?.({ id: p.block.id, title: p.block.title, status: 'passed', now })
       } catch {}
     }
-    return res
+    return {
+      ...res,
+      state: finalState,
+      verifySummary: summarizeDayBlocksVerify(finalState.dayBlocks, { minuteOfDay: min }),
+      custody: finalState.custody,
+      custodyPolicy: finalState.custodyPolicy,
+      adaptiveLog: finalState.adaptiveLog,
+    }
   }
 
   function getDayVerifySummary(now = Date.now(), sealsOpt = null) {
@@ -512,6 +551,9 @@ export function createV4Hub(deps) {
       activeStrictBlock: res.activeStrictBlock,
       overdueVerifyBlocks: res.overdueVerifyBlocks,
       dayBlocks: res.state.dayBlocks,
+      custody: res.state.custody,
+      custodyPolicy: res.state.custodyPolicy,
+      adaptiveLog: res.state.adaptiveLog,
     }
   }
 
@@ -630,7 +672,9 @@ export function createV4Hub(deps) {
       allowAutoFromReceipt: Boolean(body?.allowAutoFromReceipt),
     })
     if (!res.ok) return { v: 1, ...res }
-    const saved = saveDayPlan(res.state, now)
+    let saved = saveDayPlan(res.state, now)
+    let adapted = false
+    let adaptiveNote = ''
     if (res.verdict === 'pass') {
       record({
         state: 'dayblock-judged-pass',
@@ -669,12 +713,23 @@ export function createV4Hub(deps) {
         summary: `验收驳回「${res.block.title}」：${res.block.judgeNote}`,
         at: now,
       }, now)
+      const ad = applyAdaptiveIntensity(saved, { triggerBlockId: res.block.id, triggerReason: 'reject', now })
+      if (ad.adapted) {
+        saved = saveDayPlan(ad.state, now)
+        adapted = true
+        adaptiveNote = ad.note
+        record({ state: 'dayblock-adaptive-split', at: now, triggerBlockId: res.block.id, splitBlockId: ad.origBlock.id, reason: 'reject' })
+        recordStoryline({ kind: 'adaptive_split', actor: 'wall_boss', summary: ad.note, at: now }, now)
+      }
     }
     onDayPlanMutated?.(now)
     const verifySummary = summarizeDayBlocksVerify(saved.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tzName) })
     return {
       v: 1,
       ...res,
+      state: saved,
+      adapted,
+      adaptiveNote,
       dayPlan: {
         ...saved,
         stats: computeDayPlanStats(saved.dayBlocks, { funBudgetMin: funBudgetMinNow(now), energyLevel: saved.energyLevel }),
@@ -717,6 +772,114 @@ export function createV4Hub(deps) {
     return {
       v: 1,
       ...res,
+      dayPlan: {
+        ...saved,
+        stats: computeDayPlanStats(saved.dayBlocks, { funBudgetMin: funBudgetMinNow(now), energyLevel: saved.energyLevel }),
+        verifySummary,
+      },
+      verifySummary,
+    }
+  }
+
+  function issueSprintCustodyNow(body = {}, now = Date.now()) {
+    const tzName = tz()
+    const cur = loadDayPlan(now)
+    const issuedBy = body?.issuedBy === 'gemini' ? 'gemini' : 'wall_boss'
+    const res = issueSprintCustody(cur, {
+      title: body?.title || '高强度托管冲刺轨',
+      blocks: body?.blocks,
+      startMin: body?.startMin,
+      issuedBy,
+      armAutoKickoff: body?.armAutoKickoff ?? body?.arm_auto_kickoff,
+      now,
+      minuteOfDay: tzMinuteOfDay(now, tzName),
+      dayStartMs: tzStartOfDay(now, tzName),
+    })
+    if (!res.ok) return { v: 1, ...res }
+    const saved = saveDayPlan(res.state, now)
+    record({
+      state: 'sprint-custody-issued',
+      at: now,
+      custodyId: res.custody.id,
+      title: res.custody.title,
+      issuedBy,
+      count: res.blocks.length,
+    })
+    recordStoryline({
+      kind: 'sprint_custody',
+      actor: issuedBy === 'gemini' ? 'strategist' : 'wall_boss',
+      summary: `签发托管冲刺轨「${res.custody.title}」（${res.blocks.length} 块，至 ${res.untilHm}）`,
+      at: now,
+    }, now)
+    onDayPlanMutated?.(now)
+    const verifySummary = summarizeDayBlocksVerify(saved.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tzName) })
+    return {
+      v: 1,
+      ...res,
+      state: saved,
+      dayPlan: {
+        ...saved,
+        stats: computeDayPlanStats(saved.dayBlocks, { funBudgetMin: funBudgetMinNow(now), energyLevel: saved.energyLevel }),
+        verifySummary,
+      },
+      verifySummary,
+    }
+  }
+
+  function rebriefSprintCustodyNow(body = {}, now = Date.now()) {
+    const tzName = tz()
+    const cur = loadDayPlan(now)
+    const issuedBy = body?.issuedBy === 'gemini' ? 'gemini' : (body?.issuedBy === 'user' ? 'wall_boss' : 'wall_boss')
+    const res = rebriefSprintCustody(cur, {
+      reason: body?.reason ?? body?.rebriefReason ?? '',
+      blocks: body?.blocks,
+      downgradeLowEnergy: body?.downgradeLowEnergy === true || body?.downgrade_low_energy === true,
+      issuedBy,
+      now,
+      minuteOfDay: tzMinuteOfDay(now, tzName),
+      dayStartMs: tzStartOfDay(now, tzName),
+    })
+    if (!res.ok) return { v: 1, ...res }
+    const saved = saveDayPlan(res.state, now)
+    record({
+      state: 'sprint-custody-rebrief',
+      at: now,
+      custodyId: res.custody.id,
+      reason: String(body?.reason ?? body?.rebriefReason ?? '').slice(0, 120),
+      issuedBy,
+    })
+    recordStoryline({
+      kind: 'sprint_custody_rebrief',
+      actor: 'wall_boss',
+      summary: `托管 Re-brief 重签（至 ${res.untilHm}）：${String(body?.reason ?? body?.rebriefReason ?? '').slice(0, 60)}`,
+      at: now,
+    }, now)
+    onDayPlanMutated?.(now)
+    const verifySummary = summarizeDayBlocksVerify(saved.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tzName) })
+    return {
+      v: 1,
+      ...res,
+      state: saved,
+      dayPlan: {
+        ...saved,
+        stats: computeDayPlanStats(saved.dayBlocks, { funBudgetMin: funBudgetMinNow(now), energyLevel: saved.energyLevel }),
+        verifySummary,
+      },
+      verifySummary,
+    }
+  }
+
+  function setCustodyPolicyNow(body = {}, now = Date.now()) {
+    const tzName = tz()
+    const cur = loadDayPlan(now)
+    const res = setCustodyPolicy(cur, body, { now })
+    const saved = saveDayPlan(res.state, now)
+    onDayPlanMutated?.(now)
+    const verifySummary = summarizeDayBlocksVerify(saved.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tzName) })
+    return {
+      v: 1,
+      ok: true,
+      custodyPolicy: saved.custodyPolicy,
       dayPlan: {
         ...saved,
         stats: computeDayPlanStats(saved.dayBlocks, { funBudgetMin: funBudgetMinNow(now), energyLevel: saved.energyLevel }),
@@ -1567,6 +1730,10 @@ export function createV4Hub(deps) {
           energyLevel: res.energyLevel,
           carryoverItems: res.carryoverItems,
           dayBlocks: res.dayBlocks,
+          custodyPolicy: res.custodyPolicy,
+          custody: res.custody,
+          firedKickoffSlots: res.firedKickoffSlots,
+          adaptiveLog: res.adaptiveLog,
           stats: res.stats,
           verifySummary,
           updatedAt: res.updatedAt,
@@ -1581,6 +1748,12 @@ export function createV4Hub(deps) {
     }
     if (action === 'issue_directive') {
       return issueDirective(body, now)
+    }
+    if (action === 'issue_sprint_custody') {
+      return issueSprintCustodyNow(body, now)
+    }
+    if (action === 'rebrief_custody') {
+      return rebriefSprintCustodyNow(body, now)
     }
     if (action === 'status') {
       const cur = loadContract()
@@ -2407,6 +2580,9 @@ export function createV4Hub(deps) {
     submitDelivery,
     judgeDelivery,
     issueDirective,
+    issueSprintCustody: issueSprintCustodyNow,
+    rebriefSprintCustody: rebriefSprintCustodyNow,
+    setCustodyPolicy: setCustodyPolicyNow,
     getDayVerifySummary,
     skillsAuditRoute,
     analyticsRoute,

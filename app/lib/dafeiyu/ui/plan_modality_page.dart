@@ -65,6 +65,9 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
   Map<String, dynamic>? _today;
   Map<String, dynamic>? _locksOverview;
   Map<String, dynamic>? _verifySummary;
+  Map<String, dynamic>? _custody;
+  Map<String, dynamic>? _custodyPolicy;
+  List<Map<String, dynamic>> _adaptiveLog = const [];
   List<Map<String, dynamic>> _remotePresets = const [];
   List<LoopApp> _installedApps = const [];
 
@@ -183,8 +186,23 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       }
       final dayPlan = res?['dayPlan'] is Map ? Map<String, dynamic>.from(res!['dayPlan'] as Map) : null;
       final rawVerify = res?['verifySummary'] ?? dayPlan?['verifySummary'];
-      if (rawVerify is Map) {
-        _verifySummary = Map<String, dynamic>.from(rawVerify);
+      final rawVerifyMap = rawVerify is Map ? Map<String, dynamic>.from(rawVerify) : null;
+      if (rawVerifyMap != null) {
+        _verifySummary = rawVerifyMap;
+      }
+      final rawCustody = res?['custody'] ?? dayPlan?['custody'] ?? rawVerifyMap?['custody'];
+      if (rawCustody is Map) {
+        _custody = Map<String, dynamic>.from(rawCustody);
+      } else if (res != null && (dayPlan != null || res.containsKey('custody'))) {
+        _custody = null;
+      }
+      final rawPolicy = res?['custodyPolicy'] ?? dayPlan?['custodyPolicy'] ?? rawVerifyMap?['custodyPolicy'];
+      if (rawPolicy is Map) {
+        _custodyPolicy = Map<String, dynamic>.from(rawPolicy);
+      }
+      final rawAdaptive = res?['adaptiveLog'] ?? dayPlan?['adaptiveLog'];
+      if (rawAdaptive is List) {
+        _adaptiveLog = _mapList(rawAdaptive);
       }
       final serverEnergy = '${dayPlan?['energyLevel'] ?? res?['energyLevel'] ?? _contract?['energyLevel'] ?? ''}'.trim();
       if (const ['low', 'mid', 'high'].contains(serverEnergy) && !_hasLocalBlockEdits) {
@@ -441,6 +459,242 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       'dayBlocks': built,
     }).catchError((_) => null));
     unawaited(_channel.tickNow().catchError((_) => false));
+  }
+
+  Future<void> _setCustodyPolicy({bool? autoKickoffEnabled, bool? adaptiveSplitEnabled}) async {
+    final cur = Map<String, dynamic>.from(_custodyPolicy ?? const {});
+    final nextKick = autoKickoffEnabled ?? (cur['autoKickoffEnabled'] == true);
+    final nextAdapt = adaptiveSplitEnabled ?? (cur['adaptiveSplitEnabled'] != false);
+    setState(() {
+      _custodyPolicy = {
+        ...cur,
+        'autoKickoffEnabled': nextKick,
+        'adaptiveSplitEnabled': nextAdapt,
+      };
+      _banner = '✓ 已更新托管哨兵策略（09:15/14:45 哨兵 ${nextKick ? '开' : '关'} · 打回/逾期缩块 ${nextAdapt ? '开' : '关'}）';
+    });
+    final res = await _channel.planContractOp({
+      'action': 'set_custody_policy',
+      'autoKickoffEnabled': nextKick,
+      'adaptiveSplitEnabled': nextAdapt,
+    }).catchError((_) => null);
+    if (mounted && res?['dayPlan'] is Map) {
+      final dp = Map<String, dynamic>.from(res!['dayPlan'] as Map);
+      if (dp['custodyPolicy'] is Map) {
+        setState(() => _custodyPolicy = Map<String, dynamic>.from(dp['custodyPolicy'] as Map));
+      }
+    }
+    unawaited(_channel.tickNow().catchError((_) => false));
+  }
+
+  Future<void> _openRebriefCustodyDialog() async {
+    final reasonCtrl = TextEditingController();
+    var downgradeLowEnergy = false;
+    String? err;
+    final out = await showDialog<(String, bool)>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          key: const ValueKey('plan-custody-rebrief-dialog'),
+          shape: AppShape.dialog,
+          title: const Text('受控改签（Re-brief）'),
+          content: SizedBox(
+            width: 380,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    '托管冲刺轨进行期间禁止自删或降级时间块。写清不少于 6 字的客观突发原因后，可重签为保底推进轨。',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    key: const ValueKey('plan-custody-rebrief-reason'),
+                    controller: reasonCtrl,
+                    minLines: 2,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: '改签理由（至少 6 字）',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Expanded(child: Text('切为低电量 25m 保底轨')),
+                      Switch(
+                        value: downgradeLowEnergy,
+                        onChanged: (v) => setLocal(() => downgradeLowEnergy = v),
+                      ),
+                    ],
+                  ),
+                  if (err != null) ...[
+                    const SizedBox(height: 4),
+                    Text(err!, style: TextStyle(color: DshColors.of(ctx).danger, fontSize: 12)),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            FilledButton(
+              key: const ValueKey('plan-custody-rebrief-confirm'),
+              onPressed: () {
+                final r = reasonCtrl.text.trim();
+                if (r.length < 6) {
+                  setLocal(() => err = '请写清至少 6 个字的客观原因');
+                  return;
+                }
+                Navigator.pop(ctx, (r, downgradeLowEnergy));
+              },
+              child: const Text('确认重签'),
+            ),
+          ],
+        ),
+      ),
+    );
+    disposeAfterRoute(reasonCtrl);
+    if (out == null || !mounted) return;
+    setState(() => _busy = true);
+    final res = await _channel.planContractOp({
+      'action': 'rebrief_custody',
+      'reason': out.$1,
+      'downgradeLowEnergy': out.$2,
+    }).catchError((_) => null);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (res?['ok'] == true) {
+        _hasLocalBlockEdits = false;
+        _banner = '✓ 已执行受控改签（Re-brief）并重签保底推进轨';
+      } else {
+        _banner = '${res?['text'] ?? res?['error'] ?? '受控改签失败'}';
+      }
+    });
+    unawaited(_channel.tickNow().catchError((_) => false));
+    await _refresh();
+  }
+
+  Widget _buildCustodyPolicyCard(ThemeData theme, DshColors colors) {
+    final custody = _custody ?? const <String, dynamic>{};
+    final custodyActive = custody['active'] == true;
+    final autoKick = _custodyPolicy?['autoKickoffEnabled'] == true;
+    final adaptiveOn = _custodyPolicy?['adaptiveSplitEnabled'] != false;
+    final rebriefCount = _asInt(custody['rebriefCount'], 0);
+    return GlassSurface(
+      key: const ValueKey('plan-custody-policy-card'),
+      tier: GlassTier.card,
+      borderRadius: AppShape.radiusLg,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '路径 2 托管冲刺与自动哨兵',
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                StatusChip(
+                  tone: custodyActive ? StatusTone.error : (autoKick ? StatusTone.ok : StatusTone.idle),
+                  label: custodyActive
+                      ? '托管中（至 ${custody['untilHm'] ?? '--:--'}）'
+                      : (autoKick ? '哨兵值守' : '手动'),
+                ),
+              ],
+            ),
+            if (custodyActive) ...[
+              const SizedBox(height: 10),
+              Container(
+                key: const ValueKey('plan-custody-active-banner'),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: colors.dangerContainer.withValues(alpha: 0.45),
+                  borderRadius: AppShape.radiusMd,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '托管冲刺轨护航中：「${custody['title'] ?? '冲刺轨'}」（至 ${custody['untilHm'] ?? '--:--'}${rebriefCount > 0 ? ' · 已改签 $rebriefCount 次' : ''}）',
+                      style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '托管期间不可擅自删块、清空或降级为温和放行，仅可通过下方「受控改签」填写原因重排。',
+                      style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('plan-custody-rebrief-btn'),
+                        onPressed: _busy ? null : () => unawaited(_openRebriefCustodyDialog()),
+                        icon: const Icon(AppIcons.edit, size: 15),
+                        label: const Text('受控改签 (Re-brief)'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('09:15 / 14:45 自动开局哨兵', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                      Text(
+                        '当日尚无任何验收块时，自动钉入 25m 验收块并拉入昨日未完',
+                        style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Switch(
+                  key: const ValueKey('plan-auto-kickoff-switch'),
+                  value: autoKick,
+                  onChanged: _busy ? null : (v) => unawaited(_setCustodyPolicy(autoKickoffEnabled: v)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('打回 / 逾期自动缩块 (2×25m)', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                      Text(
+                        '验收被打回或 P3 逾期后，自动把下个大块拆成 2×25m 短块并收窄白名单${_adaptiveLog.isNotEmpty ? ' · 今日已触发 ${_adaptiveLog.length} 次' : ''}',
+                        style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Switch(
+                  key: const ValueKey('plan-adaptive-split-switch'),
+                  value: adaptiveOn,
+                  onChanged: _busy ? null : (v) => unawaited(_setCustodyPolicy(adaptiveSplitEnabled: v)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _addCarryoverManual() {
@@ -1415,6 +1669,8 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         ),
       ),
       const SizedBox(height: 14),
+      _buildCustodyPolicyCard(theme, colors),
+      const SizedBox(height: 14),
       GlassSurface(
         tier: GlassTier.card,
         borderRadius: AppShape.radiusLg,
@@ -1861,6 +2117,9 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         final pendingCnt = _asInt(vCenter?['pendingReviewCount'], 0);
         final passedCnt = _asInt(vCenter?['passedVerify'], 0);
         final totalCnt = _asInt(vCenter?['totalVerify'], 0);
+        final custodyMap = vCenter?['custody'] is Map ? Map<String, dynamic>.from(vCenter!['custody'] as Map) : _custody;
+        final custodyActive = custodyMap?['active'] == true;
+        final adaptiveCnt = _asInt(vCenter?['adaptiveSplitsToday'], _adaptiveLog.length);
         final headline = winner != null
             ? '此刻锁源：${winner['priority'] ?? ''} · ${winner['name'] ?? winnerId}'
             : '此刻锁源：${ov == null ? '同步锁机探针中…' : '自由推进中（P6）'}';
@@ -1868,6 +2127,8 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
           if (winner != null && '${winner['duty'] ?? ''}'.trim().isNotEmpty) '${winner['duty']}',
           if (totalCnt > 0 || overdueCnt > 0 || pendingCnt > 0)
             '验收块 $passedCnt/$totalCnt 通关 · 逾期严锁 $overdueCnt · 待终审 $pendingCnt',
+          if (custodyActive) '托管冲刺：「${custodyMap?['title'] ?? '冲刺轨'}」（至 ${custodyMap?['untilHm'] ?? '--:--'}）',
+          if (adaptiveCnt > 0) '自动缩块 ×$adaptiveCnt',
         ].join(' · ');
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),

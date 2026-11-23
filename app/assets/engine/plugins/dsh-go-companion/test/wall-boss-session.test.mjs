@@ -206,6 +206,7 @@ test('[Boss-Wall Path B] mounts isolated 3rd wallSessionId with read-only tools 
       'wall_vault_recent',
       'wall_issue_directive',
       'wall_judge_delivery',
+      'wall_issue_sprint_custody',
     ])
     const briefToolRes = wbAgent.registeredTools[0].execute({})
     assert.equal(briefToolRes.ok, true)
@@ -232,13 +233,25 @@ test('[Boss-Wall Path B] mounts isolated 3rd wallSessionId with read-only tools 
     assert.equal(judgeEmptyRes.ok, false)
     assert.match(judgeEmptyRes.text, /≥12字|交付/)
 
+    const custodyToolRes = wbAgent.registeredTools[6].execute({
+      title: '主管双棒托管',
+      blocks: [
+        { title: '第1棒', deliverable: '交15题记录', durationMin: 25 },
+        { title: '第2棒', deliverable: '交错因归档', durationMin: 25 },
+      ],
+    })
+    assert.equal(custodyToolRes.ok, true)
+    assert.match(custodyToolRes.text, /托管冲刺轨/)
+
     // Sisters keep their original personas untouched and do not receive boss directive/judge tools
     assert.ok(agents['sis-1'].promptContexts.some((c) => c.name === 'dafeiyu-persona'))
     assert.ok(!agents['sis-1'].promptContexts.some((c) => c.name === 'dafeiyu-wall-boss'))
-    assert.ok(!agents['sis-1'].registeredTools.some((t) => t.name === 'wall_issue_directive' || t.name === 'wall_judge_delivery'))
+    assert.ok(!agents['sis-1'].registeredTools.some((t) =>
+      t.name === 'wall_issue_directive' || t.name === 'wall_judge_delivery' || t.name === 'wall_issue_sprint_custody'))
     assert.ok(agents['strat-1'].promptContexts.some((c) => c.name === 'dafeiyu-strategist'))
     assert.ok(!agents['strat-1'].promptContexts.some((c) => c.name === 'dafeiyu-wall-boss'))
-    assert.ok(!agents['strat-1'].registeredTools.some((t) => t.name === 'wall_issue_directive' || t.name === 'wall_judge_delivery'))
+    assert.ok(!agents['strat-1'].registeredTools.some((t) =>
+      t.name === 'wall_issue_directive' || t.name === 'wall_judge_delivery' || t.name === 'wall_issue_sprint_custody'))
 
     // 3. Trigger audit_now & verify turn lifecycle writes assistant reply
     const auditRes = await mockHttpCall(handler, 'POST', '/wall/boss-chat', { action: 'audit_now' })

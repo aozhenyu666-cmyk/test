@@ -364,7 +364,7 @@ export const DAY_SLOTS = Object.freeze(['morning', 'lunch', 'afternoon', 'evenin
 export const BLOCK_LOCK_MODES = Object.freeze(['gentle', 'strict', 'verify'])
 export const BLOCK_STATUSES = Object.freeze(['pending', 'running', 'done', 'skipped'])
 export const VERIFY_STATUSES = Object.freeze(['none', 'armed', 'grace_warning', 'overdue_locked', 'submitted', 'passed', 'rejected', 'expired_breach'])
-export const DAYBLOCK_SOURCES = Object.freeze(['user', 'carryover', 'wall_boss', 'gemini', 'template'])
+export const DAYBLOCK_SOURCES = Object.freeze(['user', 'carryover', 'wall_boss', 'gemini', 'gemini_custody', 'auto_kickoff', 'template'])
 export const DAYBLOCK_EVIDENCE_KINDS = Object.freeze(['', 'subjective', 'quiz', 'bout_minutes', 'file', 'screenshots', 'gemini_receipt', 'app_minutes'])
 export const DAYBLOCK_LOCK_CAP_MS = 60 * 60_000
 export const LUNCH_BREAK_WINDOW = Object.freeze({ startMin: 12 * 60, endMin: 14 * 60 })
@@ -482,7 +482,7 @@ export function cleanDayBlock(raw, idx = 0) {
   const endMin = clamp(intNum(raw.endMin, defaultEnd), startMin + 5, 1440)
   const slot = DAY_SLOTS.includes(raw.slot) ? raw.slot : slotFromMinute(startMin)
   const source = DAYBLOCK_SOURCES.includes(String(raw.source || '')) ? String(raw.source) : 'user'
-  const lockedByBoss = raw.lockedByBoss === true || source === 'wall_boss'
+  const lockedByBoss = raw.lockedByBoss === true || source === 'wall_boss' || source === 'gemini_custody' || source === 'auto_kickoff'
   const isBreak = !lockedByBoss && (raw.isBreak === true || (slot === 'lunch' && /午休|放风|休息/.test(title)))
   const lockMode = lockedByBoss
     ? 'verify'
@@ -506,6 +506,8 @@ export function cleanDayBlock(raw, idx = 0) {
   const judgedAt = Math.max(0, Number(raw.judgedAt) || 0)
   const overdueLockUntil = Math.max(0, Number(raw.overdueLockUntil) || 0)
   const rewardPaidMin = Math.max(0, intNum(raw.rewardPaidMin, 0))
+  const custodyId = String(raw.custodyId || '').trim().slice(0, 64)
+  const adaptedFrom = String(raw.adaptedFrom || '').trim().slice(0, 64)
 
   return {
     id,
@@ -532,6 +534,8 @@ export function cleanDayBlock(raw, idx = 0) {
     judgedAt,
     overdueLockUntil,
     rewardPaidMin,
+    ...(custodyId ? { custodyId } : {}),
+    ...(adaptedFrom ? { adaptedFrom } : {}),
     horizonId: String(raw.horizonId || '').slice(0, 64),
     checkpointId: String(raw.checkpointId || '').slice(0, 64),
     updatedAt: Number(raw.updatedAt) || 0,
@@ -945,17 +949,95 @@ export function buildDayPlanGeminiPrompt({
   return lines.join('\n')
 }
 
+export const DEFAULT_KICKOFF_MINUTES = Object.freeze([9 * 60 + 15, 14 * 60 + 45])
+
+const hmStrOf = (m) => {
+  const c = clamp(intNum(m, 0), 0, 1439)
+  return `${String(Math.floor(c / 60)).padStart(2, '0')}:${String(c % 60).padStart(2, '0')}`
+}
+
+export function cleanCustodyPolicy(raw) {
+  const s = raw && typeof raw === 'object' ? raw : {}
+  const rawSlots = Array.isArray(s.kickoffMinutes) ? s.kickoffMinutes : DEFAULT_KICKOFF_MINUTES
+  const kickoffMinutes = [...new Set(
+    rawSlots
+      .map((x) => intNum(x, -1))
+      .filter((m) => m >= 7 * 60 && m <= 21 * 60 + 30),
+  )].sort((a, b) => a - b).slice(0, 4)
+  return {
+    autoKickoffEnabled: Boolean(s.autoKickoffEnabled),
+    kickoffMinutes: kickoffMinutes.length ? kickoffMinutes : [...DEFAULT_KICKOFF_MINUTES],
+    kickoffDurationMin: clamp(intNum(s.kickoffDurationMin, 25), 15, 60),
+    adaptiveSplitEnabled: s.adaptiveSplitEnabled !== false,
+  }
+}
+
+export function cleanCustody(raw, dayBlocks = [], now = Date.now()) {
+  if (!raw || typeof raw !== 'object') return null
+  const id = String(raw.id || '').trim().slice(0, 64)
+  if (!id) return null
+  const blockIds = [...new Set((Array.isArray(raw.blockIds) ? raw.blockIds : []).map((x) => String(x || '').trim()).filter(Boolean))].slice(0, 12)
+  const idSet = new Set(blockIds)
+  const hasOpen = (Array.isArray(dayBlocks) ? dayBlocks : []).some((b) => idSet.has(b.id) && !b.isBreak && b.status !== 'done' && b.status !== 'skipped')
+  const untilAt = Math.max(0, Number(raw.untilAt) || 0)
+  const active = raw.active === true && (untilAt <= 0 || now < untilAt) && hasOpen
+  const rebriefLog = (Array.isArray(raw.rebriefLog) ? raw.rebriefLog : [])
+    .filter((x) => x && typeof x === 'object' && String(x.reason || '').trim())
+    .slice(-12)
+    .map((x) => ({
+      at: Math.max(0, Number(x.at) || 0),
+      reason: String(x.reason || '').trim().slice(0, 240),
+      issuedBy: String(x.issuedBy || 'wall_boss').slice(0, 32),
+    }))
+  const untilMin = clamp(intNum(raw.untilMin, 0), 0, 1440)
+  return {
+    active,
+    id,
+    title: String(raw.title || '托管冲刺轨').trim().slice(0, 100),
+    issuedBy: ['wall_boss', 'gemini', 'auto_kickoff', 'user'].includes(String(raw.issuedBy || '')) ? String(raw.issuedBy) : 'wall_boss',
+    startedAt: Math.max(0, Number(raw.startedAt) || 0),
+    untilAt,
+    untilMin,
+    untilHm: untilMin >= 1440 ? '24:00' : (untilMin > 0 ? hmStrOf(untilMin) : ''),
+    blockIds,
+    rebriefCount: Math.max(0, intNum(raw.rebriefCount, rebriefLog.length)),
+    rebriefLog,
+  }
+}
+
+export function isCustodyActive(state, now = Date.now()) {
+  if (!state || typeof state !== 'object') return false
+  return Boolean(cleanCustody(state.custody, state.dayBlocks, now)?.active)
+}
+
 export function cleanDayPlanState(raw, { day = '', now = Date.now() } = {}) {
   const s = raw && typeof raw === 'object' ? raw : {}
   const energyLevel = normalizeEnergyLevel(s.energyLevel)
   const carryoverItems = cleanCarryoverItems(s.carryoverItems ?? s.carryover)
   const dayBlocks = cleanDayBlocks(s.dayBlocks)
+  const custodyPolicy = cleanCustodyPolicy(s.custodyPolicy)
+  const custody = cleanCustody(s.custody, dayBlocks, now)
+  const firedKickoffSlots = [...new Set((Array.isArray(s.firedKickoffSlots) ? s.firedKickoffSlots : []).map((x) => String(x || '').trim()).filter(Boolean))].slice(0, 10)
+  const adaptiveLog = (Array.isArray(s.adaptiveLog) ? s.adaptiveLog : [])
+    .filter((x) => x && typeof x === 'object' && x.splitBlockId)
+    .slice(-20)
+    .map((x) => ({
+      at: Math.max(0, Number(x.at) || 0),
+      triggerBlockId: String(x.triggerBlockId || '').slice(0, 64),
+      splitBlockId: String(x.splitBlockId || '').slice(0, 64),
+      newBlockIds: Array.isArray(x.newBlockIds) ? x.newBlockIds.map((k) => String(k || '').slice(0, 64)).slice(0, 4) : [],
+      reason: String(x.reason || '').slice(0, 48),
+    }))
   return {
     v: 1,
     day: String(s.day || day || ''),
     energyLevel,
     carryoverItems,
     dayBlocks,
+    custodyPolicy,
+    custody,
+    firedKickoffSlots,
+    adaptiveLog,
     updatedAt: Number(s.updatedAt) || now,
   }
 }
@@ -963,12 +1045,22 @@ export function cleanDayPlanState(raw, { day = '', now = Date.now() } = {}) {
 export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day = '', funBudgetMin = 30 } = {}) {
   const cur = cleanDayPlanState(rawState, { day, now })
   const action = String(body?.action || 'get_day_plan')
+  const custodyLocked = isCustodyActive(cur, now) && body?.allowSystemMutation !== true
+  const custodyIdSet = new Set(cur.custody?.blockIds || [])
 
   if (action === 'get_day_plan' || action === 'status') {
     return {
       ok: true,
       ...cur,
       stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+    }
+  }
+  if (action === 'set_custody_policy') {
+    const out = setCustodyPolicy(cur, body, { now })
+    return {
+      ok: true,
+      ...out.state,
+      stats: computeDayPlanStats(out.state.dayBlocks, { funBudgetMin, energyLevel: out.state.energyLevel }),
     }
   }
   if (action === 'set_energy') {
@@ -981,6 +1073,15 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
     }
   }
   if (action === 'generate_default') {
+    if (custodyLocked) {
+      return {
+        ok: false,
+        error: 'custody-locked',
+        text: '当前处于托管冲刺期，不可重建覆盖计划；如遇突发情况请通过主管墙或 Gemini 发起 Re-brief 重签',
+        ...cur,
+        stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+      }
+    }
     const built = buildDefaultDayPlan({
       energyLevel: body?.energyLevel ?? cur.energyLevel,
       carryoverItems: body?.carryoverItems ?? cur.carryoverItems,
@@ -996,12 +1097,34 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
       energyLevel: built.energyLevel,
       carryoverItems: built.carryoverItems,
       dayBlocks: built.dayBlocks,
+      custodyPolicy: cur.custodyPolicy,
+      custody: cur.custody,
+      firedKickoffSlots: cur.firedKickoffSlots,
+      adaptiveLog: cur.adaptiveLog,
       stats: built.stats,
       updatedAt: now,
     }
   }
   if (action === 'upsert_block') {
-    const up = upsertDayBlock(cur.dayBlocks, body?.block || body, { now })
+    const rawBlock = body?.block || body
+    const blockId = String(rawBlock?.id || '').trim()
+    const prevBlock = blockId ? cur.dayBlocks.find((b) => b.id === blockId) : null
+    if (custodyLocked && prevBlock && (prevBlock.lockedByBoss || custodyIdSet.has(prevBlock.id)) && prevBlock.status !== 'done') {
+      const requestedEnd = rawBlock?.endMin != null ? intNum(rawBlock.endMin, prevBlock.endMin) : null
+      const requestedDur = rawBlock?.durationMin ?? rawBlock?.minutes
+      const nextEnd = requestedEnd ?? (requestedDur != null ? prevBlock.startMin + intNum(requestedDur, prevBlock.endMin - prevBlock.startMin) : prevBlock.endMin)
+      if ((rawBlock?.lockMode && rawBlock.lockMode !== 'verify') || rawBlock?.status === 'skipped' || nextEnd > prevBlock.endMin) {
+        return {
+          ok: false,
+          error: 'custody-locked',
+          text: '托管冲刺期内不可降级验收锁、跳过或延后截止时间；如需重排请发起 Re-brief',
+          block: prevBlock,
+          ...cur,
+          stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+        }
+      }
+    }
+    const up = upsertDayBlock(cur.dayBlocks, rawBlock, { now })
     const next = { ...cur, dayBlocks: up.dayBlocks, updatedAt: now }
     return {
       ok: up.ok,
@@ -1012,7 +1135,18 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
     }
   }
   if (action === 'delete_block') {
-    const del = removeDayBlock(cur.dayBlocks, body?.blockId ?? body?.id, { force: Boolean(body?.force) })
+    const targetId = String(body?.blockId ?? body?.id ?? '').trim()
+    if (custodyLocked && custodyIdSet.has(targetId)) {
+      return {
+        ok: false,
+        error: 'custody-locked',
+        text: '托管冲刺期内的时间块不可自行删除；请先交付或通过主管/Gemini 发起 Re-brief',
+        removed: null,
+        ...cur,
+        stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+      }
+    }
+    const del = removeDayBlock(cur.dayBlocks, targetId, { force: Boolean(body?.force) })
     const next = { ...cur, dayBlocks: del.dayBlocks, updatedAt: now }
     return {
       ok: del.ok,
@@ -1024,7 +1158,18 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
     }
   }
   if (action === 'set_block_status') {
-    const st = setDayBlockStatus(cur.dayBlocks, body?.blockId ?? body?.id, body?.status, {
+    const targetId = String(body?.blockId ?? body?.id ?? '').trim()
+    if (custodyLocked && custodyIdSet.has(targetId) && body?.status === 'skipped') {
+      return {
+        ok: false,
+        error: 'custody-locked',
+        text: '托管冲刺期内不可跳过验收块，请先交付或走 Re-brief',
+        block: null,
+        ...cur,
+        stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+      }
+    }
+    const st = setDayBlockStatus(cur.dayBlocks, targetId, body?.status, {
       allowMultipleRunning: Boolean(body?.allowMultipleRunning),
       force: Boolean(body?.force),
       now,
@@ -1060,11 +1205,23 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
   }
   if (action === 'set_day_plan') {
     const rawIn = body?.dayPlan && typeof body.dayPlan === 'object' ? body.dayPlan : body
-    const parsedIn = cleanDayPlanState({ ...cur, ...rawIn, updatedAt: now }, { day: cur.day, now })
+    const parsedIn = cleanDayPlanState({
+      ...cur,
+      ...rawIn,
+      ...(body?.allowSystemMutation === true ? {} : {
+        custodyPolicy: cur.custodyPolicy,
+        custody: cur.custody,
+        firedKickoffSlots: cur.firedKickoffSlots,
+        adaptiveLog: cur.adaptiveLog,
+      }),
+      updatedAt: now,
+    }, { day: cur.day, now })
     const incomingIds = new Set(parsedIn.dayBlocks.map((b) => b.id))
-    const preservedBoss = cur.dayBlocks.filter((b) => b.lockedByBoss && b.status !== 'done' && !incomingIds.has(b.id))
+    const preservedBoss = cur.dayBlocks.filter(
+      (b) => (b.lockedByBoss || (custodyLocked && custodyIdSet.has(b.id))) && b.status !== 'done' && !incomingIds.has(b.id),
+    )
     const mergedBlocks = preservedBoss.length ? cleanDayBlocks([...parsedIn.dayBlocks, ...preservedBoss]) : parsedIn.dayBlocks
-    const next = { ...parsedIn, dayBlocks: mergedBlocks }
+    const next = cleanDayPlanState({ ...parsedIn, dayBlocks: mergedBlocks }, { day: cur.day, now })
     return {
       ok: true,
       ...next,
@@ -1492,4 +1649,393 @@ export function issueBossDirectiveBlock(rawState, {
     block: up.block,
     state: { ...cur, dayBlocks: up.dayBlocks, updatedAt: now },
   }
+}
+
+/**
+ * 更新托管冲刺轨与无人破冰哨策略（可跨天保留）。
+ */
+export function setCustodyPolicy(rawState, patch = {}, { now = Date.now() } = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  const p = patch && typeof patch === 'object' ? patch : {}
+  const nextPolicy = cleanCustodyPolicy({
+    ...cur.custodyPolicy,
+    ...(p.autoKickoffEnabled !== undefined ? { autoKickoffEnabled: p.autoKickoffEnabled } : {}),
+    ...(p.kickoffMinutes !== undefined ? { kickoffMinutes: p.kickoffMinutes } : {}),
+    ...(p.kickoffDurationMin !== undefined ? { kickoffDurationMin: p.kickoffDurationMin } : {}),
+    ...(p.adaptiveSplitEnabled !== undefined ? { adaptiveSplitEnabled: p.adaptiveSplitEnabled } : {}),
+  })
+  return {
+    ok: true,
+    custodyPolicy: nextPolicy,
+    state: { ...cur, custodyPolicy: nextPolicy, updatedAt: now },
+  }
+}
+
+/**
+ * 路径 2 核心：高强度对齐后一次签发未来 2-4 小时「串联托管冲刺轨」（1-4 个强制 verify 块 + 中间短休）。
+ */
+export function issueSprintCustody(rawState, {
+  title = '高强度托管冲刺轨',
+  blocks = [],
+  startMin,
+  issuedBy = 'wall_boss',
+  armAutoKickoff,
+  now = Date.now(),
+  minuteOfDay = 0,
+  dayStartMs = 0,
+} = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  const rawList = (Array.isArray(blocks) ? blocks : []).slice(0, 4)
+  if (!rawList.length) {
+    return {
+      ok: false,
+      error: 'empty-blocks',
+      text: '托管冲刺轨至少需要 1 个带明确交付物的验收块',
+      custody: cur.custody,
+      blocks: [],
+      state: cur,
+    }
+  }
+
+  let cursor = startMin !== undefined && startMin !== null && Number.isFinite(Number(startMin))
+    ? clamp(Math.round(Number(startMin)), 0, 1410)
+    : clamp(intNum(minuteOfDay, 9 * 60), 0, 1410)
+
+  const custodyId = `custody-${now.toString(36).slice(-5)}`
+  const src = issuedBy === 'gemini' ? 'gemini_custody' : 'wall_boss'
+  const builtBlocks = []
+  const workIds = []
+
+  for (let i = 0; i < rawList.length; i += 1) {
+    const item = rawList[i] && typeof rawList[i] === 'object' ? rawList[i] : {}
+    const bTitle = String(item.title || '').trim().slice(0, 100)
+    const bDeliv = String(item.deliverable || '').trim().slice(0, 180)
+    if (!bTitle || !bDeliv) {
+      return {
+        ok: false,
+        error: 'missing-fields',
+        text: `第 ${i + 1} 个冲刺块必须同时写清 title 与 deliverable`,
+        custody: cur.custody,
+        blocks: [],
+        state: cur,
+      }
+    }
+    const dur = clamp(intNum(item.durationMin ?? item.duration_min ?? item.minutes, 45), 15, 120)
+    const start = clamp(cursor, 0, 1425)
+    const end = Math.min(1440, start + dur)
+    const bid = `blk-cust-${now.toString(36).slice(-4)}-${i + 1}`
+    const apps = cleanAppsList(item.allowedApps ?? item.allowed_apps)
+    const blk = cleanDayBlock({
+      id: bid,
+      startMin: start,
+      endMin: end,
+      title: bTitle,
+      deliverable: bDeliv,
+      lockMode: 'verify',
+      source: src,
+      lockedByBoss: true,
+      verifyStatus: 'armed',
+      status: 'pending',
+      isBreak: false,
+      custodyId,
+      allowedApps: apps,
+      updatedAt: now,
+    }, cur.dayBlocks.length + builtBlocks.length)
+    builtBlocks.push(blk)
+    workIds.push(blk.id)
+    cursor = end
+
+    const isLast = i === rawList.length - 1
+    const rawBreak = item.breakAfterMin ?? item.break_after_min
+    const gap = isLast ? 0 : (rawBreak !== undefined ? clamp(intNum(rawBreak, 0), 0, 20) : 10)
+    if (gap >= 5 && cursor + gap + 15 <= 1440) {
+      builtBlocks.push(cleanDayBlock({
+        id: `blk-cust-gap-${now.toString(36).slice(-4)}-${i + 1}`,
+        startMin: cursor,
+        endMin: cursor + gap,
+        title: `冲刺段间恢复休整 (${gap}m)`,
+        deliverable: '准时回位进入下一冲刺块',
+        lockMode: 'gentle',
+        source: 'template',
+        lockedByBoss: false,
+        isBreak: true,
+        custodyId,
+        status: 'pending',
+        updatedAt: now,
+      }, cur.dayBlocks.length + builtBlocks.length))
+      cursor += gap
+    }
+  }
+
+  const untilMin = builtBlocks.reduce((mx, b) => Math.max(mx, b.endMin), cursor)
+  const remainSpan = Math.max(30, untilMin - intNum(minuteOfDay, 0))
+  const untilAt = dayStartMs > 0 ? (dayStartMs + untilMin * 60_000) : (now + remainSpan * 60_000)
+  const prevRebriefCount = Number(cur.custody?.rebriefCount) || 0
+  const prevRebriefLog = Array.isArray(cur.custody?.rebriefLog) ? cur.custody.rebriefLog : []
+  const custody = {
+    active: true,
+    id: custodyId,
+    title: String(title || '高强度托管冲刺轨').trim().slice(0, 100),
+    issuedBy: issuedBy === 'gemini' ? 'gemini' : 'wall_boss',
+    startedAt: now,
+    untilAt,
+    untilMin,
+    blockIds: workIds,
+    rebriefCount: prevRebriefCount,
+    rebriefLog: prevRebriefLog,
+  }
+  const nextPolicy = armAutoKickoff !== undefined
+    ? cleanCustodyPolicy({ ...cur.custodyPolicy, autoKickoffEnabled: Boolean(armAutoKickoff) })
+    : cur.custodyPolicy
+  const nextBlocks = cleanDayBlocks([...cur.dayBlocks, ...builtBlocks])
+  const nextState = cleanDayPlanState({
+    ...cur,
+    dayBlocks: nextBlocks,
+    custody,
+    custodyPolicy: nextPolicy,
+    updatedAt: now,
+  }, { day: cur.day, now })
+  return {
+    ok: true,
+    custody: nextState.custody,
+    blocks: builtBlocks.filter((b) => !b.isBreak),
+    untilHm: hmStrOf(untilMin),
+    state: nextState,
+  }
+}
+
+/**
+ * 托管期唯一合法改轨口：须交代 >=6 字客观原因，关闭旧托管未完成块并替换为新轨或低电量 25m 保底块。
+ */
+export function rebriefSprintCustody(rawState, {
+  reason = '',
+  blocks = [],
+  downgradeLowEnergy = false,
+  issuedBy = 'wall_boss',
+  now = Date.now(),
+  minuteOfDay = 0,
+  dayStartMs = 0,
+} = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  const cleanReason = String(reason || '').trim().slice(0, 240)
+  if (cleanReason.length < 6) {
+    return {
+      ok: false,
+      error: 'need-reason',
+      text: 'Re-brief 重签至少写明 6 个字的客观变动原因',
+      custody: cur.custody,
+      state: cur,
+    }
+  }
+  const oldIds = new Set(cur.custody?.blockIds || [])
+  const oldCustodyId = cur.custody?.id || ''
+  const nextDayBlocks = cur.dayBlocks.map((b) => {
+    if ((oldIds.has(b.id) || (oldCustodyId && b.custodyId === oldCustodyId)) && b.status !== 'done') {
+      return { ...b, status: 'skipped', overdueLockUntil: 0, updatedAt: now }
+    }
+    return b
+  })
+  const baseWithSkip = {
+    ...cur,
+    dayBlocks: nextDayBlocks,
+    custody: cur.custody
+      ? {
+          ...cur.custody,
+          active: false,
+          rebriefCount: (cur.custody.rebriefCount || 0) + 1,
+          rebriefLog: [...(cur.custody.rebriefLog || []), { at: now, reason: cleanReason, issuedBy }].slice(-12),
+        }
+      : {
+          active: false,
+          id: `custody-rebrief-${now.toString(36).slice(-4)}`,
+          title: 'Re-brief 重签轨',
+          issuedBy,
+          startedAt: now,
+          untilAt: now,
+          untilMin: clamp(intNum(minuteOfDay, 540), 0, 1440),
+          blockIds: [],
+          rebriefCount: 1,
+          rebriefLog: [{ at: now, reason: cleanReason, issuedBy }],
+        },
+  }
+  const replacement = Array.isArray(blocks) && blocks.length
+    ? blocks
+    : [{
+        title: downgradeLowEnergy ? '低电量保底重签块 (25m)' : 'Re-brief 保底推进块',
+        deliverable: '提交 ≥12 字最小物理产出或断点',
+        durationMin: 25,
+      }]
+  return issueSprintCustody(baseWithSkip, {
+    title: downgradeLowEnergy ? 'Re-brief 低电量保底轨' : 'Re-brief 重签冲刺轨',
+    blocks: replacement,
+    issuedBy,
+    now,
+    minuteOfDay,
+    dayStartMs,
+  })
+}
+
+/**
+ * 成绩驱动强度阶梯：块被 REJECT 或 P3 违约后，自动将下一段待办大块（>=45m）拆成 2x25m 高频短促硬验并收窄白名单。
+ */
+export function applyAdaptiveIntensity(rawState, { triggerBlockId = '', triggerReason = 'reject', now = Date.now() } = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  if (cur.custodyPolicy?.adaptiveSplitEnabled === false) {
+    return { adapted: false, state: cur, origBlock: null, splitBlocks: [], note: '' }
+  }
+  const blocks = cur.dayBlocks
+  const candidate = blocks.find(
+    (b) =>
+      b.id !== triggerBlockId &&
+      !b.isBreak &&
+      b.status === 'pending' &&
+      !b.adaptedFrom &&
+      (b.endMin - b.startMin) >= 45,
+  )
+  if (!candidate) {
+    return { adapted: false, state: cur, origBlock: null, splitBlocks: [], note: '' }
+  }
+
+  const totalDur = candidate.endMin - candidate.startMin
+  const part1Dur = 25
+  const part1End = candidate.startMin + part1Dur
+  const gapMin = totalDur >= 50 ? 5 : 0
+  const part2Start = part1End + gapMin
+  const part2Dur = Math.max(15, candidate.endMin - part2Start)
+  const part2End = Math.min(1440, part2Start + part2Dur)
+
+  const coreAllow = candidate.allowedApps.filter((p) => p === 'md.obsidian' || /anki|wps|office|pdf|read|notion/i.test(p))
+  const narrowedApps = cleanAppsList(coreAllow.length ? coreAllow.slice(0, 2) : candidate.allowedApps.slice(0, 1))
+
+  const p1 = cleanDayBlock({
+    ...candidate,
+    id: `${candidate.id}-s1`.slice(0, 60),
+    startMin: candidate.startMin,
+    endMin: part1End,
+    title: `${candidate.title} · 拆段 1/2 (25m)`,
+    deliverable: `${candidate.deliverable}（前半段物理检查点）`.slice(0, 180),
+    lockMode: 'verify',
+    lockedByBoss: true,
+    verifyStatus: 'armed',
+    allowedApps: narrowedApps,
+    adaptedFrom: candidate.id,
+    updatedAt: now,
+  })
+  const p2 = cleanDayBlock({
+    ...candidate,
+    id: `${candidate.id}-s2`.slice(0, 60),
+    startMin: part2Start,
+    endMin: part2End,
+    title: `${candidate.title} · 拆段 2/2 (${part2End - part2Start}m)`,
+    deliverable: `${candidate.deliverable}（下半段终验收口）`.slice(0, 180),
+    lockMode: 'verify',
+    lockedByBoss: true,
+    verifyStatus: 'armed',
+    allowedApps: narrowedApps,
+    adaptedFrom: candidate.id,
+    updatedAt: now,
+  })
+  const gapBreak = gapMin > 0
+    ? cleanDayBlock({
+        id: `${candidate.id}-sg`.slice(0, 60),
+        startMin: part1End,
+        endMin: part2Start,
+        title: `拆段喘息切换 (${gapMin}m)`,
+        deliverable: '准备下半段动作',
+        lockMode: 'gentle',
+        source: 'template',
+        lockedByBoss: false,
+        isBreak: true,
+        status: 'pending',
+        updatedAt: now,
+      })
+    : null
+
+  const replacement = gapBreak ? [p1, gapBreak, p2] : [p1, p2]
+  const nextBlocks = cleanDayBlocks(blocks.flatMap((b) => (b.id === candidate.id ? replacement : [b])))
+
+  let nextCustody = cur.custody
+  if (nextCustody && Array.isArray(nextCustody.blockIds) && nextCustody.blockIds.includes(candidate.id)) {
+    const newIds = nextCustody.blockIds.flatMap((id) => (id === candidate.id ? [p1.id, p2.id] : [id]))
+    nextCustody = { ...nextCustody, blockIds: newIds }
+  }
+
+  const nextLog = [
+    ...(cur.adaptiveLog || []),
+    {
+      at: now,
+      triggerBlockId,
+      splitBlockId: candidate.id,
+      newBlockIds: [p1.id, p2.id],
+      reason: String(triggerReason || 'reject').slice(0, 48),
+    },
+  ].slice(-20)
+
+  const nextState = cleanDayPlanState({
+    ...cur,
+    dayBlocks: nextBlocks,
+    custody: nextCustody,
+    adaptiveLog: nextLog,
+    updatedAt: now,
+  }, { day: cur.day, now })
+  const note = `因上一块${triggerReason === 'breach' ? '逾期违约' : '验收驳回'}，已自动将「${candidate.title}」拆为 2 段高频短块（${hmStrOf(p1.startMin)}–${hmStrOf(p1.endMin)} / ${hmStrOf(p2.startMin)}–${hmStrOf(p2.endMin)}）并收窄白名单`
+  return { adapted: true, state: nextState, origBlock: candidate, splitBlocks: [p1, p2], note }
+}
+
+/**
+ * 路径 1 无人破冰硬哨：到 09:15 / 14:45 时若当日尚未排入任何 verify 块，不等用户输入直接钉入 25m 起手硬验收块。
+ */
+export function evaluateAutoKickoffTick(rawState, { now = Date.now(), minuteOfDay = 0 } = {}) {
+  const cur = cleanDayPlanState(rawState, { now })
+  if (cur.custodyPolicy?.autoKickoffEnabled !== true) {
+    return { fired: false, block: null, slotHm: '', state: cur }
+  }
+  const m = clamp(intNum(minuteOfDay, 0), 0, 1439)
+  if (m < 7 * 60 || m >= 22 * 60 || (m >= LUNCH_BREAK_WINDOW.startMin && m < LUNCH_BREAK_WINDOW.endMin)) {
+    return { fired: false, block: null, slotHm: '', state: cur }
+  }
+  const vSum = summarizeDayBlocksVerify(cur.dayBlocks, { minuteOfDay: m })
+  if (vSum.totalVerify > 0) {
+    return { fired: false, block: null, slotHm: '', state: cur }
+  }
+
+  const slots = cur.custodyPolicy.kickoffMinutes || DEFAULT_KICKOFF_MINUTES
+  const firedSet = new Set(cur.firedKickoffSlots || [])
+  const dueSlot = slots.find((s) => m >= s && m < s + 180 && !firedSet.has(hmStrOf(s)))
+  if (dueSlot === undefined) {
+    return { fired: false, block: null, slotHm: '', state: cur }
+  }
+
+  const slotHm = hmStrOf(dueSlot)
+  const dur = clamp(intNum(cur.custodyPolicy.kickoffDurationMin, 25), 15, 60)
+  const end = Math.min(1440, m + dur)
+  const unmovedCarry = cur.carryoverItems.find((c) => !c.moved && c.title)
+  const bid = `blk-kick-${slotHm.replace(':', '')}-${now.toString(36).slice(-4)}`
+  const block = cleanDayBlock({
+    id: bid,
+    startMin: m,
+    endMin: end,
+    title: unmovedCarry ? `自动破冰：${unmovedCarry.title}` : (dueSlot < 720 ? '上午无人破冰硬起手 (25m)' : '下午无人破冰硬起手 (25m)'),
+    deliverable: unmovedCarry?.deliverable || '完成 20 题或主线推进 1 步并提交 ≥12 字物理产出',
+    lockMode: 'verify',
+    source: 'auto_kickoff',
+    lockedByBoss: true,
+    verifyStatus: 'armed',
+    status: 'pending',
+    isBreak: false,
+    allowedApps: unmovedCarry?.allowedApps || ['md.obsidian', 'com.tencent.mm'],
+    updatedAt: now,
+  }, cur.dayBlocks.length)
+
+  const nextCarryover = unmovedCarry
+    ? cur.carryoverItems.map((c) => (c.id === unmovedCarry.id ? { ...c, moved: true, movedBlockId: bid } : c))
+    : cur.carryoverItems
+  const nextState = cleanDayPlanState({
+    ...cur,
+    carryoverItems: nextCarryover,
+    dayBlocks: cleanDayBlocks([...cur.dayBlocks, block]),
+    firedKickoffSlots: [...(cur.firedKickoffSlots || []), slotHm],
+    updatedAt: now,
+  }, { day: cur.day, now })
+  return { fired: true, block, slotHm, state: nextState }
 }

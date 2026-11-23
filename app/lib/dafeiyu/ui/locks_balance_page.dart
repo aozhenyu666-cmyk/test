@@ -960,6 +960,9 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
     final overdueCount = _asInt(center['overdueCount'], 0);
     final pendingReviewCount = _asInt(center['pendingReviewCount'], 0);
     final clearedToday = center['clearedToday'] == true || overview['verifyClearedToday'] == true;
+    final custody = _asMap(center['custody']);
+    final custodyActive = custody['active'] == true;
+    final adaptiveSplits = _asInt(center['adaptiveSplitsToday'], 0);
 
     final overdueBlocks = _asListOfMaps(center['overdueBlocks']);
     final pendingBlocks = _asListOfMaps(center['pendingReviewBlocks']);
@@ -969,7 +972,9 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
         pendingBlocks.isNotEmpty ||
         activeVerify.isNotEmpty ||
         upcomingBlocks.isNotEmpty ||
-        totalVerify > 0;
+        totalVerify > 0 ||
+        custodyActive ||
+        adaptiveSplits > 0;
 
     if (!hasDetails) {
       return Padding(
@@ -1039,6 +1044,25 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                   ),
                 ],
               ),
+              if (custodyActive || adaptiveSplits > 0) ...[
+                const SizedBox(height: 8),
+                Container(
+                  key: const ValueKey('locks-verify-custody-banner'),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: (custodyActive ? scheme.primaryContainer : colors.warningContainer).withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    [
+                      if (custodyActive)
+                        '托管冲刺轨：「${custody['title'] ?? '冲刺轨'}」（至 ${custody['untilHm'] ?? '--:--'} · 托管期禁自删降级）',
+                      if (adaptiveSplits > 0) '今日自适应缩块 $adaptiveSplits 次（2×25m 短快严控）',
+                    ].join(' · '),
+                    style: theme.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
               for (final b in overdueBlocks) ...[
                 const SizedBox(height: 8),
                 Container(

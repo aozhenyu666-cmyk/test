@@ -142,7 +142,7 @@ test('MCP：initialize / tools/list / 通知回 202；没同步过时 today 说�
     assert.equal((await rpc(http, tk, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202)
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()
     const names = list.result.tools.map((t) => t.name)
-    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_read_inbox', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule', 'dafeiyu_boss_brief'])
+    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_read_inbox', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule', 'dafeiyu_boss_brief', 'dafeiyu_issue_sprint_custody'])
     assert.ok(!names.some((n) => /unlock|quota|waive|lower|delete/.test(n)), '没有放松类工具')
     assert.equal(list.result.tools[0].annotations.readOnlyHint, true)
     const today = await (await rpc(http, tk, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dafeiyu_today', arguments: {} } })).json()
@@ -203,7 +203,7 @@ test('笔记库只读：能搜能读；日记 / 越界不读', async () => {
     const { access_token: tk } = await connect(http, store)
     const call = async (name, args) => (await (await rpc(http, tk, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } })).json()).result
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()
-    assert.equal(list.result.tools.length, 18)
+    assert.equal(list.result.tools.length, 19)
     assert.match((await call('dafeiyu_search_notes', { query: '增长率' })).content[0].text, /学习\/行测\.md/)
     assert.doesNotMatch((await call('dafeiyu_search_notes', { query: '不该被读到' })).content[0].text, /私事/)
     assert.match((await call('dafeiyu_read_note', { path: '学习/行测.md' })).content[0].text, /现期\/基期/)
@@ -528,6 +528,99 @@ test('[Boss-Wall Path A] dafeiyu_boss_brief（未同步/兜底合成/引擎账�
     assert.equal(locBody.ok, true)
     assert.equal(locBody.source, 'engine')
     assert.match(locBody.bossBriefText, /7日兑现 35%/)
+  } finally {
+    pub.close()
+    loc.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('dafeiyu_issue_sprint_custody 签发托管冲刺轨；dafeiyu_today 与 /bridge/local/today 透传 dayblock P3 锁与 custody', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dfy-custody-bridge-'))
+  const store = createStore(join(dir, 'state.json'))
+  const bridge = createBridge({ store, resultWaitMs: 600 })
+  const pub = createServer(bridge.handler)
+  const loc = createServer(bridge.localHandler)
+  await new Promise((r) => pub.listen(0, '127.0.0.1', r))
+  await new Promise((r) => loc.listen(0, '127.0.0.1', r))
+  const P = 'http://127.0.0.1:' + pub.address().port
+  const L = 'http://127.0.0.1:' + loc.address().port
+  const http = (path, init = {}) => fetch(P + path, { redirect: 'manual', ...init })
+  const auth = (k) => ({ authorization: 'Bearer ' + k })
+  try {
+    const { access_token: tk } = await connect(http, store)
+    const sync = (body) => http('/bridge/sync', json(body, auth(store.state.secret.phoneKey))).then((r) => r.json())
+    const call = (name, args, id = 31) =>
+      rpc(http, tk, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }).then((r) => r.json())
+
+    // 1. 同步含 dayblock P3 锁 + 托管冲刺轨的快照
+    await sync({
+      snapshot: {
+        ...SNAP,
+        locking: {
+          kind: 'dayblock',
+          id: 'blk-v1',
+          title: '行测30题',
+          actual: 0,
+          floor: 1,
+          until: '11:00',
+          lockedByBoss: true,
+        },
+        custody: {
+          active: true,
+          id: 'cus-1',
+          title: '早间双飞轮',
+          issuedBy: 'gemini',
+          untilHm: '11:30',
+          rebriefCount: 0,
+        },
+        verifyLockCenter: {
+          totalVerify: 2,
+          passedVerify: 0,
+          overdueCount: 1,
+          pendingReviewCount: 0,
+          overdueBlocks: [{ id: 'blk-v1', title: '行测30题', dueHm: '10:00', lockedByBoss: true }],
+          pendingReviewBlocks: [],
+        },
+      },
+    })
+
+    const todayRes = (await call('dafeiyu_today', {})).result
+    assert.ok(!todayRes.isError)
+    const todayStr = todayRes.content[0].text
+    assert.match(todayStr, /计划验收块「行测30题」/)
+    assert.match(todayStr, /托管冲刺轨中：「早间双飞轮」（至 11:30/)
+    assert.match(todayStr, /验收锁中枢：已过 0\/2/)
+
+    const locToday = await (await fetch(L + '/bridge/local/today', { headers: auth(store.state.secret.localKey) })).json()
+    assert.equal(locToday.ok, true)
+    assert.equal(locToday.custody.title, '早间双飞轮')
+    assert.equal(locToday.verifyLockCenter.overdueCount, 1)
+
+    // 2. dafeiyu_issue_sprint_custody 入队并回传手机结果
+    const emptyRes = (await call('dafeiyu_issue_sprint_custody', { title: '无块测试' })).result
+    assert.equal(emptyRes.isError, true)
+
+    const issueP = call('dafeiyu_issue_sprint_custody', {
+      title: '下午考公连冲',
+      arm_auto_kickoff: true,
+      blocks: [
+        { title: '第一棒 资料25m', deliverable: '完成20题真题', duration_min: 25 },
+        { title: '第二棒 错因25m', deliverable: '写入Obsidian错题本', duration_min: 25 },
+      ],
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    const pulled = await sync({})
+    assert.equal(pulled.commands.length, 1)
+    assert.equal(pulled.commands[0].type, 'issue_sprint_custody')
+    assert.equal(pulled.commands[0].payload.title, '下午考公连冲')
+    assert.equal(pulled.commands[0].payload.armAutoKickoff, true)
+    assert.equal(pulled.commands[0].payload.blocks.length, 2)
+
+    await sync({ results: [{ id: pulled.commands[0].id, ok: true, text: '已签发「下午考公连冲」' }] })
+    const doneRes = (await issueP).result
+    assert.ok(!doneRes.isError)
+    assert.match(doneRes.content[0].text, /已签发「下午考公连冲」/)
   } finally {
     pub.close()
     loc.close()

@@ -200,4 +200,48 @@ void main() {
     expect(snap.bridgeOnline, isFalse);
     expect(snap.isEffective, isFalse);
   });
+
+  test('fromTodayJson tightens PC guard on phone overdue verify block or active custody', () {
+    const now = 1763770120000;
+    final overdue = PhoneBridgeSnapshot.fromTodayJson({
+      'ok': true,
+      'phoneOnline': true,
+      'syncedAt': now - 5000,
+      'verifyLockCenter': {
+        'overdueCount': 1,
+        'overdueBlocks': [
+          {'id': 'blk-1', 'title': '资料分析30题', 'dueHm': '10:00'},
+        ],
+      },
+    }, fetchedAtUtcMs: now);
+    expect(overdue.directive, PhoneSyncDirective.tighten);
+    expect(overdue.reason, contains('P3 验收锁逾期严锁'));
+
+    final custodyOnly = PhoneBridgeSnapshot.fromTodayJson({
+      'ok': true,
+      'phoneOnline': true,
+      'syncedAt': now - 5000,
+      'verifyLockCenter': {'overdueCount': 0},
+      'custody': {
+        'active': true,
+        'title': '高强度双飞轮托管',
+        'untilHm': '11:30',
+      },
+    }, fetchedAtUtcMs: now);
+    expect(custodyOnly.directive, PhoneSyncDirective.tighten);
+    expect(custodyOnly.reason, contains('高强度双飞轮托管'));
+    expect(custodyOnly.reason, contains('11:30'));
+
+    final emergencyOverrides = PhoneBridgeSnapshot.fromTodayJson({
+      'ok': true,
+      'phoneOnline': true,
+      'syncedAt': now - 5000,
+      'today': {
+        'verify': {'emergency': true},
+      },
+      'verifyLockCenter': {'overdueCount': 1},
+      'custody': {'active': true, 'title': '早间冲刺', 'untilHm': '11:30'},
+    }, fetchedAtUtcMs: now);
+    expect(emergencyOverrides.directive, PhoneSyncDirective.relax);
+  });
 }

@@ -28,6 +28,7 @@ export const INSTRUCTIONS = [
   '聊透一个知识点 / 讲完一道错题，用 dafeiyu_push_cards 沉成复习卡（手机按遗忘曲线 12 小时后开始问他）；他丢真题 / 拍错题给你，洗成标准结构用 dafeiyu_import_questions 灌进手机题库。',
   '开聊或空闲时看一眼 dafeiyu_review_due，顺手考他 1–2 张到期卡（别给提示，让他先说）；交回执时把评分放进 reviewed_cards——你判的才算数，他说「记得」不算。',
   '当用户说“看收件箱/整理碎片/卡住了”时调用 dafeiyu_read_inbox，合并看电脑端收件箱与手机卡壳、未过保底和到期复习摘要；聊透后用 dafeiyu_push_cards 沉卡或 dafeiyu_submit_receipt 交回执。',
+  '当与用户完成 5–10 分钟高强度规划/对质后，调用 dafeiyu_issue_sprint_custody 一次签发未来 2–4 小时串联托管冲刺轨（1–4 个强制 verify 块，托管期内手机禁止自删或降级，彻底脱离用户拖延节奏）；若遇真突发需要改轨，要求其说明 ≥6 字客观原因并用 rebrief_reason 重签。',
   '当用户要求做全局复盘、老板视角审视或追问一周虚耗时，调用 dafeiyu_boss_brief 获取近 7 天宏观账本与结构缺口（以及可选的近期改动笔记索引），零寒暄零迎合，先核事实再提 3 个直击逃避模式的追问与 1 条 24 小时止损硬指令。',
 ].join('\n')
 
@@ -294,6 +295,40 @@ export function toolDefs({ vault = false } = {}) {
       },
       annotations: ro,
     },
+    {
+      name: 'dafeiyu_issue_sprint_custody',
+      title: '签发强托管冲刺轨 / Re-brief',
+      description: '高强度对齐后一次签发未来 2–4 小时「串联托管冲刺轨」（1–4 个强制 P3 验收块，含段间短休），托管期内禁止用户在手机自删/降级/延后；也可带 rebrief_reason（≥6字客观原因）执行重签。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '托管冲刺轨标题（如：下午考公2连冲）' },
+          start: { type: 'string', description: '可选起始 HH:MM（不传则从手机当前时刻起排）' },
+          arm_auto_kickoff: { type: 'boolean', description: '是否同时打开 09:15/14:45 无人破冰起手哨' },
+          rebrief_reason: { type: 'string', description: '若为突发情况重签（Re-brief），必填 ≥6 字客观原因' },
+          downgrade_low_energy: { type: 'boolean', description: 'Re-brief 时若没传 blocks，是否降为 25m 低电量保底块' },
+          blocks: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 4,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: '冲刺块标题' },
+                deliverable: { type: 'string', description: '到点须提交的可验物理交付物' },
+                duration_min: { type: 'integer', minimum: 15, maximum: 120, description: '专注时长（分钟，15-120）' },
+                break_after_min: { type: 'integer', minimum: 0, maximum: 20, description: '本块结束后的段间休整分钟（0-20，默认 10）' },
+                allowed_apps: { type: 'array', items: { type: 'string' }, description: '允许放行的工作 App 包名' },
+              },
+              required: ['title', 'deliverable'],
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      annotations: add,
+    },
   ]
   if (vault) {
     tools.push(
@@ -336,7 +371,16 @@ export function todayText(snap, now) {
   const off = Number.isFinite(Number(snap.tzOffsetMin)) ? Number(snap.tzOffsetMin) : null
   const local = off === null ? null : new Date(now + off * 60_000).toISOString()
   lines.push('现在 ' + (local ? local.slice(11, 16) : (snap.hm || '')) + '（' + (local ? local.slice(0, 10) : (snap.day || '')) + '）。')
-  if (snap.locking) lines.push('🔒 锁着：验收点「' + snap.locking.title + '」到点没过保底（' + snap.locking.actual + '/' + snap.locking.floor + '），交够保底就解，最晚 ' + snap.locking.until + '。')
+  if (snap.locking) lines.push('🔒 锁着：' + (snap.locking.kind === 'dayblock' ? '计划验收块' : '验收点') + '「' + snap.locking.title + '」到点没过保底（' + snap.locking.actual + '/' + snap.locking.floor + '），交够保底或过审就解，最晚 ' + snap.locking.until + '。')
+  if (snap.custody?.active) lines.push('🛡 托管冲刺轨中：「' + snap.custody.title + '」（至 ' + snap.custody.untilHm + ' · 已重签 ' + (snap.custody.rebriefCount || 0) + ' 次 · 托管期禁自删降级）。')
+  if (snap.verifyLockCenter && (snap.verifyLockCenter.overdueCount > 0 || snap.verifyLockCenter.pendingReviewCount > 0 || snap.verifyLockCenter.totalVerify > 0)) {
+    const vlc = snap.verifyLockCenter
+    const overStr = (vlc.overdueBlocks || []).map((b) => '[' + b.id + '] ' + b.title).join('；')
+    const pendStr = (vlc.pendingReviewBlocks || []).map((b) => '[' + b.id + '] ' + b.title).join('；')
+    lines.push('📋 验收锁中枢：已过 ' + (vlc.passedVerify || 0) + '/' + (vlc.totalVerify || 0) +
+      (overStr ? ' | 逾期P3：' + overStr : '') +
+      (pendStr ? ' | 待终审（可用 dafeiyu_submit_receipt checkpoint_id 判过/不过）：' + pendStr : ''))
+  }
   if (snap.bout) lines.push('▶ 局在跑：「' + snap.bout.title + '」已 ' + snap.bout.minutes + ' 分钟。')
   if (snap.verify?.recovery) lines.push('今天是恢复日（连续两天没过保底）：只要一套 10 题，别加码，先问清楚卡在哪。')
   if (snap.verify?.active) lines.push('默认验收中（到 ' + snap.verify.until + '）：只放常用 App；他要玩，先要一句理由再 dafeiyu_spend_balance。')
@@ -778,6 +822,20 @@ export async function callTool(ctx, name, args = {}) {
     case 'dafeiyu_boss_brief': {
       const summary = bossBriefSummary(store, vaultDir, { days: args.days })
       return text(bossBriefText(summary), { structuredContent: summary })
+    }
+    case 'dafeiyu_issue_sprint_custody': {
+      const blocks = Array.isArray(args.blocks) ? args.blocks.slice(0, 4) : []
+      if (!args.rebrief_reason && !blocks.length) {
+        return fail('blocks 是空的（签发托管冲刺轨至少需要 1 个带 title 和 deliverable 的块；若 Re-brief 减负请传 rebrief_reason）。')
+      }
+      return writeTool(ctx, 'issue_sprint_custody', {
+        title: args.title || '',
+        start: args.start || '',
+        armAutoKickoff: args.arm_auto_kickoff,
+        rebriefReason: args.rebrief_reason || '',
+        downgradeLowEnergy: args.downgrade_low_energy === true,
+        blocks,
+      }, args.rebrief_reason ? 'Re-brief 重签托管轨' : '签发托管冲刺轨')
     }
     case 'dafeiyu_push_cards': {
       const cards = (Array.isArray(args.cards) ? args.cards : []).slice(0, 10)

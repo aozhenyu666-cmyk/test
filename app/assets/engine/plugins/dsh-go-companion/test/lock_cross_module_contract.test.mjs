@@ -658,3 +658,176 @@ test('Contract 8 (Closed-Loop 1A+2A+3A + 过量法则): verify块到点自动接
     tc.mock.timers.reset()
   }
 })
+
+test('Contract 9 (Path 1 + Path 2 + Tri-Node Snapshot): 自动开局哨兵跨夜保留→托管冲刺轨防删改→打回自适应2x25m缩块→Re-brief→Bridge快照透传', async (tc) => {
+  // 2026-11-22 23:55 Asia/Shanghai = 2026-11-22 15:55 UTC
+  const T_22_2355 = Date.UTC(2026, 10, 22, 15, 55, 0)
+  // 2026-11-23 09:15 Asia/Shanghai = 2026-11-23 01:15 UTC (minuteOfDay = 555)
+  const T_23_0915 = Date.UTC(2026, 10, 23, 1, 15, 0)
+  const origFetch = globalThis.fetch
+  tc.mock.timers.enable({ apis: ['Date'], now: T_22_2355 })
+  try {
+    await withHome(async () => {
+      const sis = agentOf(SIS)
+      const big = agentOf(BIG)
+      const h = host({ [SIS]: sis, [BIG]: big })
+
+      // 关掉白天工作墙避免干扰今日计划块自身 P3/托管 测试
+      await call(h(), 'POST', '/seals', { action: 'toggle_day_wall', enabled: false })
+      await call(h(), 'POST', '/config', { control: true, minGapMs: 0 })
+
+      // 1) 昨日开启自动哨兵策略 + 留一条未完成块跨夜
+      const polRes = await call(h(), 'POST', '/plan-contract', {
+        action: 'set_custody_policy',
+        autoKickoffEnabled: true,
+        adaptiveSplitEnabled: true,
+      })
+      assert.equal(polRes.body.ok, true)
+      assert.equal(polRes.body.dayPlan.custodyPolicy.autoKickoffEnabled, true)
+
+      const yestRes = await call(h(), 'POST', '/plan-contract', {
+        action: 'upsert_block',
+        block: {
+          id: 'blk-yest-carry',
+          startMin: 900,
+          endMin: 945,
+          title: '昨日遗留资料分析20题',
+          deliverable: '提交20题笔记',
+          lockMode: 'gentle',
+          status: 'pending',
+        },
+      })
+      assert.equal(yestRes.body.ok, true)
+
+      // 2) 跨夜到次日 09:15：策略保留 + 昨日未完自动入列 + 自动哨兵钉入 25m 硬验收块（仅触发 1 次）
+      tc.mock.timers.setTime(T_23_0915)
+      const st0915 = (await call(h(), 'POST', '/plan-contract', { action: 'status' })).body
+      assert.equal(st0915.ok, true)
+      assert.equal(st0915.dayPlan.custodyPolicy.autoKickoffEnabled, true, 'custodyPolicy 必须跨夜保留')
+      assert.ok(
+        st0915.dayPlan.carryoverItems.some((c) => String(c.title).includes('昨日遗留资料分析20题')),
+        '跨夜自动带入昨日未完任务',
+      )
+      const kickoffBlks = st0915.dayPlan.dayBlocks.filter((b) => b.source === 'auto_kickoff')
+      assert.equal(kickoffBlks.length, 1, '09:15 无 verify 块时应自动钉入 1 个 25m 破冰验收块')
+      assert.equal(kickoffBlks[0].lockMode, 'verify')
+      assert.equal(kickoffBlks[0].lockedByBoss, true)
+      assert.equal(kickoffBlks[0].endMin - kickoffBlks[0].startMin, 25)
+      assert.ok(kickoffBlks[0].title.includes('昨日遗留资料分析20题'))
+      assert.ok(st0915.dayPlan.firedKickoffSlots.includes('09:15'))
+
+      // 同槽位不重复触发
+      tc.mock.timers.setTime(T_23_0915 + 5 * 60_000)
+      const st0920 = (await call(h(), 'POST', '/plan-contract', { action: 'status' })).body
+      assert.equal(st0920.dayPlan.dayBlocks.filter((b) => b.source === 'auto_kickoff').length, 1)
+
+      // 3) 签发路径 2 串联托管冲刺轨 + 防删改/防降级契约
+      const cusRes = await call(h(), 'POST', '/wall/boss-chat', {
+        action: 'issue_sprint_custody',
+        title: '上午双连冲刺轨',
+        blocks: [
+          {
+            title: '第一棒 资料分析25m',
+            deliverable: '交20题截图与3条错因',
+            durationMin: 25,
+            allowedApps: ['md.obsidian', 'com.tencent.mm'],
+          },
+          {
+            title: '第二棒 申论大作文50m',
+            deliverable: '交三段提纲写进Obsidian',
+            durationMin: 50,
+            allowedApps: ['md.obsidian', 'tv.danmaku.bili', 'com.tencent.mm'],
+          },
+        ],
+      })
+      assert.equal(cusRes.body.ok, true)
+      assert.equal(cusRes.body.custody.active, true)
+      assert.match(String(cusRes.body.custody.untilHm || ''), /^\d{2}:\d{2}$/)
+      assert.equal(cusRes.body.blocks.length, 2)
+      const blk1 = cusRes.body.blocks[0]
+      const blk2 = cusRes.body.blocks[1]
+
+      const delGuarded = await call(h(), 'POST', '/plan-contract', { action: 'delete_block', blockId: blk1.id })
+      assert.equal(delGuarded.body.ok, false)
+      assert.equal(delGuarded.body.error, 'custody-locked')
+
+      const genGuarded = await call(h(), 'POST', '/plan-contract', { action: 'generate_default', energyLevel: 'low' })
+      assert.equal(genGuarded.body.ok, false)
+      assert.equal(genGuarded.body.error, 'custody-locked')
+
+      const downGuarded = await call(h(), 'POST', '/plan-contract', {
+        action: 'upsert_block',
+        block: { ...blk2, lockMode: 'gentle' },
+      })
+      assert.equal(downGuarded.body.ok, false)
+      assert.equal(downGuarded.body.error, 'custody-locked')
+
+      // 4) 第一棒提交交付后被主管打回 -> 第二棒 50m 大块自动拆为 2x25m 并收窄白名单
+      await call(h(), 'POST', '/plan-contract', {
+        action: 'submit_delivery',
+        blockId: blk1.id,
+        summary: '只做了一半题目，先把半成品思路放上来审一下',
+      })
+      const rejRes = await call(h(), 'POST', '/wall/boss-chat', {
+        action: 'judge_delivery',
+        blockId: blk1.id,
+        verdict: 'reject',
+        note: '缺完整题量与错因步骤，打回并缩紧下一段节奏',
+      })
+      assert.equal(rejRes.body.ok, true)
+      assert.equal(rejRes.body.adapted, true)
+
+      const afterAdapt = (await call(h(), 'POST', '/plan-contract', { action: 'status' })).body
+      assert.ok(afterAdapt.dayPlan.adaptiveLog.length >= 1)
+      const splitChildren = afterAdapt.dayPlan.dayBlocks.filter((b) => b.adaptedFrom === blk2.id && !b.isBreak)
+      assert.equal(splitChildren.length, 2, '第二棒 50m 大块应被自动拆成 2 段短块')
+      assert.equal(splitChildren[0].endMin - splitChildren[0].startMin, 25)
+      assert.equal(splitChildren[0].lockMode, 'verify')
+      assert.deepEqual(splitChildren[0].allowedApps, ['md.obsidian'])
+
+      // 5) 第一棒到点逾期 -> P3 验收锁 + bridgeSnapshot 透传 dayblock P3 与 custody
+      const pastBlk1EndMs = T_23_0915 + ((blk1.endMin - 555) * 60_000) + 75_000
+      tc.mock.timers.setTime(pastBlk1EndMs)
+
+      let capturedSync = null
+      globalThis.fetch = async (url, init) => {
+        if (String(url).startsWith('http://127.0.0.1:8787/bridge/sync')) {
+          capturedSync = JSON.parse(String(init?.body || '{}'))
+          return new Response(JSON.stringify({ ok: true, commands: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return origFetch(url, init)
+      }
+      const syncRes = await call(h(), 'POST', '/gemini-bridge', {
+        action: 'config',
+        url: 'http://127.0.0.1:8787',
+        key: 'dfy_contract9_test',
+      })
+      assert.equal(syncRes.body.ok, true)
+      assert.equal(syncRes.body.synced, true)
+      assert.ok(capturedSync?.snapshot, '配置桥后应立即推送完整 bridgeSnapshot')
+      assert.equal(capturedSync.snapshot.locking?.kind, 'dayblock')
+      assert.equal(capturedSync.snapshot.custody?.active, true)
+      assert.match(String(capturedSync.snapshot.custody?.untilHm || ''), /^\d{2}:\d{2}$/)
+      assert.ok((capturedSync.snapshot.verifyLockCenter?.overdueCount || 0) >= 1)
+      await call(h(), 'POST', '/gemini-bridge', { action: 'forget' })
+
+      // 6) 受控 Re-brief：短理由拦截，>=6字理由允许重签
+      const badRebrief = await call(h(), 'POST', '/plan-contract', { action: 'rebrief_custody', reason: '不想干了' })
+      assert.equal(badRebrief.body.ok, false)
+      const okRebrief = await call(h(), 'POST', '/plan-contract', {
+        action: 'rebrief_custody',
+        reason: '突发临时外出办事需切为25m保底重签轨',
+        downgradeLowEnergy: true,
+      })
+      assert.equal(okRebrief.body.ok, true)
+      assert.ok((okRebrief.body.custody?.rebriefCount || 0) >= 1)
+      assert.equal(okRebrief.body.custody?.active, true)
+    })
+  } finally {
+    globalThis.fetch = origFetch
+    tc.mock.timers.reset()
+  }
+})

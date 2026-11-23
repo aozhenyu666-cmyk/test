@@ -70,10 +70,16 @@ class PhoneBridgeSnapshot {
           todayMap?['verify'],
     );
     final lockingMap = _asMap(raw['locking'] ?? todayMap?['locking']);
+    final verifyLockCenterMap =
+        _asMap(raw['verifyLockCenter'] ?? todayMap?['verifyLockCenter']);
+    final custodyMap = _asMap(raw['custody'] ?? todayMap?['custody']);
     final syncedAt = _asInt(raw['syncedAt']);
 
-    final hasPayload =
-        todayMap != null || verifierMap != null || lockingMap != null;
+    final hasPayload = todayMap != null ||
+        verifierMap != null ||
+        lockingMap != null ||
+        verifyLockCenterMap != null ||
+        custodyMap != null;
     final phoneOnline = raw.containsKey('phoneOnline')
         ? raw['phoneOnline'] == true
         : hasPayload;
@@ -94,6 +100,8 @@ class PhoneBridgeSnapshot {
       todayMap: todayMap,
       verifierMap: verifierMap,
       lockingMap: lockingMap,
+      verifyLockCenterMap: verifyLockCenterMap,
+      custodyMap: custodyMap,
     );
 
     return PhoneBridgeSnapshot(
@@ -111,6 +119,8 @@ class PhoneBridgeSnapshot {
     required Map<String, Object?>? todayMap,
     required Map<String, Object?>? verifierMap,
     required Map<String, Object?>? lockingMap,
+    required Map<String, Object?>? verifyLockCenterMap,
+    required Map<String, Object?>? custodyMap,
   }) {
     // 1. Explicit emergency release or balance spend pass -> relax PC block.
     final emergencyActive = verifierMap?['emergency'] == true ||
@@ -154,6 +164,25 @@ class PhoneBridgeSnapshot {
       return (
         directive: PhoneSyncDirective.tighten,
         reason: '手机封印逾期严格锁：「$title」$suffix',
+      );
+    }
+
+    final overdueCount = _asInt(verifyLockCenterMap?['overdueCount']);
+    if (overdueCount > 0) {
+      return (
+        directive: PhoneSyncDirective.tighten,
+        reason: '手机计划块 P3 验收锁逾期严锁（$overdueCount 项待交货）',
+      );
+    }
+
+    if (custodyMap?['active'] == true) {
+      final title = (custodyMap?['title'] ?? '托管冲刺轨').toString().trim();
+      final untilHm = (custodyMap?['untilHm'] ?? '').toString().trim();
+      return (
+        directive: PhoneSyncDirective.tighten,
+        reason: untilHm.isNotEmpty
+            ? '手机托管冲刺轨护航中：「$title」（至 $untilHm）'
+            : '手机托管冲刺轨护航中：「$title」',
       );
     }
 

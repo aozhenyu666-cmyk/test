@@ -6148,7 +6148,7 @@ export function apply(ctx) {
         role: 'system',
         text: res.verdict === 'pass'
           ? `主管终审 PASS「${res.block.title}」：已解锁${res.rewardMin > 0 ? `并入账 +${res.rewardMin}m 余额` : ''}（${res.block.judgeNote}）`
-          : `主管终审 REJECT「${res.block.title}」：驳回（${res.block.judgeNote}），继续维持 P3 验收锁`,
+          : `主管终审 REJECT「${res.block.title}」：驳回（${res.block.judgeNote}），继续维持 P3 验收锁${res.adaptiveNote ? `；${res.adaptiveNote}` : ''}`,
         at: now,
       })
       return {
@@ -6157,7 +6157,53 @@ export function apply(ctx) {
         verdict: res.verdict,
         block: res.block,
         rewardMin: res.rewardMin || 0,
-        text: res.verdict === 'pass' ? `终审 PASS：「${res.block.title}」已放行并解除验收锁` : `终审 REJECT：「${res.block.title}」已被驳回`,
+        adapted: Boolean(res.adapted),
+        adaptiveNote: res.adaptiveNote || '',
+        text: res.verdict === 'pass'
+          ? `终审 PASS：「${res.block.title}」已放行并解除验收锁`
+          : `终审 REJECT：「${res.block.title}」已被驳回${res.adaptiveNote ? ` · ${res.adaptiveNote}` : ''}`,
+      }
+    }
+    if (action === 'issue_sprint_custody') {
+      const now = Date.now()
+      const res = v4Hub?.issueSprintCustody?.({ ...b, issuedBy: 'wall_boss' }, now)
+      if (!res || !res.ok) {
+        return { ...wallBossStatusSnapshot(b), ok: false, error: res?.error || 'custody-failed', text: res?.text || '签发托管冲刺轨失败' }
+      }
+      dayPlanWatchUntil = Math.max(dayPlanWatchUntil, now + 2 * 60_000)
+      appendWallBossEntry({
+        id: 'cus-' + now.toString(36),
+        role: 'system',
+        text: `已签发托管冲刺轨「${res.custody.title}」（${res.blocks.length} 段验收块 · 至 ${res.untilHm} · 托管期内禁自删降级）`,
+        at: now,
+      })
+      return {
+        ...wallBossStatusSnapshot(b),
+        ok: true,
+        custody: res.custody,
+        blocks: res.blocks,
+        text: `已签发「${res.custody.title}」（至 ${res.untilHm}，托管期锁定防自改）。`,
+      }
+    }
+    if (action === 'rebrief_custody') {
+      const now = Date.now()
+      const res = v4Hub?.rebriefSprintCustody?.({ ...b, issuedBy: 'wall_boss' }, now)
+      if (!res || !res.ok) {
+        return { ...wallBossStatusSnapshot(b), ok: false, error: res?.error || 'rebrief-failed', text: res?.text || '托管 Re-brief 失败' }
+      }
+      dayPlanWatchUntil = Math.max(dayPlanWatchUntil, now + 2 * 60_000)
+      appendWallBossEntry({
+        id: 'rbr-' + now.toString(36),
+        role: 'system',
+        text: `已执行托管 Re-brief 重签（理由：${String(b.reason || '').slice(0, 80)} · 至 ${res.untilHm}）`,
+        at: now,
+      })
+      return {
+        ...wallBossStatusSnapshot(b),
+        ok: true,
+        custody: res.custody,
+        blocks: res.blocks,
+        text: `已重签托管冲刺轨（至 ${res.untilHm}）。`,
       }
     }
     if (action === 'send' || action === 'audit_now' || action === 'request_judge') {
@@ -7698,6 +7744,49 @@ export function apply(ctx) {
       },
     }
   }
+  function wallIssueSprintCustodyTool() {
+    return {
+      name: 'wall_issue_sprint_custody',
+      description: '主管墙路径2强托管与 Re-brief 工具：高强度质询后一次签发未来 2-4 小时「串联托管冲刺轨」（1-4 个强制 verify 块，托管期内禁止用户自删或降级），或凭客观变动理由执行 rebrief_reason 重签。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '托管冲刺轨总标题（如：下午考公资料分析2连冲）' },
+          blocks: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                deliverable: { type: 'string' },
+                durationMin: { type: 'integer', minimum: 15, maximum: 120 },
+                breakAfterMin: { type: 'integer', minimum: 0, maximum: 20 },
+                allowedApps: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['title', 'deliverable'],
+            },
+          },
+          armAutoKickoff: { type: 'boolean', description: '是否顺带开启 09:15/14:45 无人破冰硬起手哨' },
+          rebriefReason: { type: 'string', description: '若属突发变动 Re-brief 重签，填写 ≥6 字客观原因' },
+          downgradeLowEnergy: { type: 'boolean', description: 'Re-brief 时是否降为 25m 低电量保底块' },
+        },
+      },
+      output: toolOutput,
+      execute: (args = {}) => {
+        const now = Date.now()
+        const rebrief = String(args.rebriefReason || '').trim()
+        const res = rebrief
+          ? v4Hub?.rebriefSprintCustody?.({ reason: rebrief, blocks: args.blocks, downgradeLowEnergy: Boolean(args.downgradeLowEnergy), issuedBy: 'wall_boss' }, now)
+          : v4Hub?.issueSprintCustody?.({ title: args.title || '主管托管冲刺轨', blocks: args.blocks, armAutoKickoff: args.armAutoKickoff, issuedBy: 'wall_boss' }, now)
+        if (!res || !res.ok) return { ok: false, text: res?.text || res?.error || '签发托管冲刺轨失败' }
+        dayPlanWatchUntil = Math.max(dayPlanWatchUntil, now + 2 * 60_000)
+        return {
+          ok: true,
+          text: `✓ ${rebrief ? 'Re-brief 重签' : '签发'}托管冲刺轨「${res.custody.title}」（${res.blocks.length} 块强制 verify，至 ${res.untilHm}）。托管期内禁止自删降级。`,
+        }
+      },
+    }
+  }
   function mountWallBoss(rawSid) {
     let sid = typeof rawSid === 'string' ? rawSid.trim() : ''
     if (sid && (sid === String(config.sessionId || '') || (config.dual !== false && sid === String(config.strategistSessionId || '')))) {
@@ -7718,6 +7807,7 @@ export function apply(ctx) {
         { ...vaultRecentTool(), name: 'wall_vault_recent' },
         wallIssueDirectiveTool(),
         wallJudgeDeliveryTool(),
+        wallIssueSprintCustodyTool(),
       ]
       for (const tool of roTools) {
         try {
@@ -9590,6 +9680,54 @@ export function apply(ctx) {
       actual: x.actual, status: x.status, source: x.source, sameDay: x.sameDay, paidMinutes: x.paidMinutes, opened: Boolean(x.openedAt),
     })
     const lock = lockingSeal(seals, { now, today })
+    let dayTick = null
+    try {
+      dayTick = v4Hub?.dayBlockTickNow?.(now, seals.items) || null
+    } catch {}
+    const overBlk = Array.isArray(dayTick?.overdueVerifyBlocks) && dayTick.overdueVerifyBlocks.length ? dayTick.overdueVerifyBlocks[0] : null
+    const snapLocking = lock
+      ? { id: lock.id, title: lock.title, actual: lock.actual, floor: lock.floor, until: sealHm(Math.round((lock.lockUntil - startOfDay(now, tz)) / 60_000)) }
+      : (overBlk
+          ? {
+              id: overBlk.id,
+              title: overBlk.title,
+              kind: 'dayblock',
+              actual: 0,
+              floor: 1,
+              until: sealHm(Math.round(((Number(overBlk.overdueLockUntil) || (now + 3600_000)) - startOfDay(now, tz)) / 60_000)),
+              lockedByBoss: Boolean(overBlk.lockedByBoss),
+            }
+          : null)
+    const snapCustody = dayTick?.custody
+      ? {
+          active: Boolean(dayTick.custody.active),
+          id: dayTick.custody.id,
+          title: dayTick.custody.title,
+          issuedBy: dayTick.custody.issuedBy,
+          untilHm: sealHm(dayTick.custody.untilMin),
+          untilAt: dayTick.custody.untilAt,
+          rebriefCount: Number(dayTick.custody.rebriefCount) || 0,
+        }
+      : null
+    const snapVerifyCenter = dayTick?.verifySummary
+      ? {
+          totalVerify: Number(dayTick.verifySummary.totalVerify) || 0,
+          passedVerify: Number(dayTick.verifySummary.passedVerify) || 0,
+          overdueCount: (dayTick.overdueVerifyBlocks || []).length,
+          pendingReviewCount: Number(dayTick.verifySummary.pendingReviewCount) || 0,
+          clearedToday: Boolean(dayTick.verifySummary.allVerifyCleared),
+          overdueBlocks: (dayTick.overdueVerifyBlocks || []).slice(0, 4).map((b) => ({
+            id: b.id,
+            title: b.title,
+            dueHm: sealHm(b.endMin),
+            lockedByBoss: Boolean(b.lockedByBoss),
+          })),
+          pendingReviewBlocks: (dayTick.state?.dayBlocks || [])
+            .filter((b) => !b.isBreak && b.status !== 'done' && (b.verifyStatus === 'submitted' || b.verifyStatus === 'rejected'))
+            .slice(0, 4)
+            .map((b) => ({ id: b.id, title: b.title, verifyStatus: b.verifyStatus })),
+        }
+      : null
     const run = runningBoutNow()
     let funLeft = null
     try {
@@ -9610,7 +9748,9 @@ export function apply(ctx) {
       cold: !workStarted && min < COLD_CUTOFF_MINUTE, coldCutoff: sealHm(COLD_CUTOFF_MINUTE), workStarted, cutoffPassed: min >= SEAL_CUTOFF_MINUTE,
       timeline: seals.items.filter((x) => x.day === today).sort((a, b) => a.dueMinute - b.dueMinute).map(mapSeal),
       tomorrow: seals.items.filter((x) => x.day === nextYmd(today)).sort((a, b) => a.dueMinute - b.dueMinute).map(mapSeal),
-      locking: lock ? { id: lock.id, title: lock.title, actual: lock.actual, floor: lock.floor, until: sealHm(Math.round((lock.lockUntil - startOfDay(now, config.timeZone)) / 60_000)) } : null,
+      locking: snapLocking,
+      custody: snapCustody,
+      verifyLockCenter: snapVerifyCenter,
       bout: run ? { title: String(live?.goal || run.kind || ''), minutes: Math.round((now - Number(run.openedAt || now)) / 60_000), sealId: String(live?.sealId || '') } : null,
       balance: funLeft === null ? null : { funLeft },
       deadlines,
@@ -9720,6 +9860,18 @@ export function apply(ctx) {
             blockNote = `；计划验收块「${jr.block.title}」已同步解锁` + (jr.rewardMin > 0 ? `（+${jr.rewardMin}m 余额）` : '')
           }
         } catch {}
+      } else if (!seal && (it.verdict === 'fail' || it.verdict === 'partial') && targetBlockId) {
+        try {
+          const jr = v4Hub?.judgeDelivery?.({
+            blockId: targetBlockId,
+            verdict: 'reject',
+            note: it.did || it.topic || 'Gemini 问答未通过验收',
+            judgedBy: 'gemini',
+          }, now)
+          if (jr?.ok && jr.block) {
+            blockNote = `；计划验收块「${jr.block.title}」未达标，继续保持 P3 锁定` + (jr.adapted && jr.adaptiveNote ? `（${jr.adaptiveNote}）` : '')
+          }
+        } catch {}
       }
       return { ok: true, text: '回执收到：「' + (it.topic || '回执') + '」' + word +
         (p.verdict === 'pass' && it.verdict !== 'pass' ? '（「过」要 2 组像样的问答，这条按半过记）' : '') +
@@ -9781,6 +9933,33 @@ export function apply(ctx) {
       writeCovenantSide(next, now)
       record({ state: 'covenant-propose', at: now, by: 'gemini', id: r.proposal.id, title: r.proposal.rule.title })
       return { ok: true, text: '提上去了，等他在手机「公约」页批；批之前不算数。' }
+    }
+    if (cmd?.type === 'issue_sprint_custody') {
+      const rebriefReason = String(p.rebriefReason ?? p.rebrief_reason ?? '').trim()
+      const parsedStart = Number.isFinite(Number(p.startMin))
+        ? Number(p.startMin)
+        : (typeof p.start === 'string' && p.start.trim() ? hmParse(p.start) : -1)
+      const startMin = parsedStart >= 0 ? parsedStart : undefined
+      const r = rebriefReason
+        ? v4Hub?.rebriefSprintCustody?.({
+            reason: rebriefReason,
+            blocks: p.blocks,
+            downgradeLowEnergy: Boolean(p.downgradeLowEnergy ?? p.downgrade_low_energy),
+            issuedBy: 'gemini',
+          }, now)
+        : v4Hub?.issueSprintCustody?.({
+            title: p.title || 'Gemini 托管冲刺轨',
+            blocks: p.blocks,
+            startMin,
+            armAutoKickoff: p.armAutoKickoff ?? p.arm_auto_kickoff,
+            issuedBy: 'gemini',
+          }, now)
+      if (!r || !r.ok) return { ok: false, text: r?.text || r?.error || '手机未收成托管冲刺轨' }
+      dayPlanWatchUntil = Math.max(dayPlanWatchUntil, now + 2 * 60_000)
+      return {
+        ok: true,
+        text: `已签发「${r.custody.title}」（${r.blocks.length} 个强制验收块，托管锁定至 ${r.untilHm}；期内禁止自删降级）。`,
+      }
     }
     return { ok: false, text: '手机不认识这种命令：' + String(cmd?.type || '') }
   }
@@ -11138,6 +11317,7 @@ export function apply(ctx) {
       remainingMin: Math.max(0, b.endMin - min),
     })
     const verifyCandidates = allDayBlocks.filter((b) => !b.isBreak && b.status !== 'skipped' && (b.lockMode === 'verify' || b.lockedByBoss))
+    const rawCustody = dayVerify?.custody && typeof dayVerify.custody === 'object' ? dayVerify.custody : null
     const verifyLockCenter = {
       totalVerify: Number(dayVerify?.totalVerify) || 0,
       passedVerify: Number(dayVerify?.passedVerify) || 0,
@@ -11145,6 +11325,9 @@ export function apply(ctx) {
       pendingReviewCount: Number(dayVerify?.pendingReviewCount) || 0,
       clearedToday: Boolean(dayVerify?.allVerifyCleared),
       bossDirectiveCount: verifyCandidates.filter((b) => b.lockedByBoss && b.status !== 'done').length,
+      custody: rawCustody ? { ...rawCustody, untilHm: sealHm(rawCustody.untilMin) } : null,
+      custodyPolicy: dayVerify?.custodyPolicy || null,
+      adaptiveSplitsToday: Array.isArray(dayVerify?.adaptiveLog) ? dayVerify.adaptiveLog.length : 0,
       overdueBlocks: (dayVerify?.overdueVerifyBlocks || []).map(formatBlockCard),
       activeVerifyBlock: dayVerify?.activeVerifyBlock ? formatBlockCard(dayVerify.activeVerifyBlock) : null,
       pendingReviewBlocks: verifyCandidates

@@ -897,6 +897,13 @@ class _WallPageState extends ConsumerState<WallPage> {
         : const <Map<String, dynamic>>[];
     final totalVerify = verifyCenter['totalVerify'] is num ? (verifyCenter['totalVerify'] as num).toInt() : 0;
     final passedVerify = verifyCenter['passedVerify'] is num ? (verifyCenter['passedVerify'] as num).toInt() : 0;
+    final custody = verifyCenter['custody'] is Map
+        ? Map<String, dynamic>.from(verifyCenter['custody'] as Map)
+        : const <String, dynamic>{};
+    final custodyActive = custody['active'] == true;
+    final adaptiveSplitsToday = verifyCenter['adaptiveSplitsToday'] is num
+        ? (verifyCenter['adaptiveSplitsToday'] as num).toInt()
+        : 0;
 
     return [
       Padding(
@@ -1079,12 +1086,43 @@ class _WallPageState extends ConsumerState<WallPage> {
                     ),
                   ),
                 ],
+                if (custodyActive || adaptiveSplitsToday > 0) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    key: const ValueKey('wall-boss-custody-banner'),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.65),
+                      borderRadius: AppShape.radiusMd,
+                    ),
+                    child: Text(
+                      [
+                        if (custodyActive)
+                          '托管冲刺轨进行中：「${custody['title'] ?? '冲刺轨'}」（至 ${custody['untilHm'] ?? '--:--'}）',
+                        if (adaptiveSplitsToday > 0) '自动缩块 $adaptiveSplitsToday 次',
+                      ].join(' · '),
+                      style: theme.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  key: const ValueKey('wall-boss-issue-directive-btn'),
-                  onPressed: inFlight ? null : () => unawaited(_openIssueDirectiveDialog()),
-                  icon: const Icon(AppIcons.add, size: 16),
-                  label: const Text('下达止损硬指令'),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      key: const ValueKey('wall-boss-issue-directive-btn'),
+                      onPressed: inFlight ? null : () => unawaited(_openIssueDirectiveDialog()),
+                      icon: const Icon(AppIcons.add, size: 16),
+                      label: const Text('下达止损硬指令'),
+                    ),
+                    FilledButton.tonalIcon(
+                      key: const ValueKey('wall-boss-sprint-custody-btn'),
+                      onPressed: inFlight ? null : () => unawaited(_openIssueSprintCustodyDialog()),
+                      icon: const Icon(AppIcons.planMode, size: 16),
+                      label: const Text('发起托管冲刺轨'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1178,6 +1216,19 @@ class _WallPageState extends ConsumerState<WallPage> {
     });
     unawaited(_channel.tickNow().catchError((_) => false));
   }
+
+  Future<void> _openIssueSprintCustodyDialog() async {
+    final out = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => const _IssueSprintCustodyDialog(),
+    );
+    if (out == null || !mounted) return;
+    await _runBossChatOp({
+      'action': 'issue_sprint_custody',
+      ...out,
+    });
+    unawaited(_channel.tickNow().catchError((_) => false));
+  }
 }
 
 class _IssueDirectiveDialog extends StatefulWidget {
@@ -1264,6 +1315,153 @@ class _IssueDirectiveDialogState extends State<_IssueDirectiveDialog> {
           key: const ValueKey('wall-directive-submit'),
           onPressed: _submit,
           child: const Text('钉入硬指令'),
+        ),
+      ],
+    );
+  }
+}
+
+class _IssueSprintCustodyDialog extends StatefulWidget {
+  const _IssueSprintCustodyDialog();
+
+  @override
+  State<_IssueSprintCustodyDialog> createState() => _IssueSprintCustodyDialogState();
+}
+
+class _IssueSprintCustodyDialogState extends State<_IssueSprintCustodyDialog> {
+  static const _presets = <({String id, String label, String defaultTitle, String defaultDeliv, List<int> mins})>[
+    (
+      id: 'morning_2x25',
+      label: '双飞轮 2×25m',
+      defaultTitle: '高强度双飞轮托管',
+      defaultDeliv: '第 1 轮落地初稿或 20 题；第 2 轮查错归档 Obsidian',
+      mins: [25, 25],
+    ),
+    (
+      id: 'deep_90',
+      label: '深水双验 2×45m',
+      defaultTitle: '90m 深水托管冲刺',
+      defaultDeliv: '提交阶段性文档/代码或整套真题验收结果',
+      mins: [45, 45],
+    ),
+    (
+      id: 'afternoon_3x25',
+      label: '连环攻坚 3×25m',
+      defaultTitle: '连环短快托管 3×25m',
+      defaultDeliv: '连续推完 3 段 25m 关键节点并提交复盘摘要',
+      mins: [25, 25, 25],
+    ),
+  ];
+
+  String _presetId = _presets.first.id;
+  late final TextEditingController _title = TextEditingController(text: _presets.first.defaultTitle);
+  late final TextEditingController _deliv = TextEditingController(text: _presets.first.defaultDeliv);
+  bool _armAutoKickoff = true;
+  String? _error;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _deliv.dispose();
+    super.dispose();
+  }
+
+  void _selectPreset(({String id, String label, String defaultTitle, String defaultDeliv, List<int> mins}) preset) {
+    setState(() {
+      _presetId = preset.id;
+      _title.text = preset.defaultTitle;
+      _deliv.text = preset.defaultDeliv;
+      _error = null;
+    });
+  }
+
+  void _submit() {
+    final t = _title.text.trim();
+    final d = _deliv.text.trim();
+    if (t.isEmpty || d.isEmpty) {
+      setState(() => _error = '托管主标题和可验物理交付物均不能为空');
+      return;
+    }
+    final preset = _presets.firstWhere((p) => p.id == _presetId, orElse: () => _presets.first);
+    final blocks = <Map<String, dynamic>>[
+      for (var i = 0; i < preset.mins.length; i++)
+        {
+          'title': '$t · 第 ${i + 1}/${preset.mins.length} 棒',
+          'deliverable': d,
+          'minutes': preset.mins[i],
+        },
+    ];
+    Navigator.pop(context, {
+      'title': t,
+      'blocks': blocks,
+      'armAutoKickoff': _armAutoKickoff,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = DshColors.of(context);
+    return AlertDialog(
+      key: const ValueKey('wall-custody-dialog'),
+      shape: AppShape.dialog,
+      title: const Text('发起托管冲刺轨（路径 2 连环 verify 锁）'),
+      content: SizedBox(
+        width: 390,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final p in _presets)
+                    ChoiceChip(
+                      key: ValueKey('wall-custody-preset-${p.id}'),
+                      label: Text(p.label),
+                      selected: _presetId == p.id,
+                      onSelected: (_) => _selectPreset(p),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                key: const ValueKey('wall-custody-title'),
+                controller: _title,
+                decoration: const InputDecoration(labelText: '托管冲刺轨名称', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                key: const ValueKey('wall-custody-deliverable'),
+                controller: _deliv,
+                minLines: 2,
+                maxLines: 3,
+                decoration: const InputDecoration(labelText: '每棒可验物理交付物', border: OutlineInputBorder(), isDense: true),
+              ),
+              const SizedBox(height: 6),
+              SwitchListTile(
+                key: const ValueKey('wall-custody-arm-kickoff'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('顺带开启 09:15 / 14:45 自动开局哨兵'),
+                value: _armAutoKickoff,
+                onChanged: (v) => setState(() => _armAutoKickoff = v),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 4),
+                Text(_error!, style: TextStyle(color: colors.danger, fontSize: 12)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        FilledButton(
+          key: const ValueKey('wall-custody-submit'),
+          onPressed: _submit,
+          child: const Text('签发串联托管'),
         ),
       ],
     );
