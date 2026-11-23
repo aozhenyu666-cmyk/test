@@ -2395,8 +2395,21 @@ export function apply(ctx) {
   }
   let v4Hub = null
   /** 手机的 session 槽：连麦舱 / AI 专时锁 / 逾期严锁计划契约 / 鲸澜租约 / 外部 Agent 租约 / 预案严格模式 / 护航期契约。 */
-  const sessionNow = (now) =>
-    geminiSessionView(now) ||
+  /**
+   * 2026-11-23 手机上有两条执行路：按裁决器的锁结论拦（InterceptRuntime），和按 session 名单拦（ProactiveRuntime）。
+   * 锁结论在严格类锁下早就放了学习层 + AI（Gemini / ChatGPT / Claude）+ NekoBox，session 名单却还是窄的（只有局 / 验收点那一两个 App），
+   * 结果锁页上列着的 Claude、BOSS 直聘点了打不开。这里让严格类 session 的名单和锁结论一样宽。连麦舱（只许 Gemini）不动。
+   */
+  const strictWorkAllowNow = () => {
+    const tf = tierFnNow()
+    const installedWork = (Array.isArray(lastInstalled) ? lastInstalled : []).map((x) => String(x?.pkg || '')).filter((p) => p && tf(p) === 'work')
+    return [...WORK_DEFAULT, ...installedWork, ...GEMINI_PACKAGES, ...PROXY_PACKAGES]
+  }
+  const widenStrictSession = (sess) => (sess && Array.isArray(sess.allow)
+    ? { ...sess, allow: [...new Set([...sess.allow, ...strictWorkAllowNow()])] }
+    : sess)
+  const sessionNow = (now) => geminiSessionView(now) || widenStrictSession(sessionNonGemini(now))
+  const sessionNonGemini = (now) =>
     aiWorkSessionView(now) ||
     v4Hub?.dayBlockOverdueSessionView?.(now) ||
     v4Hub?.contractSessionView(now, { escalatedOnly: true }) ||
@@ -10645,8 +10658,15 @@ export function apply(ctx) {
     const tz = zoneOr(config.timeZone)
     const s = lockingSeal(loadSeals(now, tz), { now, today: dayString(now, tz) })
     if (!s) return null
-    const tier = s.app ? tierFnNow()(s.app) : ''
-    const allow = [...new Set(['md.obsidian', ...(s.app && tier !== 'fun' && tier !== 'game' ? [s.app] : []), ...emergencyPackages(appsOf())])]
+    const tf = tierFnNow()
+    const tier = s.app ? tf(s.app) : ''
+    // 2026-11-23 验收点到点没过保底：放「能把这一点交上」的那一层——Obsidian、AI（Gemini / ChatGPT / Claude）、
+    // NekoBox、学习层 App、这一点要的 App。以前只放 Obsidian + 这一点的 App，要交「局的分钟 / Gemini 回执」时没地方做。
+    const workInstalled = (Array.isArray(lastInstalled) ? lastInstalled : []).map((x) => String(x?.pkg || '')).filter((p) => p && tf(p) === 'work')
+    const allow = [...new Set([
+      'md.obsidian', ...WORK_DEFAULT, ...workInstalled, ...GEMINI_PACKAGES, ...PROXY_PACKAGES,
+      ...(s.app && tier !== 'fun' && tier !== 'game' ? [s.app] : []), ...emergencyPackages(appsOf()),
+    ])]
     return {
       allow,
       until: s.lockUntil,
@@ -13061,14 +13081,16 @@ export function apply(ctx) {
         }
       : null
     const verifySessNow = !emergencyActive ? verifySessionView(now) : null
+    // 2026-11-23 硬干预上限只管「系统主动的打扰」（接管、雷达 / 姐妹力度、自动拉 Gemini）。
+    // 他自己选的锁——局（温和 / 严格）、深夜、默认验收、验收点保底、晚间上限、连麦舱、墙——用满了也照锁。
+    // 以前用满后把墙（含深夜）和他自己开的严格局一起降成「只提醒」：白天被折腾满 12 次，晚上开局就锁不住。
     let lockArbiter = v4Hub.computeLockArbiter(now, {
       autonomy: v4ContractTick.autonomy,
-      wall: { locked: (emergencyActive || hardCapDowngrade) ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
+      wall: { locked: emergencyActive ? false : wd.locked, kind: emergencyActive ? null : (wd.kind || null) },
       takeoverSession: takeoverActiveSession,
-      ...(hardCapDowngrade ? { aiWorkSession: null, presetStrict: verifySessNow, takeoverSession: null } : {}),
+      ...(hardCapDowngrade ? { takeoverSession: null, ...(config.aiWorkSession?.by === 'takeover' ? { aiWorkSession: null } : {}) } : {}),
     })
-    const isVerifyLock = lockArbiter?.source === 'BOUT_STRICT' && (verifySessNow?.by === 'verify' || verifyStateNow(now, tz).active)
-    const keepOnHardCap = ['P0', 'P1', 'P3'].includes(lockArbiter.priority) || isVerifyLock
+    const keepOnHardCap = lockArbiter?.source !== 'TAKEOVER_STRICT'
     if (hardCapDowngrade && !keepOnHardCap) {
       lockArbiter = {
         active: false,

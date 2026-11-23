@@ -151,7 +151,9 @@ test('局里在不允许的 App 待满 1 分钟：这一次 /plan 的回答里�
     const r = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
     const s = r.body.session
     assert.ok(s, '应当有 session')
-    assert.deepEqual(s.allow.sort(), ['com.dict', 'com.study'])
+    // 2026-11-23 严格名单 = 本局 App + 学习层 + AI（Gemini 等）+ NekoBox，和锁结论一致；娱乐不在里面。
+    for (const p of ['com.dict', 'com.study', 'com.google.android.apps.bard']) assert.ok(s.allow.includes(p), p)
+    assert.ok(!s.allow.includes('com.douyin'))
     assert.equal(s.graceMs, 0, '严格模式不给宽限')
     assert.equal(s.kind, 'strict')
     assert.match(s.why, /局内偏离停留/)
@@ -170,7 +172,8 @@ test('局里 10 分钟切出 3 次：严格模式', async () => {
     }
     const r = await t.plan(at('com.study'))
     assert.equal(r.body.session?.kind, 'strict')
-    assert.deepEqual(r.body.session.allow, ['com.study'])
+    assert.ok(r.body.session.allow.includes('com.study') && r.body.session.allow.includes('com.google.android.apps.bard'))
+    assert.ok(!r.body.session.allow.includes('com.bili') && !r.body.session.allow.includes('com.douyin'))
     assert.ok(t.ledger().some((e) => e.state === 'preset-fire' && e.presetId === 'switch-storm'))
   })
 })
@@ -335,7 +338,8 @@ test('/plan/day：都写清了就定下来，立刻生效（不用等 10 分钟�
       await t.plan(at('com.zhuoyin.tiku'))
       const p = await t.plan(at('com.douyin', { fun: true, minutes: 2 }))
       assert.equal(p.body.session?.kind, 'strict', '这一局一开就按自己的 App 管')
-      assert.deepEqual(p.body.session.allow.sort(), ['com.dict', 'com.zhuoyin.tiku'])
+      for (const x of ['com.dict', 'com.zhuoyin.tiku', 'com.google.android.apps.bard']) assert.ok(p.body.session.allow.includes(x), x)
+      assert.ok(!p.body.session.allow.includes('com.douyin'))
     } finally {
       tc.mock.timers.reset()
     }
