@@ -12,6 +12,7 @@ import '../../ui/theme/theme.dart';
 import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
 import 'app_picker_dialog.dart';
+import 'live_core_atlas_page.dart';
 import 'plan_modality_page.dart';
 import 'usage_analytics_page.dart';
 

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply, setStatePin } from '../lib/index.js'
-import { LIVE_CORE_DEFAULTS, LIVE_DICE_FACES, buildLiveCoreBrief, evaluateLiveCore } from '../lib/live_core.js'
+import { LIVE_CORE_DEFAULTS, LIVE_DICE_FACES, buildLiveCoreAtlas, buildLiveCoreBrief, evaluateLiveCore, formatLiveCoreHistory } from '../lib/live_core.js'
 
 const TZ = 'Asia/Shanghai'
 const SIS = 'session-sis'
@@ -259,6 +259,103 @@ test('LiveCore-4: 6 面骰子与笔记/错题/设定/MCP/屏幕共享融合剧�
       const muted = (await call(h(), 'POST', '/live-core', { action: 'mute', minutes: 20 })).body
       assert.equal(muted.ok, true)
       assert.equal(muted.muted, true)
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
+})
+
+test('LiveCore-5: 连刷 5 题泄压阀 + 历史记录过滤 + 功能图谱 4 支柱 + P0-P6 梯子', () => {
+  const now = Date.UTC(2026, 10, 24, 7, 30, 0) // 15:30 Asia/Shanghai
+  const relief = evaluateLiveCore({
+    now,
+    phone: { app: 'com.bbk.launcher2', label: '桌面', minutes: 4, screenOn: true, fun: false },
+    arbiter: { priority: 'P4', source: 'DAY_WORK_WALL' },
+    recentQuizAnswers: 5,
+  })
+  assert.equal(relief.triggered, false)
+  assert.equal(relief.reason, 'quiz_relief_valve')
+  assert.equal(relief.phase, 'yielded_quiz_relief')
+  assert.equal(relief.nextState.mutedUntil, now + LIVE_CORE_DEFAULTS.muteDurationMs)
+  assert.equal(relief.nextState.quizReliefCount, 1)
+
+  const sampleLedger = [
+    { state: 'live-core-ignite', at: now - 50_000, action: 'ignite', reason: 'gaze_ignite_under_lock', diceFace: 2, anchorId: 'v-1' },
+    { state: 'live-core-yield', at: now - 30_000, reason: 'quiz_relief_valve', phase: 'yielded_quiz_relief' },
+    { state: 'live-core-mute', at: now - 20_000, minutes: 20 },
+    { state: 'live-core-relay', at: now - 10_000, mode: 'checkpoint_25m', next: '完成判断推理 15 题', minutes: 25 },
+    { state: 'reverse-capsule', at: now - 5_000, mode: 'quiz_only', minutes: 20 },
+  ]
+  const allHist = formatLiveCoreHistory(sampleLedger, { tz: TZ })
+  assert.equal(allHist.length, 5)
+  assert.equal(allHist[0].kind, 'capsule')
+  const onlyIgnite = formatLiveCoreHistory(sampleLedger, { filter: 'ignite', tz: TZ })
+  assert.equal(onlyIgnite.length, 1)
+  assert.match(onlyIgnite[0].title, /笔记翻旧账/)
+  const onlyYield = formatLiveCoreHistory(sampleLedger, { filter: 'yield', tz: TZ })
+  assert.equal(onlyYield.length, 2)
+  assert.match(onlyYield[1].title, /连刷 5 题/)
+  const onlyRelay = formatLiveCoreHistory(sampleLedger, { filter: 'relay', tz: TZ })
+  assert.equal(onlyRelay.length, 2)
+
+  const atlas = buildLiveCoreAtlas({
+    now,
+    liveCore: { enabled: true, phase: 'ignited', dice: LIVE_DICE_FACES[1] },
+    arbiter: { active: true, priority: 'P4', label: '白天防分心锁' },
+    bridgeHealthy: true,
+    capabilities: { a11y: true, shizuku: false },
+    todayStats: { quizAnsweredToday: 8, liveMinutesToday: 14 },
+    history: allHist,
+    tz: TZ,
+  })
+  assert.equal(atlas.pipeline.length, 4)
+  assert.equal(atlas.pillars.length, 4)
+  assert.deepEqual(atlas.pillars.map((p) => p.id), ['ignite', 'locks', 'plan', 'quiz'])
+  assert.equal(atlas.lockLadder.length, 6)
+  assert.equal(atlas.todayMetrics.ignites, 1)
+  assert.equal(atlas.todayMetrics.yields, 2)
+  assert.equal(atlas.todayMetrics.relays, 1)
+  assert.equal(atlas.todayMetrics.capsules, 1)
+  assert.equal(atlas.todayMetrics.quizAnsweredToday, 8)
+})
+
+test('LiveCore-6: POST /live-core commit_relay (25m 验收点 + 20m 纯刷题舱) 与 GET /live-core 返回完整图谱和记录', async (tc) => {
+  const T_1500 = Date.UTC(2026, 10, 24, 7, 0, 0)
+  tc.mock.timers.enable({ apis: ['Date'], now: T_1500 })
+  try {
+    await withHome(async () => {
+      const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
+      await call(h(), 'POST', '/live-core', { action: 'roll_dice', diceHint: 1 })
+
+      const cp = (await call(h(), 'POST', '/live-core', {
+        action: 'commit_relay',
+        mode: 'checkpoint_25m',
+        minutes: 25,
+        summary: '拆清削弱论证他因漏洞',
+        next: '刷 15 道削弱真题并复盘',
+      })).body
+      assert.equal(cp.ok, true)
+      assert.equal(cp.relay.mode, 'checkpoint_25m')
+      assert.equal(cp.relay.checkpointResult.ok, true)
+      assert.equal(cp.relay.checkpointResult.added.length, 1)
+
+      const quizCap = (await call(h(), 'POST', '/live-core', {
+        action: 'commit_relay',
+        mode: 'quiz_only',
+        minutes: 20,
+        next: 'Pure 20m Quiz Relay',
+      })).body
+      assert.equal(quizCap.ok, true)
+      assert.equal(quizCap.relay.mode, 'quiz_only')
+      assert.equal(quizCap.relay.capsuleResult.ok, true)
+      assert.equal(quizCap.relay.capsuleResult.mode, 'quiz_only')
+
+      const atlasRes = (await call(h(), 'GET', '/live-core?filter=relay')).body
+      assert.equal(atlasRes.ok, true)
+      assert.equal(atlasRes.atlas.pillars.length, 4)
+      assert.ok(atlasRes.history.length >= 2)
+      assert.equal(atlasRes.atlas.todayMetrics.relays, 2)
+      assert.equal(atlasRes.atlas.todayMetrics.capsules, 1)
     })
   } finally {
     tc.mock.timers.reset()

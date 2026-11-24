@@ -11,6 +11,7 @@ import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../channels/proactive_state.dart';
+import 'live_core_atlas_page.dart';
 
 enum _GeminiBridgeScene { icebreak, lockBounce, eveningCards, bossAudit }
 
@@ -332,7 +333,15 @@ class _GeminiBridgePageState extends State<GeminiBridgePage> {
     return AppPage.list(
       title: 'Gemini 桥',
       subtitle: const Text('Gemini 的自定义应用连到大肥鱼'),
-      actions: [GlassIconButton(tooltip: '立即同步', icon: AppIcons.refresh, onPressed: _busy || !configured ? null : () => unawaited(_sync()))],
+      actions: [
+        GlassIconButton(
+          key: const ValueKey('bridge-open-atlas-btn'),
+          tooltip: 'Live 窥视核心与图谱',
+          icon: AppIcons.diagram,
+          onPressed: () => unawaited(LiveCoreAtlasPage.open(context, channel: _channel)),
+        ),
+        GlassIconButton(tooltip: '立即同步', icon: AppIcons.refresh, onPressed: _busy || !configured ? null : () => unawaited(_sync())),
+      ],
       children: [
         OverviewCard(
           leading: const OverviewGlyph(AppIcons.link, tint: 2),

@@ -24,6 +24,7 @@ import 'bout_voice_page.dart';
 import 'companion_hub_page.dart';
 import 'gemini_bridge_page.dart';
 import 'horizon_dossier_page.dart';
+import 'live_core_atlas_page.dart';
 import 'locks_balance_page.dart';
 import 'plan_hub_page.dart';
 import 'plan_modality_page.dart';
@@ -832,6 +833,12 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                 label: const Text('三层战略'),
                 onPressed: () => unawaited(StrategyHorizonsPage.open(context, channel: _channel)),
               ),
+              ActionChip(
+                key: const ValueKey('today-capsule-atlas'),
+                avatar: const Icon(AppIcons.diagram, size: 15),
+                label: const Text('图谱与Live'),
+                onPressed: () => unawaited(LiveCoreAtlasPage.open(context, channel: _channel, loopChannel: _loop)),
+              ),
             ],
           ),
         ),
@@ -874,6 +881,8 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
               }
             case 'plan_hub':
               unawaited(PlanHubPage.open(context, channel: _channel, loopChannel: _loop));
+            case 'atlas':
+              unawaited(LiveCoreAtlasPage.open(context, channel: _channel, loopChannel: _loop));
           }
         },
         itemBuilder: (ctx) => [
@@ -881,6 +890,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           const PopupMenuItem(value: 'handoff', child: Text('跨 AI 交接上下文预览')),
           const PopupMenuItem(value: 'details', child: Text('系统明细（队列 / 协议库 / 时钟核）')),
           const PopupMenuItem(value: 'plan_hub', child: Text('全部计划目录（长线 / 封印 / 排程）')),
+          const PopupMenuItem(value: 'atlas', child: Text('功能图谱与 Live 记录')),
           if (widget.nativePanel != null) const PopupMenuItem(value: 'native', child: Text('插件原生视图')),
         ],
       ),

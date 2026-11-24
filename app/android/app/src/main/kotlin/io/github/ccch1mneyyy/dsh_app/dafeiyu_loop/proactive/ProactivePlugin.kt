@@ -535,6 +535,10 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
             "notifications" to (nm?.areNotificationsEnabled() == true),
             "exactAlarm" to (Build.VERSION.SDK_INT < 31 || am?.canScheduleExactAlarms() == true),
             "battery" to (pm?.isIgnoringBatteryOptimizations(context.packageName) == true),
+            "shizuku" to runCatching {
+                rikka.shizuku.Shizuku.getBinder()?.isBinderAlive == true &&
+                    rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+            }.getOrDefault(false),
             // 2026-11-21 体检：引擎保活想不想要（他点过「停止」就是 false，之后不会自动拉起）。
             "keeper" to io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.shouldKeep(context),
         )

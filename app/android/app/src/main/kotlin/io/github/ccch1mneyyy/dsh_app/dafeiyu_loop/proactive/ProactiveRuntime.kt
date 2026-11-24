@@ -1751,8 +1751,10 @@ object ProactiveRuntime {
     @Volatile private var lastAutoPullAt: Long = 0L
     @Volatile private var lastPlanModalShownAt: Long = 0L
     @Volatile private var lastGeminiVoiceActive: Boolean = false
+    @Volatile private var lastGeminiVoiceStartedAt: Long = 0L
     @Volatile private var lastGeminiVoiceActiveAt: Long = 0L
     @Volatile private var lastGeminiVoiceDroppedAt: Long = 0L
+    @Volatile private var lastLiveDurationSec: Long = 0L
     private val shownSparkIds = LinkedHashSet<String>()
     private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
 
@@ -2929,6 +2931,11 @@ object ProactiveRuntime {
         inComm || recActive || textLive
     }.getOrDefault(false)
 
+    private fun isShizukuReady(): Boolean = runCatching {
+        rikka.shizuku.Shizuku.getBinder()?.isBinderAlive == true &&
+            rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }.getOrDefault(false)
+
     private fun phoneContext(): Map<String, Any?>? = runCatching {
         val now = SystemClock.elapsedRealtime()
         val s = NowFeed.snapshot(now)
@@ -2973,15 +2980,25 @@ object ProactiveRuntime {
         }.getOrNull()
         val geminiVoiceActive = isVoiceModalityActive(front, screenText)
         if (geminiVoiceActive) {
+            if (!lastGeminiVoiceActive) {
+                lastGeminiVoiceStartedAt = wall
+            }
             lastGeminiVoiceActiveAt = wall
             lastGeminiVoiceDroppedAt = 0L
         } else if (lastGeminiVoiceActive) {
             lastGeminiVoiceDroppedAt = wall
+            if (lastGeminiVoiceStartedAt > 0L) {
+                lastLiveDurationSec = ((wall - lastGeminiVoiceStartedAt) / 1000L).coerceAtLeast(0L)
+            }
         }
         lastGeminiVoiceActive = geminiVoiceActive
         val liveDroppedAgoMs = if (!geminiVoiceActive && lastGeminiVoiceActiveAt > 0L) {
             (wall - lastGeminiVoiceActiveAt).coerceAtLeast(0L)
         } else 0L
+        val a11yConnected = runCatching {
+            io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService.isConnected()
+        }.getOrDefault(false)
+        val shizukuReady = isShizukuReady()
         val geminiMinutesToday = GEMINI_PACKAGES.sumOf { pkg ->
             val uRow = usageMap[pkg]
             val nowMins = (nowTodayMap[pkg] as? Number)?.toLong() ?: 0L
@@ -3015,6 +3032,9 @@ object ProactiveRuntime {
             "geminiVoiceActive" to geminiVoiceActive,
             "liveDroppedAgoMs" to liveDroppedAgoMs,
             "lastVoiceActiveAt" to lastGeminiVoiceActiveAt,
+            "lastLiveDurationSec" to lastLiveDurationSec,
+            "a11yConnected" to a11yConnected,
+            "shizukuReady" to shizukuReady,
             "geminiMinutesToday" to geminiMinutesToday,
             "screenText" to screenText,
             "foregroundDebugOn" to io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(app),

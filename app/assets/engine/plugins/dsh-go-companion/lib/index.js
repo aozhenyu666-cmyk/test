@@ -270,7 +270,7 @@ import { classifyApp, isDualUseApp, isPureGame, resolveAppNames } from './app_re
 import { evalBehaviorRadar } from './behavior_radar.js'
 import { cleanBankUnlockState } from './bank_unlock.js'
 import { SUPER_SPARK_DEFAULTS, generateSuperSpark } from './super_spark.js'
-import { LIVE_CORE_DEFAULTS, evaluateLiveCore } from './live_core.js'
+import { LIVE_CORE_DEFAULTS, buildLiveCoreAtlas, evaluateLiveCore, formatLiveCoreHistory } from './live_core.js'
 
 export const name = 'dsh-go-companion'
 // Without this, `ctx.tools` below throws "cannot get property tools without inject"
@@ -8289,7 +8289,7 @@ export function apply(ctx) {
         if (path === '/bank') return send(res, 200, v4Hub.bankRoute(body.value || {}))
         if (path === '/plan-contract' || path === '/plan-modality') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
         if (path === '/super-spark') return send(res, 200, superSparkRoute(body.value || {}, 'POST'))
-        if (path === '/live-core') return send(res, 200, liveCoreRoute(body.value || {}, 'POST'))
+        if (path === '/live-core') return send(res, 200, await liveCoreRoute(body.value || {}, 'POST'))
         if (path === '/skills/audit') return send(res, 200, v4Hub.skillsAuditRoute(body.value || {}))
         if (path === '/analytics') return send(res, 200, v4Hub.analyticsRoute(body.value || {}))
         if (path === '/storyline') return send(res, 200, v4Hub.storylineRoute(body.value || {}))
@@ -8632,7 +8632,7 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/health') return send(res, 200, { v: 1, ok: true, ...healthNow(Date.now()) })
       if (req.method === 'GET' && (path === '/plan-contract' || path === '/plan-modality')) return send(res, 200, v4Hub.planContractRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/super-spark') return send(res, 200, superSparkRoute(Object.fromEntries(url.searchParams.entries()), 'GET'))
-      if (req.method === 'GET' && path === '/live-core') return send(res, 200, liveCoreRoute(Object.fromEntries(url.searchParams.entries()), 'GET'))
+      if (req.method === 'GET' && path === '/live-core') return send(res, 200, await liveCoreRoute(Object.fromEntries(url.searchParams.entries()), 'GET'))
       if (req.method === 'GET' && path === '/autonomy') return send(res, 200, { v: 1, ok: true, autonomy: v4Hub.computeAutonomy() })
       if (req.method === 'GET' && path === '/analytics') {
         return send(res, 200, v4Hub.analyticsRoute({
@@ -10497,12 +10497,20 @@ export function apply(ctx) {
     const vault = vaultContext(now)
     const gemSt = loadGemini()
     const recaps = Array.isArray(gemSt?.recaps) ? gemSt.recaps : []
-    const lastRecap = recaps.length ? recaps[recaps.length - 1] : null
+    const lastGemRecap = recaps.length ? recaps[recaps.length - 1] : null
+    const lastRecap = (st?.lastRecap && (!lastGemRecap || (Number(st.lastRecap.at) || 0) >= (Number(lastGemRecap.at) || 0)))
+      ? st.lastRecap
+      : lastGemRecap
     const commitments = readCommitments(home(), now, 3).map((c) => c.statement)
     const fgPkg = String(phone?.app || '')
     const fgTier = fgPkg ? tierFnNow()(fgPkg, String(phone?.label || '')) : 'other'
     const gemGate = loadGeminiGate(now, tz)
     const externalMutedUntil = Math.max(Number(config.muteUntil) || 0, Number(gemGate?.snoozeUntil) || 0)
+    const ledgerEntries = Array.isArray(opts.ledger) ? opts.ledger : readLedger(home(), 120)
+    const quizSince = Math.max(Number(st.lastIgniteAt) || 0, Number(st.lastQuizReliefAt) || 0, now - 30 * 60_000)
+    const recentQuizAnswers = ledgerEntries.filter(
+      (e) => (e?.state === 'bank-quiz-answer' || e?.state === 'quiz-solved') && Number(e?.at) > quizSince,
+    ).length
 
     const res = evaluateLiveCore({
       now,
@@ -10513,7 +10521,8 @@ export function apply(ctx) {
       planModal: opts.planModal || null,
       mealOrQuiet: Boolean(opts.mealOrQuiet),
       inGemini: opts.inGemini !== undefined ? Boolean(opts.inGemini) : inGemini(phone, geminiPackages()),
-      runningQuiz: opts.runningQuiz !== undefined ? Boolean(opts.runningQuiz) : isRunningQuizNow(now, phone, null),
+      runningQuiz: opts.runningQuiz !== undefined ? Boolean(opts.runningQuiz) : isRunningQuizNow(now, phone, ledgerEntries),
+      recentQuizAnswers,
       fgTier,
       bankState,
       questionBank,
@@ -10530,7 +10539,7 @@ export function apply(ctx) {
     })
 
     if (opts.commit !== false) {
-      saveLiveCoreState(res.nextState)
+      let persistedState = res.nextState
       if (res.triggered) {
         record({
           state: 'live-core-ignite',
@@ -10540,7 +10549,32 @@ export function apply(ctx) {
           diceFace: res.dice?.face || 0,
           anchorId: res.anchor?.id || '',
         })
+      } else {
+        const informativeYields = new Set([
+          'active_study_or_quiz',
+          'quiz_relief_valve',
+          'plan_modal_priority',
+          'sleeping',
+          'break',
+          'emergency',
+          'live_running',
+        ])
+        const sameRecentYield = res.reason === st.lastYieldLoggedReason && now - (Number(st.lastYieldLoggedAt) || 0) < LIVE_CORE_DEFAULTS.yieldLogDedupMs
+        if (informativeYields.has(res.reason) && !sameRecentYield) {
+          persistedState = {
+            ...res.nextState,
+            lastYieldLoggedAt: now,
+            lastYieldLoggedReason: res.reason,
+          }
+          record({
+            state: 'live-core-yield',
+            at: now,
+            reason: res.reason,
+            phase: res.phase,
+          })
+        }
       }
+      saveLiveCoreState(persistedState)
     }
     return res
   }
@@ -10561,27 +10595,95 @@ export function apply(ctx) {
       triggered: Boolean(evalRes?.triggered),
       lastVoiceActiveAt: Math.max(0, Number(st.lastVoiceActiveAt) || 0),
       lastIgniteAt: Math.max(0, Number(st.lastIgniteAt) || 0),
+      quizReliefCount: Math.max(0, Number(st.quizReliefCount) || 0),
+      lastRecap: st.lastRecap || null,
       dice: evalRes?.dice || st.lastPayload?.dice || null,
       payload: evalRes?.payload || st.lastPayload || null,
     }
   }
 
-  function liveCoreRoute(body = {}, method = 'POST') {
+  function buildLiveCoreAtlasAndHistory(now, tz, summaryObj, opts = {}) {
+    const ledgerEntries = readLedger(home(), 160)
+    const history = formatLiveCoreHistory(ledgerEntries, {
+      limit: Number(opts.limit) || LIVE_CORE_DEFAULTS.historyLimit,
+      filter: String(opts.filter || 'all'),
+      tz,
+    })
+    const allHistory = String(opts.filter || 'all').toLowerCase() === 'all'
+      ? history
+      : formatLiveCoreHistory(ledgerEntries, { limit: LIVE_CORE_DEFAULTS.historyLimit, filter: 'all', tz })
+    let arbiterLock = null
+    try {
+      arbiterLock = buildLocksOverview(now, tz)?.activeLock || null
+    } catch {}
+    let planState = null
+    try {
+      planState = loadSeals(now, tz)
+    } catch {}
+    const atlas = buildLiveCoreAtlas({
+      now,
+      liveCore: summaryObj,
+      arbiter: arbiterLock,
+      bridgeHealthy: bridgeHealthy(now),
+      capabilities: {
+        a11y: Boolean(lastPhone?.a11yConnected),
+        shizuku: Boolean(lastPhone?.shizukuReady),
+      },
+      todayStats: {
+        liveMinutesToday: Number(lastPhone?.geminiMinutesToday || 0),
+      },
+      bankStats: cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null)),
+      planState,
+      history: allHistory,
+      tz,
+    })
+    return { atlas, history }
+  }
+
+  async function liveCoreRoute(body = {}, method = 'POST') {
     const now = Date.now()
     const b = body && typeof body === 'object' ? body : {}
+    const tz = zoneOr(b.timeZone || config.timeZone)
     const defaultAction = method === 'GET' ? ((b.trigger === '1' || b.trigger === 'true' || b.ignite === '1') ? 'ignite' : 'status') : 'ignite'
     const action = String(b.action || defaultAction).trim()
-    if (action === 'status') {
-      return { v: 1, ok: true, ...liveCoreSummary(now), liveCore: liveCoreSummary(now) }
+    if (action === 'status' || action === 'atlas' || action === 'history') {
+      const summary = liveCoreSummary(now)
+      const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
+      return { v: 1, ok: true, ...summary, liveCore: summary, atlas, history }
     }
-    if (action === 'mute') {
+    if (action === 'mute' || action === 'quiz_relief') {
       const mins = Math.max(1, Math.min(180, Math.round(Number(b.minutes) || 20)))
+      const isRelief = action === 'quiz_relief'
       const cur = loadLiveCoreState()
-      const next = { ...cur, mutedUntil: now + mins * 60_000, lastPhase: 'muted', lastReason: 'manual_mute' }
+      const reason = isRelief ? 'quiz_relief_valve' : 'manual_mute'
+      const phase = isRelief ? 'yielded_quiz_relief' : 'muted'
+      const next = {
+        ...cur,
+        mutedUntil: now + mins * 60_000,
+        lastPhase: phase,
+        lastReason: reason,
+        ...(isRelief ? {
+          lastQuizReliefAt: now,
+          lastYieldLoggedAt: now,
+          lastYieldLoggedReason: 'quiz_relief_valve',
+          quizReliefCount: Number(cur.quizReliefCount || 0) + 1,
+        } : {}),
+      }
       saveLiveCoreState(next)
-      record({ state: 'live-core-mute', at: now, minutes: mins })
-      const summary = liveCoreSummary(now, { phase: 'muted', reason: 'manual_mute', nextState: next })
-      return { v: 1, ok: true, ...summary, liveCore: summary, toast: `已静音 Gemini 窥视调度 ${mins} 分钟` }
+      record(isRelief
+        ? { state: 'live-core-yield', at: now, reason: 'quiz_relief_valve', phase, minutes: mins }
+        : { state: 'live-core-mute', at: now, minutes: mins })
+      const summary = liveCoreSummary(now, { phase, reason, nextState: next })
+      const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
+      return {
+        v: 1,
+        ok: true,
+        ...summary,
+        liveCore: summary,
+        atlas,
+        history,
+        toast: isRelief ? `连刷 5 题已触发静音泄压 ${mins} 分钟` : `已静音 Gemini 窥视调度 ${mins} 分钟`,
+      }
     }
     if (action === 'set_config') {
       const cur = loadLiveCoreState()
@@ -10598,8 +10700,97 @@ export function apply(ctx) {
       const summary = liveCoreSummary(now, { nextState: next })
       return { v: 1, ok: true, ...summary, liveCore: summary, toast: '已更新 Gemini 窥视核心设置' }
     }
+    if (action === 'commit_relay' || action === 'submit_recap') {
+      const modeRaw = String(b.mode || (action === 'submit_recap' ? 'recap_only' : 'checkpoint_25m')).trim()
+      const mode = ['checkpoint_25m', 'quiz_only', 'recap_only'].includes(modeRaw) ? modeRaw : 'checkpoint_25m'
+      const defaultMin = mode === 'quiz_only' ? 20 : 25
+      const minutes = Math.max(10, Math.min(60, Math.round(Number(b.minutes) || defaultMin)))
+      const summaryText = String(b.summary || '').trim().slice(0, 180)
+      const nextText = String(b.next || b.title || '').trim().slice(0, 100)
+      const cur = loadLiveCoreState()
+      const next = {
+        ...cur,
+        receiptSinceLastLive: true,
+        lastPhase: 'standby',
+        lastReason: `relay_${mode}`,
+        lastRecap: {
+          at: now,
+          summary: summaryText,
+          next: nextText,
+          mode,
+        },
+      }
+      saveLiveCoreState(next)
+
+      let checkpointResult = null
+      let capsuleResult = null
+      let toast = '已记录本轮 Live 复盘并闭环交接'
+
+      if (mode === 'checkpoint_25m') {
+        const curMin = zoneMinuteOfDay(now, tz)
+        const target = curMin < 1435 ? 'today' : 'tomorrow'
+        const dueMinute = curMin < 1435 ? Math.min(1439, curMin + minutes) : 9 * 60 + 30
+        const sealTitle = nextText || summaryText || `Live 接力 ${minutes}m 产出`
+        checkpointResult = sealsRoute({
+          action: 'plan-day',
+          target,
+          seals: [{
+            title: sealTitle,
+            kind: 'bout_minutes',
+            stretch: minutes,
+            floor: Math.max(10, Math.round(minutes / 2)),
+            estMinutes: minutes,
+            dueMinute,
+          }],
+          by: 'live-relay',
+        })
+        if (checkpointResult?.added?.length) {
+          toast = `已签下「${sealTitle}」（${minutes}m 微验收点）`
+        } else {
+          const skipReason = checkpointResult?.skipped?.[0]?.text || '今日验收条数已满'
+          toast = `已交接本轮 Live（验收点未追加：${skipReason}）`
+        }
+      } else if (mode === 'quiz_only') {
+        capsuleResult = await boutsRoute({
+          action: 'reverse_capsule',
+          mode: 'quiz_only',
+          minutes,
+          goal: nextText || 'Live 接力 · 纯考公刷题舱',
+          by: 'live-relay',
+          installedApps: lastPhone?.installedApps,
+        })
+        toast = capsuleResult?.toast || `已切入 ${minutes}m 纯考公刷题舱`
+      }
+
+      record({
+        state: 'live-core-relay',
+        at: now,
+        mode,
+        summary: summaryText.slice(0, 120),
+        next: nextText.slice(0, 80),
+        minutes,
+      })
+      const summary = liveCoreSummary(now, { phase: 'standby', reason: `relay_${mode}`, nextState: next })
+      const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
+      return {
+        v: 1,
+        ok: true,
+        ...summary,
+        liveCore: summary,
+        atlas,
+        history,
+        relay: {
+          mode,
+          minutes,
+          summary: summaryText,
+          next: nextText,
+          checkpointResult,
+          capsuleResult,
+        },
+        toast,
+      }
+    }
     if (['roll_dice', 'ignite', 'trigger', 'reengage'].includes(action)) {
-      const tz = zoneOr(config.timeZone)
       const res = evaluateLiveCoreNow(now, {
         force: true,
         tz,
@@ -10608,11 +10799,14 @@ export function apply(ctx) {
         phone: b.phone || lastPhone || {},
       })
       const summary = liveCoreSummary(now, res)
+      const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
       return {
         v: 1,
         ok: Boolean(res.triggered),
         ...summary,
         liveCore: summary,
+        atlas,
+        history,
         payload: res.payload,
         result: res,
       }
@@ -12104,6 +12298,7 @@ export function apply(ctx) {
         inGemini: inGeminiTop,
         emergencyActive,
         runningQuiz: isRunningQuizNow(now, phone, ledger),
+        ledger,
         commit: body?.liveCoreCheck !== false,
       })
       if (liveCoreRes?.triggered && !geminiAutoPull && !openedThisTick && !hardCapped && v4Hub.getPullMode(now) !== 'gentle') {

@@ -701,6 +701,12 @@ extension _LocksBalanceSections on _LocksBalancePageState {
                     label: const Text('静音 20m'),
                     onPressed: _busy ? null : () => unawaited(_handleMuteLiveCore20m()),
                   ),
+                  ActionChip(
+                    key: const ValueKey('locks-live-core-atlas-chip'),
+                    avatar: const Icon(AppIcons.diagram, size: 14),
+                    label: const Text('图谱与记录'),
+                    onPressed: () => unawaited(LiveCoreAtlasPage.open(context, channel: _channel, loopChannel: _loop)),
+                  ),
                 ],
               ),
             ],

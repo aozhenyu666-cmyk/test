@@ -10,6 +10,7 @@
 
 import { collectAnchorCandidates, pickWeightedCandidate } from './super_spark.js'
 import { DEFAULT_GEMINI_SETTING, RECEIPT_FORMAT, settingLines } from './trigger.js'
+import { hm as zoneHm, ymd as zoneYmd, zoneOr } from './tz.js'
 
 export const LIVE_CORE_DEFAULTS = Object.freeze({
   reengageMinDropMs: 90_000,
@@ -19,6 +20,30 @@ export const LIVE_CORE_DEFAULTS = Object.freeze({
   musicTriggerMin: 5,
   muteDurationMs: 20 * 60_000,
   recentMax: 8,
+  quizReliefThreshold: 5,
+  yieldLogDedupMs: 10 * 60_000,
+  historyLimit: 40,
+})
+
+export const LIVE_REASON_LABELS = Object.freeze({
+  gaze_ignite_under_lock: '白天防分心窗空转点火',
+  live_reengage: 'Live 断线未复盘拉回',
+  manual_dice_roll: '手动摇骰灌料',
+  dice_spark_live: '走神/听歌触发点火',
+  active_study_or_quiz: '正在刷题或学习 · 自动让路',
+  quiz_relief_valve: '连刷 5 题触发静音泄压 20m',
+  plan_modal_priority: '计划模态优先 · 让路',
+  sleeping: '深夜睡眠守护 · 让路',
+  break: '合法放风时段 · 让路',
+  emergency: '应急放行 · 让路',
+  live_running: '已在 Gemini Live 中',
+  manual_mute: '手动静音',
+  muted: '静音冷却中 · 让路',
+  screen_off: '息屏待机 · 让路',
+  meal_or_quiet: '用餐或安静时段 · 让路',
+  disabled: '总调度已关闭',
+  cooldown: '自动点火冷却中',
+  standby: '窥视待命',
 })
 
 export const LIVE_DICE_FACES = Object.freeze([
@@ -81,6 +106,20 @@ function cleanDiceList(raw, limit = 3) {
     .slice(-limit)
 }
 
+function normalizeRecap(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const summary = cleanLine(raw.summary, 180)
+  const next = cleanLine(raw.next, 100)
+  const mode = String(raw.mode || '').trim()
+  if (!summary && !next && !mode) return null
+  return {
+    at: Math.max(0, Number(raw.at) || 0),
+    summary,
+    next,
+    mode,
+  }
+}
+
 function normalizeLiveState(raw) {
   const s = raw && typeof raw === 'object' ? raw : {}
   return {
@@ -93,12 +132,17 @@ function normalizeLiveState(raw) {
     lastVoiceActiveAt: Math.max(0, Number(s.lastVoiceActiveAt) || 0),
     lastVoiceDropHandledAt: Math.max(0, Number(s.lastVoiceDropHandledAt) || 0),
     lastIgniteAt: Math.max(0, Number(s.lastIgniteAt) || 0),
+    lastQuizReliefAt: Math.max(0, Number(s.lastQuizReliefAt) || 0),
     receiptSinceLastLive: Boolean(s.receiptSinceLastLive),
     recentAnchorIds: cleanIdList(s.recentAnchorIds),
     recentDice: cleanDiceList(s.recentDice),
     lastPhase: String(s.lastPhase || 'standby'),
     lastReason: String(s.lastReason || ''),
     lastPayload: s.lastPayload && typeof s.lastPayload === 'object' ? s.lastPayload : null,
+    lastRecap: normalizeRecap(s.lastRecap),
+    lastYieldLoggedAt: Math.max(0, Number(s.lastYieldLoggedAt) || 0),
+    lastYieldLoggedReason: String(s.lastYieldLoggedReason || ''),
+    quizReliefCount: Math.max(0, Number(s.quizReliefCount) || 0),
   }
 }
 
@@ -230,6 +274,7 @@ export function evaluateLiveCore({
   mealOrQuiet = false,
   inGemini = false,
   runningQuiz = false,
+  recentQuizAnswers = 0,
   fgTier = 'other',
   bankState = null,
   questionBank = [],
@@ -259,7 +304,7 @@ export function evaluateLiveCore({
     receiptSinceLastLive: voiceActiveNow ? false : st.receiptSinceLastLive,
   }
 
-  const yieldWith = (reason, phase) => ({
+  const yieldWith = (reason, phase, patchState = null) => ({
     triggered: false,
     action: 'yield',
     reason,
@@ -274,6 +319,7 @@ export function evaluateLiveCore({
     pullMode: 'instant',
     nextState: {
       ...nextBase,
+      ...(patchState && typeof patchState === 'object' ? patchState : {}),
       lastPhase: phase,
       lastReason: reason,
     },
@@ -288,6 +334,15 @@ export function evaluateLiveCore({
     if (mealOrQuiet) return yieldWith('meal_or_quiet', 'standby')
     if (voiceActiveNow || inGemini) return yieldWith('live_running', 'live_active')
     if (phone?.screenOn === false) return yieldWith('screen_off', 'standby')
+
+    const quizCount = Math.max(0, Number(recentQuizAnswers) || 0)
+    if (quizCount >= LIVE_CORE_DEFAULTS.quizReliefThreshold && st.mutedUntil <= ts) {
+      return yieldWith('quiz_relief_valve', 'yielded_quiz_relief', {
+        mutedUntil: ts + LIVE_CORE_DEFAULTS.muteDurationMs,
+        quizReliefCount: st.quizReliefCount + 1,
+        lastQuizReliefAt: ts,
+      })
+    }
 
     const fgTierNorm = String(fgTier || '').trim().toLowerCase()
     const idleMin = Math.max(0, Number(phone?.minutes) || 0)
@@ -473,5 +528,328 @@ function buildTriggeredResult({
     pullMode: 'instant',
     payload,
     nextState,
+  }
+}
+
+export function reasonLabelOf(reason) {
+  const key = String(reason || '').trim()
+  return LIVE_REASON_LABELS[key] || key || '未知状态'
+}
+
+function normalizeHistoryEntry(entry, idx, tzName) {
+  if (!entry || typeof entry !== 'object') return null
+  const st = String(entry.state || '').trim()
+  const at = Math.max(0, Number(entry.at) || 0)
+  if (!at) return null
+  const hm = zoneHm(at, tzName)
+
+  if (st === 'live-core-ignite') {
+    const face = Number(entry.diceFace) || 0
+    const diceObj = face >= 1 && face <= 6 ? LIVE_DICE_FACES[face - 1] : null
+    const reason = String(entry.reason || '')
+    const action = String(entry.action || 'ignite')
+    return {
+      id: `lc-ig-${at}-${idx}`,
+      at,
+      hm,
+      kind: 'ignite',
+      badge: action === 'reengage' ? '断线拉回' : (action === 'roll_dice' ? '手动摇骰' : '窥视点火'),
+      title: diceObj ? `骰${diceObj.face} · ${diceObj.name}` : 'Gemini Live 点火',
+      detail: reasonLabelOf(reason) + (entry.anchorId ? ` · 锚点 ${cleanLine(entry.anchorId, 28)}` : ''),
+      diceFace: face,
+      reason,
+    }
+  }
+
+  if (st === 'super-spark') {
+    const mode = String(entry.mode || '')
+    const src = String(entry.anchorSource || '')
+    return {
+      id: `lc-sp-${at}-${idx}`,
+      at,
+      hm,
+      kind: 'ignite',
+      badge: '火花点火',
+      title: src === 'vault' ? '笔记记忆抽考' : '错题/待复习火花',
+      detail: mode ? reasonLabelOf(mode) : '后台碎片定时破冰',
+      diceFace: 0,
+      reason: mode || 'super_spark',
+    }
+  }
+
+  if (st === 'live-core-yield') {
+    const reason = String(entry.reason || '')
+    return {
+      id: `lc-yd-${at}-${idx}`,
+      at,
+      hm,
+      kind: 'yield',
+      badge: '自动让路',
+      title: reasonLabelOf(reason),
+      detail: entry.phase ? `裁决阶段：${cleanLine(entry.phase, 32)}` : '不抢屏、让给当前正事',
+      diceFace: 0,
+      reason,
+    }
+  }
+
+  if (st === 'live-core-mute') {
+    const mins = Math.max(1, Number(entry.minutes) || 20)
+    return {
+      id: `lc-mt-${at}-${idx}`,
+      at,
+      hm,
+      kind: 'mute',
+      badge: '静音泄压',
+      title: `静音 ${mins} 分钟`,
+      detail: '期间暂停自动拉起 Gemini Live',
+      diceFace: 0,
+      reason: 'manual_mute',
+    }
+  }
+
+  if (st === 'live-core-relay') {
+    const mode = String(entry.mode || 'checkpoint_25m')
+    const mins = Math.max(5, Number(entry.minutes) || 25)
+    const title = mode === 'quiz_only'
+      ? `接力进 ${mins}m 纯刷题舱`
+      : (mode === 'recap_only' ? '记录本轮 Live 复盘' : `签下 ${mins}m 微验收点`)
+    const detail = cleanLine(entry.next || entry.summary || '已完成本轮 Live 交接', 80)
+    return {
+      id: `lc-rl-${at}-${idx}`,
+      at,
+      hm,
+      kind: 'relay',
+      badge: '接力回流',
+      title,
+      detail,
+      diceFace: 0,
+      reason: mode,
+    }
+  }
+
+  if (st === 'reverse-capsule') {
+    const mode = String(entry.mode || 'quiz_only')
+    const mins = Math.max(5, Number(entry.minutes) || 20)
+    const label = mode === 'gemini_only' ? '只留 Gemini 舱' : (mode === 'quiz_only' ? '纯考公刷题舱' : '定制专注舱')
+    return {
+      id: `lc-cp-${at}-${idx}`,
+      at,
+      hm,
+      kind: 'capsule',
+      badge: '反向单开舱',
+      title: `${label} · ${mins} 分钟`,
+      detail: '严控白名单护航',
+      diceFace: 0,
+      reason: `capsule_${mode}`,
+    }
+  }
+
+  if (st === 'checkpoints-by-ai') {
+    const n = Math.max(0, Number(entry.added) || 0)
+    if (n <= 0) return null
+    return {
+      id: `lc-ai-${at}-${idx}`,
+      at,
+      hm,
+      kind: 'relay',
+      badge: '写入验收点',
+      title: `Gemini 写入 ${n} 个验收点`,
+      detail: '已同步至今日时间轴与验收锁',
+      diceFace: 0,
+      reason: 'checkpoints_by_ai',
+    }
+  }
+
+  return null
+}
+
+/**
+ * 格式化结构化运行记录（倒序），支持 all / ignite / yield / relay 过滤。
+ */
+export function formatLiveCoreHistory(
+  ledgerEntries = [],
+  { limit = LIVE_CORE_DEFAULTS.historyLimit, filter = 'all', tz = 'Asia/Shanghai' } = {},
+) {
+  const tzName = zoneOr(tz)
+  const normFilter = String(filter || 'all').trim().toLowerCase()
+  const maxItems = Math.max(1, Math.min(100, Number(limit) || LIVE_CORE_DEFAULTS.historyLimit))
+  const list = Array.isArray(ledgerEntries) ? ledgerEntries : []
+  const out = []
+
+  for (let i = 0; i < list.length; i += 1) {
+    const item = normalizeHistoryEntry(list[i], i, tzName)
+    if (!item) continue
+    if (normFilter === 'ignite' && item.kind !== 'ignite') continue
+    if (normFilter === 'yield' && item.kind !== 'yield' && item.kind !== 'mute') continue
+    if (normFilter === 'relay' && item.kind !== 'relay' && item.kind !== 'capsule') continue
+    out.push(item)
+  }
+
+  out.sort((a, b) => b.at - a.at)
+  return out.slice(0, maxItems)
+}
+
+/**
+ * 构建极简直观的功能图谱（4 大闭环能力 + P0–P6 零冲突梯子 + 今日计数）。
+ */
+export function buildLiveCoreAtlas({
+  now = Date.now(),
+  liveCore = null,
+  arbiter = null,
+  bridgeHealthy = false,
+  capabilities = null,
+  todayStats = null,
+  bankStats = null,
+  planState = null,
+  history = [],
+  tz = 'Asia/Shanghai',
+} = {}) {
+  const ts = Math.max(0, Number(now) || Date.now())
+  const tzName = zoneOr(tz)
+  const todayStr = zoneYmd(ts, tzName)
+  const lc = liveCore && typeof liveCore === 'object' ? liveCore : {}
+  const hist = Array.isArray(history) ? history : []
+
+  let ignites = 0
+  let reengages = 0
+  let yields = 0
+  let relays = 0
+  let capsules = 0
+  for (const item of hist) {
+    if (!item || typeof item !== 'object') continue
+    if (item.kind === 'ignite') {
+      ignites += 1
+      if (item.reason === 'live_reengage') reengages += 1
+    } else if (item.kind === 'yield' || item.kind === 'mute') {
+      yields += 1
+    } else if (item.kind === 'relay') {
+      relays += 1
+    } else if (item.kind === 'capsule') {
+      capsules += 1
+    }
+  }
+
+  const dailyHist = bankStats?.stats?.dailyHistory?.[todayStr]
+  const quizAnsweredToday = Math.max(
+    0,
+    Number(
+      todayStats?.quizAnsweredToday ??
+      bankStats?.todayAnswered ??
+      dailyHist?.answered ??
+      bankStats?.session?.solved ??
+      0,
+    ) || 0,
+  )
+  const liveMinutesToday = Math.max(0, Math.round(Number(todayStats?.liveMinutesToday) || 0))
+
+  const todaySeals = (Array.isArray(planState?.items) ? planState.items : []).filter((s) => s && s.day === todayStr && s.status !== 'waived')
+  const phase = String(lc.phase || 'standby')
+  const activePrio = String(arbiter?.priority || 'P6')
+
+  const igniteStatus = lc.enabled === false
+    ? 'off'
+    : (lc.muted ? 'yielded' : (phase === 'live_active' || phase === 'ignited' ? 'active' : (phase.startsWith('yielded') ? 'yielded' : 'ready')))
+  const locksStatus = arbiter?.active ? 'active' : 'ready'
+  const planStatus = activePrio === 'P3' ? 'active' : (todaySeals.length > 0 ? 'ready' : 'ready')
+  const quizStatus = lc.reason === 'quiz_relief_valve' ? 'yielded' : (quizAnsweredToday > 0 ? 'active' : 'ready')
+
+  const pipeline = [
+    {
+      step: 1,
+      key: 'sense',
+      label: '感知现场',
+      status: capabilities?.a11y ? 'ready' : 'needs_setup',
+    },
+    {
+      step: 2,
+      key: 'dice',
+      label: '骰子灌料',
+      status: lc.dice?.face ? 'active' : 'ready',
+    },
+    {
+      step: 3,
+      key: 'live',
+      label: '官方 Live',
+      status: phase === 'live_active' ? 'active' : (bridgeHealthy ? 'ready' : 'fallback'),
+    },
+    {
+      step: 4,
+      key: 'relay',
+      label: '25m 接力',
+      status: relays + capsules > 0 ? 'active' : 'ready',
+    },
+  ]
+
+  const pillars = [
+    {
+      id: 'ignite',
+      title: '① 窥视点火（1 颗骰子）',
+      tagline: '后台整合设定/错题/笔记/屏幕摘录，一键灌进官方 Gemini Live',
+      triggerRule: '白天防分心窗空转/听歌/断线未复盘时自动点火',
+      yieldRule: '刷题/学习/睡眠/计划模态/连刷 5 题时绝对让路',
+      status: igniteStatus,
+      statusLabel: igniteStatus === 'active'
+        ? (phase === 'live_active' ? 'Live 在线' : '已点火')
+        : (igniteStatus === 'yielded' ? '已让路' : (igniteStatus === 'off' ? '已关闭' : '待命中')),
+      metricText: `今日点火 ${ignites} 次 · 拉回 ${reengages} 次`,
+      route: 'live_core',
+    },
+    {
+      id: 'locks',
+      title: '② 零冲突锁仲裁（P0–P6 · 6 只手）',
+      tagline: '单一裁判裁决优先级，绝无影子锁互相打架',
+      triggerRule: '按 P0 急事 > P1 睡眠 > P2 连麦舱 > P3 逾期验收 > P4 专心局/防分心 > P6 余额 裁决',
+      yieldRule: '应急通道、电话/短信/支付/导航永不误锁',
+      status: locksStatus,
+      statusLabel: arbiter?.active ? `${activePrio} 生效中` : '空闲守望',
+      metricText: arbiter?.label ? `当前：${cleanLine(arbiter.label, 24)}` : '当前：暂无强锁',
+      route: 'locks',
+    },
+    {
+      id: 'plan',
+      title: '③ 计划模态与验收锁（25m 接力）',
+      tagline: '先定今日计划再启动验收锁；Live 聊完可 1 键签 25m 微验收点',
+      triggerRule: '未定计划时温和拉回，到点未交按节点转 P3 验收锁',
+      yieldRule: '已过保底或放风/午休时段不打扰',
+      status: planStatus,
+      statusLabel: activePrio === 'P3' ? 'P3 逾期严锁' : (todaySeals.length > 0 ? `今日 ${todaySeals.length} 个点` : '待立约'),
+      metricText: `今日接力 ${relays} 次 · 单开舱 ${capsules} 次`,
+      route: 'plan',
+    },
+    {
+      id: 'quiz',
+      title: '④ 刷题账本与记忆回流（10 题 5 分）',
+      tagline: '刷题挣余额不被旧债吞噬，错题与 FSRS 到期卡自动灌回下次 Live',
+      triggerRule: '锁屏刷题或进入 20m 纯刷题舱直接累积正向额度',
+      yieldRule: '连刷 5 题自动触发 20m 静音泄压阀',
+      status: quizStatus,
+      statusLabel: quizStatus === 'yielded' ? '5 题泄压中' : (quizAnsweredToday > 0 ? '正产出中' : '就绪'),
+      metricText: `今日刷题 ${quizAnsweredToday} 题 · Live ${liveMinutesToday}m`,
+      route: 'bank',
+    },
+  ]
+
+  const lockLadder = [
+    { priority: 'P0', name: '应急通道 & 安全底线', rule: '3m 应急解禁、电话/短信/支付/导航永不锁', active: activePrio === 'P0' },
+    { priority: 'P1', name: '睡眠守护 & 放风窗', rule: '23:00–07:00 睡眠锁或午休/合法放风窗（Live 让路）', active: activePrio === 'P1' || activePrio === 'P1.2' },
+    { priority: 'P2', name: 'Gemini 连麦共脑舱', rule: '语音/口头考辩专属时段，只放行共脑应用', active: activePrio === 'P2' },
+    { priority: 'P3', name: '计划验收逾期严锁', rule: '到点未交保底转严锁（不可花零散余额绕过）', active: activePrio === 'P3' || activePrio === 'P3.5' },
+    { priority: 'P4', name: '专心局 & 白天防分心窗', rule: '常规白名单护航；闲逛发呆时自动点火进 Live', active: activePrio === 'P4' },
+    { priority: 'P6', name: '余额门槛 & 雷达软提示', rule: '无强锁时的温和余额计量与频率约束', active: activePrio === 'P5' || activePrio === 'P6' },
+  ]
+
+  return {
+    pipeline,
+    pillars,
+    lockLadder,
+    todayMetrics: {
+      ignites,
+      reengages,
+      yields,
+      relays,
+      capsules,
+      quizAnsweredToday,
+      liveMinutesToday,
+    },
   }
 }
