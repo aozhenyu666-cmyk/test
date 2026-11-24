@@ -950,6 +950,10 @@ export function buildDayPlanGeminiPrompt({
 }
 
 export const DEFAULT_KICKOFF_MINUTES = Object.freeze([9 * 60 + 15, 14 * 60 + 45])
+export const PLAN_MODAL_START_MIN = 8 * 60
+export const PLAN_MODAL_END_MIN = 21 * 60 + 30
+export const PLAN_MODAL_MAX_SNOOZES = 2
+export const PLAN_MODAL_SNOOZE_MS = 15 * 60_000
 
 const hmStrOf = (m) => {
   const c = clamp(intNum(m, 0), 0, 1439)
@@ -965,7 +969,8 @@ export function cleanCustodyPolicy(raw) {
       .filter((m) => m >= 7 * 60 && m <= 21 * 60 + 30),
   )].sort((a, b) => a - b).slice(0, 4)
   return {
-    autoKickoffEnabled: Boolean(s.autoKickoffEnabled),
+    autoKickoffEnabled: s.autoKickoffEnabled !== false,
+    mandatoryPlanModalEnabled: s.mandatoryPlanModalEnabled !== false,
     kickoffMinutes: kickoffMinutes.length ? kickoffMinutes : [...DEFAULT_KICKOFF_MINUTES],
     kickoffDurationMin: clamp(intNum(s.kickoffDurationMin, 25), 15, 60),
     adaptiveSplitEnabled: s.adaptiveSplitEnabled !== false,
@@ -1012,25 +1017,36 @@ export function isCustodyActive(state, now = Date.now()) {
 
 export function cleanDayPlanState(raw, { day = '', now = Date.now() } = {}) {
   const s = raw && typeof raw === 'object' ? raw : {}
+  const dayStr = String(day || s.day || '')
+  const sameDay = !s.day || !day || String(s.day) === String(day)
   const energyLevel = normalizeEnergyLevel(s.energyLevel)
   const carryoverItems = cleanCarryoverItems(s.carryoverItems ?? s.carryover)
   const dayBlocks = cleanDayBlocks(s.dayBlocks)
   const custodyPolicy = cleanCustodyPolicy(s.custodyPolicy)
   const custody = cleanCustody(s.custody, dayBlocks, now)
-  const firedKickoffSlots = [...new Set((Array.isArray(s.firedKickoffSlots) ? s.firedKickoffSlots : []).map((x) => String(x || '').trim()).filter(Boolean))].slice(0, 10)
-  const adaptiveLog = (Array.isArray(s.adaptiveLog) ? s.adaptiveLog : [])
-    .filter((x) => x && typeof x === 'object' && x.splitBlockId)
-    .slice(-20)
-    .map((x) => ({
-      at: Math.max(0, Number(x.at) || 0),
-      triggerBlockId: String(x.triggerBlockId || '').slice(0, 64),
-      splitBlockId: String(x.splitBlockId || '').slice(0, 64),
-      newBlockIds: Array.isArray(x.newBlockIds) ? x.newBlockIds.map((k) => String(k || '').slice(0, 64)).slice(0, 4) : [],
-      reason: String(x.reason || '').slice(0, 48),
-    }))
+  const firedKickoffSlots = sameDay
+    ? [...new Set((Array.isArray(s.firedKickoffSlots) ? s.firedKickoffSlots : []).map((x) => String(x || '').trim()).filter(Boolean))].slice(0, 10)
+    : []
+  const adaptiveLog = sameDay
+    ? (Array.isArray(s.adaptiveLog) ? s.adaptiveLog : [])
+        .filter((x) => x && typeof x === 'object' && x.splitBlockId)
+        .slice(-20)
+        .map((x) => ({
+          at: Math.max(0, Number(x.at) || 0),
+          triggerBlockId: String(x.triggerBlockId || '').slice(0, 64),
+          splitBlockId: String(x.splitBlockId || '').slice(0, 64),
+          newBlockIds: Array.isArray(x.newBlockIds) ? x.newBlockIds.map((k) => String(k || '').slice(0, 64)).slice(0, 4) : [],
+          reason: String(x.reason || '').slice(0, 48),
+        }))
+    : []
+  const rawConfirmed = /^\d{4}-\d{2}-\d{2}$/.test(String(s.planConfirmedDay || '')) ? String(s.planConfirmedDay) : ''
+  const planConfirmedDay = (day && rawConfirmed && rawConfirmed !== day && !sameDay) ? '' : rawConfirmed
+  const planModalSnoozeUntil = sameDay ? Math.max(0, Number(s.planModalSnoozeUntil) || 0) : 0
+  const planModalSnoozeCount = sameDay ? Math.max(0, intNum(s.planModalSnoozeCount, 0)) : 0
+  const planModalLastShownAt = sameDay ? Math.max(0, Number(s.planModalLastShownAt) || 0) : 0
   return {
     v: 1,
-    day: String(s.day || day || ''),
+    day: dayStr,
     energyLevel,
     carryoverItems,
     dayBlocks,
@@ -1038,11 +1054,416 @@ export function cleanDayPlanState(raw, { day = '', now = Date.now() } = {}) {
     custody,
     firedKickoffSlots,
     adaptiveLog,
+    planConfirmedDay,
+    planModalSnoozeUntil,
+    planModalSnoozeCount,
+    planModalLastShownAt,
     updatedAt: Number(s.updatedAt) || now,
   }
 }
 
-export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day = '', funBudgetMin = 30 } = {}) {
+function advanceAvoidLunch(startMin, dur) {
+  let s = clamp(intNum(startMin, PLAN_MODAL_START_MIN), 0, 1425)
+  const d = clamp(intNum(dur, 35), 10, 180)
+  if (s < LUNCH_BREAK_WINDOW.endMin && (s + d) > LUNCH_BREAK_WINDOW.startMin) {
+    s = LUNCH_BREAK_WINDOW.endMin
+  }
+  const end = Math.min(1440, s + d)
+  if (end - s < 10) s = Math.max(0, end - 15)
+  return { startMin: s, endMin: Math.min(1440, s + d) }
+}
+
+function buildModalDraftBlocks(cur, { minuteOfDay = 540, now = Date.now() } = {}) {
+  const level = normalizeEnergyLevel(cur.energyLevel)
+  const targetCount = level === 'low' ? 2 : 3
+  const defaultDur = level === 'low' ? 30 : (level === 'high' ? 50 : 40)
+  let cursor = Math.max(PLAN_MODAL_START_MIN, clamp(intNum(minuteOfDay, 540), 0, 1380) + 5)
+  const out = []
+
+  const unmovedCarry = (cur.carryoverItems || []).filter((c) => !c.moved && c.title).slice(0, 2)
+  for (let i = 0; i < unmovedCarry.length && out.length < targetCount; i += 1) {
+    const c = unmovedCarry[i]
+    const dur = clamp(intNum(c.minutes, defaultDur), 15, 90)
+    const span = advanceAvoidLunch(cursor, dur)
+    out.push({
+      id: `blk-modal-carry-${i + 1}`,
+      startMin: span.startMin,
+      endMin: span.endMin,
+      title: `结转：${c.title}`.slice(0, 100),
+      deliverable: c.deliverable || '完成昨日遗留并提交 ≥12 字物理产出',
+      lockMode: 'verify',
+      verifyStatus: 'armed',
+      source: 'carryover',
+      status: 'pending',
+      isBreak: false,
+      allowedApps: cleanAppsList(c.allowedApps, ['md.obsidian', 'com.fenbi.android.solar', 'com.tencent.mm']),
+      updatedAt: now,
+    })
+    cursor = span.endMin + 10
+  }
+
+  const starterPool = [
+    {
+      id: 'blk-modal-1',
+      title: '行测判断推理/言语专项突破（无纸笔直接做）',
+      deliverable: '完成 20 题并归纳 3 条错因规律（≥12 字交付）',
+      durationMin: defaultDur,
+      allowedApps: ['com.fenbi.android.solar', 'com.huatu.ztk', 'com.offcn.android', 'md.obsidian', 'com.tencent.mm'],
+    },
+    {
+      id: 'blk-modal-2',
+      title: '主线攻坚：资料分析/申论或岗位投递',
+      deliverable: '提交本块物理产出（完成题量/笔记增量/投递家数）',
+      durationMin: defaultDur,
+      allowedApps: ['md.obsidian', 'cn.wps.moffice_eng', 'com.fenbi.android.solar', 'com.hpbr.bosszhipin', 'com.tencent.mm'],
+    },
+    {
+      id: 'blk-modal-3',
+      title: '错题回炉复盘与明日规律沉淀',
+      deliverable: '压缩 ≥1 张三段因果或复习卡并完成核验',
+      durationMin: 30,
+      allowedApps: ['md.obsidian', 'com.google.android.apps.bard', 'com.ichi2.anki', 'com.tencent.mm'],
+    },
+  ]
+
+  for (let i = 0; i < starterPool.length && out.length < targetCount; i += 1) {
+    const t = starterPool[i]
+    const span = advanceAvoidLunch(cursor, t.durationMin)
+    out.push({
+      id: t.id,
+      startMin: span.startMin,
+      endMin: span.endMin,
+      title: t.title,
+      deliverable: t.deliverable,
+      lockMode: 'verify',
+      verifyStatus: 'armed',
+      source: 'user',
+      status: 'pending',
+      isBreak: false,
+      allowedApps: t.allowedApps,
+      updatedAt: now,
+    })
+    cursor = span.endMin + 10
+  }
+
+  return cleanDayBlocks(out)
+}
+
+/**
+ * 强制计划模态评估器：
+ * 在清醒工作时段（08:00–21:30）若今日未确认计划且无 verify 块且未在 snooze 期内，
+ * 结合 carryoverItems 与 energyLevel 生成 2–3 个可落地 verify 草案块并要求沟通确认。
+ */
+export function evaluateMandatoryPlanModal(rawState, {
+  now = Date.now(),
+  day = '',
+  minuteOfDay = 0,
+  inGemini = false,
+  emergencyActive = false,
+  isNight = false,
+  isMeal = false,
+  isQuiet = false,
+} = {}) {
+  const cur = cleanDayPlanState(rawState, { day, now })
+  const today = String(day || cur.day || '')
+  const m = clamp(intNum(minuteOfDay, 0), 0, 1439)
+  const verifySummary = summarizeDayBlocksVerify(cur.dayBlocks, { minuteOfDay: m })
+  const snoozeCount = cur.planModalSnoozeCount || 0
+  const snoozeLeft = Math.max(0, PLAN_MODAL_MAX_SNOOZES - snoozeCount)
+  const mustConfirm = snoozeCount >= PLAN_MODAL_MAX_SNOOZES
+
+  let reason = ''
+  if (cur.custodyPolicy?.mandatoryPlanModalEnabled === false) reason = 'disabled'
+  else if (inGemini || emergencyActive || isNight || isMeal || isQuiet) reason = 'suppressed'
+  else if (m < PLAN_MODAL_START_MIN || m > PLAN_MODAL_END_MIN) reason = 'outside_window'
+  else if (today && cur.planConfirmedDay === today) reason = 'confirmed'
+  else if (verifySummary.totalVerify > 0) reason = 'has_verify_blocks'
+  else if (cur.planModalSnoozeUntil > now) reason = 'snoozed'
+
+  if (reason) {
+    return {
+      active: false,
+      reason,
+      day: today,
+      headline: '',
+      prompt: '',
+      draftBlocks: [],
+      snoozeLeft,
+      mustConfirm,
+      snoozeCount,
+      snoozeUntil: cur.planModalSnoozeUntil,
+      energyLevel: cur.energyLevel,
+    }
+  }
+
+  const draftBlocks = buildModalDraftBlocks(cur, { minuteOfDay: m, now })
+  const profile = ENERGY_PROFILES[cur.energyLevel] || ENERGY_PROFILES.mid
+  const carryCount = (cur.carryoverItems || []).filter((c) => !c.moved).length
+  const headline = `今日尚未建验收锁 · 请确认 ${draftBlocks.length} 块行动计划`
+  const prompt = `精力档位「${profile.label}」${carryCount ? `（含 ${carryCount} 项昨日结转）` : ''}。点击确认草案或直接发一句话告诉鲸澜今天安排（例如“下午判断推理 40 分钟，晚上申论复盘 1 小时”），落盘后正式激活 P3 验收锁。${mustConfirm ? '今日延后次数已耗尽，请立即确认。' : `还可延后 ${snoozeLeft} 次（每次 15 分钟）。`}`
+
+  return {
+    active: true,
+    day: today,
+    headline,
+    prompt,
+    draftBlocks,
+    snoozeLeft,
+    mustConfirm,
+    snoozeCount,
+    snoozeUntil: cur.planModalSnoozeUntil,
+    energyLevel: cur.energyLevel,
+  }
+}
+
+const DOMAIN_SPECS = [
+  {
+    key: 'logic',
+    re: /(判断推理|图推|图形推理|逻辑判断|定义判断|类比推理|削弱|加强)/i,
+    title: '判断推理专项（无纸笔直接开干）',
+    deliverable: '完成 15–20 道判断推理并总结 3 条规律（≥12 字交付）',
+    allowedApps: ['com.fenbi.android.solar', 'com.huatu.ztk', 'com.offcn.android', 'md.obsidian', 'com.tencent.mm'],
+    duration: 40,
+  },
+  {
+    key: 'verbal',
+    re: /(言语|逻辑填空|片段阅读|语句表达)/i,
+    title: '言语理解与表达专项',
+    deliverable: '完成 20 道言语题并归纳 3 组高频易混词辨析',
+    allowedApps: ['com.fenbi.android.solar', 'com.huatu.ztk', 'com.offcn.android', 'md.obsidian', 'com.tencent.mm'],
+    duration: 35,
+  },
+  {
+    key: 'data',
+    re: /(资料分析|数量关系|速算|截位)/i,
+    title: '资料分析速算与截位训练',
+    penFreeTitle: '资料分析口算估算/降维判断训练',
+    deliverable: '完成 2 篇 10 题资料分析并记录 3 条公式或截位错因',
+    penFreeDeliverable: '无纸笔口算完成 10 题或无缝切判断推理 15 题并提交 3 条错因',
+    allowedApps: ['com.fenbi.android.solar', 'com.huatu.ztk', 'com.offcn.android', 'md.obsidian', 'com.tencent.mm'],
+    duration: 45,
+  },
+  {
+    key: 'essay',
+    re: /(申论|大作文|公文|归纳概括|综合分析|提出对策)/i,
+    title: '申论材料提炼与作答',
+    deliverable: '提交申论采分点要点或三段大纲框架（写进笔记或文字提交）',
+    allowedApps: ['md.obsidian', 'cn.wps.moffice_eng', 'com.fenbi.android.solar', 'com.tencent.mm'],
+    duration: 45,
+  },
+  {
+    key: 'exam',
+    re: /(考公|行测|真题|模考|刷题|套卷|常识)/i,
+    title: '考公行测真题专项冲刺',
+    penFreeTitle: '行测无纸笔专项（判断推理 + 言语）',
+    deliverable: '提交本轮刷题数量、正确率与 3 条错因规则',
+    penFreeDeliverable: '无纸笔完成 20 道判断/言语题并提交 3 条错因',
+    allowedApps: ['com.fenbi.android.solar', 'com.huatu.ztk', 'com.offcn.android', 'com.ichi2.anki', 'md.obsidian', 'com.tencent.mm'],
+    duration: 45,
+  },
+  {
+    key: 'resume',
+    re: /(简历|投递|求职|boss|招聘|内推)/i,
+    title: '简历项目打磨与定向投递',
+    deliverable: '完成 ≥1 处量化成果修改并实际投递/沟通 ≥3 家岗位',
+    allowedApps: ['md.obsidian', 'cn.wps.moffice_eng', 'com.hpbr.bosszhipin', 'com.tencent.mm'],
+    duration: 45,
+  },
+  {
+    key: 'interview',
+    re: /(面试|面经|模拟面|八股|star)/i,
+    title: '面试高频追问与口述模拟',
+    deliverable: '完成 3 道高频面试题 STAR 口述骨架并记录薄弱项',
+    allowedApps: ['com.google.android.apps.bard', 'md.obsidian', 'com.tencent.mm'],
+    duration: 35,
+  },
+  {
+    key: 'video',
+    re: /(网课|听课|视频|看课|b站|课程|讲座)/i,
+    title: '网课压缩提炼与问答验收',
+    deliverable: '提交 [触发→机制→行动] 三段因果链与 2 句反例追问',
+    allowedApps: ['tv.danmaku.bili', 'md.obsidian', 'com.tencent.mm'],
+    duration: 45,
+  },
+  {
+    key: 'review',
+    re: /(复盘|错题|总结|回顾|整理|背诵|记忆卡)/i,
+    title: '错题本与今日规律复盘收口',
+    deliverable: '完成错题重做并压缩出 ≥1 张可复用规律卡',
+    allowedApps: ['md.obsidian', 'com.ichi2.anki', 'com.google.android.apps.bard', 'com.tencent.mm'],
+    duration: 35,
+  },
+]
+
+function parseClauseTimeAndDuration(clause, { defaultSlot, slotCursors, minuteOfDay }) {
+  let slot = defaultSlot
+  if (/(早上|晨间|上午|早间)/.test(clause)) slot = 'morning'
+  else if (/(中午|午间)/.test(clause)) slot = 'lunch'
+  else if (/(下午|午后)/.test(clause)) slot = 'afternoon'
+  else if (/(傍晚|晚上|今晚|夜里|睡前)/.test(clause)) slot = 'evening'
+
+  let durationMin = 0
+  const hourHalfM = clause.match(/(\d+(?:\.\d+)?)\s*(?:小时|h|hr|hrs|钟头)\s*(半)?/i)
+  if (hourHalfM) {
+    durationMin = Math.round(Number(hourHalfM[1]) * 60) + (hourHalfM[2] ? 30 : 0)
+  } else if (/半(?:个)?小时/.test(clause)) {
+    durationMin = 30
+  } else {
+    const minM = clause.match(/(\d{1,3})\s*(?:分钟|分|min|m)(?![a-z])/i)
+    if (minM) durationMin = Number(minM[1])
+  }
+
+  let explicitStart = null
+  const hmClock = clause.match(/\b(\d{1,2})[:：](\d{2})\b/)
+  if (hmClock) {
+    let hh = Number(hmClock[1])
+    const mm = clamp(Number(hmClock[2]), 0, 59)
+    if ((slot === 'afternoon' || slot === 'evening') && hh >= 1 && hh <= 11) hh += 12
+    if (hh >= 0 && hh <= 23) explicitStart = hh * 60 + mm
+  } else {
+    const dianM = clause.match(/(\d{1,2})\s*点\s*(半|(\d{1,2})\s*分?)?/)
+    if (dianM) {
+      let hh = Number(dianM[1])
+      const mm = dianM[2] === '半' ? 30 : clamp(Number(dianM[3]) || 0, 0, 59)
+      if ((slot === 'afternoon' || slot === 'evening') && hh >= 1 && hh <= 11) hh += 12
+      if (hh >= 0 && hh <= 23) explicitStart = hh * 60 + mm
+    }
+  }
+
+  const startBase = explicitStart !== null
+    ? explicitStart
+    : Math.max(slotCursors[slot] ?? Math.max(minuteOfDay + 5, 9 * 60), minuteOfDay >= 480 && slot === slotFromMinute(minuteOfDay) ? minuteOfDay + 5 : 0)
+
+  return { slot, startBase, durationMin }
+}
+
+/**
+ * 确定性自然语言计划解析器：把用户的口语/碎片规划拆成带明确交付物与白名单的 verify 时间块。
+ */
+export function parseNegotiatePlanText(rawText, {
+  minuteOfDay = 540,
+  energyLevel = 'mid',
+  now = Date.now(),
+} = {}) {
+  const text = String(rawText || '').trim()
+  if (!text) return { ok: false, blocks: [], noPen: false, error: 'empty-text' }
+
+  const noPen = /(没笔|没有笔|没带笔|无纸笔|找不到地方|在外面|通勤|骑车|走路|没桌)/.test(text)
+  const textWithoutNoPen = text.replace(/(?:没|没有|无)带?纸?笔/g, '')
+  const hasExplicitPen = /(有笔|带笔|有纸笔|在桌前)/.test(textWithoutNoPen)
+  const effectiveNoPen = noPen && !hasExplicitPen
+
+  const normalized = text
+    .replace(/\r?\n/g, '，')
+    .replace(/\s+(?=(?:上午|早上|晨间|中午|午间|下午|午后|傍晚|晚上|今晚|睡前))/g, '，')
+  const rawClauses = normalized
+    .split(/[，,。；;、]+/)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 2)
+    .filter((x) => !/^(?:(?:我|现在|今天|目前|手头|这会儿)*)(?:没|没有|没带|无|有|带)?(?:纸?笔|地方|桌)$|^(?:在外面|在路上|没带纸笔|找不到地方|我今天没带笔|我没带笔|现在没笔)$/.test(x))
+
+  const clauses = rawClauses.length ? rawClauses : [text]
+  const m = clamp(intNum(minuteOfDay, 540), 0, 1439)
+  const slotCursors = {
+    morning: Math.max(9 * 60, m < LUNCH_BREAK_WINDOW.startMin ? m + 5 : 9 * 60),
+    lunch: 14 * 60,
+    afternoon: Math.max(14 * 60 + 30, m >= LUNCH_BREAK_WINDOW.endMin && m < 18 * 60 ? m + 5 : 14 * 60 + 30),
+    evening: Math.max(19 * 60 + 30, m >= 18 * 60 ? m + 5 : 19 * 60 + 30),
+  }
+
+  const defaultSlot = slotFromMinute(m) === 'lunch' ? 'afternoon' : slotFromMinute(m)
+  const blocks = []
+
+  for (let i = 0; i < clauses.length && blocks.length < 5; i += 1) {
+    const clause = clauses[i]
+    const parsedTime = parseClauseTimeAndDuration(clause, {
+      defaultSlot,
+      slotCursors,
+      minuteOfDay: m,
+    })
+    const matchedSpecs = DOMAIN_SPECS.filter((sp) => sp.re.test(clause))
+    const primary = matchedSpecs[0] || null
+    const hasReview = matchedSpecs.some((sp) => sp.key === 'review')
+
+    let title = ''
+    let deliverable = ''
+    let allowedApps = ['md.obsidian', 'com.tencent.mm']
+    let dur = parsedTime.durationMin
+
+    if (primary) {
+      const usePenFree = effectiveNoPen && Boolean(primary.penFreeTitle)
+      title = usePenFree ? primary.penFreeTitle : primary.title
+      if (hasReview && primary.key !== 'review') {
+        title = `${title.replace(/（.*?）/, '')} + 复盘`
+      }
+      deliverable = usePenFree ? primary.penFreeDeliverable : primary.deliverable
+      allowedApps = [...primary.allowedApps]
+      if (dur <= 0) dur = energyLevel === 'low' ? 30 : primary.duration
+    } else {
+      const stripped = clause
+        .replace(/(上午|早上|晨间|中午|午间|下午|午后|傍晚|晚上|今晚|睡前)/g, '')
+        .replace(/\d+(?:\.\d+)?\s*(?:小时|h|hr|hrs|钟头|分钟|分|min|m)/gi, '')
+        .replace(/\d{1,2}[:：]\d{2}|\d{1,2}\s*点\s*(?:半|\d{1,2}分?)?/g, '')
+        .replace(/^[要打算想先再做搞弄]+/, '')
+        .trim()
+      if (!stripped && blocks.length > 0) continue
+      title = (stripped || '主线专注推进块').slice(0, 48)
+      deliverable = `完成「${title}」并提交 ≥12 字真实物理产出`
+      if (dur <= 0) dur = energyLevel === 'low' ? 30 : 40
+    }
+
+    dur = clamp(intNum(dur, 40), 10, 180)
+    const span = advanceAvoidLunch(parsedTime.startBase, dur)
+    const blockSlot = slotFromMinute(span.startMin)
+    slotCursors[parsedTime.slot] = span.endMin + 10
+    if (blockSlot !== parsedTime.slot) slotCursors[blockSlot] = Math.max(slotCursors[blockSlot] || 0, span.endMin + 10)
+
+    blocks.push({
+      id: `blk-neg-${now.toString(36).slice(-4)}-${blocks.length + 1}`,
+      slot: blockSlot === 'lunch' ? 'afternoon' : blockSlot,
+      startMin: span.startMin,
+      endMin: span.endMin,
+      title,
+      deliverable,
+      lockMode: 'verify',
+      verifyStatus: 'armed',
+      source: 'user',
+      status: 'pending',
+      isBreak: false,
+      allowedApps: cleanAppsList(allowedApps),
+      updatedAt: now,
+    })
+  }
+
+  return {
+    ok: blocks.length > 0,
+    noPen: effectiveNoPen,
+    blocks: cleanDayBlocks(blocks),
+  }
+}
+
+function armModalVerifyBlocks(blocksRaw, existingBlocks = [], { now = Date.now() } = {}) {
+  const cleaned = cleanDayBlocks(blocksRaw).map((b) => (b.isBreak
+    ? { ...b, updatedAt: now }
+    : {
+        ...b,
+        lockMode: 'verify',
+        verifyStatus: b.verifyStatus === 'passed' ? 'passed' : 'armed',
+        status: b.status === 'done' ? 'done' : 'pending',
+        updatedAt: now,
+      }))
+  const incomingIds = new Set(cleaned.map((b) => b.id))
+  const preservedBoss = (Array.isArray(existingBlocks) ? existingBlocks : []).filter(
+    (b) => b.lockedByBoss && b.status !== 'done' && !incomingIds.has(b.id),
+  )
+  const merged = preservedBoss.length ? cleanDayBlocks([...cleaned, ...preservedBoss]) : cleaned
+  const armedVerifyCount = merged.filter(
+    (b) => !b.isBreak && b.status !== 'skipped' && b.lockMode === 'verify' && b.verifyStatus === 'armed',
+  ).length
+  return { dayBlocks: merged, armedVerifyCount }
+}
+
+export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day = '', funBudgetMin = 30, minuteOfDay = 540 } = {}) {
   const cur = cleanDayPlanState(rawState, { day, now })
   const action = String(body?.action || 'get_day_plan')
   const custodyLocked = isCustodyActive(cur, now) && body?.allowSystemMutation !== true
@@ -1101,6 +1522,10 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
       custody: cur.custody,
       firedKickoffSlots: cur.firedKickoffSlots,
       adaptiveLog: cur.adaptiveLog,
+      planConfirmedDay: cur.planConfirmedDay,
+      planModalSnoozeUntil: cur.planModalSnoozeUntil,
+      planModalSnoozeCount: cur.planModalSnoozeCount,
+      planModalLastShownAt: cur.planModalLastShownAt,
       stats: built.stats,
       updatedAt: now,
     }
@@ -1224,6 +1649,149 @@ export function applyDayPlanAction(rawState, body = {}, { now = Date.now(), day 
     const next = cleanDayPlanState({ ...parsedIn, dayBlocks: mergedBlocks }, { day: cur.day, now })
     return {
       ok: true,
+      ...next,
+      stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+    }
+  }
+  if (action === 'confirm_plan_modal') {
+    const confirmedDay = cur.day || new Date(now).toISOString().slice(0, 10)
+    const inputBlocks = Array.isArray(body?.blocks) && body.blocks.length
+      ? body.blocks
+      : (Array.isArray(body?.dayBlocks) && body.dayBlocks.length
+          ? body.dayBlocks
+          : buildModalDraftBlocks(cur, { minuteOfDay, now }))
+    const { dayBlocks: nextBlocks, armedVerifyCount } = armModalVerifyBlocks(inputBlocks, cur.dayBlocks, { now })
+    const next = cleanDayPlanState({
+      ...cur,
+      day: confirmedDay,
+      dayBlocks: nextBlocks,
+      planConfirmedDay: confirmedDay,
+      planModalSnoozeUntil: 0,
+      updatedAt: now,
+    }, { day: confirmedDay, now })
+    return {
+      ok: true,
+      armedVerifyCount,
+      ...next,
+      stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+    }
+  }
+  if (action === 'negotiate_plan_modal') {
+    const confirmedDay = cur.day || new Date(now).toISOString().slice(0, 10)
+    const parsed = parseNegotiatePlanText(body?.text ?? body?.message ?? body?.prompt ?? '', {
+      minuteOfDay,
+      energyLevel: cur.energyLevel,
+      now,
+    })
+    if (!parsed.ok || !parsed.blocks.length) {
+      return {
+        ok: false,
+        error: parsed.error || 'empty-text',
+        reply: '没提取到具体行动块。请用一句话说清「做什么 + 什么时候 + 多久」，比如“下午判断推理 40 分钟，晚上申论复盘 1 小时”。',
+        blocks: [],
+        armedVerifyCount: 0,
+        ...cur,
+        stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+      }
+    }
+    const summaryList = parsed.blocks.map((b) => `${hmStrOf(b.startMin)}–${hmStrOf(b.endMin)} ${b.title}`).join('；')
+    const reply = parsed.noPen
+      ? `收到无纸笔约束，已拆为 ${parsed.blocks.length} 个可直接开做的验收块：${summaryList}。P3 验收锁已就位。`
+      : `已为你排好 ${parsed.blocks.length} 个验收行动块：${summaryList}。P3 验收锁已就位，到点需提交物理产出放行。`
+    if (body?.commit === false) {
+      return {
+        ok: true,
+        committed: false,
+        noPen: parsed.noPen,
+        reply,
+        blocks: parsed.blocks,
+        armedVerifyCount: parsed.blocks.length,
+        ...cur,
+        stats: computeDayPlanStats(cur.dayBlocks, { funBudgetMin, energyLevel: cur.energyLevel }),
+      }
+    }
+    const { dayBlocks: nextBlocks, armedVerifyCount } = armModalVerifyBlocks(parsed.blocks, cur.dayBlocks, { now })
+    const next = cleanDayPlanState({
+      ...cur,
+      day: confirmedDay,
+      dayBlocks: nextBlocks,
+      planConfirmedDay: confirmedDay,
+      planModalSnoozeUntil: 0,
+      updatedAt: now,
+    }, { day: confirmedDay, now })
+    return {
+      ok: true,
+      committed: true,
+      noPen: parsed.noPen,
+      reply,
+      blocks: parsed.blocks,
+      armedVerifyCount,
+      ...next,
+      stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+    }
+  }
+  if (action === 'snooze_plan_modal') {
+    const confirmedDay = cur.day || new Date(now).toISOString().slice(0, 10)
+    const prevCount = cur.planModalSnoozeCount || 0
+    if (prevCount < PLAN_MODAL_MAX_SNOOZES) {
+      const nextCount = prevCount + 1
+      const snoozeUntil = now + PLAN_MODAL_SNOOZE_MS
+      const snoozeLeft = Math.max(0, PLAN_MODAL_MAX_SNOOZES - nextCount)
+      const next = cleanDayPlanState({
+        ...cur,
+        day: confirmedDay,
+        planModalSnoozeCount: nextCount,
+        planModalSnoozeUntil: snoozeUntil,
+        updatedAt: now,
+      }, { day: confirmedDay, now })
+      return {
+        ok: true,
+        autoArmed: false,
+        snoozeUntil,
+        snoozeCount: nextCount,
+        snoozeLeft,
+        mustConfirm: nextCount >= PLAN_MODAL_MAX_SNOOZES,
+        ...next,
+        stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
+      }
+    }
+    const startMin = clamp(intNum(minuteOfDay, PLAN_MODAL_START_MIN), PLAN_MODAL_START_MIN, 1410)
+    const endMin = Math.min(1439, startMin + 25)
+    const topCarry = (cur.carryoverItems || []).find((c) => !c.moved)
+    const forcedBlock = {
+      id: `blk-forced-${now.toString(36).slice(-4)}`,
+      slot: slotFromMinute(startMin) === 'lunch' ? 'afternoon' : slotFromMinute(startMin),
+      startMin,
+      endMin,
+      title: topCarry ? `${topCarry.title}（25m 强制起手）` : '25m 最低起步验收块（判断推理/真题）',
+      deliverable: '完成 1 轮 25 分钟无纸笔起步（10–15 题或 1 段复盘）并提交 ≥12 字物理产出',
+      lockMode: 'verify',
+      verifyStatus: 'armed',
+      source: 'system',
+      status: 'pending',
+      isBreak: false,
+      allowedApps: cleanAppsList(buildModalDraftBlocks(cur, { minuteOfDay: startMin, now })[0]?.allowedApps || ['com.fenbi.android.solar', 'md.obsidian', 'com.tencent.mm']),
+      updatedAt: now,
+    }
+    const { dayBlocks: nextBlocks, armedVerifyCount } = armModalVerifyBlocks([forcedBlock], cur.dayBlocks, { now })
+    const nextCount = prevCount + 1
+    const next = cleanDayPlanState({
+      ...cur,
+      day: confirmedDay,
+      dayBlocks: nextBlocks,
+      planConfirmedDay: confirmedDay,
+      planModalSnoozeUntil: 0,
+      planModalSnoozeCount: nextCount,
+      updatedAt: now,
+    }, { day: confirmedDay, now })
+    return {
+      ok: true,
+      autoArmed: true,
+      block: forcedBlock,
+      armedVerifyCount,
+      snoozeCount: nextCount,
+      snoozeLeft: 0,
+      mustConfirm: true,
       ...next,
       stats: computeDayPlanStats(next.dayBlocks, { funBudgetMin, energyLevel: next.energyLevel }),
     }
@@ -1660,6 +2228,7 @@ export function setCustodyPolicy(rawState, patch = {}, { now = Date.now() } = {}
   const nextPolicy = cleanCustodyPolicy({
     ...cur.custodyPolicy,
     ...(p.autoKickoffEnabled !== undefined ? { autoKickoffEnabled: p.autoKickoffEnabled } : {}),
+    ...(p.mandatoryPlanModalEnabled !== undefined ? { mandatoryPlanModalEnabled: p.mandatoryPlanModalEnabled } : {}),
     ...(p.kickoffMinutes !== undefined ? { kickoffMinutes: p.kickoffMinutes } : {}),
     ...(p.kickoffDurationMin !== undefined ? { kickoffDurationMin: p.kickoffDurationMin } : {}),
     ...(p.adaptiveSplitEnabled !== undefined ? { adaptiveSplitEnabled: p.adaptiveSplitEnabled } : {}),

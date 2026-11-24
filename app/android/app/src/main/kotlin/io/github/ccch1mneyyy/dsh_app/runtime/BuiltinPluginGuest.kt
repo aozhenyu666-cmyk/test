@@ -294,6 +294,7 @@ object BuiltinPluginGuest {
                 "lib/bridge_runtime.js",
                 "lib/review_runtime.js",
                 "lib/wall_boss_runtime.js",
+                "lib/super_spark.js",
             ),
         ),
     )

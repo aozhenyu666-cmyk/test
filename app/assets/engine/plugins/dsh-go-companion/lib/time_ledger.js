@@ -33,6 +33,7 @@ export function emptyTimeLedger(day = '') {
     v: 1,
     day: String(day || ''),
     deficitOffset: 0,
+    penaltyOffset: 0,
     entries: [],
   }
 }
@@ -50,6 +51,7 @@ export function normalizeTimeLedger(raw, day = '') {
     v: 1,
     day: String(s.day || d),
     deficitOffset: posInt(s.deficitOffset),
+    penaltyOffset: posInt(s.penaltyOffset),
     entries,
   }
 }
@@ -140,9 +142,11 @@ export function computeTimeLedger({
   const gameUsed = phoneGame + extraGameUsed
 
   const earned = sumBout + sumBank + sumBreak + sumSeal
+  const penaltyOffset = posInt(s.penaltyOffset)
+  const effectivePenalty = Math.max(0, sumPenalty - penaltyOffset)
   // 扣罚先扣今天挣来的，再扣结转；保底不扣。
-  const penaltyApplied = Math.min(earned + carryIn, sumPenalty)
-  const earnedNet = Math.max(0, earned - sumPenalty)
+  const penaltyApplied = Math.min(earned + carryIn, effectivePenalty)
+  const earnedNet = Math.max(0, earned - effectivePenalty)
   const deficitOffset = posInt(s.deficitOffset)
   const effectiveUsed = Math.max(0, funUsed + gameUsed - deficitOffset)
   const avail = carryIn + baseFun + earned - penaltyApplied
@@ -159,7 +163,7 @@ export function computeTimeLedger({
     converted: 0,
     earned,
     earnedNet,
-    penalty: sumPenalty,
+    penalty: effectivePenalty,
     carry: carryIn,
     base: baseFun,
   })
@@ -177,6 +181,8 @@ export function computeTimeLedger({
     earnedSeal: sumSeal,
     earned,
     penalty: sumPenalty,
+    penaltyOffset,
+    effectivePenalty,
     penaltyApplied,
     earnedNet,
     passMinutes: posInt(passMinutes),

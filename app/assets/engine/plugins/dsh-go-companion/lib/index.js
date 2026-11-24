@@ -148,7 +148,7 @@ import {
 import { createV4Hub } from './v4_hub.js'
 import { EMERGENCY_PACKAGES, PROXY_PACKAGES, RESIDENT_PACKAGES, SELF_PACKAGES, SYSTEM_PACKAGES, isNeverLockPkg } from './never_lock.js'
 import { contextLines, loadGeminiSetting, parseReceipt } from './trigger.js'
-import { AGREE_RE, BASE_EXTRA, DEFAULT_NEUTRAL_WORK_QUOTA_MIN, NEUTRAL_COMM_PACKAGES, TIER_FILE, TIER_LABEL, TIER_RANK, WORK_DEFAULT, classifyTierChanges, parseTierFile, renderTierFile, resolveScopeApps, tierOf } from './app_tiers.js'
+import { AGREE_RE, BASE_EXTRA, DEFAULT_NEUTRAL_WORK_QUOTA_MIN, NEUTRAL_COMM_PACKAGES, TASK_APP_SCOPES, TIER_FILE, TIER_LABEL, TIER_RANK, WORK_DEFAULT, classifyTierChanges, parseTierFile, renderTierFile, resolveScopeApps, tierOf } from './app_tiers.js'
 import { computeQuota } from './quota.js'
 import { buildLockDecision } from './lock_decision.js'
 import { CHAT_PACKAGES, driveMode, ignite, nextDrive, returnAction, stepTakeover, TAKEOVER_SPEAK_GAP_MS } from './driver.js'
@@ -268,6 +268,8 @@ import { auditOf, cardsOf, groupPrompts } from './sisters.js'
 import { ClockKernel, parseCron } from './clock_kernel.js'
 import { classifyApp, isDualUseApp, isPureGame, resolveAppNames } from './app_resolver.js'
 import { evalBehaviorRadar } from './behavior_radar.js'
+import { cleanBankUnlockState } from './bank_unlock.js'
+import { SUPER_SPARK_DEFAULTS, generateSuperSpark } from './super_spark.js'
 
 export const name = 'dsh-go-companion'
 // Without this, `ctx.tools` below throws "cannot get property tools without inject"
@@ -1793,7 +1795,23 @@ export function apply(ctx) {
     const mins = Math.max(0, Math.round(Number(minutes) || 0))
     if (EARN_LEDGER_KINDS.has(String(kind || '')) && mins > 0) {
       const tlBefore = timeLedgerNow(at, tz, lastPhone)
-      const availBefore = (Number(tlBefore.carry) || 0) + (Number(tlBefore.funQuota) || 0) + (Number(tlBefore.earned) || 0) - (Number(tlBefore.penaltyApplied) || 0)
+      if (String(kind || '') === 'earned_bank') {
+        // 刷题挣到的 earned_bank 绝不被历史违约 penalty 或历史超额吞噬：先抵平此前未消化的 penalty shortfall
+        const effectivePenaltyBefore = Math.max(0, (Number(tlBefore.penalty) || 0) - (Number(baseState.penaltyOffset) || 0))
+        const penaltyShortfall = Math.max(
+          0,
+          effectivePenaltyBefore - ((Number(tlBefore.earned) || 0) + (Number(tlBefore.carry) || 0)),
+        )
+        if (penaltyShortfall > 0) {
+          baseState = { ...baseState, penaltyOffset: (Number(baseState.penaltyOffset) || 0) + penaltyShortfall }
+        }
+      }
+      const effectivePenaltyAfter = Math.max(0, (Number(tlBefore.penalty) || 0) - (Number(baseState.penaltyOffset) || 0))
+      const penaltyAppliedAfter = Math.min((Number(tlBefore.earned) || 0) + (Number(tlBefore.carry) || 0), effectivePenaltyAfter)
+      const availBefore = (Number(tlBefore.carry) || 0)
+        + (Number(tlBefore.funQuota) || 0)
+        + (Number(tlBefore.earned) || 0)
+        - penaltyAppliedAfter
       const usedBefore = (Number(tlBefore.funUsed) || 0) + (Number(tlBefore.gameUsed) || 0)
       const effectiveUsedBefore = Math.max(0, usedBefore - (Number(baseState.deficitOffset) || 0))
       const shortfall = Math.max(0, effectiveUsedBefore - availBefore)
@@ -2361,7 +2379,37 @@ export function apply(ctx) {
   const widenStrictSession = (sess) => (sess && Array.isArray(sess.allow)
     ? { ...sess, allow: [...new Set([...sess.allow, ...strictWorkAllowNow()])] }
     : sess)
-  const sessionNow = (now) => geminiSessionView(now) || widenStrictSession(sessionNonGemini(now))
+  const reverseCapsuleSessionView = (now = Date.now()) => {
+    const rc = live?.reverseCapsule
+    if (!rc || !live || live.official?.view?.().closed) return null
+    if (!(Number(rc.until) > now)) return null
+    const strictSess = presetRt.sessionView(now)
+    if (!strictSess) return null
+    return {
+      allow: [...new Set(rc.allow || [])],
+      strict: true,
+      until: Math.min(Number(strictSess.until) || rc.until, rc.until),
+      by: 'reverse-capsule',
+      source: 'REVERSE_CAPSULE',
+      mode: rc.mode,
+      scopeKey: rc.scopeKey || `reverse:${rc.mode}`,
+      why: `反向单开舱(${rc.mode})：仅放行 ${(rc.allow || []).length} 个指定应用`,
+    }
+  }
+  const sessionNow = (now) => {
+    const gem = geminiSessionView(now)
+    if (gem) return gem
+    const highPriority = aiWorkSessionView(now)
+      || v4Hub?.dayBlockOverdueSessionView?.(now)
+      || v4Hub?.contractSessionView(now, { escalatedOnly: true })
+      || sealSessionView(now)
+      || taskLeaseView(now)
+      || leaseSessionView(now)
+    if (highPriority) return widenStrictSession(highPriority)
+    const rev = reverseCapsuleSessionView(now)
+    if (rev) return rev
+    return widenStrictSession(sessionNonGemini(now))
+  }
   const sessionNonGemini = (now) =>
     aiWorkSessionView(now) ||
     v4Hub?.dayBlockOverdueSessionView?.(now) ||
@@ -3017,6 +3065,7 @@ export function apply(ctx) {
     },
     getTimeLedger: (now = Date.now()) => timeLedgerNow(now, zoneOr(config.timeZone), lastPhone),
     getAvailableFunLeft: (now = Date.now()) => Number(timeLedgerNow(now, zoneOr(config.timeZone), lastPhone).funLeft) || 0,
+    getSpendGateStatus: (now = Date.now()) => spendGateStatus(now, zoneOr(config.timeZone)),
     getBreakPass: (now = Date.now()) => {
       if (!onBreak(now)) return null
       const wdNow = wallDecision(wallCfgNow(), now, zoneOr(config.timeZone))
@@ -3111,6 +3160,7 @@ export function apply(ctx) {
         recordTimeEntryNow({ kind: 'earned_bank', minutes: added, reason: `题库挣余额 ${solved || 10} 题`, at: now, tz })
       }
       const tlAfter = timeLedgerNow(now, tz, lastPhone)
+      const gate = spendGateStatus(now, tz)
       return {
         earnedOnly: true,
         needSpend: true,
@@ -3119,6 +3169,8 @@ export function apply(ctx) {
         dailyBankCap: BANK_EARN_DAILY_CAP,
         capped: added < mins,
         availableFunLeft: Number(tlAfter.funLeft) || 0,
+        spendBlockedReason: gate.spendBlockedReason,
+        daytimeRem: gate.daytimeRem,
       }
     },
     requestGeminiGate: (opts) => requestGeminiViaGate(opts),
@@ -8159,7 +8211,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/wall/boss-brief' || path === '/wall/boss-chat' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/wall/boss-brief' || path === '/wall/boss-chat' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/plan-modality' || path === '/super-spark' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -8234,7 +8286,8 @@ export function apply(ctx) {
         if (path === '/card') return send(res, 200, await cardRoute(body.value || {}))
         if (path === '/horizons') return send(res, 200, v4Hub.horizonsRoute(body.value || {}))
         if (path === '/bank') return send(res, 200, v4Hub.bankRoute(body.value || {}))
-        if (path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
+        if (path === '/plan-contract' || path === '/plan-modality') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
+        if (path === '/super-spark') return send(res, 200, superSparkRoute(body.value || {}, 'POST'))
         if (path === '/skills/audit') return send(res, 200, v4Hub.skillsAuditRoute(body.value || {}))
         if (path === '/analytics') return send(res, 200, v4Hub.analyticsRoute(body.value || {}))
         if (path === '/storyline') return send(res, 200, v4Hub.storylineRoute(body.value || {}))
@@ -8575,7 +8628,8 @@ export function apply(ctx) {
       if (req.method === 'GET' && path === '/horizons') return send(res, 200, v4Hub.horizonsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bank') return send(res, 200, v4Hub.bankRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/health') return send(res, 200, { v: 1, ok: true, ...healthNow(Date.now()) })
-      if (req.method === 'GET' && path === '/plan-contract') return send(res, 200, v4Hub.planContractRoute({ action: 'status' }))
+      if (req.method === 'GET' && (path === '/plan-contract' || path === '/plan-modality')) return send(res, 200, v4Hub.planContractRoute({ action: 'status' }))
+      if (req.method === 'GET' && path === '/super-spark') return send(res, 200, superSparkRoute(Object.fromEntries(url.searchParams.entries()), 'GET'))
       if (req.method === 'GET' && path === '/autonomy') return send(res, 200, { v: 1, ok: true, autonomy: v4Hub.computeAutonomy() })
       if (req.method === 'GET' && path === '/analytics') {
         return send(res, 200, v4Hub.analyticsRoute({
@@ -9057,8 +9111,7 @@ export function apply(ctx) {
     }
     return sum
   }
-  function spendBalance({ minutes, reason, by = 'panel' }, now = Date.now()) {
-    const tz = zoneOr(config.timeZone)
+  function spendGateStatus(now = Date.now(), tz = zoneOr(config.timeZone)) {
     const today = dayString(now, tz)
     const min = zoneMinuteOfDay(now, tz)
     const window = classifySpendWindow(min)
@@ -9067,37 +9120,69 @@ export function apply(ctx) {
     const overdueContract = Boolean((() => { try { return v4Hub?.contractSessionView?.(now, { escalatedOnly: true }) } catch { return null } })())
     const overdueDayBlock = Boolean((() => { try { return v4Hub?.dayBlockOverdueSessionView?.(now) } catch { return null } })())
     const arbiterNow = (() => { try { return v4Hub?.computeLockArbiter?.(now) } catch { return null } })()
-    if (overdueSeal || overdueContract || overdueDayBlock || arbiterNow?.priority === 'P3' || arbiterNow?.source === 'CONTRACT_OVERDUE_STRICT') {
+    const verifyOverdue = Boolean(overdueSeal || overdueContract || overdueDayBlock || arbiterNow?.priority === 'P3' || arbiterNow?.source === 'CONTRACT_OVERDUE_STRICT')
+    const eveningLocked = Boolean(eveningLockUntil(now, tz))
+    const wdRaw = wallDecision(wallCfgNow(), now, tz)
+    const nightLocked = Boolean(lastRhythm?.night === 'lock' || (wdRaw.locked && wdRaw.kind === 'night'))
+    const todaySeals = sealsState.items.filter((x) => x.day === today)
+    const dayVerify = (() => { try { return v4Hub?.getDayVerifySummary?.(now, sealsState.items) } catch { return null } })()
+    const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch') || Boolean(dayVerify?.allVerifyCleared)
+    const daytimeSpentMin = daytimeSpentMinToday(now, tz)
+    let tlNow = null
+    try {
+      tlNow = timeLedgerNow(now, tz, lastPhone)
+    } catch {}
+    const earnedBankBonus = (!floorPassed && Number(tlNow?.earnedBank) > 0)
+      ? Math.min(30, Math.round(Number(tlNow.earnedBank) || 0))
+      : 0
+    const daytimeCapMin = DAYTIME_SPEND_CAP_MIN + earnedBankBonus
+    const daytimeRem = Math.max(0, daytimeCapMin - daytimeSpentMin)
+
+    let spendBlockedReason = ''
+    if (verifyOverdue) spendBlockedReason = 'verify-overdue'
+    else if (eveningLocked) spendBlockedReason = 'evening-cap'
+    else if (nightLocked) spendBlockedReason = 'night-lock'
+    else if (window === 'daytime' && !floorPassed && daytimeRem < SPEND_MIN) spendBlockedReason = 'daytime-cap'
+
+    return {
+      today,
+      min,
+      window,
+      floorPassed,
+      daytimeSpentMin,
+      daytimeCapMin,
+      daytimeRem,
+      tlNow,
+      spendBlockedReason,
+    }
+  }
+  function spendBalance({ minutes, reason, by = 'panel' }, now = Date.now()) {
+    const tz = zoneOr(config.timeZone)
+    const gate = spendGateStatus(now, tz)
+    const { today, window, floorPassed, daytimeSpentMin, daytimeCapMin, daytimeRem, tlNow, spendBlockedReason } = gate
+    if (spendBlockedReason === 'verify-overdue') {
       return {
         ok: false,
         error: 'verify-overdue',
         text: '当前有已到点未过保底的验收点或计划验收锁生效中，请先交付验收或保底再解锁，不可用零散余额绕过。紧急情况请走 3 分钟应急通行。',
       }
     }
-    if (eveningLockUntil(now, tz)) return { ok: false, error: 'evening-cap', text: '今晚的娱乐上限已经用完了，锁到明早 7 点。余额留着明天用。' }
-    const wdRaw = wallDecision(wallCfgNow(), now, tz)
-    const nightLocked = Boolean(lastRhythm?.night === 'lock' || (wdRaw.locked && wdRaw.kind === 'night'))
-    if (nightLocked) {
+    if (spendBlockedReason === 'evening-cap') {
+      return { ok: false, error: 'evening-cap', text: '今晚的娱乐上限已经用完了，锁到明早 7 点。余额留着明天用。' }
+    }
+    if (spendBlockedReason === 'night-lock') {
       return { ok: false, error: 'night-lock', text: '已进入深夜睡眠护栏（锁到明早 7 点），余额留着明天用。' }
     }
-    const todaySeals = sealsState.items.filter((x) => x.day === today)
-    const dayVerify = (() => { try { return v4Hub?.getDayVerifySummary?.(now, sealsState.items) } catch { return null } })()
-    const floorPassed = todaySeals.some((x) => x.status === 'floor' || x.status === 'stretch') || Boolean(dayVerify?.allVerifyCleared)
-    const daytimeSpentMin = daytimeSpentMinToday(now, tz)
-    const daytimeRem = Math.max(0, DAYTIME_SPEND_CAP_MIN - daytimeSpentMin)
-    if (window === 'daytime' && !floorPassed && daytimeRem < SPEND_MIN) {
+    if (spendBlockedReason === 'daytime-cap') {
       return {
         ok: false,
         error: 'daytime-cap',
-        text: daytimeSpentMin >= DAYTIME_SPEND_CAP_MIN
-          ? '白天工作时段零散花余额已达 30 分钟上限。12:00–14:00 午休及 18:00 后可自由花余额，或先过今日保底立即解除白天 30m 限制。'
-          : `白天工作时段零散槽位仅剩 ${daytimeRem} 分钟（不足 ${SPEND_MIN} 分钟最低起花），12:00–14:00 午休及 18:00 后可自由花余额，或先过今日保底立即解除白天 30m 限制。`,
+        text: daytimeSpentMin >= daytimeCapMin
+          ? `白天工作时段零散花余额已达 ${daytimeCapMin} 分钟上限。12:00–14:00 午休及 18:00 后可自由花余额，或先过今日保底立即解除白天限制。`
+          : `白天工作时段零散槽位仅剩 ${daytimeRem} 分钟（不足 ${SPEND_MIN} 分钟最低起花），12:00–14:00 午休及 18:00 后可自由花余额，或先过今日保底立即解除白天限制。`,
       }
     }
-    let balance = 0
-    try {
-      balance = Number(timeLedgerNow(now, tz, lastPhone).funLeft) || 0
-    } catch {}
+    const balance = Number(tlNow?.funLeft) || 0
     const rawMin = Math.round(Number(minutes) || 0)
     const effectiveMinutes = window === 'daytime' && !floorPassed ? Math.min(rawMin, daytimeRem) : rawMin
     const c = checkSpend({ minutes: effectiveMinutes, reason, balance })
@@ -10022,7 +10107,7 @@ export function apply(ctx) {
         if (seen.has(pkg)) continue
         rows.push({ pkg, label: '', tier: tf(pkg), override: tier, pendingTier: pending[pkg]?.tier || null, effectiveAt: pending[pkg] ? Number(pending[pkg].since) + TIER_LOOSEN_MS : 0 })
       }
-      return { v: 1, ok: true, tiers: ['work', 'dual', 'fun', 'game'], labels: TIER_LABEL, rows, loosenDelayMs: TIER_LOOSEN_MS }
+      return { v: 1, ok: true, tiers: ['work', 'dual', 'fun', 'game'], labels: TIER_LABEL, rows, loosenDelayMs: TIER_LOOSEN_MS, defaultAllow: defaultAllowApps() }
     }
     const pkg = String(b.pkg || '').trim()
     if (!pkg) return { v: 1, ok: false, error: 'no-pkg', text: '没说是哪个 App。' }
@@ -10043,6 +10128,26 @@ export function apply(ctx) {
     if (before === tier) {
       if (pending[pkg]) { delete pending[pkg]; saveTierPending(pending) }
       return { v: 1, ok: true, applied: true, tier, text: '本来就在「' + TIER_LABEL[tier] + '」。' }
+    }
+    if (before === 'other' && tier === 'work') {
+      if (isPureGame(pkg, String(b.label || ''))) {
+        return { v: 1, ok: false, error: 'pure-game', text: '硬规矩拦回：纯游戏不可设为工作白名单。' }
+      }
+      if (pending[pkg]) { delete pending[pkg]; saveTierPending(pending) }
+      commit({
+        appTiers: { ...overrides, [pkg]: tier },
+        ...syncAppListMembership([pkg], 'allow', now),
+      })
+      writeTierFile()
+      record({ state: 'app-tier-set', at: now, pkg, from: before, to: tier, loosen: true, immediate: true, by: 'app' })
+      return {
+        v: 1,
+        ok: true,
+        applied: true,
+        tier,
+        defaultAllow: defaultAllowApps(),
+        text: TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '：未分级应用加入工作白名单，立即生效。',
+      }
     }
     const loosen = (TIER_RANK[tier] ?? 1) < (TIER_RANK[before] ?? 1)
     if (!loosen) {
@@ -10183,7 +10288,7 @@ export function apply(ctx) {
     const extraDeny = (Array.isArray(config.blockExtra) ? config.blockExtra : [])
       .filter((b) => b && Number(b.until) > now && !isNeverLockPkg(b.app))
       .map((b) => ({ app: b.app, until: Number(b.until), why: b.why || '临时锁' }))
-    return buildLockDecision({
+    const dec = buildLockDecision({
       arbiter: lockArbiter,
       work: {
         active: workActive,
@@ -10206,6 +10311,153 @@ export function apply(ctx) {
       neutralWorkQuotaMin: DEFAULT_NEUTRAL_WORK_QUOTA_MIN,
       now,
     })
+    const reverseSess = reverseCapsuleSessionView(now)
+    if (reverseSess && (!lockArbiter || !['P0', 'P1', 'P2', 'P3'].includes(lockArbiter.priority))) {
+      return {
+        ...dec,
+        mode: 'allowlist',
+        source: 'REVERSE_CAPSULE',
+        allow: [...new Set(reverseSess.allow)],
+        needPass: [],
+        why: reverseSess.why,
+        unlockHow: '完成本轮胶囊或手动收局解锁',
+      }
+    }
+    return dec
+  }
+
+  function loadSuperSparkState() {
+    const raw = readState(stateFile('super-spark.json'), null)
+    return {
+      v: 1,
+      recentIds: Array.isArray(raw?.recentIds) ? raw.recentIds.map((x) => String(x || '')).filter(Boolean).slice(-SUPER_SPARK_DEFAULTS.recentMax) : [],
+      lastSparkAt: Math.max(0, Number(raw?.lastSparkAt) || 0),
+      mutedUntil: Math.max(0, Number(raw?.mutedUntil) || 0),
+      lastSpark: raw?.lastSpark && typeof raw.lastSpark === 'object' ? raw.lastSpark : null,
+    }
+  }
+
+  function saveSuperSparkState(next) {
+    writeJson(stateFile('super-spark.json'), { ...next, v: 1 })
+  }
+
+  function loadAllBankQuestions() {
+    const out = []
+    const catalog = readState(stateFile('bank-catalog.json'), null)
+    if (catalog && Array.isArray(catalog.banks)) {
+      for (const b of catalog.banks) {
+        if (!b || b.enabled === false || !Array.isArray(b.questions)) continue
+        for (const q of b.questions) out.push(q)
+      }
+    }
+    const legacy = readState(stateFile('bank.json'), null)
+    if (legacy && Array.isArray(legacy.questions)) {
+      for (const q of legacy.questions) out.push(q)
+    }
+    return out
+  }
+
+  function buildSuperSparkNow(now = Date.now(), opts = {}) {
+    const ss = loadSuperSparkState()
+    const phone = opts.phone || lastPhone || {}
+    const bankState = cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
+    const questionBank = loadAllBankQuestions()
+    const reviewList = dueCards(loadReviewCards(), now, { limit: 10 })
+    const horizons = readState(stateFile('horizons.json'), null)
+    const vault = vaultContext(now)
+    const fgPkg = String(phone?.app || '')
+    const fgTier = fgPkg ? tierFnNow()(fgPkg, String(phone?.label || '')) : 'other'
+    const fgMin = Math.max(0, Number(phone?.minutes || 0) || 0)
+    const wandering = opts.wandering !== undefined
+      ? Boolean(opts.wandering)
+      : Boolean(phone?.fun || (['fun', 'game', 'other'].includes(fgTier) && fgMin >= 3))
+
+    const spark = generateSuperSpark({
+      now,
+      bankState,
+      questionBank,
+      reviewCards: reviewList,
+      horizons,
+      vault,
+      recentIds: ss.recentIds,
+      modeHint: String(opts.modeHint || ''),
+      wandering,
+      noPen: Boolean(opts.noPen),
+      commute: Boolean(opts.commute),
+      handsBusy: Boolean(opts.handsBusy),
+      idleMinutes: Number(opts.idleMinutes ?? fgMin) || 0,
+      mutedUntil: ss.mutedUntil,
+      force: Boolean(opts.force),
+    })
+
+    if (spark.triggered && opts.commit !== false) {
+      saveSuperSparkState({
+        ...ss,
+        recentIds: spark.nextRecentIds || ss.recentIds,
+        lastSparkAt: now,
+        lastSpark: spark,
+      })
+      record({
+        state: 'super-spark',
+        at: now,
+        mode: spark.mode,
+        anchorSource: spark.anchorSource,
+        anchorId: spark.anchorId,
+      })
+    }
+    return spark
+  }
+
+  function superSparkRoute(body = {}, method = 'POST') {
+    const now = Date.now()
+    const b = body && typeof body === 'object' ? body : {}
+    const action = String(b.action || (method === 'GET' ? (b.trigger === '1' || b.trigger === 'true' ? 'trigger' : 'status') : 'trigger'))
+    if (action === 'mute_15m' || action === 'mute') {
+      const mins = Math.max(1, Math.min(120, Math.round(Number(b.minutes) || 15)))
+      const cur = loadSuperSparkState()
+      const mutedUntil = now + mins * 60_000
+      saveSuperSparkState({ ...cur, mutedUntil })
+      record({ state: 'super-spark-muted', at: now, until: mutedUntil, minutes: mins })
+      return {
+        v: 1,
+        ok: true,
+        muted: true,
+        mutedUntil,
+        toast: `已静音超级大肥鱼主动抽考 ${mins} 分钟`,
+      }
+    }
+    if (action === 'status') {
+      const st = loadSuperSparkState()
+      return {
+        v: 1,
+        ok: true,
+        muted: st.mutedUntil > now,
+        mutedUntil: st.mutedUntil,
+        lastSparkAt: st.lastSparkAt,
+        recentIds: st.recentIds,
+        spark: st.lastSpark,
+        superSpark: st.lastSpark,
+      }
+    }
+    const spark = buildSuperSparkNow(now, {
+      force: b.force !== false,
+      modeHint: String(b.modeHint || b.mode || ''),
+      noPen: Boolean(b.noPen),
+      wandering: b.wandering !== undefined ? Boolean(b.wandering) : undefined,
+      commute: Boolean(b.commute),
+      handsBusy: Boolean(b.handsBusy),
+      idleMinutes: Number(b.idleMinutes || 0) || 0,
+      phone: lastPhone,
+    })
+    const stAfter = loadSuperSparkState()
+    return {
+      v: 1,
+      ok: Boolean(spark?.triggered),
+      muted: stAfter.mutedUntil > now,
+      mutedUntil: stAfter.mutedUntil,
+      spark,
+      superSpark: spark,
+    }
   }
 
   // ---------------------------------------------------------------- 2026-11-18 推进器 + 三档
@@ -11391,7 +11643,13 @@ export function apply(ctx) {
     const wd = ((!dayWorkWallEnabled || spendPassActive || breakActive) && !nightLocked && (!contractOverdue || breakActive) && wdRaw.kind !== 'night')
       ? { ...wdRaw, locked: false, kind: null, openUntil: Math.max(Number(wdRaw.openUntil) || 0, Number(config.spendPass?.until) || 0, breakActive ? (Number(config.breakUntil) || 0) : 0) }
       : wdRaw
-    const hardCapDowngrade = hardCapped && !nightLocked && !contractOverdue
+    const reverseSess = reverseCapsuleSessionView(now)
+    const verifyLockActive = Boolean(
+      contractOverdue
+      || v4Hub?.dayBlockOverdueSessionView?.(now)
+      || v4Hub?.contractSessionView?.(now, { escalatedOnly: true }),
+    )
+    const hardCapDowngrade = hardCapped && !nightLocked && !contractOverdue && !verifyLockActive && !reverseSess
 
     const effectiveForceLevel = (emergencyActive || breakActive || hardCapDowngrade)
       ? 0
@@ -11421,7 +11679,23 @@ export function apply(ctx) {
       takeoverSession: takeoverActiveSession,
       ...(hardCapDowngrade ? { takeoverSession: null, ...(config.aiWorkSession?.by === 'takeover' ? { aiWorkSession: null } : {}) } : {}),
     })
+    if (reverseSess && (!lockArbiter || !['P0', 'P1', 'P2', 'P3'].includes(lockArbiter.priority))) {
+      lockArbiter = {
+        ...(lockArbiter || {}),
+        active: true,
+        priority: lockArbiter?.priority || 'P4',
+        source: 'REVERSE_CAPSULE',
+        mode: reverseSess.mode,
+        scopeKey: reverseSess.scopeKey,
+        allow: [...new Set(reverseSess.allow)],
+        label: `反向单开舱（${reverseSess.mode === 'gemini_only' ? '只留 Gemini' : (reverseSess.mode === 'quiz_only' ? '纯刷题舱' : '定制舱')}）`,
+        why: reverseSess.why,
+        unlockHow: '完成本轮胶囊或手动收局解锁',
+      }
+    }
     const keepOnHardCap = lockArbiter?.source !== 'TAKEOVER_STRICT'
+      || lockArbiter?.source === 'REVERSE_CAPSULE'
+      || lockArbiter?.priority === 'P3'
     if (hardCapDowngrade && !keepOnHardCap) {
       lockArbiter = {
         active: false,
@@ -11646,8 +11920,43 @@ export function apply(ctx) {
     const lockArbiterOut = (liveBoutId || liveSealId)
       ? { ...lockArbiter, ...(liveBoutId ? { boutId: liveBoutId } : {}), ...(liveSealId ? { sealId: liveSealId } : {}) }
       : lockArbiter
+    const modNowTop = localMinute(phone, zoneMinuteOfDay(now, tz))
+    const tzMealTop = Boolean(mealNow(wallConfig(config).meals, modNowTop))
+    const tzQuietTop = inQuiet(now, config.quietStart, config.quietEnd, tz)
+    const inGeminiTop = inGemini(phone, geminiPackages()) || Boolean(geminiSessionView(now))
+    const planModal = v4Hub.evaluatePlanModalNow(now, {
+      day: dayString(now, tz),
+      minuteOfDay: modNowTop,
+      inGemini: inGeminiTop,
+      emergencyActive,
+      isNight: nightLocked || Boolean(lastRhythm?.night),
+      isMeal: tzMealTop,
+      isQuiet: tzQuietTop,
+    })
+    let superSpark = null
+    const ssState = loadSuperSparkState()
+    const ssIntervalDue = !ssState.lastSparkAt || (now - ssState.lastSparkAt >= SUPER_SPARK_DEFAULTS.autoCooldownMs)
+    const ssAwakeWork = modNowTop >= 8 * 60 && modNowTop <= 22 * 60
+    const ssNotBlocked = !emergencyActive
+      && !nightLocked
+      && !lastRhythm?.night
+      && !tzMealTop
+      && !tzQuietTop
+      && !inGeminiTop
+      && !planModal?.active
+      && !(Number(config.muteUntil) > now)
+      && !(Number(ssState.mutedUntil) > now)
+    const ssNotFocused = !runningBoutNow() && !reverseSess
+    const hasDoneToday = (Number(timeLedger?.earnedBout) || 0) > 0 || Boolean(v4Hub?.getDayVerifySummary?.(now)?.passedCount)
+    const ssLowOutput = Boolean(phone?.fun || Number(phone?.minutes || 0) >= 3 || !hasDoneToday)
+    if (ssAwakeWork && ssNotBlocked && ssNotFocused && ssIntervalDue && ssLowOutput) {
+      const cand = buildSuperSparkNow(now, { phone, idleMinutes: Number(phone?.minutes || 0) })
+      if (cand?.triggered) superSpark = cand
+    }
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
+      planModal,
+      ...(superSpark ? { superSpark } : {}),
       boutId: liveBoutId,
       sealId: liveSealId,
       ...(liveBoutId ? { bout: { id: liveBoutId, sealId: liveSealId } } : {}),
@@ -12346,6 +12655,7 @@ export function apply(ctx) {
     live = {
       official, db, protocol, packet: pkt, department: dept, apps: resolvedApps, goal, budgetMin, openedAt: now, workId, parentHorizonId,
       sealId: boutSeal.sealId, sealTitle: boutSeal.sealTitle, scopeKey, scopeLabel,
+      ...(opts.reverseCapsule ? { reverseCapsule: opts.reverseCapsule } : {}),
     }
     try {
       const tzW = zoneOr(config.timeZone)
@@ -12669,23 +12979,139 @@ export function apply(ctx) {
       presetRt.strictOff(now, 'panel')
       return { v: 1, ok: true, strict: false, toast: live ? '已切为温和守护（仅提醒不强锁）' : '已撤回残留严格锁' }
     }
-    if (action === 'allow') {
-      if (!live) return { v: 1, ok: false, toast: '现在没有局。' }
-      const allow = cleanAllowList(body?.allow || body?.apps?.allow || body?.apps?.need || [])
-      if (!allow.length) return { v: 1, ok: false, toast: '白名单至少保留一个应用。' }
+    const sanitizeAllowWithGameGuard = (rawList) => {
+      const candidates = cleanAllowList(rawList)
+      const allow = []
+      const rejectedGames = []
+      for (const pkg of candidates) {
+        if (isPureGame(pkg, '')) rejectedGames.push(pkg)
+        else allow.push(pkg)
+      }
+      return { allow, rejectedGames }
+    }
+    const resolveQuizOnlyApps = (installedArg = []) => {
+      const installedRaw = [
+        ...(Array.isArray(lastPhone?.installedApps) ? lastPhone.installedApps : []),
+        ...(Array.isArray(installedArg) ? installedArg : []),
+      ]
+      const examSpec = TASK_APP_SCOPES.exam || {}
+      const examPkgs = Array.isArray(examSpec.packages) ? examSpec.packages : []
+      const examSet = new Set(examPkgs)
+      const examHintRe = examSpec.hintRe instanceof RegExp
+        ? examSpec.hintRe
+        : /(fenbi|huatu|offcn|anki|obsidian|粉笔|华图|中公)/i
+      const matched = []
+      for (const entry of installedRaw) {
+        const pkg = typeof entry === 'string' ? entry.trim() : String(entry?.app || entry?.pkg || '').trim()
+        const label = typeof entry === 'object' ? String(entry?.label || '') : ''
+        if (!pkg || isPureGame(pkg, label)) continue
+        if (examSet.has(pkg) || examHintRe.test(pkg) || examHintRe.test(label)) matched.push(pkg)
+      }
+      const uniqueMatched = cleanAllowList(matched)
+      if (uniqueMatched.length) return uniqueMatched
+      return cleanAllowList(examPkgs.length ? examPkgs : ['com.fenbi.android.solar', 'com.huatu.ztk', 'com.offcn.android', 'com.ichi2.anki', 'md.obsidian'])
+    }
+    if (action === 'allow' || action === 'set_default_allow') {
+      const { allow, rejectedGames } = sanitizeAllowWithGameGuard(body?.allow || body?.apps?.allow || body?.apps?.need || [])
+      if (!allow.length) {
+        return {
+          v: 1,
+          ok: false,
+          error: rejectedGames.length ? 'pure-game' : 'empty-allow',
+          rejectedGames,
+          defaultAllow: defaultAllowApps(),
+          toast: rejectedGames.length
+            ? `纯游戏不可加入白名单：${rejectedGames.join('、')}`
+            : '白名单至少保留一个有效应用。',
+        }
+      }
       const now = Date.now()
-      live.apps = { need: allow, allow }
-      const r = presetRt.setApps('current', live.apps, now, String(body?.by || 'panel'))
-      if (body?.persistDefault !== false) {
+      let setRes = null
+      if (live) {
+        live.apps = { need: allow, allow }
+        setRes = presetRt.setApps('current', live.apps, now, String(body?.by || 'panel'))
+      }
+      if (action === 'set_default_allow' || !live || body?.persistDefault !== false) {
         config = { ...config, defaultAllow: allow }
         try { writeConfig(config) } catch {}
       }
-      const wasStrict = Boolean(presetRt.sessionView(now))
-      if (wasStrict || body?.strict === true) {
-        if (wasStrict) presetRt.strictOff(now, 'panel-allow')
-        presetRt.strictNow(now, String(body?.why || '更新本局白名单'), 'panel', body?.minutes)
+      if (live) {
+        const wasStrict = Boolean(presetRt.sessionView(now))
+        if (wasStrict || body?.strict === true) {
+          if (wasStrict) presetRt.strictOff(now, 'panel-allow')
+          presetRt.strictNow(now, String(body?.why || '更新本局白名单'), 'panel', body?.minutes)
+        }
       }
-      return { v: 1, ...r, allow }
+      record({ state: 'default-allow-set', at: now, action, allow, rejectedGames, hasLive: Boolean(live) })
+      return {
+        v: 1,
+        ...(setRes || {}),
+        ok: true,
+        allow,
+        defaultAllow: defaultAllowApps(),
+        rejectedGames,
+        toast: rejectedGames.length
+          ? `已更新白名单（${allow.length} 个），并拦截纯游戏：${rejectedGames.join('、')}`
+          : (live ? '已热更新本局与默认白名单' : '已更新默认白名单'),
+      }
+    }
+    if (action === 'reverse_capsule') {
+      const now = Date.now()
+      const mode = ['gemini_only', 'quiz_only', 'custom'].includes(String(body?.mode || ''))
+        ? String(body.mode)
+        : 'quiz_only'
+      const minutes = Math.max(5, Math.min(240, Math.round(Number(body?.minutes) || (mode === 'gemini_only' ? 15 : 20))))
+      let allow = []
+      let rejectedGames = []
+      if (mode === 'gemini_only') {
+        allow = [...new Set(geminiPackages())]
+      } else if (mode === 'quiz_only') {
+        allow = resolveQuizOnlyApps(body?.installedApps)
+      } else {
+        const sanitized = sanitizeAllowWithGameGuard(body?.allow || body?.apps?.allow || body?.apps?.need || [])
+        allow = sanitized.allow
+        rejectedGames = sanitized.rejectedGames
+      }
+      if (!allow.length) {
+        return {
+          v: 1,
+          ok: false,
+          error: rejectedGames.length ? 'pure-game' : 'empty-allow',
+          rejectedGames,
+          toast: rejectedGames.length ? `纯游戏不可进入反向单开舱：${rejectedGames.join('、')}` : '反向单开舱至少需要一个合法应用',
+        }
+      }
+      if (live && !live.official.view().closed) {
+        closeBoutNow()
+      }
+      const goal = String(body?.goal || (mode === 'gemini_only'
+        ? '反向单开舱 · 只留 Gemini 口头硬考'
+        : (mode === 'quiz_only' ? '反向单开舱 · 纯考公刷题舱' : '反向单开舱 · 定制专注'))).slice(0, 120)
+      const scopeKey = `reverse:${mode}`
+      const until = now + minutes * 60_000
+      const started = startBout(String(body?.protocolId || 'execute'), {
+        apps: { need: allow, allow },
+        goal,
+        minutes,
+        scopeKey,
+        reverseCapsule: { mode, allow, minutes, goal, until, scopeKey, startedAt: now },
+        by: String(body?.by || 'reverse-capsule'),
+      })
+      if (!started.ok) return { v: 1, ...started }
+      presetRt.strictNow(now, `反向单开舱(${mode})：${goal}`, 'reverse-capsule', minutes)
+      record({ state: 'reverse-capsule', at: now, mode, allow, minutes, until, scopeKey })
+      return {
+        v: 1,
+        ok: true,
+        mode,
+        allow,
+        minutes,
+        until,
+        scopeKey,
+        rejectedGames,
+        boutId: live?.boutId || started.boutId,
+        toast: `已锁定「${goal}」（${minutes} 分钟，仅放行 ${allow.length} 个应用）`,
+      }
     }
     if (action === 'close' || action === 'finish') {
       return { v: 1, ...closeBoutNow() }

@@ -50,6 +50,7 @@ import {
   evaluateCheckpointSubmission,
   evaluateContractTick,
   evaluateDayBlocksTick,
+  evaluateMandatoryPlanModal,
   inspectScenarioApps,
   issueBossDirectiveBlock,
   issueSprintCustody,
@@ -144,6 +145,7 @@ export function createV4Hub(deps) {
     getTimeLedger = () => null,
     getBreakPass = null,
     getAvailableFunLeft = null,
+    getSpendGateStatus = null,
     onBankUnlock = null,
     requestGeminiGate = null,
     getEmergencyPassActive = null,
@@ -410,6 +412,9 @@ export function createV4Hub(deps) {
     'move_carryover',
     'set_day_plan',
     'set_custody_policy',
+    'confirm_plan_modal',
+    'negotiate_plan_modal',
+    'snooze_plan_modal',
   ])
 
   function loadDayPlan(now = Date.now()) {
@@ -441,11 +446,42 @@ export function createV4Hub(deps) {
     return cleanDayPlanState(raw, { day: today, now })
   }
 
-  function saveDayPlan(state, now = Date.now()) {
+  function saveDayPlan(state, now = Date.now(), { legacyKickoffArmed } = {}) {
+    const prevRaw = readState(stateFile('plan-daybox.json'), null)
+    const armed = legacyKickoffArmed !== undefined ? Boolean(legacyKickoffArmed) : Boolean(prevRaw?.legacyKickoffArmed)
     const today = dayString(now, tz())
     const clean = cleanDayPlanState(state, { day: today, now })
-    writeJson(stateFile('plan-daybox.json'), { ...clean, updatedAt: now })
+    writeJson(stateFile('plan-daybox.json'), { ...clean, ...(armed ? { legacyKickoffArmed: true } : {}), updatedAt: now })
     return clean
+  }
+
+  function resolveLegacyKickoffFlag(body) {
+    if (!body || typeof body !== 'object') return undefined
+    if (body.mandatoryPlanModalEnabled !== undefined) return false
+    if (body.autoKickoffEnabled === true) return true
+    if (body.autoKickoffEnabled === false) return false
+    return undefined
+  }
+
+  function evaluatePlanModalNow(now = Date.now(), ctx = {}) {
+    const tzName = tz()
+    const day = ctx.day || dayString(now, tzName)
+    const min = Number.isFinite(Number(ctx.minuteOfDay)) ? Number(ctx.minuteOfDay) : tzMinuteOfDay(now, tzName)
+    const cur = loadDayPlan(now)
+    const modal = evaluateMandatoryPlanModal(cur, {
+      now,
+      day,
+      minuteOfDay: min,
+      inGemini: Boolean(ctx.inGemini),
+      emergencyActive: Boolean(ctx.emergencyActive),
+      isNight: Boolean(ctx.isNight),
+      isMeal: Boolean(ctx.isMeal),
+      isQuiet: Boolean(ctx.isQuiet),
+    })
+    if (modal.active && (!cur.planModalLastShownAt || cur.planModalLastShownAt < (cur.planModalSnoozeUntil || 0))) {
+      saveDayPlan({ ...cur, day, planModalLastShownAt: now }, now)
+    }
+    return modal
   }
 
   function funBudgetMinNow(now = Date.now()) {
@@ -483,8 +519,16 @@ export function createV4Hub(deps) {
     const tzName = tz()
     const dayStartMs = tzStartOfDay(now, tzName)
     const min = tzMinuteOfDay(now, tzName)
+    const today = dayString(now, tzName)
+    const rawStored = readState(stateFile('plan-daybox.json'), null)
+    const legacyKickoffArmed = Boolean(rawStored?.legacyKickoffArmed)
     let cur = loadDayPlan(now)
-    const kick = evaluateAutoKickoffTick(cur, { now, minuteOfDay: min })
+    const modalRefAt = Math.max(cur.planModalLastShownAt || 0, cur.planModalSnoozeUntil || 0)
+    const kickoffUnlockedByModal = cur.custodyPolicy?.mandatoryPlanModalEnabled === false
+      || (today && cur.planConfirmedDay === today)
+      || (cur.planModalLastShownAt > 0 && now - modalRefAt >= 15 * 60_000)
+      || legacyKickoffArmed
+    const kick = kickoffUnlockedByModal ? evaluateAutoKickoffTick(cur, { now, minuteOfDay: min }) : { fired: false }
     if (kick.fired) {
       cur = saveDayPlan(kick.state, now)
       record({ state: 'dayblock-auto-kickoff', at: now, blockId: kick.block.id, slotHm: kick.slotHm, title: kick.block.title })
@@ -875,7 +919,7 @@ export function createV4Hub(deps) {
     const tzName = tz()
     const cur = loadDayPlan(now)
     const res = setCustodyPolicy(cur, body, { now })
-    const saved = saveDayPlan(res.state, now)
+    const saved = saveDayPlan(res.state, now, { legacyKickoffArmed: resolveLegacyKickoffFlag(body) })
     onDayPlanMutated?.(now)
     const verifySummary = summarizeDayBlocksVerify(saved.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tzName) })
     return {
@@ -1184,16 +1228,21 @@ export function createV4Hub(deps) {
     }
 
     if (action === 'practice_session') {
+      const sess = buildPracticeSession(catalog, st, {
+        bankId: body?.bankId ?? body?.id ?? '',
+        kind: body?.kind ?? '',
+        scope: body?.scope ?? 'all',
+        limit: body?.limit ?? 20,
+        excludeIds: body?.excludeIds ?? [],
+        now,
+      })
       return {
         v: 1,
-        ...buildPracticeSession(catalog, st, {
-          bankId: body?.bankId ?? body?.id ?? '',
-          kind: body?.kind ?? '',
-          scope: body?.scope ?? 'all',
-          limit: body?.limit ?? 20,
-          excludeIds: body?.excludeIds ?? [],
-          now,
+        ...bankMetaFields(st, now, null, {
+          practiceSolved: sess.practiceSolved ?? st.practiceSession?.solved ?? 0,
+          required: sess.required ?? st.config?.requiredCount,
         }),
+        ...sess,
       }
     }
 
@@ -1211,10 +1260,14 @@ export function createV4Hub(deps) {
       if (r.ok && r.roundComplete) {
         bankRes = unlockByQuiz({ unlockMinutes: r.unlockMinutes, solved: r.practiceSolved, unlockUntil: 0 }, now)
       }
-      const avail = bankRes?.availableFunLeft ?? availableFunLeftNow(now)
+      const meta = bankMetaFields(r.state || st, now, bankRes, {
+        practiceSolved: r.practiceSolved,
+        required: r.required,
+      })
       return {
         v: 1,
         ...r,
+        ...meta,
         state: undefined,
         ...(r.roundComplete
           ? {
@@ -1226,7 +1279,6 @@ export function createV4Hub(deps) {
               capped: Boolean(bankRes?.capped),
             }
           : {}),
-        ...(avail !== undefined ? { availableFunLeft: avail } : {}),
       }
     }
 
@@ -1253,7 +1305,7 @@ export function createV4Hub(deps) {
     }
 
     if (action === 'status' || action === 'quiz_session') {
-      const avail = availableFunLeftNow(now)
+      const meta = bankMetaFields(st, now, null)
       const card = serveReviewCard(st, now, catalog)
       if (card) {
         return {
@@ -1261,7 +1313,7 @@ export function createV4Hub(deps) {
           ok: true,
           banks: summarizeCatalog(catalog, st),
           stats7d: build7dQuizStats(st, now, tz(), catalog),
-          ...(avail !== undefined ? { availableFunLeft: avail } : {}),
+          ...meta,
           ...card.payload,
         }
       }
@@ -1280,7 +1332,7 @@ export function createV4Hub(deps) {
         solved: preview.solved,
         required: preview.required,
         unlockMinutes: preview.unlockMinutes,
-        ...(avail !== undefined ? { availableFunLeft: avail } : {}),
+        ...bankMetaFields(preview.state || st, now, null, { required: preview.required }),
         question: preview.question,
       }
     }
@@ -1507,10 +1559,18 @@ export function createV4Hub(deps) {
         now,
       })
       if (!judged.ok) return { v: 1, ok: false, error: judged.error }
-      if (judged.duplicate) return { v: 1, ...judged, state: undefined }
+      if (judged.duplicate) {
+        return {
+          v: 1,
+          ...judged,
+          ...bankMetaFields(st, now, null, { required: judged.required }),
+          state: undefined,
+        }
+      }
       saveBankUnlock(judged.state)
       let bankRes = null
       if (judged.unlocked) bankRes = unlockByQuiz(judged, now)
+      const meta = bankMetaFields(judged.state || st, now, bankRes, { required: judged.required })
       if (judged.unlocked && bankRes?.earnedOnly) {
         const card = serveReviewCard(judged.state, now, catalog)
         let nextQuestion = card ? card.payload.question : null
@@ -1519,10 +1579,10 @@ export function createV4Hub(deps) {
           if (preview.state) saveBankUnlock(preview.state)
           nextQuestion = preview.question
         }
-        const avail = bankRes.availableFunLeft ?? availableFunLeftNow(now)
         return {
           v: 1,
           ...judged,
+          ...meta,
           state: undefined,
           unlocked: false,
           roundComplete: true,
@@ -1533,17 +1593,15 @@ export function createV4Hub(deps) {
           dailyBankEarned: bankRes.dailyBankEarned,
           dailyBankCap: bankRes.dailyBankCap,
           capped: bankRes.capped,
-          ...(avail !== undefined ? { availableFunLeft: avail } : {}),
           question: nextQuestion,
         }
       }
-      const avail = bankRes?.availableFunLeft ?? availableFunLeftNow(now)
       // 下一题：这一轮的复习卡名额还没用完、又有到期卡，先出卡。
       if (!judged.unlocked) {
         const card = serveReviewCard(judged.state, now, catalog)
-        if (card) return { v: 1, ...judged, ...(avail !== undefined ? { availableFunLeft: avail } : {}), question: card.payload.question, state: undefined }
+        if (card) return { v: 1, ...judged, ...meta, question: card.payload.question, state: undefined }
       }
-      return { v: 1, ...judged, ...(avail !== undefined ? { availableFunLeft: avail } : {}), state: undefined }
+      return { v: 1, ...judged, ...meta, state: undefined }
     }
 
     return { v: 1, ok: false, error: `未知 action: ${action}` }
@@ -1597,7 +1655,7 @@ export function createV4Hub(deps) {
   function answerReviewCard(st, cardId, answer, now) {
     const r = answerLockReviewCard(reviewCards, st, { cardId, answer, now, selfWeight: SELF_JUDGED_WEIGHT })
     if (!r.ok) {
-      if (r.unlockState) saveBankUnlock(r.unlockState)
+      if (r.unlockState) saveBankUnlock({ ...st, ...r.unlockState, practiceSession: r.unlockState?.practiceSession ?? st.practiceSession })
       return { v: 1, ok: false, error: r.error }
     }
     if (r.duplicate) {
@@ -1612,23 +1670,29 @@ export function createV4Hub(deps) {
         solved: r.solved,
         required: r.required,
         unlockMinutes: r.unlockMinutes,
+        ...bankMetaFields(st, now, null, { required: r.required }),
       }
     }
-    saveBankUnlock(r.unlockState)
+    const savedUnlockState = {
+      ...st,
+      ...(r.unlockState || {}),
+      practiceSession: r.unlockState?.practiceSession ?? st.practiceSession,
+    }
+    saveBankUnlock(savedUnlockState)
     let bankRes = null
     if (r.unlocked) bankRes = unlockByQuiz(r, now)
     const needNext = !r.unlocked || Boolean(bankRes?.earnedOnly)
     const catalog = loadBankCatalog(now)
-    const next = needNext ? serveReviewCard(r.unlockState, now, catalog) : null
+    const next = needNext ? serveReviewCard(savedUnlockState, now, catalog) : null
     let question = next ? next.payload.question : null
     let bankTotal = countEnabledQuestions(catalog)
     if (needNext && !next) {
-      const preview = pickNextQuizQuestion(catalog, r.unlockState)
+      const preview = pickNextQuizQuestion(catalog, savedUnlockState)
       if (preview.state) saveBankUnlock(preview.state)
       question = preview.question
       bankTotal = preview.bankTotal
     }
-    const avail = bankRes?.availableFunLeft ?? availableFunLeftNow(now)
+    const meta = bankMetaFields(savedUnlockState, now, bankRes, { required: r.required })
     if (r.unlocked && bankRes?.earnedOnly) {
       return {
         v: 1,
@@ -1646,7 +1710,7 @@ export function createV4Hub(deps) {
         dailyBankEarned: bankRes.dailyBankEarned,
         dailyBankCap: bankRes.dailyBankCap,
         capped: bankRes.capped,
-        ...(avail !== undefined ? { availableFunLeft: avail } : {}),
+        ...meta,
         unlockUntil: r.unlockUntil,
         unlockMinutes: r.unlockMinutes,
         correctAnswer: r.correctAnswer,
@@ -1654,7 +1718,7 @@ export function createV4Hub(deps) {
         solved: r.solved,
         required: r.required,
         bankTotal,
-        wrongCount: st.wrongIds.length,
+        wrongCount: savedUnlockState.wrongIds.length,
         question,
       }
     }
@@ -1663,8 +1727,8 @@ export function createV4Hub(deps) {
       unlocked: r.unlocked, unlockUntil: r.unlockUntil, unlockMinutes: r.unlockMinutes,
       correctAnswer: r.correctAnswer,
       explain: r.explain,
-      solved: r.solved, required: r.required, bankTotal, wrongCount: st.wrongIds.length,
-      ...(avail !== undefined ? { availableFunLeft: avail } : {}),
+      solved: r.solved, required: r.required, bankTotal, wrongCount: savedUnlockState.wrongIds.length,
+      ...meta,
       question,
     }
   }
@@ -1675,6 +1739,25 @@ export function createV4Hub(deps) {
       return Number.isFinite(Number(v)) ? Math.max(0, Math.round(Number(v))) : undefined
     } catch {
       return undefined
+    }
+  }
+
+  function bankMetaFields(stArg, now = Date.now(), bankRes = null, extra = {}) {
+    const avail = bankRes?.availableFunLeft ?? availableFunLeftNow(now)
+    const gate = typeof getSpendGateStatus === 'function' ? (getSpendGateStatus(now) || {}) : {}
+    const spendBlockedReason = bankRes?.spendBlockedReason ?? gate.spendBlockedReason ?? ''
+    const practiceSolved = extra.practiceSolved !== undefined
+      ? Math.max(0, Number(extra.practiceSolved) || 0)
+      : Math.max(0, Number(stArg?.practiceSession?.solved ?? 0))
+    const required = extra.required !== undefined
+      ? Math.max(1, Number(extra.required) || 10)
+      : Math.max(1, Number(stArg?.config?.requiredCount ?? 10))
+    return {
+      ...(avail !== undefined ? { availableFunLeft: avail } : {}),
+      earnedAdded: bankRes?.earnedAdded ?? 0,
+      spendBlockedReason,
+      practiceSolved,
+      required,
     }
   }
 
@@ -1760,21 +1843,40 @@ export function createV4Hub(deps) {
       }
     }
     if (DAY_PLAN_ACTIONS.has(action)) {
+      const minNow = tzMinuteOfDay(now, tz())
       const dayPlanCur = loadDayPlan(now)
       const res = applyDayPlanAction(dayPlanCur, { ...body, action }, {
         now,
         day: dayString(now, tz()),
         funBudgetMin: funBudgetMinNow(now),
+        minuteOfDay: minNow,
       })
-      if (res.ok && action !== 'get_day_plan') {
-        saveDayPlan(res, now)
+      const shouldPersist = res.ok && action !== 'get_day_plan' && res.committed !== false
+      if (shouldPersist) {
+        const legacyFlag = action === 'set_custody_policy' ? resolveLegacyKickoffFlag(body) : undefined
+        saveDayPlan(res, now, { legacyKickoffArmed: legacyFlag })
+        if (action === 'confirm_plan_modal' || (action === 'negotiate_plan_modal' && res.committed !== false) || (action === 'snooze_plan_modal' && res.autoArmed)) {
+          record({ state: action, at: now, armedVerifyCount: res.armedVerifyCount || 0 })
+          recordStoryline({
+            kind: 'plan_modal',
+            actor: action === 'snooze_plan_modal' ? 'strategist' : 'user',
+            summary: action === 'confirm_plan_modal'
+              ? `确认今日草案，激活 ${res.armedVerifyCount || 0} 个 P3 验收块`
+              : (action === 'negotiate_plan_modal'
+                  ? `自然语言建今日计划，激活 ${res.armedVerifyCount || 0} 个 P3 验收块`
+                  : '3 次延后耗尽，强制钉入 25m 起手验收块'),
+            at: now,
+          }, now)
+        }
         try { onDayPlanMutated?.(now) } catch {}
       }
-      const verifySummary = summarizeDayBlocksVerify(res.dayBlocks, { minuteOfDay: tzMinuteOfDay(now, tz()) })
+      const verifySummary = summarizeDayBlocksVerify(res.dayBlocks, { minuteOfDay: minNow })
+      const planModal = evaluatePlanModalNow(now, { minuteOfDay: minNow, day: res.day })
       return {
         v: 1,
         ...res,
         verifySummary,
+        planModal,
         dayPlan: {
           v: 1,
           day: res.day,
@@ -1785,6 +1887,10 @@ export function createV4Hub(deps) {
           custody: res.custody,
           firedKickoffSlots: res.firedKickoffSlots,
           adaptiveLog: res.adaptiveLog,
+          planConfirmedDay: res.planConfirmedDay,
+          planModalSnoozeUntil: res.planModalSnoozeUntil,
+          planModalSnoozeCount: res.planModalSnoozeCount,
+          planModalLastShownAt: res.planModalLastShownAt,
           stats: res.stats,
           verifySummary,
           updatedAt: res.updatedAt,
@@ -1816,6 +1922,7 @@ export function createV4Hub(deps) {
         funBudgetMin: funBudgetMinNow(now),
         energyLevel: dayPlanCur.energyLevel,
       })
+      const planModal = evaluatePlanModalNow(now, { day: dayPlanCur.day })
       return {
         v: 1,
         ok: true,
@@ -1827,6 +1934,7 @@ export function createV4Hub(deps) {
         presets: COMMON_PLAN_PRESETS,
         scripts: AI_PROMPT_SCRIPTS,
         verifySummary: dayTick.verifySummary,
+        planModal,
         dayPlan: {
           ...dayPlanCur,
           stats: dayPlanStats,
@@ -2627,6 +2735,8 @@ export function createV4Hub(deps) {
     bankRoute,
     planContractRoute,
     loadDayPlan,
+    saveDayPlan,
+    evaluatePlanModalNow,
     dayBlockTickNow,
     dayBlockOverdueSessionView,
     dayBlockActiveSessionView,

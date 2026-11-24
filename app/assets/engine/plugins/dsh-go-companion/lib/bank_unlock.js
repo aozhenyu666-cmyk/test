@@ -605,6 +605,7 @@ export function judgeQuizAnswer(rawOrCatalog, stateRaw, { questionId, answer, no
 
   // 完成一轮解锁时绝不清空 questionStats 与 lastQuestionId，仅重置当轮 session 计数与去重窗
   const nextState = {
+    ...state,
     config: state.config,
     session: {
       solved: unlocked ? 0 : nextSolved,
@@ -613,6 +614,7 @@ export function judgeQuizAnswer(rawOrCatalog, stateRaw, { questionId, answer, no
       seenIds: unlocked ? [] : nextSeen,
       currentId: '',
     },
+    practiceSession: state.practiceSession,
     wrongIds: nextWrong,
     wrongBookIds: nextWrongBookIds,
     lastQuestionId: qid,
