@@ -48,6 +48,9 @@ export function createBridgeRuntime(deps) {
     spendBalance,
     receiveWeekReview,
     geminiPackages,
+    liveCoreBridgeSnapshot,
+    markLiveCoreReceipt,
+    liveCoreRoute,
   } = deps
 
   const BRIDGE_TICK_MS = 10_000
@@ -267,11 +270,18 @@ export function createBridgeRuntime(deps) {
           return null
         }
       })(),
+      liveCore: (() => {
+        try {
+          return typeof liveCoreBridgeSnapshot === 'function' ? liveCoreBridgeSnapshot(now, tz) : null
+        } catch {
+          return null
+        }
+      })(),
       names: sisterNames(),
     }
   }
 
-  function applyBridgeCommand(cmd, now = Date.now()) {
+  async function applyBridgeCommand(cmd, now = Date.now()) {
     const config = getConfig()
     const v4Hub = getV4Hub()
     const p = cmd?.payload && typeof cmd.payload === 'object' ? cmd.payload : {}
@@ -279,6 +289,9 @@ export function createBridgeRuntime(deps) {
       const r = recordGeminiReceipt({ ...p, id: cmd.id }, { via: 'gemini-mcp', now })
       const it = r.receipt
       const rated = applyReviewedCards(p.reviewedCards ?? p.reviewed_cards, 'gemini', now)
+      try {
+        markLiveCoreReceipt?.({ now, summary: it.did || it.topic || '', next: it.next || '' })
+      } catch {}
       const word = { pass: '过', partial: '半过', fail: '没过' }[it.verdict]
       const tz = zoneOr(config.timeZone)
       const seal = it.sealId ? loadSeals(now, tz).items.find((x) => x.id === it.sealId) : null
@@ -401,6 +414,19 @@ export function createBridgeRuntime(deps) {
         text: `已签发「${r.custody.title}」（${r.blocks.length} 个强制验收块，托管锁定至 ${r.untilHm}；期内禁止自删降级）。`,
       }
     }
+    if (cmd?.type === 'live_relay') {
+      if (typeof liveCoreRoute !== 'function') {
+        return { ok: false, text: '手机端未挂载 liveCoreRoute。' }
+      }
+      const r = await liveCoreRoute({
+        action: 'commit_relay',
+        mode: p.mode || 'checkpoint_25m',
+        minutes: p.minutes,
+        summary: p.summary || '',
+        next: p.next || '',
+      }, 'POST')
+      return { ok: r?.ok === true, text: r?.toast || '已完成本轮 Live 接力交接。' }
+    }
     return { ok: false, text: '手机不认识这种命令：' + String(cmd?.type || '') }
   }
 
@@ -467,7 +493,7 @@ export function createBridgeRuntime(deps) {
           }
           let r
           try {
-            r = applyBridgeCommand(cmd, Date.now())
+            r = await applyBridgeCommand(cmd, Date.now())
           } catch (error) {
             r = { ok: false, text: '手机处理出错：' + String((error && error.message) || error).slice(0, 120) }
           }

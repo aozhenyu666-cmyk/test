@@ -152,7 +152,11 @@ test('手机配好桥 → 快照上去；Gemini 交回执、加验收点、提�
     server.close()
     if (old === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = old
-    rmSync(dir, { recursive: true, force: true })
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // Windows SQLite handle cleanup grace
+    }
   }
 })
 
@@ -242,5 +246,73 @@ test('复习卡和题库互通：回执问答自动成卡、Gemini 推卡、Brai
     if (old === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = old
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('Live Core 与 PC Gemini 桥双向互通：快照含 liveCore、dafeiyu_submit_receipt 消除重拉、dafeiyu_live_relay 在手机落地', async () => {
+  const min = minuteOfDay(Date.now(), TZ)
+  if (min > 1420) return
+  const dir = mkdtempSync(join(tmpdir(), 'dfy-bridge-livecore-'))
+  const old = process.env.DSH_HOME
+  process.env.DSH_HOME = join(dir, 'home')
+  mkdirSync(join(dir, 'home', 'companion'), { recursive: true })
+  writeFileSync(join(dir, 'home', 'companion', 'config.json'), JSON.stringify({ timeZone: TZ, quietStart: 12, quietEnd: 12 }))
+  const store = createStore(join(dir, 'bridge.json'))
+  const bridge = createBridge({ store, resultWaitMs: 5000 })
+  const server = createServer(bridge.handler)
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const base = 'http://127.0.0.1:' + server.address().port
+  try {
+    const call = plugin()
+    await call('/live-core', { action: 'roll_dice', diceHint: 3 })
+    const cfg = await call('/gemini-bridge', { action: 'config', url: base, key: store.state.secret.phoneKey })
+    assert.equal(cfg.synced, true, JSON.stringify(cfg))
+    assert.equal(store.state.snapshot.liveCore?.dice?.face, 3)
+
+    const tool = (name, args) => import('../mcp.mjs').then((m) => m.callTool(bridge.ctx, name, args))
+    const stRes = await tool('dafeiyu_live_status', {})
+    assert.ok(!stRes.isError)
+    assert.match(stRes.content[0].text, /错题追击战/)
+
+    // 提交 MCP 回执后应把 receiptSinceLastLive 置为 true 并记录 lastRecap
+    const recP = tool('dafeiyu_submit_receipt', {
+      topic: 'Live 抽考错题',
+      did: '口述排除法错因',
+      next: '进入刷题巩固',
+      verdict: 'pass',
+      qa: [{ q: '排他对比怎么破', a: '找是否另有他因' }, { q: '削弱强弱排序', a: '直接否定前提强于质疑样本' }],
+    })
+    await new Promise((r) => setTimeout(r, 120))
+    await call('/gemini-bridge', { action: 'sync' })
+    const rec = await recP
+    assert.ok(!rec.isError)
+    const liveCoreDisk1 = JSON.parse(readFileSync(join(dir, 'home', 'companion', 'live-core.json'), 'utf8'))
+    assert.equal(liveCoreDisk1.receiptSinceLastLive, true)
+    assert.equal(liveCoreDisk1.lastRecap?.mode, 'mcp_receipt')
+
+    // 通过 dafeiyu_live_relay 在手机落地 20m quiz_only 单开舱
+    const relP = tool('dafeiyu_live_relay', {
+      mode: 'quiz_only',
+      minutes: 20,
+      summary: '错题追击结束',
+      next: 'MCP 遥控切纯考公刷题舱',
+    })
+    await new Promise((r) => setTimeout(r, 120))
+    await call('/gemini-bridge', { action: 'sync' })
+    const rel = await relP
+    assert.ok(!rel.isError)
+    assert.match(rel.content[0].text, /纯考公刷题舱/)
+    const ledgerText = readFileSync(join(dir, 'home', 'companion', 'ledger.jsonl'), 'utf8')
+    assert.match(ledgerText, /"state":"live-core-relay"/)
+    assert.match(ledgerText, /"mode":"quiz_only"/)
+  } finally {
+    server.close()
+    if (old === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = old
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // Windows SQLite handle cleanup grace
+    }
   }
 })

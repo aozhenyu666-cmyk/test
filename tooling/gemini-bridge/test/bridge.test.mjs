@@ -142,7 +142,7 @@ test('MCP：initialize / tools/list / 通知回 202；没同步过时 today 说�
     assert.equal((await rpc(http, tk, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202)
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()
     const names = list.result.tools.map((t) => t.name)
-    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_read_inbox', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule', 'dafeiyu_boss_brief', 'dafeiyu_issue_sprint_custody'])
+    assert.deepEqual(names, ['dafeiyu_today', 'dafeiyu_rules', 'dafeiyu_health', 'dafeiyu_week', 'dafeiyu_submit_week_review', 'dafeiyu_start_work', 'dafeiyu_spend_balance', 'dafeiyu_add_checkpoints', 'dafeiyu_submit_receipt', 'dafeiyu_review_due', 'dafeiyu_read_inbox', 'dafeiyu_push_cards', 'dafeiyu_import_questions', 'dafeiyu_propose_rule', 'dafeiyu_boss_brief', 'dafeiyu_issue_sprint_custody', 'dafeiyu_live_status', 'dafeiyu_live_relay'])
     assert.ok(!names.some((n) => /unlock|quota|waive|lower|delete/.test(n)), '没有放松类工具')
     assert.equal(list.result.tools[0].annotations.readOnlyHint, true)
     const today = await (await rpc(http, tk, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dafeiyu_today', arguments: {} } })).json()
@@ -203,7 +203,7 @@ test('笔记库只读：能搜能读；日记 / 越界不读', async () => {
     const { access_token: tk } = await connect(http, store)
     const call = async (name, args) => (await (await rpc(http, tk, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } })).json()).result
     const list = await (await rpc(http, tk, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()
-    assert.equal(list.result.tools.length, 19)
+    assert.equal(list.result.tools.length, 21)
     assert.match((await call('dafeiyu_search_notes', { query: '增长率' })).content[0].text, /学习\/行测\.md/)
     assert.doesNotMatch((await call('dafeiyu_search_notes', { query: '不该被读到' })).content[0].text, /私事/)
     assert.match((await call('dafeiyu_read_note', { path: '学习/行测.md' })).content[0].text, /现期\/基期/)
@@ -621,6 +621,42 @@ test('dafeiyu_issue_sprint_custody 签发托管冲刺轨；dafeiyu_today 与 /br
     const doneRes = (await issueP).result
     assert.ok(!doneRes.isError)
     assert.match(doneRes.content[0].text, /已签发「下午考公连冲」/)
+
+    // 3. dafeiyu_live_status + dafeiyu_live_relay 往返测试
+    await sync({
+      snapshot: {
+        ...SNAP,
+        liveCore: {
+          phase: 'ignited',
+          reason: 'gaze_ignite_under_lock',
+          enabled: true,
+          muted: false,
+          dice: { face: 2, name: '笔记翻旧账' },
+          todayMetrics: { ignites: 2, reengages: 0, yields: 1, relays: 0, capsules: 0, quizAnsweredToday: 5 },
+          recentHistory: [{ hm: '15:00', badge: '窥视点火', title: '骰2 · 笔记翻旧账' }],
+        },
+      },
+    })
+    const liveSt = (await call('dafeiyu_live_status', {}, 32)).result
+    assert.ok(!liveSt.isError)
+    assert.match(liveSt.content[0].text, /笔记翻旧账/)
+    assert.equal(liveSt.structuredContent.liveCore.todayMetrics.ignites, 2)
+
+    const relayP = call('dafeiyu_live_relay', {
+      mode: 'checkpoint_25m',
+      minutes: 25,
+      summary: '拆清他因削弱',
+      next: '判断推理 15 题',
+    }, 33)
+    await new Promise((r) => setTimeout(r, 50))
+    const pulledRelay = await sync({})
+    assert.equal(pulledRelay.commands.length, 1)
+    assert.equal(pulledRelay.commands[0].type, 'live_relay')
+    assert.equal(pulledRelay.commands[0].payload.mode, 'checkpoint_25m')
+    await sync({ results: [{ id: pulledRelay.commands[0].id, ok: true, text: '已签下「判断推理 15 题」（25m 微验收点）' }] })
+    const relayDone = (await relayP).result
+    assert.ok(!relayDone.isError)
+    assert.match(relayDone.content[0].text, /判断推理 15 题/)
   } finally {
     pub.close()
     loc.close()

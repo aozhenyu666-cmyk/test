@@ -7580,6 +7580,9 @@ export function apply(ctx) {
     spendBalance,
     receiveWeekReview,
     geminiPackages,
+    liveCoreBridgeSnapshot: (n, t) => liveCoreBridgeSnapshot(n, t),
+    markLiveCoreReceipt: (o) => markLiveCoreReceipt(o),
+    liveCoreRoute: (b, m) => liveCoreRoute(b, m),
   })
 
   /** role -> {sid, agent, off}：两个会话各挂各的人设。 */
@@ -10471,6 +10474,50 @@ export function apply(ctx) {
   function saveLiveCoreState(next) {
     if (!next || typeof next !== 'object') return
     writeJson(stateFile('live-core.json'), { ...next, v: 1 })
+  }
+
+  function markLiveCoreReceipt({ now = Date.now(), summary = '', next = '' } = {}) {
+    const cur = loadLiveCoreState()
+    const summaryText = String(summary || '').trim().slice(0, 180)
+    const nextText = String(next || '').trim().slice(0, 100)
+    const updated = {
+      ...cur,
+      receiptSinceLastLive: true,
+      ...(summaryText || nextText
+        ? {
+            lastRecap: {
+              at: now,
+              summary: summaryText,
+              next: nextText,
+              mode: 'mcp_receipt',
+            },
+          }
+        : {}),
+    }
+    saveLiveCoreState(updated)
+    return updated
+  }
+
+  function liveCoreBridgeSnapshot(now = Date.now(), tz = zoneOr(config.timeZone)) {
+    const summary = liveCoreSummary(now)
+    const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, { limit: 8 })
+    return {
+      phase: summary.phase,
+      reason: summary.reason,
+      enabled: summary.enabled,
+      muted: summary.muted,
+      lastIgniteAt: summary.lastIgniteAt,
+      dice: summary.dice ? { face: summary.dice.face, name: summary.dice.name } : null,
+      lastRecap: summary.lastRecap || null,
+      todayMetrics: atlas.todayMetrics,
+      recentHistory: history.slice(0, 8).map((h) => ({
+        hm: h.hm,
+        kind: h.kind,
+        badge: h.badge,
+        title: h.title,
+        detail: h.detail,
+      })),
+    }
   }
 
   function isRunningQuizNow(now, phone, ledgerEntries) {

@@ -30,6 +30,7 @@ export const INSTRUCTIONS = [
   '当用户说“看收件箱/整理碎片/卡住了”时调用 dafeiyu_read_inbox，合并看电脑端收件箱与手机卡壳、未过保底和到期复习摘要；聊透后用 dafeiyu_push_cards 沉卡或 dafeiyu_submit_receipt 交回执。',
   '当与用户完成 5–10 分钟高强度规划/对质后，调用 dafeiyu_issue_sprint_custody 一次签发未来 2–4 小时串联托管冲刺轨（1–4 个强制 verify 块，托管期内手机禁止自删或降级，彻底脱离用户拖延节奏）；若遇真突发需要改轨，要求其说明 ≥6 字客观原因并用 rebrief_reason 重签。',
   '当用户要求做全局复盘、老板视角审视或追问一周虚耗时，调用 dafeiyu_boss_brief 获取近 7 天宏观账本与结构缺口（以及可选的近期改动笔记索引），零寒暄零迎合，先核事实再提 3 个直击逃避模式的追问与 1 条 24 小时止损硬指令。',
+  '连麦 Live 结束后，若要帮他无缝接力到下一个 25 分钟验收点或 20 分钟纯刷题舱，调用 dafeiyu_live_relay；想看他今日 Live 点火/让路/骰子轨迹，调 dafeiyu_live_status。',
 ].join('\n')
 
 const KIND_ENUM = ['quiz', 'external_quiz', 'file', 'screenshots', 'app_minutes', 'bout_minutes', 'gemini_receipt', 'study_cards']
@@ -329,6 +330,34 @@ export function toolDefs({ vault = false } = {}) {
       },
       annotations: add,
     },
+    {
+      name: 'dafeiyu_live_status',
+      title: '看 Live 窥视核心状态与轨迹',
+      description: '查看大肥鱼 × Gemini Live 窥视总调度当前状态（阶段、最近骰面、复盘交接、今日点火/让路/接力计数与最近 8 条轨迹）。',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: ro,
+    },
+    {
+      name: 'dafeiyu_live_relay',
+      title: '签发 Live 后接力闭环',
+      description: '在结束本轮 Gemini Live 口头对练/抽查后，一键为他签下下一棒：checkpoint_25m（25分钟微验收点）、quiz_only（20分钟纯考公刷题单开舱）或 recap_only（仅记复盘并解除断线重拉）。不能解锁或减负。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            enum: ['checkpoint_25m', 'quiz_only', 'recap_only'],
+            description: '接力方式：checkpoint_25m=签下下一段微验收点；quiz_only=切入纯刷题单开舱；recap_only=仅标记复盘闭环',
+          },
+          minutes: { type: 'integer', minimum: 10, maximum: 60, description: '接力时长（分钟，默认验收 25 / 刷题舱 20）' },
+          summary: { type: 'string', description: '本轮 Live 一句话结论' },
+          next: { type: 'string', description: '接下来 25 分钟要交出的具体动作' },
+        },
+        required: ['mode'],
+        additionalProperties: false,
+      },
+      annotations: add,
+    },
   ]
   if (vault) {
     tools.push(
@@ -400,6 +429,12 @@ export function todayText(snap, now) {
   if (snap.balance) lines.push('娱乐余额 ' + snap.balance.funLeft + ' 分钟（只能靠交验收点、过局挣）。')
   if (Array.isArray(snap.deadlines) && snap.deadlines.length) lines.push('截止日：' + snap.deadlines.map((d) => '「' + d.title + '」' + (d.daysLeft === 0 ? '今天' : d.daysLeft + ' 天后')).join('；'))
   if (Number(snap.receiptsToday) > 0) lines.push('今天你已经交过 ' + snap.receiptsToday + ' 条回执。')
+  if (snap.liveCore) {
+    const lc = snap.liveCore
+    const tm = lc.todayMetrics || {}
+    const diceStr = lc.dice?.face ? '骰' + lc.dice.face + '·' + lc.dice.name : '未掷骰'
+    lines.push('🎲 Live 窥视核心：' + (lc.phase || 'standby') + '（' + diceStr + ' · 今日点火 ' + (tm.ignites || 0) + ' 次 / 让路 ' + (tm.yields || 0) + ' 次 / 接力 ' + (tm.relays || 0) + ' 次）。')
+  }
   const iron = snap.covenant?.iron || []
   if (iron.length) lines.push('公约铁律：' + iron.map((r) => r.id + ' ' + r.title).join('；') + '（全文用 dafeiyu_rules）。')
   return lines.join('\n')
@@ -427,6 +462,29 @@ export function rulesText(snap) {
   const rules = snap?.covenant?.rules || []
   if (!rules.length) return '还没有公约（或手机没同步过）。'
   return rules.map((r) => '[' + r.hardness + '] ' + r.id + ' ' + r.title + (r.who && r.who !== '都' ? '（归' + r.who + '）' : '') + '：' + r.do).join('\n')
+}
+
+export function liveStatusText(snap) {
+  if (!snap) return '手机还没跟桥同步过，暂时看不到 Live 窥视核心状态。'
+  const lc = snap.liveCore
+  if (!lc) return '当前快照尚未携带 liveCore 状态（升级手机版或等下一次同步）。'
+  const tm = lc.todayMetrics || {}
+  const lines = [
+    `【Gemini Live 窥视核心】阶段：${lc.phase || 'standby'}（原因：${lc.reason || 'standby'}）· ${lc.enabled === false ? '已关闭' : (lc.muted ? '静音冷却中' : '运行中')}`,
+    lc.dice?.face ? `最近骰子：骰${lc.dice.face} · ${lc.dice.name}` : '最近骰子：暂无',
+    `今日计数：点火 ${tm.ignites || 0}（拉回 ${tm.reengages || 0}） · 让路 ${tm.yields || 0} · 接力 ${tm.relays || 0} · 单开舱 ${tm.capsules || 0} · 刷题 ${tm.quizAnsweredToday || 0} 题`,
+  ]
+  if (lc.lastRecap?.summary || lc.lastRecap?.next) {
+    lines.push(`最近交接：${lc.lastRecap.summary || '—'}${lc.lastRecap.next ? ` → 下一步：${lc.lastRecap.next}` : ''}`)
+  }
+  const hist = Array.isArray(lc.recentHistory) ? lc.recentHistory : []
+  if (hist.length) {
+    lines.push('近期轨迹：')
+    for (const h of hist.slice(0, 6)) {
+      lines.push(`- ${h.hm || ''} [${h.badge || h.kind}] ${h.title || ''}${h.detail ? `（${h.detail}）` : ''}`)
+    }
+  }
+  return lines.join('\n')
 }
 
 // ---------------------------------------------------------------- 四部门：收件箱 + 手机卡壳/复习合并视图
@@ -876,6 +934,22 @@ export async function callTool(ctx, name, args = {}) {
       if (!vaultDir) return fail('桥没配笔记库（启动时加 --vault）。')
       const list = recentNotes(vaultDir, { days: args.days || 7, now: store.now() })
       return text(list.length ? list.map((f) => new Date(f.mtime).toISOString().slice(0, 16).replace('T', ' ') + '  ' + f.rel).join('\n') : '最近没改过笔记。')
+    }
+    case 'dafeiyu_live_status': {
+      const lc = snap?.liveCore || null
+      return text(liveStatusText(snap), lc ? { structuredContent: { liveCore: lc } } : {})
+    }
+    case 'dafeiyu_live_relay': {
+      const mode = ['checkpoint_25m', 'quiz_only', 'recap_only'].includes(String(args.mode || ''))
+        ? String(args.mode)
+        : 'checkpoint_25m'
+      const defaultMin = mode === 'quiz_only' ? 20 : 25
+      return writeTool(ctx, 'live_relay', {
+        mode,
+        minutes: args.minutes || defaultMin,
+        summary: String(args.summary || '').trim(),
+        next: String(args.next || '').trim(),
+      }, 'Live 接力闭环')
     }
     default:
       return null

@@ -269,6 +269,7 @@ object ProactiveOverlay {
     private val live = LinkedHashMap<String, Card>()
     private var liveDice: DiceCard? = null
     private var livePlanModal: PlanModalCard? = null
+    private var livePostRelay: PostLiveRelayCard? = null
 
     fun install(context: Context) {
         app = context.applicationContext
@@ -356,6 +357,40 @@ object ProactiveOverlay {
         live.clear()
         dismissDice()
         dismissPlanModal()
+        dismissPostLiveRelay()
+    }
+
+    fun showPostLiveRelay(
+        durationSec: Long,
+        onCheckpoint25m: () -> Unit,
+        onQuizCapsule20m: () -> Unit,
+        onRecapOnly: () -> Unit,
+    ): Boolean {
+        val context = app ?: return false
+        dismissPostLiveRelay()
+        val host = host(context) ?: return false
+        val card = PostLiveRelayCard(
+            context = host.first,
+            type = host.second,
+            durationSec = durationSec,
+            onCheckpoint25m = onCheckpoint25m,
+            onQuizCapsule20m = onQuizCapsule20m,
+            onRecapOnly = onRecapOnly,
+        )
+        return try {
+            card.attach()
+            livePostRelay = card
+            true
+        } catch (e: Exception) {
+            android.util.Log.i(TAG, "post-live relay overlay add failed: ${e.javaClass.simpleName}")
+            card.destroy()
+            false
+        }
+    }
+
+    fun dismissPostLiveRelay() {
+        livePostRelay?.destroy()
+        livePostRelay = null
     }
 
     fun isShowing(token: String) = live.containsKey(token)
@@ -370,6 +405,7 @@ object ProactiveOverlay {
         geminiPrompt: String = "",
         onSubmitThought: (String, (Boolean, String?) -> Unit) -> Unit,
         onReroll: () -> Unit,
+        onEnterLive: (() -> Unit)? = null,
         onClose: () -> Unit = {},
     ): Boolean {
         val context = app ?: return false
@@ -387,6 +423,7 @@ object ProactiveOverlay {
             geminiPrompt = geminiPrompt,
             onSubmitThought = onSubmitThought,
             onReroll = onReroll,
+            onEnterLive = onEnterLive,
             onClose = onClose,
         )
         return try {
@@ -425,6 +462,7 @@ object ProactiveOverlay {
         live.values.toList().forEach { it.foldForLock() }
         dismissDice()
         dismissPlanModal()
+        dismissPostLiveRelay()
     }
 
     /** The accessibility service's own window context when it is on; else the overlay permission. */
@@ -1028,6 +1066,7 @@ object ProactiveOverlay {
         private val geminiPrompt: String,
         private val onSubmitThought: (String, (Boolean, String?) -> Unit) -> Unit,
         private val onReroll: () -> Unit,
+        private val onEnterLive: (() -> Unit)?,
         private val onClose: () -> Unit,
     ) {
         private val palette = OverlayPalette.of(context)
@@ -1206,19 +1245,34 @@ object ProactiveOverlay {
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginEnd = context.dp(6f)
             })
-            btnRow.addView(chip("连 Gemini") {
-                // 2026-11-18 触发器：骰子 → 整份简报（设定 + 当下事实 + 这一骰 + 回执）→ 先确认代理 → 打开 Gemini。
-                val clipText = geminiPrompt.ifBlank { "【骰$dice · $name】$ask" }
-                runCatching {
-                    val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("大肥鱼六骰提问", clipText))
-                    setStatus("简报已复制：进 Gemini 粘贴发出，再开 Live 共享屏幕")
+            btnRow.addView(chip("🎲 灌料进 Live", accent = true) {
+                val customEnter = onEnterLive
+                if (customEnter != null) {
+                    setStatus("正在用本骰灌料并进入官方 Gemini Live…")
+                    customEnter()
+                } else {
+                    val clipText = geminiPrompt.ifBlank { "【骰$dice · $name】$ask" }
+                    runCatching {
+                        val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("大肥鱼六骰提问", clipText))
+                        setStatus("简报已复制：正在切入 Live 并尝试共享屏幕")
+                    }
+                    runCatching {
+                        GeminiAutoLauncher.launchAndAutomateLive(
+                            app = app,
+                            topic = "骰$dice · $name",
+                            brief = clipText,
+                            voiceLine = "骰$dice$name，直接开答",
+                            mode = "instant",
+                            autoClickLive = true,
+                            requestScreenShare = true,
+                        )
+                    }
                 }
-                runCatching { GeminiAutoLauncher.launch(app, "骰$dice · $name", clipText, mode = "instant", preferVoice = true) }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginEnd = context.dp(6f)
             })
-            val saveBtn = chip("记一句思考", accent = true) { submitThought() }
+            val saveBtn = chip("记一句思考") { submitThought() }
             submitBtn = saveBtn
             btnRow.addView(saveBtn)
             card.addView(btnRow)
@@ -1777,6 +1831,134 @@ object ProactiveOverlay {
             val v = root ?: return
             root = null
             runCatching { wm?.removeViewImmediate(v) }
+        }
+    }
+
+    /**
+     * 本轮 Gemini Live 结束后的零打字 3 键接力卡（签 25m 验收点 / 进 20m 纯刷题舱 / 仅记复盘收起）。
+     */
+    private class PostLiveRelayCard(
+        private val context: Context,
+        private val type: Int,
+        private val durationSec: Long,
+        private val onCheckpoint25m: () -> Unit,
+        private val onQuizCapsule20m: () -> Unit,
+        private val onRecapOnly: () -> Unit,
+    ) {
+        private val palette = OverlayPalette.of(context)
+        private val wm = context.getSystemService(WindowManager::class.java)
+        private var root: View? = null
+        private val autoTimeout = Runnable { destroy() }
+
+        fun attach() {
+            val view = buildView()
+            val p = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                y = context.dp(56f)
+                title = "大肥鱼 Live 接力卡"
+                if (Build.VERSION.SDK_INT >= 28) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+                if (Build.VERSION.SDK_INT >= 30) setFitInsetsTypes(0)
+                val maxW = (context.resources.displayMetrics.widthPixels * 0.90f).toInt()
+                width = minOf(maxW, context.dp(400f))
+            }
+            root = view
+            wm!!.addView(view, p)
+            main.postDelayed(autoTimeout, 45_000L)
+        }
+
+        private fun buildView(): View {
+            val card = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                val pad = context.dp(14f)
+                setPadding(pad, context.dp(12f), pad, context.dp(12f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(18f).toFloat()
+                    setColor(palette.fill)
+                    setStroke(context.dp(1.5f).coerceAtLeast(1), palette.accent)
+                }
+            }
+
+            val head = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            head.addView(TextView(context).apply {
+                text = "🎙️ 本轮 Live 结束（${PostLiveRelayPolicy.formatDuration(durationSec)}）"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(palette.accent)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            head.addView(TextView(context).apply {
+                text = "收起"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(palette.muted)
+                setPadding(context.dp(8f), context.dp(4f), context.dp(2f), context.dp(4f))
+                isClickable = true
+                setOnClickListener { destroy() }
+            })
+            card.addView(head)
+
+            card.addView(TextView(context).apply {
+                text = "趁脑子还热，立刻接下一棒，别滑回桌面发呆："
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                setTextColor(palette.ink)
+                setPadding(0, context.dp(4f), 0, context.dp(10f))
+            })
+
+            fun actionBtn(label: String, accent: Boolean = false, onTap: () -> Unit) = TextView(context).apply {
+                text = label
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                setTypeface(typeface, if (accent) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+                setTextColor(if (accent) palette.onAccent else palette.ink)
+                setPadding(context.dp(12f), context.dp(9f), context.dp(12f), context.dp(9f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(12f).toFloat()
+                    setColor(if (accent) palette.accent else palette.pressed)
+                }
+                isClickable = true
+                setOnClickListener {
+                    destroy()
+                    onTap()
+                }
+            }
+
+            card.addView(
+                actionBtn("签 25m 验收点", accent = true, onTap = onCheckpoint25m),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = context.dp(6f)
+                },
+            )
+            card.addView(
+                actionBtn("进 20m 纯刷题舱", accent = false, onTap = onQuizCapsule20m),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = context.dp(6f)
+                },
+            )
+            card.addView(
+                actionBtn("仅记复盘收起", accent = false, onTap = onRecapOnly),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT),
+            )
+            return card
+        }
+
+        fun destroy() {
+            main.removeCallbacks(autoTimeout)
+            val v = root ?: return
+            root = null
+            runCatching { wm?.removeView(v) }
+            if (livePostRelay === this) livePostRelay = null
         }
     }
 }

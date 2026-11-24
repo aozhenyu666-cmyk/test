@@ -1755,6 +1755,7 @@ object ProactiveRuntime {
     @Volatile private var lastGeminiVoiceActiveAt: Long = 0L
     @Volatile private var lastGeminiVoiceDroppedAt: Long = 0L
     @Volatile private var lastLiveDurationSec: Long = 0L
+    @Volatile private var lastPostLiveRelayPromptAt: Long = 0L
     private val shownSparkIds = LinkedHashSet<String>()
     private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
 
@@ -2990,6 +2991,43 @@ object ProactiveRuntime {
             if (lastGeminiVoiceStartedAt > 0L) {
                 lastLiveDurationSec = ((wall - lastGeminiVoiceStartedAt) / 1000L).coerceAtLeast(0L)
             }
+            val durationJustEnded = lastLiveDurationSec
+            val modNow = minuteOfDay(wall)
+            val nightNow = modNow < 7 * 60 || modNow >= 23 * 60
+            val emergNow = inEmergencyPass(wall) || LockSafety.disarmed(app, wall)
+            val studyPkgs = allowedAppsForFocus()
+                .map { it.first }
+                .filter { it !in GEMINI_PACKAGES }
+                .toSet()
+            if (PostLiveRelayPolicy.shouldPrompt(
+                    durationSec = durationJustEnded,
+                    nowMs = wall,
+                    lastPromptAtMs = lastPostLiveRelayPromptAt,
+                    interceptHeld = VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) ||
+                        VisibleSurface.isHeldBy(VisibleSurface.OWNER_FOCUS),
+                    planModalShowing = ProactiveOverlay.isPlanModalShowing(),
+                    emergencyActive = emergNow,
+                    inNightWindow = nightNow,
+                    frontPkg = front,
+                    selfPkg = app.packageName,
+                    workOrQuizPackages = studyPkgs,
+                )
+            ) {
+                lastPostLiveRelayPromptAt = wall
+                main.post {
+                    if (!ProactiveOverlay.isPlanModalShowing() &&
+                        !VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) &&
+                        !VisibleSurface.isHeldBy(VisibleSurface.OWNER_FOCUS)
+                    ) {
+                        ProactiveOverlay.showPostLiveRelay(
+                            durationSec = durationJustEnded,
+                            onCheckpoint25m = { commitLiveRelay(mode = "checkpoint_25m", minutes = 25, nextTitle = "Live 接力 25m 产出") },
+                            onQuizCapsule20m = { commitLiveRelay(mode = "quiz_only", minutes = 20, nextTitle = "Live 接力 · 纯考公刷题舱") },
+                            onRecapOnly = { commitLiveRelay(mode = "recap_only", minutes = 25, nextTitle = "Live 口头对练已复盘闭环") },
+                        )
+                    }
+                }
+            }
         }
         lastGeminiVoiceActive = geminiVoiceActive
         val liveDroppedAgoMs = if (!geminiVoiceActive && lastGeminiVoiceActiveAt > 0L) {
@@ -3346,6 +3384,82 @@ object ProactiveRuntime {
         triggerShakeDice(manual = false)
     }
 
+    /** 从桌面摇骰/快捷触发直接走 Live Core 总调度灌料进官方 Gemini Live。 */
+    fun triggerLiveCoreRoll(diceHint: Int = 0, done: ((Boolean, String?) -> Unit)? = null) {
+        if (!::app.isInitialized) {
+            done?.invoke(false, "未初始化")
+            return
+        }
+        val body = linkedMapOf<String, Any?>("action" to "roll_dice")
+        if (diceHint in 1..6) body["diceHint"] = diceHint
+        fetchPluginRoute(
+            routeCallback { res ->
+                val payload = (res["payload"] as? Map<*, *>)
+                    ?: ((res["liveCore"] as? Map<*, *>)?.get("payload") as? Map<*, *>)
+                val fallback = LOCAL_DICE_FALLBACK.firstOrNull { it.first == diceHint } ?: LOCAL_DICE_FALLBACK.first()
+                val topic = (payload?.get("topic") as? String)?.takeIf { it.isNotBlank() }
+                    ?: "骰${fallback.first}·${fallback.second}"
+                val brief = (payload?.get("brief") as? String)?.takeIf { it.isNotBlank() }
+                    ?: "【禁聊体系死命令】别聊体系方法论，直接开考：${fallback.third}"
+                val voiceLine = (payload?.get("voiceLine") as? String)?.takeIf { it.isNotBlank() }
+                    ?: "骰${fallback.first}${fallback.second}，进 Live 直接开答"
+                val wantShare = res["wantScreenShare"] != false
+                main.post {
+                    GeminiAutoLauncher.launchAndAutomateLive(
+                        app = app,
+                        topic = topic,
+                        brief = brief,
+                        voiceLine = voiceLine,
+                        mode = "instant",
+                        autoClickLive = true,
+                        requestScreenShare = wantShare,
+                    ) { opened ->
+                        done?.invoke(opened, topic)
+                    }
+                }
+            },
+            "POST",
+            "/live-core",
+            body,
+        )
+    }
+
+    /** 结束一轮 Live 后提交接力单（25m 微验收点 / 20m 纯刷题舱 / 仅记复盘）。 */
+    fun commitLiveRelay(
+        mode: String,
+        minutes: Int = 25,
+        nextTitle: String = "",
+        summary: String = "",
+        done: ((Boolean, String?) -> Unit)? = null,
+    ) {
+        if (!::app.isInitialized) {
+            done?.invoke(false, "未初始化")
+            return
+        }
+        val body = linkedMapOf<String, Any?>(
+            "action" to "commit_relay",
+            "mode" to mode,
+            "minutes" to minutes,
+        )
+        if (nextTitle.isNotBlank()) body["next"] = nextTitle
+        if (summary.isNotBlank()) body["summary"] = summary
+        fetchPluginRoute(
+            routeCallback { res ->
+                val ok = res["ok"] == true
+                val msg = (res["toast"] as? String)?.takeIf { it.isNotBlank() }
+                    ?: if (ok) "已完成本轮 Live 接力交接" else "接力交接失败，请稍后在图谱页重试"
+                main.post {
+                    runCatching { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
+                    if (ok) consultPlanSoon(minGapMs = 0L)
+                    done?.invoke(ok, msg)
+                }
+            },
+            "POST",
+            "/live-core",
+            body,
+        )
+    }
+
     /** 触发一次摇六骰浮窗（manual=true 允许在 App 内或锁屏外手动触发）。 */
     fun triggerShakeDice(manual: Boolean = true, done: ((Map<String, Any?>) -> Unit)? = null) {
         if (!::app.isInitialized) {
@@ -3405,6 +3519,10 @@ object ProactiveRuntime {
                             )
                         },
                         onReroll = { triggerShakeDice(manual = true) },
+                        onEnterLive = {
+                            ProactiveOverlay.dismissDice()
+                            triggerLiveCoreRoll(diceHint = diceNum)
+                        },
                     )
                     if (!shown && manual) {
                         Toast.makeText(app, "🎲 骰$diceNum · $name：$ask（开启悬浮窗权限可直接在任意界面弹出）", Toast.LENGTH_LONG).show()
