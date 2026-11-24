@@ -321,4 +321,94 @@ class GeminiUiAutomatorPolicyTest {
         assertEquals(GeminiAutoState.CLICK_LIVE_BUTTON, jumpToLive.nextState)
         assertTrue(jumpToLive.sawGeminiWindow)
     }
+
+    @Test
+    fun shareScreenStepClicksGeminiShareButtonWhenRequestedAndRejectsSystemUi() {
+        val shareBtnInGemini = UiNodeSnapshot(
+            id = 40,
+            packageName = geminiPkg,
+            className = "android.widget.Button",
+            contentDescription = "共享屏幕",
+            viewIdResourceName = "$geminiPkg:id/live_screen_share_button",
+            isClickable = true,
+        )
+        val systemUiDialogBtn = UiNodeSnapshot(
+            id = 41,
+            packageName = "com.android.systemui",
+            className = "android.widget.Button",
+            text = "共享屏幕",
+            isClickable = true,
+        )
+        val stopSharingBtn = UiNodeSnapshot(
+            id = 42,
+            packageName = geminiPkg,
+            className = "android.widget.Button",
+            text = "停止共享",
+            isClickable = true,
+        )
+
+        assertNull(GeminiNodeMatcher.findScreenShareButton(listOf(systemUiDialogBtn, stopSharingBtn)))
+        assertEquals(40, GeminiNodeMatcher.findScreenShareButton(listOf(systemUiDialogBtn, stopSharingBtn, shareBtnInGemini))?.id)
+
+        val clickLiveNextShare = GeminiAutoStepPolicy.decide(
+            GeminiStepInput(
+                state = GeminiAutoState.CLICK_LIVE_BUTTON,
+                round = 5,
+                elapsedMs = 3_000L,
+                frontPackage = geminiPkg,
+                emergencyActive = false,
+                brief = "brief",
+                briefWritten = true,
+                sendClicked = true,
+                sawGeminiWindow = true,
+                requestScreenShare = true,
+                nodes = listOf(liveNode()),
+            ),
+        )
+        assertEquals(GeminiAutoState.CLICK_SCREEN_SHARE, clickLiveNextShare.nextState)
+        assertTrue(clickLiveNextShare.action is GeminiAutoAction.ClickLive)
+        assertTrue(clickLiveNextShare.liveClicked)
+
+        val clickShare = GeminiAutoStepPolicy.decide(
+            GeminiStepInput(
+                state = GeminiAutoState.CLICK_SCREEN_SHARE,
+                round = 6,
+                elapsedMs = 3_800L,
+                frontPackage = geminiPkg,
+                emergencyActive = false,
+                brief = "brief",
+                briefWritten = true,
+                sendClicked = true,
+                sawGeminiWindow = true,
+                requestScreenShare = true,
+                liveClicked = true,
+                nodes = listOf(shareBtnInGemini),
+            ),
+        )
+        assertEquals(GeminiAutoState.DONE, clickShare.nextState)
+        val shareAct = clickShare.action as? GeminiAutoAction.ClickScreenShare
+        assertNotNull(shareAct)
+        assertEquals(40, shareAct?.node?.id)
+    }
+
+    @Test
+    fun missingShareScreenButtonFinishesGracefullyWithoutFailingLiveSession() {
+        var step = GeminiAutoStepPolicy.decide(
+            GeminiStepInput(
+                state = GeminiAutoState.CLICK_SCREEN_SHARE,
+                round = 6,
+                elapsedMs = 3_500L,
+                frontPackage = geminiPkg,
+                emergencyActive = false,
+                brief = "brief",
+                sawGeminiWindow = true,
+                requestScreenShare = true,
+                liveClicked = true,
+                shareWaitRounds = GeminiAutoStepPolicy.MAX_SHARE_WAIT_ROUNDS - 1,
+                nodes = emptyList(),
+            ),
+        )
+        assertEquals(GeminiAutoState.DONE, step.nextState)
+        assertEquals(GeminiAutoAction.Finish("live_active_no_share_btn"), step.action)
+    }
 }

@@ -402,6 +402,22 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                     ProactiveRuntime.fetchPluginRoute(result, "POST", "/super-spark", body)
                 }
             }
+            "liveCoreOp" -> {
+                val args = (call.arguments as? Map<*, *>)?.entries
+                    ?.mapNotNull { (k, v) -> (k as? String)?.let { it to v } }
+                    ?.toMap()
+                val action = (args?.get("action") as? String)?.trim().orEmpty()
+                if (args.isNullOrEmpty() || action == "status") {
+                    ProactiveRuntime.fetchPluginRoute(
+                        result, "GET", "/live-core?timeZone=${BeijingClock.ZONE.id}", null,
+                    )
+                } else {
+                    val body = LinkedHashMap<String, Any?>()
+                    body["timeZone"] = BeijingClock.ZONE.id
+                    args.forEach { (k, v) -> if (k != "timeZone") body[k] = v }
+                    ProactiveRuntime.fetchPluginRoute(result, "POST", "/live-core", body)
+                }
+            }
             "bankStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/bank", null)
             "bankOp" -> {
                 val body = linkedMapOf<String, Any?>()
@@ -456,6 +472,7 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 val voiceLine = call.argument<String>("voiceLine").orEmpty()
                 val mode = call.argument<String>("mode")?.takeIf { it.isNotBlank() } ?: "instant"
                 val autoClickLive = call.argument<Boolean>("autoClickLive") != false
+                val requestScreenShare = call.argument<Boolean>("requestScreenShare") == true
                 GeminiAutoLauncher.launchAndAutomateLive(
                     app = context,
                     topic = topic,
@@ -463,6 +480,7 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                     voiceLine = voiceLine,
                     mode = mode,
                     autoClickLive = autoClickLive,
+                    requestScreenShare = requestScreenShare,
                 )
                 result.success(true)
             }

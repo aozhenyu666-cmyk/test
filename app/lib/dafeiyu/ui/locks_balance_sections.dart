@@ -601,6 +601,114 @@ extension _LocksBalanceSections on _LocksBalancePageState {
       ),
     );
   }
+
+  Widget _buildLiveCoreCard(
+    BuildContext context, {
+    required ThemeData theme,
+    required DshColors colors,
+    required ColorScheme scheme,
+  }) {
+    final lc = _resolveLiveCore();
+    final enabled = lc['enabled'] != false;
+    final wantScreenShare = lc['wantScreenShare'] != false;
+    final autoReengage = lc['autoReengage'] != false;
+    final muted = lc['muted'] == true;
+    final phase = '${lc['phase'] ?? 'standby'}';
+    final dice = _asMap(lc['dice']);
+    final diceFace = _asInt(dice['face'], 0);
+    final diceName = '${dice['name'] ?? ''}';
+    final diceRoleHint = '${dice['roleHint'] ?? '随机六面破冰 · 窥视现场 · 喂入笔记/错题与禁聊死命令'}';
+
+    final (StatusTone tone, String phaseLabel) = switch (phase) {
+      'live_active' => (StatusTone.ok, 'Live 在线'),
+      'ignited' => (StatusTone.warn, '窥视待命'),
+      'yielded_studying' => (StatusTone.ok, '已让路：刷题或睡眠中'),
+      'yielded_night' || 'yielded_emergency' || 'yielded_break' || 'yielded_plan_modal' =>
+        (StatusTone.idle, '已让路：刷题或睡眠中'),
+      'muted' => (StatusTone.idle, '静音中'),
+      _ => enabled ? (StatusTone.ok, '窥视待命') : (StatusTone.idle, '已暂停'),
+    };
+    final effectiveTone = muted ? StatusTone.idle : tone;
+    final effectiveLabel = muted ? '静音中' : phaseLabel;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: GlassSurface(
+        key: const ValueKey('locks-live-core-card'),
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(AppIcons.voice, size: 18, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '🎲 Gemini Live 窥视核心（总调度 V1）',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall,
+                    ),
+                  ),
+                  StatusChip(
+                    key: const ValueKey('locks-live-core-phase-chip'),
+                    tone: effectiveTone,
+                    label: effectiveLabel,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                diceFace > 0
+                    ? '最近骰$diceFace「$diceName」：$diceRoleHint'
+                    : '入口极简只留 1 颗骰子，后台整合设定 / 错题 / Obsidian / 屏幕摘录灌进官方 Live；刷题或睡眠自动让路。',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                key: const ValueKey('locks-live-core-roll-btn'),
+                style: FilledButton.styleFrom(shape: AppShape.card),
+                onPressed: _busy ? null : () => unawaited(_handleRollLiveCoreDice()),
+                icon: const Icon(AppIcons.voice, size: 17),
+                label: const Text('🎲 摇骰子灌料进 Live'),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  FilterChip(
+                    key: const ValueKey('locks-live-core-share-chip'),
+                    label: const Text('窥视共享屏幕'),
+                    selected: wantScreenShare,
+                    onSelected: _busy ? null : (v) => unawaited(_handleToggleLiveCoreShare(v)),
+                  ),
+                  FilterChip(
+                    key: const ValueKey('locks-live-core-reengage-chip'),
+                    label: const Text('断线自动拉回'),
+                    selected: autoReengage,
+                    onSelected: _busy ? null : (v) => unawaited(_handleToggleLiveCoreReengage(v)),
+                  ),
+                  ActionChip(
+                    key: const ValueKey('locks-live-core-mute-chip'),
+                    avatar: const Icon(AppIcons.close, size: 14),
+                    label: const Text('静音 20m'),
+                    onPressed: _busy ? null : () => unawaited(_handleMuteLiveCore20m()),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _MiniBalanceMetric extends StatelessWidget {

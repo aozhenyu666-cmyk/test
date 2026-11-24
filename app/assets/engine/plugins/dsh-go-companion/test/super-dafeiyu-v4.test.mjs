@@ -398,8 +398,11 @@ test('P0-2: 强制计划模态 → 沟通解析/3次延后钉死 P3 验收锁 + 
   }
 })
 
-test('P0-3: 无局可改默认白名单 + 纯游戏硬拦截 + other->work 立即生效 + reverse_capsule 窄舱隔离', async () => {
-  await withHome(async () => {
+test('P0-3: 无局可改默认白名单 + 纯游戏硬拦截 + other->work 立即生效 + reverse_capsule 窄舱隔离', async (tc) => {
+  const T_1600 = Date.UTC(2026, 10, 24, 8, 0, 0) // 16:00 Asia/Shanghai
+  tc.mock.timers.enable({ apis: ['Date'], now: T_1600 })
+  try {
+    await withHome(async () => {
     const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
     // 上报已安装应用（含考公学习、纯游戏、其他未知应用）
     await call(h(), 'POST', '/plan', {
@@ -519,7 +522,10 @@ test('P0-3: 无局可改默认白名单 + 纯游戏硬拦截 + other->work 立�
     assert.deepEqual(rcCustom.rejectedGames, ['com.miHoYo.Yuanshen'])
 
     await call(h(), 'POST', '/bouts', { action: 'close' })
-  })
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
 })
 
 test('P1-4: super_spark 四源融合/去重/4模式/受控Gemini剧本 + /super-spark + /plan 注入 + 人设反说教校验', async (tc) => {

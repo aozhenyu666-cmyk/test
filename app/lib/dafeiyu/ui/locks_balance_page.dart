@@ -55,6 +55,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
 
   Map<String, dynamic> _today = const {};
   Map<String, dynamic>? _seals;
+  Map<String, dynamic>? _liveCore;
   Map<String, Object?>? _wall;
   bool? _lockShadow;
   List<String>? _defaultAllowOverride;
@@ -109,6 +110,13 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
       _channel.lockShadow().then((r) {
         if (!mounted || r == null) return;
         setState(() => _lockShadow = r);
+      }).catchError((_) {}),
+    );
+    unawaited(
+      _channel.liveCoreOp().then((r) {
+        if (!mounted || r == null) return;
+        final nested = _asMap(r['liveCore']);
+        setState(() => _liveCore = nested.isNotEmpty ? nested : _asMap(r));
       }).catchError((_) {}),
     );
 
@@ -660,6 +668,114 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Map<String, dynamic> _resolveLiveCore() {
+    if (_liveCore != null && _liveCore!.isNotEmpty) return _liveCore!;
+    final fromToday = _asMap(_today['liveCore']);
+    if (fromToday.isNotEmpty) return fromToday;
+    return const {
+      'enabled': true,
+      'autoReengage': true,
+      'wantScreenShare': true,
+      'muted': false,
+      'phase': 'standby',
+    };
+  }
+
+  Future<void> _handleRollLiveCoreDice() async {
+    if (_busy) return;
+    final current = _resolveLiveCore();
+    final wantScreenShare = current['wantScreenShare'] != false;
+    setState(() => _busy = true);
+    final res = await _channel.liveCoreOp(const {'action': 'roll_dice'});
+    final nested = _asMap(res?['liveCore']);
+    final payload = _asMap(res?['payload']).isNotEmpty
+        ? _asMap(res?['payload'])
+        : _asMap(nested['payload']);
+    final dice = _asMap(payload['dice']).isNotEmpty ? _asMap(payload['dice']) : _asMap(res?['dice']);
+    final topic = '${payload['topic'] ?? '骰子触发 · 进 Gemini Live'}'.trim();
+    final brief = '${payload['brief'] ?? '请直接基于当下屏幕与题源开考，禁聊体系与找地方'}'.trim();
+    final voiceLine = '${payload['voiceLine'] ?? '骰子已落定，进 Live 直接开答'}'.trim();
+    final launched = await _channel.triggerGeminiAutoLive(
+      topic: topic,
+      brief: brief,
+      voiceLine: voiceLine,
+      mode: 'instant',
+      autoClickLive: true,
+      requestScreenShare: wantScreenShare,
+    );
+    await _refresh();
+    if (!mounted) return;
+    final diceFace = _asInt(dice['face'], 0);
+    final diceName = '${dice['name'] ?? ''}'.trim();
+    final diceTag = diceFace > 0 ? '骰$diceFace·$diceName' : topic;
+    final msg = launched
+        ? '🎲 已触发 $diceTag 并灌料进 Gemini Live${wantScreenShare ? '（含屏幕共享提示）' : ''}'
+        : '🎲 已生成 $diceTag 灌料简报';
+    setState(() {
+      if (nested.isNotEmpty) _liveCore = nested;
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _handleToggleLiveCoreShare(bool value) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final res = await _channel.liveCoreOp({'action': 'set_config', 'wantScreenShare': value});
+    if (!mounted) return;
+    final nested = _asMap(res?['liveCore']);
+    final msg = value ? '已开启进 Live 后自动触发「共享屏幕」提示' : '已关闭进 Live 自动共享屏幕提示';
+    setState(() {
+      if (nested.isNotEmpty) {
+        _liveCore = nested;
+      } else {
+        _liveCore = {..._resolveLiveCore(), 'wantScreenShare': value};
+      }
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _handleToggleLiveCoreReengage(bool value) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final res = await _channel.liveCoreOp({'action': 'set_config', 'autoReengage': value});
+    if (!mounted) return;
+    final nested = _asMap(res?['liveCore']);
+    final msg = value ? '已开启 Live 断线未交回执自动拉回' : '已暂停 Live 断线自动拉回';
+    setState(() {
+      if (nested.isNotEmpty) {
+        _liveCore = nested;
+      } else {
+        _liveCore = {..._resolveLiveCore(), 'autoReengage': value};
+      }
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _handleMuteLiveCore20m() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final res = await _channel.liveCoreOp(const {'action': 'mute', 'minutes': 20});
+    if (!mounted) return;
+    final nested = _asMap(res?['liveCore']);
+    final msg = '${res?['toast'] ?? '已静音 Gemini 窥视调度 20 分钟'}';
+    setState(() {
+      if (nested.isNotEmpty) {
+        _liveCore = nested;
+      } else {
+        _liveCore = {..._resolveLiveCore(), 'muted': true, 'phase': 'muted'};
+      }
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -706,6 +822,13 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
       title: '锁与余额总控',
       subtitle: const Text('6 只手统一裁决 · 分时余额大盘 · 双鱼设局轨迹'),
       actions: [
+        GlassIconButton(
+          icon: AppIcons.voice,
+          tooltip: '🎲 摇骰子灌料进 Live',
+          onPressed: () {
+            if (!_busy) unawaited(_handleRollLiveCoreDice());
+          },
+        ),
         GlassIconButton(
           icon: AppIcons.chart,
           tooltip: 'App 使用时长统计（独立页）',
@@ -1038,6 +1161,14 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                         meta: '${act['hm'] ?? ''}',
                       ),
                   ],
+          ),
+
+          // 板块 4.5 · Gemini Live 窥视核心（总调度 V1）
+          _buildLiveCoreCard(
+            context,
+            theme: theme,
+            colors: colors,
+            scheme: scheme,
           ),
 
           ListPageCard(

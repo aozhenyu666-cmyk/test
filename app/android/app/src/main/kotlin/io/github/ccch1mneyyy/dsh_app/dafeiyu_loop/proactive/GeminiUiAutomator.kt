@@ -14,6 +14,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.VoicePlan
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist
 
@@ -41,6 +42,7 @@ enum class GeminiAutoState {
     PASTE_AND_SEND_BRIEF,
     WAIT_REPLY_START,
     CLICK_LIVE_BUTTON,
+    CLICK_SCREEN_SHARE,
     DONE,
     ABORTED,
 }
@@ -50,6 +52,7 @@ sealed interface GeminiAutoAction {
     data class PasteBrief(val node: UiNodeSnapshot, val text: String) : GeminiAutoAction
     data class ClickSend(val node: UiNodeSnapshot) : GeminiAutoAction
     data class ClickLive(val node: UiNodeSnapshot) : GeminiAutoAction
+    data class ClickScreenShare(val node: UiNodeSnapshot) : GeminiAutoAction
     data class Finish(val reason: String) : GeminiAutoAction
     data class Abort(val reason: String) : GeminiAutoAction
 }
@@ -67,6 +70,9 @@ data class GeminiStepInput(
     val sawGeminiWindow: Boolean = false,
     val nodes: List<UiNodeSnapshot> = emptyList(),
     val ownPackage: String = "",
+    val requestScreenShare: Boolean = false,
+    val liveClicked: Boolean = false,
+    val shareWaitRounds: Int = 0,
 )
 
 data class GeminiStepOutput(
@@ -76,6 +82,8 @@ data class GeminiStepOutput(
     val sendClicked: Boolean = false,
     val replyWaitRounds: Int = 0,
     val sawGeminiWindow: Boolean = false,
+    val liveClicked: Boolean = false,
+    val shareWaitRounds: Int = 0,
 )
 
 /** 纯 JVM 可测：Gemini 包名、输入框、发送按钮、Live 按钮及回复状态识别规则。 */
@@ -153,6 +161,38 @@ object GeminiNodeMatcher {
         "结束语音",
         "tap to interrupt",
         "轻触可打断",
+    )
+
+    private val EXCLUDED_SHARE_TERMS = listOf(
+        "stop sharing",
+        "stop screen",
+        "end sharing",
+        "停止共享",
+        "关闭共享",
+        "结束共享",
+        "停止投屏",
+        "结束投屏",
+        "cancel",
+        "取消",
+    )
+
+    private val SHARE_EXACT_LABELS = setOf(
+        "share screen",
+        "screen share",
+        "share your screen",
+        "共享屏幕",
+        "屏幕共享",
+        "分享屏幕",
+        "投屏",
+    )
+
+    private val SHARE_PHRASES = listOf(
+        "share screen",
+        "screen share",
+        "share your screen",
+        "共享屏幕",
+        "屏幕共享",
+        "分享屏幕",
     )
 
     private val REPLY_ACTIVE_MARKERS = listOf(
@@ -293,6 +333,39 @@ object GeminiNodeMatcher {
         return sawLiveLabel && sawCallControl
     }
 
+    /** 仅匹配官方 Gemini Live 窗口内部的「共享屏幕」按钮，严格拒配系统 MediaProjection 权限窗（com.android.systemui）。 */
+    fun findScreenShareButton(nodes: List<UiNodeSnapshot>, requireGeminiPackage: Boolean = true): UiNodeSnapshot? {
+        var best: UiNodeSnapshot? = null
+        var bestScore = Int.MIN_VALUE
+        for (n in nodes) {
+            if (!n.isVisibleToUser || !n.isEnabled) continue
+            if (!pkgAllowed(n, requireGeminiPackage)) continue
+            if (n.isEditable || n.className.contains("EditText", ignoreCase = true)) continue
+
+            val t = n.text.trim().lowercase()
+            val d = n.contentDescription.trim().lowercase()
+            val v = n.viewIdResourceName.trim().lowercase()
+            val combined = "$t $d $v"
+            if (EXCLUDED_SHARE_TERMS.any { combined.contains(it) }) continue
+
+            val exactMatch = t in SHARE_EXACT_LABELS || d in SHARE_EXACT_LABELS
+            val phraseMatch = SHARE_PHRASES.any { t.contains(it) || d.contains(it) }
+            val idMatch = v.contains("share_screen") || v.contains("screen_share") || v.contains("live_screen_share")
+            if (!exactMatch && !phraseMatch && !idMatch) continue
+
+            var score = 0
+            if (n.isClickable) score += 50
+            if (exactMatch) score += 40
+            if (phraseMatch) score += 30
+            if (idMatch) score += 25
+            if (score > bestScore) {
+                bestScore = score
+                best = n
+            }
+        }
+        return best
+    }
+
     fun hasReplyStarted(
         nodes: List<UiNodeSnapshot>,
         brief: String,
@@ -341,6 +414,7 @@ object GeminiAutoStepPolicy {
     const val MAX_TIMEOUT_MS = 12_000L
     const val MAX_ROUNDS = 16
     const val LAUNCH_GRACE_ROUNDS = 6
+    const val MAX_SHARE_WAIT_ROUNDS = 4
 
     fun decide(input: GeminiStepInput): GeminiStepOutput {
         if (input.state == GeminiAutoState.DONE || input.state == GeminiAutoState.ABORTED) {
@@ -355,22 +429,63 @@ object GeminiAutoStepPolicy {
                 sendClicked = input.sendClicked,
                 replyWaitRounds = input.replyWaitRounds,
                 sawGeminiWindow = input.sawGeminiWindow,
+                liveClicked = input.liveClicked,
+                shareWaitRounds = input.shareWaitRounds,
             )
         }
         if (input.emergencyActive) {
             return abort(input, "emergency_active")
         }
         if (input.elapsedMs >= MAX_TIMEOUT_MS) {
-            return abort(input, "timeout")
+            return if (input.state == GeminiAutoState.CLICK_SCREEN_SHARE && input.liveClicked) {
+                GeminiStepOutput(
+                    nextState = GeminiAutoState.DONE,
+                    action = GeminiAutoAction.Finish("live_active_no_share_btn"),
+                    briefWritten = input.briefWritten,
+                    sendClicked = input.sendClicked,
+                    replyWaitRounds = input.replyWaitRounds,
+                    sawGeminiWindow = input.sawGeminiWindow,
+                    liveClicked = true,
+                    shareWaitRounds = input.shareWaitRounds,
+                )
+            } else {
+                abort(input, "timeout")
+            }
         }
         if (input.round >= MAX_ROUNDS) {
-            return abort(input, "max_rounds")
+            return if (input.state == GeminiAutoState.CLICK_SCREEN_SHARE && input.liveClicked) {
+                GeminiStepOutput(
+                    nextState = GeminiAutoState.DONE,
+                    action = GeminiAutoAction.Finish("live_active_no_share_btn"),
+                    briefWritten = input.briefWritten,
+                    sendClicked = input.sendClicked,
+                    replyWaitRounds = input.replyWaitRounds,
+                    sawGeminiWindow = input.sawGeminiWindow,
+                    liveClicked = true,
+                    shareWaitRounds = input.shareWaitRounds,
+                )
+            } else {
+                abort(input, "max_rounds")
+            }
         }
 
         val front = input.frontPackage?.trim().orEmpty()
         val isGemini = GeminiNodeMatcher.isGeminiPackage(front)
         if (input.sawGeminiWindow && front.isNotEmpty() && !isGemini) {
-            return abort(input, "foreground_switched")
+            return if (input.state == GeminiAutoState.CLICK_SCREEN_SHARE && input.liveClicked) {
+                GeminiStepOutput(
+                    nextState = GeminiAutoState.DONE,
+                    action = GeminiAutoAction.Finish("live_active_window_left"),
+                    briefWritten = input.briefWritten,
+                    sendClicked = input.sendClicked,
+                    replyWaitRounds = input.replyWaitRounds,
+                    sawGeminiWindow = true,
+                    liveClicked = true,
+                    shareWaitRounds = input.shareWaitRounds,
+                )
+            } else {
+                abort(input, "foreground_switched")
+            }
         }
 
         return when (input.state) {
@@ -393,11 +508,21 @@ object GeminiAutoStepPolicy {
                     )
                 }
                 if (GeminiNodeMatcher.isAlreadyInLiveScreen(input.nodes)) {
-                    return GeminiStepOutput(
-                        nextState = GeminiAutoState.DONE,
-                        action = GeminiAutoAction.Finish("already_in_live"),
-                        sawGeminiWindow = true,
-                    )
+                    return if (input.requestScreenShare) {
+                        GeminiStepOutput(
+                            nextState = GeminiAutoState.CLICK_SCREEN_SHARE,
+                            action = GeminiAutoAction.Wait,
+                            sawGeminiWindow = true,
+                            liveClicked = true,
+                            shareWaitRounds = 0,
+                        )
+                    } else {
+                        GeminiStepOutput(
+                            nextState = GeminiAutoState.DONE,
+                            action = GeminiAutoAction.Finish("already_in_live"),
+                            sawGeminiWindow = true,
+                        )
+                    }
                 }
                 val next = if (input.brief.isBlank()) {
                     GeminiAutoState.CLICK_LIVE_BUTTON
@@ -479,14 +604,27 @@ object GeminiAutoStepPolicy {
 
             GeminiAutoState.WAIT_REPLY_START -> {
                 if (GeminiNodeMatcher.isAlreadyInLiveScreen(input.nodes)) {
-                    return GeminiStepOutput(
-                        nextState = GeminiAutoState.DONE,
-                        action = GeminiAutoAction.Finish("already_in_live"),
-                        briefWritten = input.briefWritten,
-                        sendClicked = true,
-                        replyWaitRounds = input.replyWaitRounds,
-                        sawGeminiWindow = true,
-                    )
+                    return if (input.requestScreenShare) {
+                        GeminiStepOutput(
+                            nextState = GeminiAutoState.CLICK_SCREEN_SHARE,
+                            action = GeminiAutoAction.Wait,
+                            briefWritten = input.briefWritten,
+                            sendClicked = true,
+                            replyWaitRounds = input.replyWaitRounds,
+                            sawGeminiWindow = true,
+                            liveClicked = true,
+                            shareWaitRounds = 0,
+                        )
+                    } else {
+                        GeminiStepOutput(
+                            nextState = GeminiAutoState.DONE,
+                            action = GeminiAutoAction.Finish("already_in_live"),
+                            briefWritten = input.briefWritten,
+                            sendClicked = true,
+                            replyWaitRounds = input.replyWaitRounds,
+                            sawGeminiWindow = true,
+                        )
+                    }
                 }
                 val nextWait = input.replyWaitRounds + 1
                 val replyStarted = GeminiNodeMatcher.hasReplyStarted(input.nodes, input.brief)
@@ -515,24 +653,39 @@ object GeminiAutoStepPolicy {
 
             GeminiAutoState.CLICK_LIVE_BUTTON -> {
                 if (GeminiNodeMatcher.isAlreadyInLiveScreen(input.nodes)) {
-                    return GeminiStepOutput(
-                        nextState = GeminiAutoState.DONE,
-                        action = GeminiAutoAction.Finish("already_in_live"),
-                        briefWritten = input.briefWritten,
-                        sendClicked = input.sendClicked,
-                        replyWaitRounds = input.replyWaitRounds,
-                        sawGeminiWindow = true,
-                    )
+                    return if (input.requestScreenShare) {
+                        GeminiStepOutput(
+                            nextState = GeminiAutoState.CLICK_SCREEN_SHARE,
+                            action = GeminiAutoAction.Wait,
+                            briefWritten = input.briefWritten,
+                            sendClicked = input.sendClicked,
+                            replyWaitRounds = input.replyWaitRounds,
+                            sawGeminiWindow = true,
+                            liveClicked = true,
+                            shareWaitRounds = 0,
+                        )
+                    } else {
+                        GeminiStepOutput(
+                            nextState = GeminiAutoState.DONE,
+                            action = GeminiAutoAction.Finish("already_in_live"),
+                            briefWritten = input.briefWritten,
+                            sendClicked = input.sendClicked,
+                            replyWaitRounds = input.replyWaitRounds,
+                            sawGeminiWindow = true,
+                        )
+                    }
                 }
                 val liveBtn = GeminiNodeMatcher.findLiveButton(input.nodes)
                 if (liveBtn != null) {
                     GeminiStepOutput(
-                        nextState = GeminiAutoState.DONE,
+                        nextState = if (input.requestScreenShare) GeminiAutoState.CLICK_SCREEN_SHARE else GeminiAutoState.DONE,
                         action = GeminiAutoAction.ClickLive(liveBtn),
                         briefWritten = input.briefWritten,
                         sendClicked = input.sendClicked,
                         replyWaitRounds = input.replyWaitRounds,
                         sawGeminiWindow = true,
+                        liveClicked = true,
+                        shareWaitRounds = 0,
                     )
                 } else {
                     GeminiStepOutput(
@@ -543,6 +696,47 @@ object GeminiAutoStepPolicy {
                         replyWaitRounds = input.replyWaitRounds,
                         sawGeminiWindow = true,
                     )
+                }
+            }
+
+            GeminiAutoState.CLICK_SCREEN_SHARE -> {
+                val shareBtn = GeminiNodeMatcher.findScreenShareButton(input.nodes)
+                if (shareBtn != null) {
+                    GeminiStepOutput(
+                        nextState = GeminiAutoState.DONE,
+                        action = GeminiAutoAction.ClickScreenShare(shareBtn),
+                        briefWritten = input.briefWritten,
+                        sendClicked = input.sendClicked,
+                        replyWaitRounds = input.replyWaitRounds,
+                        sawGeminiWindow = true,
+                        liveClicked = true,
+                        shareWaitRounds = input.shareWaitRounds,
+                    )
+                } else {
+                    val nextShareWait = input.shareWaitRounds + 1
+                    if (nextShareWait >= MAX_SHARE_WAIT_ROUNDS) {
+                        GeminiStepOutput(
+                            nextState = GeminiAutoState.DONE,
+                            action = GeminiAutoAction.Finish("live_active_no_share_btn"),
+                            briefWritten = input.briefWritten,
+                            sendClicked = input.sendClicked,
+                            replyWaitRounds = input.replyWaitRounds,
+                            sawGeminiWindow = true,
+                            liveClicked = true,
+                            shareWaitRounds = nextShareWait,
+                        )
+                    } else {
+                        GeminiStepOutput(
+                            nextState = GeminiAutoState.CLICK_SCREEN_SHARE,
+                            action = GeminiAutoAction.Wait,
+                            briefWritten = input.briefWritten,
+                            sendClicked = input.sendClicked,
+                            replyWaitRounds = input.replyWaitRounds,
+                            sawGeminiWindow = true,
+                            liveClicked = true,
+                            shareWaitRounds = nextShareWait,
+                        )
+                    }
                 }
             }
 
@@ -557,6 +751,8 @@ object GeminiAutoStepPolicy {
         sendClicked = input.sendClicked,
         replyWaitRounds = input.replyWaitRounds,
         sawGeminiWindow = input.sawGeminiWindow,
+        liveClicked = input.liveClicked,
+        shareWaitRounds = input.shareWaitRounds,
     )
 }
 
@@ -587,11 +783,12 @@ object GeminiUiAutomator {
     fun run(
         app: Context,
         brief: String,
+        requestScreenShare: Boolean = false,
         onResult: ((ok: Boolean, reason: String) -> Unit)? = null,
     ) {
         val appCtx = app.applicationContext ?: app
         val startTask = Runnable {
-            startOnMain(appCtx, brief, onResult)
+            startOnMain(appCtx, brief, requestScreenShare, onResult)
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
             startTask.run()
@@ -603,6 +800,7 @@ object GeminiUiAutomator {
     private fun startOnMain(
         app: Context,
         brief: String,
+        requestScreenShare: Boolean,
         onResult: ((ok: Boolean, reason: String) -> Unit)?,
     ) {
         cancel()
@@ -614,6 +812,8 @@ object GeminiUiAutomator {
         var sendClicked = false
         var replyWaitRounds = 0
         var sawGeminiWindow = false
+        var liveClicked = false
+        var shareWaitRounds = 0
 
         fun finishRun(ok: Boolean, reason: String) {
             if (token != activeToken) return
@@ -656,6 +856,9 @@ object GeminiUiAutomator {
                             sawGeminiWindow = sawGeminiWindow,
                             nodes = captured.snapshots,
                             ownPackage = app.packageName,
+                            requestScreenShare = requestScreenShare,
+                            liveClicked = liveClicked,
+                            shareWaitRounds = shareWaitRounds,
                         ),
                     )
                     round++
@@ -664,6 +867,8 @@ object GeminiUiAutomator {
                     var nextSendClicked = out.sendClicked
                     val nextReplyWait = out.replyWaitRounds
                     val nextSawGemini = out.sawGeminiWindow
+                    var nextLiveClicked = out.liveClicked
+                    var nextShareWait = out.shareWaitRounds
 
                     when (val act = out.action) {
                         is GeminiAutoAction.Wait -> Unit
@@ -691,11 +896,34 @@ object GeminiUiAutomator {
                                 GeminiNodeMatcher.isGeminiPackage(captured.frontPackage) &&
                                 clickNodeOrAncestor(node)
                             if (clicked) {
-                                finishRun(true, "clicked_live")
-                                return
+                                if (out.nextState == GeminiAutoState.DONE) {
+                                    finishRun(true, "clicked_live")
+                                    return
+                                }
+                                nextLiveClicked = true
+                                nextShareWait = 0
                             } else {
                                 // 没点中则留在 CLICK_LIVE_BUTTON 继续尝试直到超时
                                 nextState = GeminiAutoState.CLICK_LIVE_BUTTON
+                                nextLiveClicked = false
+                            }
+                        }
+                        is GeminiAutoAction.ClickScreenShare -> {
+                            val node = captured.nativeNodes[act.node.id]
+                            val clicked = node != null &&
+                                GeminiNodeMatcher.isGeminiPackage(captured.frontPackage) &&
+                                clickNodeOrAncestor(node)
+                            if (clicked) {
+                                val spoken = VoicePlan.brief("已打开屏幕共享提示，点一下允许，让它盯着你")
+                                    ?: "已打开屏幕共享提示，点一下允许"
+                                runCatching {
+                                    VoiceOut.install(app)
+                                    VoiceOut.speak(VoicePlan(spoken, VoicePlan.DEFAULT_RATE, VoicePlan.DEFAULT_PITCH)) {}
+                                }
+                                finishRun(true, "clicked_screen_share_prompt")
+                                return
+                            } else {
+                                nextState = GeminiAutoState.CLICK_SCREEN_SHARE
                             }
                         }
                         is GeminiAutoAction.Finish -> {
@@ -713,10 +941,13 @@ object GeminiUiAutomator {
                     sendClicked = nextSendClicked
                     replyWaitRounds = nextReplyWait
                     sawGeminiWindow = nextSawGemini
+                    liveClicked = nextLiveClicked
+                    shareWaitRounds = nextShareWait
 
                     val nextDelay = when (out.action) {
                         is GeminiAutoAction.PasteBrief -> 350L
                         is GeminiAutoAction.ClickSend -> 650L
+                        is GeminiAutoAction.ClickLive -> 850L
                         else -> if (state == GeminiAutoState.PASTE_AND_SEND_BRIEF && !briefWritten) 350L else POLL_INTERVAL_MS
                     }
                     main.postDelayed(this, nextDelay)

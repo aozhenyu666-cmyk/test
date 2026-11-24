@@ -138,6 +138,7 @@ object GeminiAutoLauncher {
         voiceLine: String = "",
         mode: String = "instant",
         autoClickLive: Boolean = true,
+        requestScreenShare: Boolean = false,
         onResult: ((Boolean) -> Unit)? = null,
     ) {
         val appCtx = app.applicationContext ?: app
@@ -149,6 +150,7 @@ object GeminiAutoLauncher {
                 voiceLine = voiceLine,
                 mode = mode,
                 autoClickLive = autoClickLive,
+                requestScreenShare = requestScreenShare,
                 onResult = onResult,
             )
         }
@@ -166,6 +168,7 @@ object GeminiAutoLauncher {
         voiceLine: String,
         mode: String,
         autoClickLive: Boolean,
+        requestScreenShare: Boolean,
         onResult: ((Boolean) -> Unit)?,
     ) {
         val frontPkg = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
@@ -206,7 +209,7 @@ object GeminiAutoLauncher {
         fun startDirectAndMaybeAutomate() {
             val opened = startGeminiDirect(app, topic, preferVoice = false)
             if (opened && autoClickLive && PhoneA11yService.isConnected()) {
-                GeminiUiAutomator.run(app, brief) { autoOk, _ ->
+                GeminiUiAutomator.run(app, brief, requestScreenShare = requestScreenShare) { autoOk, _ ->
                     onResult?.invoke(autoOk)
                 }
             } else {

@@ -1750,6 +1750,9 @@ object ProactiveRuntime {
     @Volatile private var geminiDueAt: Long = 0L
     @Volatile private var lastAutoPullAt: Long = 0L
     @Volatile private var lastPlanModalShownAt: Long = 0L
+    @Volatile private var lastGeminiVoiceActive: Boolean = false
+    @Volatile private var lastGeminiVoiceActiveAt: Long = 0L
+    @Volatile private var lastGeminiVoiceDroppedAt: Long = 0L
     private val shownSparkIds = LinkedHashSet<String>()
     private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
 
@@ -2309,7 +2312,11 @@ object ProactiveRuntime {
         }
         val autoPull = map["geminiAutoPull"] as? Map<*, *>
         var autoPulledNow = false
-        if (autoPull != null && autoPull["trigger"] != false && autoPull["active"] != false) {
+        val interceptHeldForPull = VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) ||
+            VisibleSurface.isHeldBy(VisibleSurface.OWNER_FOCUS)
+        if (autoPull != null && autoPull["trigger"] != false && autoPull["active"] != false &&
+            (!interceptHeldForPull || autoPull["force"] == true)
+        ) {
             val pullTopic = (autoPull["topic"] as? String).orEmpty()
             val pullBrief = (autoPull["brief"] as? String).orEmpty()
             val pullMode = (autoPull["mode"] as? String)?.takeIf { it.isNotBlank() }
@@ -2317,6 +2324,7 @@ object ProactiveRuntime {
                 ?: "countdown_3s"
             val preferVoice = autoPull["preferVoice"] == true
             val autoClickLive = autoPull["autoClickLive"] == true
+            val requestScreenShare = autoPull["requestScreenShare"] == true
             val voiceLine = (autoPull["voiceLine"] as? String).orEmpty()
             val pullStamp = (autoPull["at"] as? Number)?.toLong() ?: stamp
             if ((pullTopic.isNotBlank() || pullBrief.isNotBlank()) &&
@@ -2333,8 +2341,9 @@ object ProactiveRuntime {
                         voiceLine = voiceLine,
                         mode = pullMode,
                         autoClickLive = true,
+                        requestScreenShare = requestScreenShare,
                     ) { opened ->
-                        Log.i(TAG, "geminiAutoPull(live): topic=$pullTopic mode=$pullMode opened=$opened")
+                        Log.i(TAG, "geminiAutoPull(live): topic=$pullTopic mode=$pullMode share=$requestScreenShare opened=$opened")
                     }
                 } else {
                     GeminiAutoLauncher.launch(
@@ -2895,6 +2904,20 @@ object ProactiveRuntime {
         report
     }.getOrNull()
 
+    private fun isHeadsetConnected(): Boolean = runCatching {
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return@runCatching false
+        am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).any { dev ->
+            when (dev.type) {
+                android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                android.media.AudioDeviceInfo.TYPE_USB_HEADSET -> true
+                else -> Build.VERSION.SDK_INT >= 31 && dev.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET
+            }
+        }
+    }.getOrDefault(false)
+
     private fun isVoiceModalityActive(frontPkgNow: String?, screenText: String?): Boolean = runCatching {
         val am = app.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return@runCatching false
         val inComm = am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION || am.mode == android.media.AudioManager.MODE_IN_CALL
@@ -2944,10 +2967,21 @@ object ProactiveRuntime {
             if (usage?.current != null && cs > 0L) ((wall - cs) / 60_000L).toInt().coerceAtLeast(0) else 0
         }
         val mediaPlaying = PhoneMediaControl.isPlaying(app)
+        val headsetConnected = isHeadsetConnected()
         val screenText = runCatching {
             io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.MaskedSummaryHelper.maskedSummary(1500)
         }.getOrNull()
         val geminiVoiceActive = isVoiceModalityActive(front, screenText)
+        if (geminiVoiceActive) {
+            lastGeminiVoiceActiveAt = wall
+            lastGeminiVoiceDroppedAt = 0L
+        } else if (lastGeminiVoiceActive) {
+            lastGeminiVoiceDroppedAt = wall
+        }
+        lastGeminiVoiceActive = geminiVoiceActive
+        val liveDroppedAgoMs = if (!geminiVoiceActive && lastGeminiVoiceActiveAt > 0L) {
+            (wall - lastGeminiVoiceActiveAt).coerceAtLeast(0L)
+        } else 0L
         val geminiMinutesToday = GEMINI_PACKAGES.sumOf { pkg ->
             val uRow = usageMap[pkg]
             val nowMins = (nowTodayMap[pkg] as? Number)?.toLong() ?: 0L
@@ -2977,7 +3011,10 @@ object ProactiveRuntime {
             "screenOn" to s.screenOn,
             "charging" to s.charging,
             "mediaPlaying" to mediaPlaying,
+            "headsetConnected" to headsetConnected,
             "geminiVoiceActive" to geminiVoiceActive,
+            "liveDroppedAgoMs" to liveDroppedAgoMs,
+            "lastVoiceActiveAt" to lastGeminiVoiceActiveAt,
             "geminiMinutesToday" to geminiMinutesToday,
             "screenText" to screenText,
             "foregroundDebugOn" to io.github.ccch1mneyyy.dsh_app.phone.a11y.ForegroundRecorder.enabled(app),

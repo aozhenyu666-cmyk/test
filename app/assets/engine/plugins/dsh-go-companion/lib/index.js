@@ -270,6 +270,7 @@ import { classifyApp, isDualUseApp, isPureGame, resolveAppNames } from './app_re
 import { evalBehaviorRadar } from './behavior_radar.js'
 import { cleanBankUnlockState } from './bank_unlock.js'
 import { SUPER_SPARK_DEFAULTS, generateSuperSpark } from './super_spark.js'
+import { LIVE_CORE_DEFAULTS, evaluateLiveCore } from './live_core.js'
 
 export const name = 'dsh-go-companion'
 // Without this, `ctx.tools` below throws "cannot get property tools without inject"
@@ -8211,7 +8212,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/wall/boss-brief' || path === '/wall/boss-chat' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/plan-modality' || path === '/super-spark' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/wall/boss-brief' || path === '/wall/boss-chat' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/plan-modality' || path === '/super-spark' || path === '/live-core' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -8288,6 +8289,7 @@ export function apply(ctx) {
         if (path === '/bank') return send(res, 200, v4Hub.bankRoute(body.value || {}))
         if (path === '/plan-contract' || path === '/plan-modality') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
         if (path === '/super-spark') return send(res, 200, superSparkRoute(body.value || {}, 'POST'))
+        if (path === '/live-core') return send(res, 200, liveCoreRoute(body.value || {}, 'POST'))
         if (path === '/skills/audit') return send(res, 200, v4Hub.skillsAuditRoute(body.value || {}))
         if (path === '/analytics') return send(res, 200, v4Hub.analyticsRoute(body.value || {}))
         if (path === '/storyline') return send(res, 200, v4Hub.storylineRoute(body.value || {}))
@@ -8624,12 +8626,13 @@ export function apply(ctx) {
       }
       if (req.method === 'GET' && path === '/presets') return send(res, 200, presetsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bouts') return send(res, 200, boutsGetRoute())
-      if (req.method === 'GET' && path === '/today') return send(res, 200, { ...v4Hub.todayViewV4(), locksOverview: buildLocksOverview(Date.now()) })
+      if (req.method === 'GET' && path === '/today') return send(res, 200, { ...v4Hub.todayViewV4(), locksOverview: buildLocksOverview(Date.now()), liveCore: liveCoreSummary(Date.now()) })
       if (req.method === 'GET' && path === '/horizons') return send(res, 200, v4Hub.horizonsRoute({ action: 'list' }))
       if (req.method === 'GET' && path === '/bank') return send(res, 200, v4Hub.bankRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/health') return send(res, 200, { v: 1, ok: true, ...healthNow(Date.now()) })
       if (req.method === 'GET' && (path === '/plan-contract' || path === '/plan-modality')) return send(res, 200, v4Hub.planContractRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/super-spark') return send(res, 200, superSparkRoute(Object.fromEntries(url.searchParams.entries()), 'GET'))
+      if (req.method === 'GET' && path === '/live-core') return send(res, 200, liveCoreRoute(Object.fromEntries(url.searchParams.entries()), 'GET'))
       if (req.method === 'GET' && path === '/autonomy') return send(res, 200, { v: 1, ok: true, autonomy: v4Hub.computeAutonomy() })
       if (req.method === 'GET' && path === '/analytics') {
         return send(res, 200, v4Hub.analyticsRoute({
@@ -10460,6 +10463,163 @@ export function apply(ctx) {
     }
   }
 
+  function loadLiveCoreState() {
+    const raw = readState(stateFile('live-core.json'), null)
+    return raw && typeof raw === 'object' ? raw : {}
+  }
+
+  function saveLiveCoreState(next) {
+    if (!next || typeof next !== 'object') return
+    writeJson(stateFile('live-core.json'), { ...next, v: 1 })
+  }
+
+  function isRunningQuizNow(now, phone, ledgerEntries) {
+    if (phone?.runningQuiz === true || phone?.quizActive === true) return true
+    const screen = String(phone?.screenText || '')
+    if (screen.includes('全屏刷题') || screen.includes('错题专练')) return true
+    const list = Array.isArray(ledgerEntries) ? ledgerEntries : readLedger(home(), 80)
+    return list.some((e) => (e?.state === 'bank-quiz-answer' || e?.state === 'quiz-solved') && now - Number(e?.at || 0) <= 2 * 60_000)
+  }
+
+  function evaluateLiveCoreNow(now = Date.now(), opts = {}) {
+    const st = loadLiveCoreState()
+    const phone = opts.phone || lastPhone || {}
+    const tz = opts.tz || zoneOr(config.timeZone)
+    const dir = notesDir()
+    let settingText = ''
+    try {
+      settingText = loadGeminiSetting(dir ? kbDir(dir, home()) : '')
+    } catch {}
+    const bankState = cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
+    const questionBank = loadAllBankQuestions()
+    const reviewCards = dueCards(loadReviewCards(), now, { limit: 10 })
+    const horizons = readState(stateFile('horizons.json'), null)
+    const vault = vaultContext(now)
+    const gemSt = loadGemini()
+    const recaps = Array.isArray(gemSt?.recaps) ? gemSt.recaps : []
+    const lastRecap = recaps.length ? recaps[recaps.length - 1] : null
+    const commitments = readCommitments(home(), now, 3).map((c) => c.statement)
+    const fgPkg = String(phone?.app || '')
+    const fgTier = fgPkg ? tierFnNow()(fgPkg, String(phone?.label || '')) : 'other'
+    const gemGate = loadGeminiGate(now, tz)
+    const externalMutedUntil = Math.max(Number(config.muteUntil) || 0, Number(gemGate?.snoozeUntil) || 0)
+
+    const res = evaluateLiveCore({
+      now,
+      state: st,
+      config: { ...config, emergencyActive: Boolean(opts.emergencyActive), muteUntil: externalMutedUntil },
+      phone,
+      arbiter: opts.arbiter || null,
+      planModal: opts.planModal || null,
+      mealOrQuiet: Boolean(opts.mealOrQuiet),
+      inGemini: opts.inGemini !== undefined ? Boolean(opts.inGemini) : inGemini(phone, geminiPackages()),
+      runningQuiz: opts.runningQuiz !== undefined ? Boolean(opts.runningQuiz) : isRunningQuizNow(now, phone, null),
+      fgTier,
+      bankState,
+      questionBank,
+      reviewCards,
+      horizons,
+      vault,
+      settingText,
+      commitments,
+      recap: lastRecap,
+      bridge: bridgeHealthy(now),
+      modeHint: String(opts.modeHint || ''),
+      diceHint: Number(opts.diceHint) || 0,
+      force: Boolean(opts.force),
+    })
+
+    if (opts.commit !== false) {
+      saveLiveCoreState(res.nextState)
+      if (res.triggered) {
+        record({
+          state: 'live-core-ignite',
+          at: now,
+          action: res.action,
+          reason: res.reason,
+          diceFace: res.dice?.face || 0,
+          anchorId: res.anchor?.id || '',
+        })
+      }
+    }
+    return res
+  }
+
+  function liveCoreSummary(now = Date.now(), evalRes = null) {
+    const st = evalRes?.nextState || loadLiveCoreState()
+    const mutedUntil = Math.max(0, Number(st.mutedUntil) || 0)
+    return {
+      v: 1,
+      enabled: st.enabled !== false,
+      autoReengage: st.autoReengage !== false,
+      wantScreenShare: st.wantScreenShare !== false,
+      autoCooldownMs: Math.max(60_000, Number(st.autoCooldownMs) || LIVE_CORE_DEFAULTS.autoCooldownMs),
+      muted: mutedUntil > now,
+      mutedUntil,
+      phase: evalRes?.phase || st.lastPhase || 'standby',
+      reason: evalRes?.reason || st.lastReason || 'standby',
+      triggered: Boolean(evalRes?.triggered),
+      lastVoiceActiveAt: Math.max(0, Number(st.lastVoiceActiveAt) || 0),
+      lastIgniteAt: Math.max(0, Number(st.lastIgniteAt) || 0),
+      dice: evalRes?.dice || st.lastPayload?.dice || null,
+      payload: evalRes?.payload || st.lastPayload || null,
+    }
+  }
+
+  function liveCoreRoute(body = {}, method = 'POST') {
+    const now = Date.now()
+    const b = body && typeof body === 'object' ? body : {}
+    const defaultAction = method === 'GET' ? ((b.trigger === '1' || b.trigger === 'true' || b.ignite === '1') ? 'ignite' : 'status') : 'ignite'
+    const action = String(b.action || defaultAction).trim()
+    if (action === 'status') {
+      return { v: 1, ok: true, ...liveCoreSummary(now), liveCore: liveCoreSummary(now) }
+    }
+    if (action === 'mute') {
+      const mins = Math.max(1, Math.min(180, Math.round(Number(b.minutes) || 20)))
+      const cur = loadLiveCoreState()
+      const next = { ...cur, mutedUntil: now + mins * 60_000, lastPhase: 'muted', lastReason: 'manual_mute' }
+      saveLiveCoreState(next)
+      record({ state: 'live-core-mute', at: now, minutes: mins })
+      const summary = liveCoreSummary(now, { phase: 'muted', reason: 'manual_mute', nextState: next })
+      return { v: 1, ok: true, ...summary, liveCore: summary, toast: `已静音 Gemini 窥视调度 ${mins} 分钟` }
+    }
+    if (action === 'set_config') {
+      const cur = loadLiveCoreState()
+      const next = {
+        ...cur,
+        ...(b.enabled !== undefined ? { enabled: Boolean(b.enabled) } : {}),
+        ...(b.autoReengage !== undefined ? { autoReengage: Boolean(b.autoReengage) } : {}),
+        ...(b.wantScreenShare !== undefined ? { wantScreenShare: Boolean(b.wantScreenShare) } : {}),
+        ...(b.autoCooldownMin !== undefined
+          ? { autoCooldownMs: Math.max(1, Math.min(120, Math.round(Number(b.autoCooldownMin)))) * 60_000 }
+          : {}),
+      }
+      saveLiveCoreState(next)
+      const summary = liveCoreSummary(now, { nextState: next })
+      return { v: 1, ok: true, ...summary, liveCore: summary, toast: '已更新 Gemini 窥视核心设置' }
+    }
+    if (['roll_dice', 'ignite', 'trigger', 'reengage'].includes(action)) {
+      const tz = zoneOr(config.timeZone)
+      const res = evaluateLiveCoreNow(now, {
+        force: true,
+        tz,
+        modeHint: b.modeHint || b.mode || '',
+        diceHint: b.diceHint || b.dice || 0,
+        phone: b.phone || lastPhone || {},
+      })
+      const summary = liveCoreSummary(now, res)
+      return {
+        v: 1,
+        ok: Boolean(res.triggered),
+        ...summary,
+        liveCore: summary,
+        payload: res.payload,
+        result: res,
+      }
+    }
+    return { v: 1, ok: false, error: 'bad-action' }
+  }
+
   // ---------------------------------------------------------------- 2026-11-18 推进器 + 三档
   const loadDrive = () => readState(stateFile('drive.json'), {}) || {}
   const saveDrive = (d) => writeJson(stateFile('drive.json'), d)
@@ -11933,6 +12093,38 @@ export function apply(ctx) {
       isMeal: tzMealTop,
       isQuiet: tzQuietTop,
     })
+    let liveCoreRes = null
+    try {
+      liveCoreRes = evaluateLiveCoreNow(now, {
+        phone,
+        tz,
+        arbiter: lockArbiter,
+        planModal,
+        mealOrQuiet: tzMealTop || tzQuietTop,
+        inGemini: inGeminiTop,
+        emergencyActive,
+        runningQuiz: isRunningQuizNow(now, phone, ledger),
+        commit: body?.liveCoreCheck !== false,
+      })
+      if (liveCoreRes?.triggered && !geminiAutoPull && !openedThisTick && !hardCapped && v4Hub.getPullMode(now) !== 'gentle') {
+        geminiAutoPull = {
+          triggered: true,
+          at: now,
+          topic: liveCoreRes.topic,
+          mode: liveCoreRes.pullMode || 'instant',
+          reason: liveCoreRes.reason,
+          preferVoice: true,
+          autoClickLive: true,
+          requestScreenShare: Boolean(liveCoreRes.requestScreenShare),
+          voiceLine: liveCoreRes.voiceLine,
+          brief: liveCoreRes.brief,
+          dice: liveCoreRes.dice,
+        }
+      }
+    } catch (error) {
+      console.error('[companion] live_core 调度失败：' + String((error && error.message) || error))
+    }
+    const liveCoreOut = liveCoreSummary(now, liveCoreRes)
     let superSpark = null
     const ssState = loadSuperSparkState()
     const ssIntervalDue = !ssState.lastSparkAt || (now - ssState.lastSparkAt >= SUPER_SPARK_DEFAULTS.autoCooldownMs)
@@ -11956,6 +12148,7 @@ export function apply(ctx) {
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
       planModal,
+      liveCore: liveCoreOut,
       ...(superSpark ? { superSpark } : {}),
       boutId: liveBoutId,
       sealId: liveSealId,

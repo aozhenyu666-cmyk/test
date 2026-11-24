@@ -1191,6 +1191,20 @@ class ProactiveChannel {
     }
   }
 
+  /// 大肥鱼 × Gemini Live 窥视常驻与知识灌料总调度（`GET / POST /live-core`）。
+  Future<Map<String, dynamic>?> liveCoreOp([Map<String, Object?>? body]) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('liveCoreOp', body);
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
   /// 拉起通知 + 震动 + 语音开场 + 无障碍自动灌料并点进官方 Gemini Live。
   Future<bool> triggerGeminiAutoLive({
     String topic = '',
@@ -1198,6 +1212,7 @@ class ProactiveChannel {
     String voiceLine = '',
     String mode = 'instant',
     bool autoClickLive = true,
+    bool requestScreenShare = false,
   }) async {
     try {
       return await _methods.invokeMethod<bool>('triggerGeminiAutoLive', {
@@ -1206,6 +1221,7 @@ class ProactiveChannel {
             'voiceLine': voiceLine,
             'mode': mode,
             'autoClickLive': autoClickLive,
+            'requestScreenShare': requestScreenShare,
           }) ??
           false;
     } on Exception {

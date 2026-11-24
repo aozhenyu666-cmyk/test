@@ -126,7 +126,7 @@ function normalizeQuestionMap(questionBank) {
   return map
 }
 
-function collectAnchorCandidates({
+export function collectAnchorCandidates({
   bankState = null,
   questionBank = [],
   reviewCards = [],
@@ -273,7 +273,7 @@ function collectAnchorCandidates({
   return candidates
 }
 
-function pickWeightedCandidate(candidates, recentIds = [], rng = Math.random) {
+export function pickWeightedCandidate(candidates, recentIds = [], rng = Math.random) {
   const recentSet = new Set(cleanIdList(recentIds, SUPER_SPARK_DEFAULTS.recentMax))
   let pool = candidates.filter((c) => !recentSet.has(c.id))
   if (!pool.length) {
