@@ -1158,6 +1158,60 @@ class ProactiveChannel {
       return false;
     }
   }
+
+  /// 持久化手机默认专注白名单（`POST /bouts` `action: 'set_default_allow'`）。
+  Future<Map<String, dynamic>?> setDefaultAllow(List<String> pkgs) =>
+      boutsCommand(<String, Object?>{'action': 'set_default_allow', 'allow': pkgs});
+
+  /// 启动反向白名单单开舱（`POST /bouts` `action: 'reverse_capsule'`）：仅留指定舱内应用，填平发呆洼地。
+  Future<Map<String, dynamic>?> activateReverseCapsule({
+    required String mode,
+    int minutes = 20,
+    List<String>? allow,
+    String? goal,
+  }) => boutsCommand(<String, Object?>{
+    'action': 'reverse_capsule',
+    'mode': mode,
+    'minutes': minutes,
+    'allow': ?allow,
+    if (goal != null && goal.isNotEmpty) 'goal': goal,
+  });
+
+  /// 超级大肥鱼高频主动提示与随机抽背（`GET / POST /super-spark`）。
+  Future<Map<String, dynamic>?> superSparkOp([Map<String, Object?>? body]) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('superSparkOp', body);
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 拉起通知 + 震动 + 语音开场 + 无障碍自动灌料并点进官方 Gemini Live。
+  Future<bool> triggerGeminiAutoLive({
+    String topic = '',
+    String brief = '',
+    String voiceLine = '',
+    String mode = 'instant',
+    bool autoClickLive = true,
+  }) async {
+    try {
+      return await _methods.invokeMethod<bool>('triggerGeminiAutoLive', {
+            'topic': topic,
+            'brief': brief,
+            'voiceLine': voiceLine,
+            'mode': mode,
+            'autoClickLive': autoClickLive,
+          }) ??
+          false;
+    } on Exception {
+      return false;
+    }
+  }
 }
 
 /// 大肥鱼与独立守护 App「大肥鱼哨兵」之间的互信绑定状态。

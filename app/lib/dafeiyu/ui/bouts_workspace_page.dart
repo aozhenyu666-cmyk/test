@@ -491,15 +491,51 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
       confirmLabel: '确认',
     );
     if (picked == null || !mounted) return;
+    final pkgs = picked.map((a) => a.package).toList();
     setState(() {
+      _busy = true;
       _allowDirty = true;
       _selectedAllow
         ..clear()
-        ..addAll(picked.map((a) => a.package));
+        ..addAll(pkgs);
       for (final a in picked) {
         _appLabels[a.package] = a.label;
       }
-      _banner = '已更新白名单预设（${picked.length} 个应用）';
+    });
+    final res = await _channel.setDefaultAllow(pkgs);
+    if (!mounted) return;
+    if (res != null && res['ok'] != false) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
+    final serverAllowRaw = res?['defaultAllow'] ?? res?['allow'];
+    final serverAllow = serverAllowRaw is List
+        ? [for (final p in serverAllowRaw) if ('$p'.trim().isNotEmpty) '$p'.trim()]
+        : const <String>[];
+    final rejectedRaw = res?['rejectedGames'];
+    final rejected = rejectedRaw is List
+        ? [for (final g in rejectedRaw) if ('$g'.trim().isNotEmpty) _labelOf('$g'.trim())]
+        : const <String>[];
+    final toast = '${res?['toast'] ?? ''}'.trim();
+    setState(() {
+      _busy = false;
+      if (serverAllow.isNotEmpty) {
+        _selectedAllow
+          ..clear()
+          ..addAll(serverAllow);
+      }
+      if (res == null) {
+        _banner = '已更新本局白名单（${pkgs.length} 个应用），但引擎未应答，暂未持久化默认白名单';
+      } else if (res['ok'] == false) {
+        final err = toast.isNotEmpty ? toast : '${res['error'] ?? '引擎暂未接受该白名单'}';
+        _banner = rejected.isNotEmpty
+            ? '白名单未保存：$err（已拦截纯游戏：${rejected.join('、')}）'
+            : '白名单未保存：$err';
+      } else {
+        final baseMsg = toast.isNotEmpty ? toast : '已持久化手机默认专注白名单（${_selectedAllow.length} 个应用）';
+        _banner = rejected.isNotEmpty
+            ? '$baseMsg · 已拦截纯游戏：${rejected.join('、')}'
+            : baseMsg;
+      }
     });
   }
 

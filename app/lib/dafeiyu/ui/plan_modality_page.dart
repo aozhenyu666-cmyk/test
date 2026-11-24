@@ -75,6 +75,10 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
   Map<String, dynamic>? _verifySummary;
   Map<String, dynamic>? _custody;
   Map<String, dynamic>? _custodyPolicy;
+  Map<String, dynamic>? _planModal;
+  String _planConfirmedDay = '';
+  String _serverDay = '';
+  int? _localArmedVerifyCount;
   List<Map<String, dynamic>> _adaptiveLog = const [];
   List<Map<String, dynamic>> _remotePresets = const [];
   List<LoopApp> _installedApps = const [];
@@ -197,6 +201,20 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         _remotePresets = _mapList(res!['presets']);
       }
       final dayPlan = res?['dayPlan'] is Map ? Map<String, dynamic>.from(res!['dayPlan'] as Map) : null;
+      final rawModal = res?['planModal'];
+      if (rawModal is Map) {
+        _planModal = Map<String, dynamic>.from(rawModal);
+      } else if (res != null && res.containsKey('planModal')) {
+        _planModal = null;
+      }
+      final dayStr = '${dayPlan?['day'] ?? res?['day'] ?? ''}'.trim();
+      if (dayStr.isNotEmpty) {
+        _serverDay = dayStr;
+      }
+      if (dayPlan != null && dayPlan.containsKey('planConfirmedDay')) {
+        _planConfirmedDay = '${dayPlan['planConfirmedDay'] ?? ''}'.trim();
+        _localArmedVerifyCount = null;
+      }
       final rawVerify = res?['verifySummary'] ?? dayPlan?['verifySummary'];
       final rawVerifyMap = rawVerify is Map ? Map<String, dynamic>.from(rawVerify) : null;
       if (rawVerifyMap != null) {
@@ -473,22 +491,30 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
     unawaited(_channel.tickNow().catchError((_) => false));
   }
 
-  Future<void> _setCustodyPolicy({bool? autoKickoffEnabled, bool? adaptiveSplitEnabled}) async {
+  Future<void> _setCustodyPolicy({
+    bool? autoKickoffEnabled,
+    bool? adaptiveSplitEnabled,
+    bool? mandatoryPlanModalEnabled,
+  }) async {
     final cur = Map<String, dynamic>.from(_custodyPolicy ?? const {});
     final nextKick = autoKickoffEnabled ?? (cur['autoKickoffEnabled'] == true);
     final nextAdapt = adaptiveSplitEnabled ?? (cur['adaptiveSplitEnabled'] != false);
+    final nextMandatory = mandatoryPlanModalEnabled ?? (cur['mandatoryPlanModalEnabled'] != false);
     setState(() {
       _custodyPolicy = {
         ...cur,
         'autoKickoffEnabled': nextKick,
         'adaptiveSplitEnabled': nextAdapt,
+        'mandatoryPlanModalEnabled': nextMandatory,
       };
-      _banner = '✓ 已更新托管哨兵策略（09:15/14:45 哨兵 ${nextKick ? '开' : '关'} · 打回/逾期缩块 ${nextAdapt ? '开' : '关'}）';
+      _banner =
+          '✓ 已更新托管哨兵策略（09:15/14:45 哨兵 ${nextKick ? '开' : '关'} · 打回/逾期缩块 ${nextAdapt ? '开' : '关'} · 强制计划模态 ${nextMandatory ? '开' : '关'}）';
     });
     final res = await _channel.planContractOp({
       'action': 'set_custody_policy',
       'autoKickoffEnabled': nextKick,
       'adaptiveSplitEnabled': nextAdapt,
+      'mandatoryPlanModalEnabled': nextMandatory,
     }).catchError((_) => null);
     if (mounted && res?['dayPlan'] is Map) {
       final dp = Map<String, dynamic>.from(res!['dayPlan'] as Map);
@@ -497,6 +523,196 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
       }
     }
     unawaited(_channel.tickNow().catchError((_) => false));
+  }
+
+  String _todayYmd() {
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${now.year}-${two(now.month)}-${two(now.day)}';
+  }
+
+  ({bool armed, int count}) _verifyLockArmedState() {
+    final expectedDay = _serverDay.isNotEmpty ? _serverDay : _todayYmd();
+    final blockVerifyCount = _dayBlocks.where((b) {
+      if (b['isBreak'] == true || b['status'] == 'skipped') return false;
+      final mode = '${b['lockMode'] ?? ''}';
+      final vStatus = '${b['verifyStatus'] ?? ''}';
+      return mode == 'verify' ||
+          vStatus == 'armed' ||
+          vStatus == 'submitted' ||
+          vStatus == 'overdue_locked' ||
+          vStatus == 'rejected' ||
+          b['lockedByBoss'] == true;
+    }).length;
+    final summaryCount = _asInt(_verifySummary?['totalVerify'], 0);
+    final count = math.max(math.max(blockVerifyCount, summaryCount), _localArmedVerifyCount ?? 0);
+    final confirmedToday = _planConfirmedDay.isNotEmpty && _planConfirmedDay == expectedDay;
+    final armed = _planModal?['active'] == true
+        ? false
+        : (confirmedToday || blockVerifyCount > 0 || summaryCount > 0 || (_localArmedVerifyCount ?? 0) > 0);
+    return (armed: armed, count: count);
+  }
+
+  void _applyPlanModalMutationResult(Map<String, dynamic> res) {
+    _hasLocalBlockEdits = false;
+    _planModal = null;
+    final dayPlan = res['dayPlan'] is Map ? Map<String, dynamic>.from(res['dayPlan'] as Map) : null;
+    final dayStr = '${dayPlan?['day'] ?? res['day'] ?? ''}'.trim();
+    if (dayStr.isNotEmpty) _serverDay = dayStr;
+    final confDay = '${dayPlan?['planConfirmedDay'] ?? res['planConfirmedDay'] ?? ''}'.trim();
+    _planConfirmedDay = confDay.isNotEmpty ? confDay : (_serverDay.isNotEmpty ? _serverDay : _todayYmd());
+    final rawBlocks = res['blocks'] ?? dayPlan?['dayBlocks'];
+    final blocks = _mapList(rawBlocks);
+    if (blocks.isNotEmpty) {
+      _dayBlocks = _sortBlocks(blocks);
+    }
+    final rawVerify = res['verifySummary'] ?? dayPlan?['verifySummary'];
+    if (rawVerify is Map) {
+      _verifySummary = Map<String, dynamic>.from(rawVerify);
+    }
+    final armedRaw = res['armedVerifyCount'];
+    if (armedRaw is num) {
+      _localArmedVerifyCount = armedRaw.toInt();
+    } else if (blocks.isNotEmpty) {
+      final vCount = blocks.where((b) => b['isBreak'] != true && '${b['lockMode'] ?? ''}' == 'verify').length;
+      if (vCount > 0) _localArmedVerifyCount = vCount;
+    }
+  }
+
+  Future<void> _confirmPlanModalLock() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final res = await _channel.planContractOp({'action': 'confirm_plan_modal'});
+    if (!mounted) return;
+    final ok = res != null && res['ok'] != false;
+    if (ok) {
+      setState(() => _applyPlanModalMutationResult(res));
+      unawaited(_channel.tickNow().catchError((_) => false));
+      await _refresh(silent: true);
+      if (!mounted) return;
+    }
+    final armed = _verifyLockArmedState();
+    final msg = ok
+        ? '${res['reply'] ?? res['toast'] ?? '✓ 已确认今日草案并激活验收锁（${armed.count} 块）'}'
+        : '激活验收锁失败：${res?['error'] ?? res?['text'] ?? '引擎暂未就绪'}';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _negotiatePlanModalLock() async {
+    if (_busy) return;
+    final ctrl = TextEditingController();
+    String? err;
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          key: const ValueKey('plan-negotiate-modal-dialog'),
+          shape: AppShape.dialog,
+          title: const Text('立即沟通构建今日计划'),
+          content: SizedBox(
+            width: 390,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    '写下今天打算推进的科目、时段和时长，引擎将立即解析为验收时间块并武装今日验收锁。',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      CapsuleChoiceChip(
+                        label: '例：判断推理40m + 申论45m',
+                        selected: false,
+                        onSelected: () => setDialog(() {
+                          ctrl.text = '下午判断推理 40m，晚上申论复盘 45m';
+                          err = null;
+                        }),
+                      ),
+                      CapsuleChoiceChip(
+                        label: '例：资料分析45m + 错题25m',
+                        selected: false,
+                        onSelected: () => setDialog(() {
+                          ctrl.text = '上午资料分析 45m，下午错题复盘 25m';
+                          err = null;
+                        }),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    key: const ValueKey('plan-negotiate-modal-input'),
+                    controller: ctrl,
+                    autofocus: true,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: '今日计划描述',
+                      hintText: '如：下午判断推理 40m，晚上申论复盘 45m',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (_) {
+                      if (err != null) setDialog(() => err = null);
+                    },
+                  ),
+                  if (err != null) ...[
+                    const SizedBox(height: 6),
+                    Text(err!, style: TextStyle(color: DshColors.of(ctx).danger, fontSize: 12)),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
+            FilledButton(
+              key: const ValueKey('plan-negotiate-modal-confirm'),
+              onPressed: () {
+                final v = ctrl.text.trim();
+                if (v.isEmpty) {
+                  setDialog(() => err = '请先输入今日计划内容');
+                  return;
+                }
+                Navigator.of(ctx).pop(v);
+              },
+              child: const Text('生成并武装验收锁'),
+            ),
+          ],
+        ),
+      ),
+    );
+    disposeAfterRoute(ctrl);
+    if (text == null || text.isEmpty || !mounted) return;
+    setState(() => _busy = true);
+    final res = await _channel.planContractOp({
+      'action': 'negotiate_plan_modal',
+      'text': text,
+    });
+    if (!mounted) return;
+    final ok = res != null && res['ok'] != false;
+    if (ok) {
+      setState(() => _applyPlanModalMutationResult(res));
+      unawaited(_channel.tickNow().catchError((_) => false));
+      await _refresh(silent: true);
+      if (!mounted) return;
+    }
+    final armed = _verifyLockArmedState();
+    final msg = ok
+        ? '${res['reply'] ?? res['toast'] ?? '✓ 已生成今日计划并武装验收锁（${armed.count} 块）'}'
+        : '构建计划失败：${res?['error'] ?? res?['text'] ?? '引擎暂未就绪'}';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
   }
 
 
@@ -1012,6 +1228,8 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
           selected: _tab,
           onChanged: (next) => setState(() => _tab = next),
         ),
+        const SizedBox(height: 12),
+        _buildVerifyModalStatusCard(theme, colors),
         const SizedBox(height: 12),
         if (_banner != null)
           Padding(
