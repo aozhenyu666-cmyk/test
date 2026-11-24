@@ -25,6 +25,7 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import io.github.ccch1mneyyy.dsh_app.R
+import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.core.VoicePlan
 import io.github.ccch1mneyyy.dsh_app.pet.OverlayPalette
 import io.github.ccch1mneyyy.dsh_app.pet.dp
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.NowFeed
@@ -104,7 +105,7 @@ object GeminiAutoLauncher {
         "com.google.android.googlequicksearchbox",
     )
 
-    private val main = Handler(Looper.getMainLooper())
+    private val main by lazy { Handler(Looper.getMainLooper()) }
     private var liveCard: CountdownCard? = null
 
     fun launch(
@@ -123,6 +124,160 @@ object GeminiAutoLauncher {
             runOnMain.run()
         } else {
             main.post(runOnMain)
+        }
+    }
+
+    /**
+     * 超级大肥鱼 v4：物理震动 + 本地 TTS 破冰第一枪 + 写剪贴板 + 打开官方 Gemini +
+     * 若 [autoClickLive] 为真且无障碍在线，触发 4 连击自动灌料并点进 Gemini Live。
+     */
+    fun launchAndAutomateLive(
+        app: Context,
+        topic: String = "",
+        brief: String = "",
+        voiceLine: String = "",
+        mode: String = "instant",
+        autoClickLive: Boolean = true,
+        onResult: ((Boolean) -> Unit)? = null,
+    ) {
+        val appCtx = app.applicationContext ?: app
+        val runOnMain = Runnable {
+            launchAndAutomateLiveOnMain(
+                app = appCtx,
+                topic = topic,
+                brief = brief,
+                voiceLine = voiceLine,
+                mode = mode,
+                autoClickLive = autoClickLive,
+                onResult = onResult,
+            )
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            runOnMain.run()
+        } else {
+            main.post(runOnMain)
+        }
+    }
+
+    private fun launchAndAutomateLiveOnMain(
+        app: Context,
+        topic: String,
+        brief: String,
+        voiceLine: String,
+        mode: String,
+        autoClickLive: Boolean,
+        onResult: ((Boolean) -> Unit)?,
+    ) {
+        val frontPkg = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
+        val emergencyActive = runCatching {
+            ProactiveRuntime.inEmergencyPass() || LockSafety.disarmed(app)
+        }.getOrDefault(false)
+        val decision = GeminiLaunchPolicy.decide(
+            frontPkg = frontPkg,
+            emergencyActive = emergencyActive,
+            pullMode = mode,
+            homePackages = SystemSafeAllowlist.SYSTEM_UI_AND_LAUNCHERS,
+        )
+        if (decision is LaunchDecision.Defer) {
+            Log.i(TAG, "launchAndAutomateLive deferred: reason=${decision.reason} front=$frontPkg")
+            if (decision.reason == "gentle_mode") {
+                copyBriefToClipboard(app, brief)
+                val intents = buildCandidateIntents(app, preferVoice = false)
+                if (intents.isNotEmpty()) {
+                    postFallbackNotification(app, topic, intents.first(), fullScreen = false)
+                }
+            }
+            onResult?.invoke(false)
+            return
+        }
+
+        ProactiveHaptics.vibrateSuperSpark(app)
+        if (voiceLine.isNotBlank()) {
+            val spoken = VoicePlan.brief(voiceLine) ?: voiceLine.trim().take(VoicePlan.MAX_CHARS)
+            if (spoken.isNotEmpty()) {
+                runCatching {
+                    VoiceOut.install(app)
+                    VoiceOut.speak(VoicePlan(spoken, VoicePlan.DEFAULT_RATE, VoicePlan.DEFAULT_PITCH)) {}
+                }
+            }
+        }
+        copyBriefToClipboard(app, brief)
+
+        fun startDirectAndMaybeAutomate() {
+            val opened = startGeminiDirect(app, topic, preferVoice = false)
+            if (opened && autoClickLive && PhoneA11yService.isConnected()) {
+                GeminiUiAutomator.run(app, brief) { autoOk, _ ->
+                    onResult?.invoke(autoOk)
+                }
+            } else {
+                onResult?.invoke(opened)
+            }
+        }
+
+        fun startWithProxyGate() {
+            when (val step = ProxyGate.before(app)) {
+                ProxyGate.Step.Direct -> startDirectAndMaybeAutomate()
+                is ProxyGate.Step.OpenProxyFirst -> {
+                    ProxyGate.openProxyThen(app, step.pkg) { startDirectAndMaybeAutomate() }
+                }
+            }
+        }
+
+        when (decision) {
+            is LaunchDecision.LaunchNow -> {
+                dismissOverlay()
+                startWithProxyGate()
+            }
+            is LaunchDecision.CountdownOverlay -> {
+                val host = resolveOverlayHost(app)
+                if (host == null) {
+                    startWithProxyGate()
+                    return
+                }
+                dismissOverlay()
+                val card = CountdownCard(
+                    app = app,
+                    ctx = host.first,
+                    windowType = host.second,
+                    topic = topic,
+                    hasBrief = brief.isNotBlank(),
+                    remainingSeconds = decision.seconds.coerceIn(1, 10),
+                    onEnterNow = {
+                        startWithProxyGate()
+                        main.postDelayed({ dismissOverlay() }, 300L)
+                    },
+                    onDelay10m = {
+                        dismissOverlay()
+                        val res = LockSafety.disarm(
+                            ctx = app,
+                            reason = "Gemini倒计时延后10分钟",
+                            minutes = LockSafety.DISARM_MINUTES,
+                            counted = true,
+                            source = "gemini-defer",
+                        )
+                        if (res is LockSafety.DisarmResult.Refused) {
+                            main.post {
+                                runCatching {
+                                    android.widget.Toast.makeText(
+                                        app,
+                                        "今天紧急解除/延后次数已用完：${res.why}",
+                                        android.widget.Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            }
+                        } else {
+                            LockSafety.ensureNotification(app)
+                        }
+                        onResult?.invoke(false)
+                    },
+                )
+                if (card.show()) {
+                    liveCard = card
+                } else {
+                    startWithProxyGate()
+                }
+            }
+            is LaunchDecision.Defer -> Unit
         }
     }
 

@@ -533,6 +533,158 @@ object ProactiveRuntime {
         arm()
     }
 
+    fun notifySuperSparkMuted15m() {
+        if (!::app.isInitialized) return
+        fetchPluginRoute(
+            ignoreResult,
+            "POST",
+            "/super-spark",
+            linkedMapOf("action" to "mute_15m", "timeZone" to BeijingClock.ZONE.id),
+        )
+    }
+
+    /** 强制计划模态 ①：确认草案并激活今日 P3 验收锁。 */
+    fun confirmPlanModal(
+        blocks: List<PlanDraftBlock>? = null,
+        done: ((ok: Boolean, message: String?) -> Unit)? = null,
+    ) {
+        if (!::app.isInitialized) {
+            done?.invoke(false, "未初始化")
+            return
+        }
+        main.post {
+            val body = linkedMapOf<String, Any?>(
+                "action" to "confirm_plan_modal",
+                "timeZone" to BeijingClock.ZONE.id,
+            )
+            if (!blocks.isNullOrEmpty()) {
+                body["blocks"] = blocks.map { b ->
+                    linkedMapOf<String, Any?>(
+                        "id" to b.id,
+                        "slot" to b.slot,
+                        "startMin" to b.startMin,
+                        "endMin" to b.endMin,
+                        "title" to b.title,
+                        "deliverable" to b.deliverable,
+                        "lockMode" to b.lockMode,
+                        "allowedApps" to b.allowedApps,
+                    )
+                }
+            }
+            fetchPluginRoute(routeCallback { m ->
+                val ok = m["ok"] == true
+                if (ok) {
+                    consultPlanSoon(minGapMs = 0L)
+                    tick("confirm_plan_modal")
+                }
+                val err = (m["error"] as? String)
+                    ?: ((m["error"] as? Map<*, *>)?.get("message") as? String)
+                    ?: (m["message"] as? String)
+                done?.invoke(ok, err)
+            }, "POST", "/plan-contract", body)
+        }
+    }
+
+    /** 强制计划模态 ②：发给鲸澜重构今日计划并激活验收锁。 */
+    fun negotiatePlanModal(
+        text: String,
+        done: ((ok: Boolean, reply: String?, armedCount: Int, error: String?) -> Unit)? = null,
+    ) {
+        if (!::app.isInitialized) {
+            done?.invoke(false, null, 0, "未初始化")
+            return
+        }
+        val clean = text.trim()
+        if (clean.isEmpty()) {
+            done?.invoke(false, null, 0, "请先输入计划内容")
+            return
+        }
+        main.post {
+            fetchPluginRoute(routeCallback { m ->
+                val ok = m["ok"] == true
+                val reply = (m["reply"] as? String)?.trim()
+                val armedCount = (m["armedVerifyCount"] as? Number)?.toInt() ?: 0
+                if (ok) {
+                    consultPlanSoon(minGapMs = 0L)
+                    tick("negotiate_plan_modal")
+                }
+                val err = (m["error"] as? String)
+                    ?: ((m["error"] as? Map<*, *>)?.get("message") as? String)
+                done?.invoke(ok, reply, armedCount, err)
+            }, "POST", "/plan-contract", linkedMapOf(
+                "action" to "negotiate_plan_modal",
+                "text" to clean,
+                "commit" to true,
+                "timeZone" to BeijingClock.ZONE.id,
+            ))
+        }
+    }
+
+    /** 强制计划模态 ③：延后 15 分钟（超限后后端会自动钉入 25m 起手验收锁）。 */
+    fun snoozePlanModal(
+        minutes: Int = 15,
+        done: ((ok: Boolean, autoArmed: Boolean, message: String?) -> Unit)? = null,
+    ) {
+        if (!::app.isInitialized) {
+            done?.invoke(false, false, "未初始化")
+            return
+        }
+        main.post {
+            fetchPluginRoute(routeCallback { m ->
+                val ok = m["ok"] == true
+                val autoArmed = m["autoArmed"] == true
+                if (ok) {
+                    consultPlanSoon(minGapMs = 0L)
+                    if (autoArmed) tick("snooze_plan_modal")
+                }
+                val err = (m["error"] as? String)
+                    ?: ((m["error"] as? Map<*, *>)?.get("message") as? String)
+                    ?: (m["message"] as? String)
+                done?.invoke(ok, autoArmed, err)
+            }, "POST", "/plan-contract", linkedMapOf(
+                "action" to "snooze_plan_modal",
+                "minutes" to minutes.coerceIn(5, 60),
+                "timeZone" to BeijingClock.ZONE.id,
+            ))
+        }
+    }
+
+    /** 反向白名单单开舱（quiz_only / gemini_only / custom）：POST /bouts action=reverse_capsule 并立刻刷新 /plan / tick。 */
+    fun activateReverseCapsule(
+        mode: String,
+        minutes: Int = 20,
+        allow: List<String>? = null,
+        goal: String? = null,
+        done: ((ok: Boolean, message: String?) -> Unit)? = null,
+    ) {
+        if (!::app.isInitialized) {
+            done?.invoke(false, "未初始化")
+            return
+        }
+        main.post {
+            val body = linkedMapOf<String, Any?>(
+                "action" to "reverse_capsule",
+                "mode" to mode,
+                "minutes" to minutes.coerceIn(5, 180),
+                "timeZone" to BeijingClock.ZONE.id,
+            )
+            if (!allow.isNullOrEmpty()) body["allow"] = allow
+            if (!goal.isNullOrBlank()) body["goal"] = goal.trim().take(80)
+            fetchPluginRoute(routeCallback { m ->
+                val ok = m["ok"] == true
+                val toast = (m["toast"] as? String)?.trim()
+                val err = (m["error"] as? String)
+                    ?: ((m["error"] as? Map<*, *>)?.get("message") as? String)
+                consultPlanSoon(minGapMs = 0L)
+                tick("reverse_capsule")
+                if (!toast.isNullOrBlank()) {
+                    runCatching { Toast.makeText(app, toast, Toast.LENGTH_SHORT).show() }
+                }
+                done?.invoke(ok, toast ?: err)
+            }, "POST", "/bouts", body)
+        }
+    }
+
     /**
      * 浮层里直接聊: hand one line to the companion's /say (it goes into the session as the person's
      * own words), then long-poll /result until 大肥鱼 has answered. [done] runs on the main thread
@@ -1597,7 +1749,17 @@ object ProactiveRuntime {
     /** 下一场预约连麦的时刻（插件给的绝对毫秒）；0 = 没有预约。 */
     @Volatile private var geminiDueAt: Long = 0L
     @Volatile private var lastAutoPullAt: Long = 0L
+    @Volatile private var lastPlanModalShownAt: Long = 0L
+    private val shownSparkIds = LinkedHashSet<String>()
     private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
+
+    private fun rememberSparkId(id: String) {
+        if (id.isBlank()) return
+        if (shownSparkIds.size >= 64) {
+            shownSparkIds.firstOrNull()?.let { shownSparkIds.remove(it) }
+        }
+        shownSparkIds.add(id)
+    }
 
     /**
      * 到点：取 launch → 简报进剪贴板 → 雾蓝悬浮桥接 / 无障碍破权拉起 Gemini → 马上问一次 /plan，拿连麦舱
@@ -2146,6 +2308,7 @@ object ProactiveRuntime {
             fireGeminiDue()
         }
         val autoPull = map["geminiAutoPull"] as? Map<*, *>
+        var autoPulledNow = false
         if (autoPull != null && autoPull["trigger"] != false && autoPull["active"] != false) {
             val pullTopic = (autoPull["topic"] as? String).orEmpty()
             val pullBrief = (autoPull["brief"] as? String).orEmpty()
@@ -2153,20 +2316,81 @@ object ProactiveRuntime {
                 ?: (autoPull["pullMode"] as? String)?.takeIf { it.isNotBlank() }
                 ?: "countdown_3s"
             val preferVoice = autoPull["preferVoice"] == true
+            val autoClickLive = autoPull["autoClickLive"] == true
+            val voiceLine = (autoPull["voiceLine"] as? String).orEmpty()
             val pullStamp = (autoPull["at"] as? Number)?.toLong() ?: stamp
             if ((pullTopic.isNotBlank() || pullBrief.isNotBlank()) &&
                 stamp - lastAutoPullAt >= AUTO_PULL_COOLDOWN_MS &&
                 pullStamp > stamp - AUTO_PULL_COOLDOWN_MS
             ) {
                 lastAutoPullAt = stamp
-                GeminiAutoLauncher.launch(
-                    app = app,
-                    topic = pullTopic,
-                    brief = pullBrief,
-                    mode = pullMode,
-                    preferVoice = preferVoice,
-                ) { opened ->
-                    Log.i(TAG, "geminiAutoPull: topic=$pullTopic mode=$pullMode opened=$opened")
+                autoPulledNow = true
+                if (autoClickLive) {
+                    GeminiAutoLauncher.launchAndAutomateLive(
+                        app = app,
+                        topic = pullTopic,
+                        brief = pullBrief,
+                        voiceLine = voiceLine,
+                        mode = pullMode,
+                        autoClickLive = true,
+                    ) { opened ->
+                        Log.i(TAG, "geminiAutoPull(live): topic=$pullTopic mode=$pullMode opened=$opened")
+                    }
+                } else {
+                    GeminiAutoLauncher.launch(
+                        app = app,
+                        topic = pullTopic,
+                        brief = pullBrief,
+                        mode = pullMode,
+                        preferVoice = preferVoice,
+                    ) { opened ->
+                        Log.i(TAG, "geminiAutoPull: topic=$pullTopic mode=$pullMode opened=$opened")
+                    }
+                }
+            }
+        }
+        // 超级大肥鱼 v4：强制计划模态弹窗 & 高频战术浮窗（与锁屏页/专注页互斥；planModal 90s 去重；superSpark 按 id 去重）。
+        val interceptHeld = VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) ||
+            VisibleSurface.isHeldBy(VisibleSurface.OWNER_FOCUS)
+        val planModalSpec = PlanModalPolicy.parseSpec(map["planModal"])
+        val sparkSpec = SuperSparkOverlayPolicy.parseSpec(map["superSpark"])
+        if (PlanModalPolicy.shouldShow(
+                spec = planModalSpec,
+                lastShownAtMs = lastPlanModalShownAt,
+                nowMs = stamp,
+                interceptHeld = interceptHeld,
+                alreadyShowing = ProactiveOverlay.isPlanModalShowing(),
+            )
+        ) {
+            if (ProactiveOverlay.showPlanModal(planModalSpec!!)) {
+                lastPlanModalShownAt = stamp
+            }
+        } else if (!autoPulledNow && SuperSparkOverlayPolicy.shouldShow(
+                spec = sparkSpec,
+                shownIds = shownSparkIds,
+                interceptHeld = interceptHeld,
+                planModalShowing = ProactiveOverlay.isPlanModalShowing(),
+                chattingActive = ProactiveOverlay.hasActiveChat(),
+            )
+        ) {
+            val spark = sparkSpec!!
+            val sparkToken = "spark:${spark.id}"
+            val canClaim = VisibleSurface.isFree() || VisibleSurface.isHeldBy(VisibleSurface.OWNER_PROACTIVE)
+            if (canClaim && VisibleSurface.claim(VisibleSurface.OWNER_PROACTIVE, sparkToken)) {
+                val shown = runCatching { ProactiveOverlay.showSuperSpark(spark) }.getOrDefault(false)
+                if (shown) {
+                    rememberSparkId(spark.id)
+                    if (spark.voiceLine.isNotBlank()) {
+                        val spoken = VoicePlan.brief(spark.voiceLine)
+                            ?: spark.voiceLine.trim().take(VoicePlan.MAX_CHARS)
+                        if (spoken.isNotEmpty()) {
+                            runCatching {
+                                VoiceOut.speak(VoicePlan(spoken, VoicePlan.DEFAULT_RATE, VoicePlan.DEFAULT_PITCH)) {}
+                            }
+                        }
+                    }
+                } else {
+                    VisibleSurface.release(VisibleSurface.OWNER_PROACTIVE, sparkToken)
                 }
             }
         }
