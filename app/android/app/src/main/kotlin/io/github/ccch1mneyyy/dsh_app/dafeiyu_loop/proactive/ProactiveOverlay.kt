@@ -5,10 +5,13 @@ import android.content.ClipboardManager
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
+import android.widget.Button
 import android.widget.FrameLayout
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
@@ -37,6 +40,206 @@ import io.github.ccch1mneyyy.dsh_app.pet.OverlayPalette
 import io.github.ccch1mneyyy.dsh_app.pet.dp
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
 
+/** 超级大肥鱼战术浮窗规格（可附带 A/B 反向阻力双按钮）。 */
+data class SuperSparkCardSpec(
+    val id: String,
+    val mode: String = "contrast_push",
+    val badge: String = "",
+    val title: String = "",
+    val ask: String = "",
+    val voiceLine: String = "",
+    val optionALabel: String = "A 省力切刷题舱 20m",
+    val optionAMode: String = "quiz_only",
+    val optionAMinutes: Int = 20,
+    val optionBLabel: String = "B 反锁进 Gemini Live",
+    val optionBMode: String = "gemini_only",
+    val optionBMinutes: Int = 15,
+    val geminiTopic: String = "",
+    val geminiBrief: String = "",
+    val autoClickLive: Boolean = true,
+    val anchorSource: String = "",
+)
+
+/** 强制计划模态中的单个草案时间块。 */
+data class PlanDraftBlock(
+    val id: String = "",
+    val slot: String = "",
+    val startMin: Int = 0,
+    val endMin: Int = 0,
+    val title: String = "",
+    val deliverable: String = "",
+    val lockMode: String = "verify",
+    val allowedApps: List<String> = emptyList(),
+)
+
+/** 强制计划模态弹窗规格。 */
+data class PlanModalSpec(
+    val day: String = "",
+    val headline: String = "今日必须确认计划并激活验收锁",
+    val prompt: String = "",
+    val draftBlocks: List<PlanDraftBlock> = emptyList(),
+    val snoozeLeft: Int = 0,
+    val mustConfirm: Boolean = false,
+    val energyLevel: String = "mid",
+)
+
+/** 纯 JVM 可测：超级大肥鱼战术浮窗解析、去重互斥与 A/B 反向阻力按钮动作策略。 */
+object SuperSparkOverlayPolicy {
+    const val MUTE_MINUTES_MS = 15 * 60_000L
+
+    data class TacticalAction(
+        val slot: String,
+        val label: String,
+        val capsuleMode: String,
+        val capsuleMinutes: Int,
+        val launchGeminiLive: Boolean,
+        val muteAndClose: Boolean,
+    )
+
+    fun parseSpec(raw: Any?): SuperSparkCardSpec? {
+        val root = raw as? Map<*, *> ?: return null
+        val m = (root["spark"] as? Map<*, *>) ?: root
+        if (m["triggered"] == false) return null
+        val id = (m["id"] as? String)?.trim().orEmpty()
+        if (id.isEmpty()) return null
+        return SuperSparkCardSpec(
+            id = id,
+            mode = (m["mode"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "contrast_push",
+            badge = (m["badge"] as? String)?.trim().orEmpty(),
+            title = (m["title"] as? String)?.trim().orEmpty(),
+            ask = (m["ask"] as? String)?.trim().orEmpty(),
+            voiceLine = (m["voiceLine"] as? String)?.trim().orEmpty(),
+            optionALabel = (m["optionALabel"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "A 省力切刷题舱 20m",
+            optionAMode = (m["optionAMode"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "quiz_only",
+            optionAMinutes = ((m["optionAMinutes"] as? Number)?.toInt() ?: 20).coerceIn(5, 180),
+            optionBLabel = (m["optionBLabel"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "B 反锁进 Gemini Live",
+            optionBMode = (m["optionBMode"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "gemini_only",
+            optionBMinutes = ((m["optionBMinutes"] as? Number)?.toInt() ?: 15).coerceIn(5, 180),
+            geminiTopic = (m["geminiTopic"] as? String)?.trim().orEmpty(),
+            geminiBrief = (m["geminiBrief"] as? String)?.trim().orEmpty(),
+            autoClickLive = m["autoClickLive"] != false,
+            anchorSource = (m["anchorSource"] as? String)?.trim().orEmpty(),
+        )
+    }
+
+    fun shouldShow(
+        spec: SuperSparkCardSpec?,
+        shownIds: Set<String>,
+        interceptHeld: Boolean,
+        planModalShowing: Boolean,
+        chattingActive: Boolean = false,
+    ): Boolean {
+        if (spec == null) return false
+        if (spec.id in shownIds) return false
+        if (interceptHeld || planModalShowing || chattingActive) return false
+        return true
+    }
+
+    fun resolveTacticalActions(spec: SuperSparkCardSpec): Pair<TacticalAction, TacticalAction> {
+        val a = TacticalAction(
+            slot = "A",
+            label = spec.optionALabel.ifBlank { "A 省力切刷题舱 20m" },
+            capsuleMode = spec.optionAMode.ifBlank { "quiz_only" },
+            capsuleMinutes = spec.optionAMinutes.coerceIn(5, 180),
+            launchGeminiLive = false,
+            muteAndClose = true,
+        )
+        val b = TacticalAction(
+            slot = "B",
+            label = spec.optionBLabel.ifBlank { "B 反锁进 Gemini Live" },
+            capsuleMode = spec.optionBMode.ifBlank { "gemini_only" },
+            capsuleMinutes = spec.optionBMinutes.coerceIn(5, 180),
+            launchGeminiLive = true,
+            muteAndClose = false,
+        )
+        return a to b
+    }
+
+    fun formatCardBody(spec: SuperSparkCardSpec): String = buildString {
+        if (spec.title.isNotBlank()) append("〔鲸澜〕${spec.title}")
+        if (spec.ask.isNotBlank()) {
+            if (isNotEmpty()) append("\n\n")
+            append(spec.ask)
+        }
+        if (spec.anchorSource.isNotBlank()) {
+            if (isNotEmpty()) append("\n")
+            append("锚点：${spec.anchorSource}")
+        }
+        if (isEmpty()) append("〔鲸澜〕现在挑一条最小动作：先刷题还是进 Gemini Live？")
+    }
+}
+
+/** 纯 JVM 可测：强制计划模态弹窗的解析、90 秒去重节流、延后条件与草案块格式化策略。 */
+object PlanModalPolicy {
+    const val MIN_SHOW_INTERVAL_MS = 90_000L
+
+    fun parseSpec(raw: Any?): PlanModalSpec? {
+        val m = raw as? Map<*, *> ?: return null
+        if (m["active"] != true) return null
+        val blocks = (m["draftBlocks"] as? List<*>).orEmpty().mapNotNull { item ->
+            val b = item as? Map<*, *> ?: return@mapNotNull null
+            val title = (b["title"] as? String)?.trim().orEmpty()
+            if (title.isEmpty()) return@mapNotNull null
+            PlanDraftBlock(
+                id = (b["id"] as? String)?.trim().orEmpty(),
+                slot = (b["slot"] as? String)?.trim().orEmpty(),
+                startMin = (b["startMin"] as? Number)?.toInt() ?: 0,
+                endMin = (b["endMin"] as? Number)?.toInt() ?: 0,
+                title = title,
+                deliverable = (b["deliverable"] as? String)?.trim().orEmpty(),
+                lockMode = (b["lockMode"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "verify",
+                allowedApps = (b["allowedApps"] as? List<*>).orEmpty().mapNotNull { (it as? String)?.trim()?.takeIf { s -> s.isNotEmpty() } },
+            )
+        }
+        return PlanModalSpec(
+            day = (m["day"] as? String)?.trim().orEmpty(),
+            headline = (m["headline"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "今日必须确认计划并激活验收锁",
+            prompt = (m["prompt"] as? String)?.trim().orEmpty(),
+            draftBlocks = blocks,
+            snoozeLeft = ((m["snoozeLeft"] as? Number)?.toInt() ?: 0).coerceAtLeast(0),
+            mustConfirm = m["mustConfirm"] == true,
+            energyLevel = (m["energyLevel"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "mid",
+        )
+    }
+
+    fun shouldShow(
+        spec: PlanModalSpec?,
+        lastShownAtMs: Long,
+        nowMs: Long,
+        interceptHeld: Boolean,
+        alreadyShowing: Boolean,
+        minIntervalMs: Long = MIN_SHOW_INTERVAL_MS,
+    ): Boolean {
+        if (spec == null) return false
+        if (interceptHeld || alreadyShowing) return false
+        if (lastShownAtMs > 0L && nowMs - lastShownAtMs < minIntervalMs) return false
+        return true
+    }
+
+    fun canSnooze(spec: PlanModalSpec): Boolean = !spec.mustConfirm && spec.snoozeLeft > 0
+
+    fun formatMinutesHm(minOfDay: Int): String {
+        val m = minOfDay.coerceIn(0, 24 * 60)
+        return String.format(java.util.Locale.US, "%02d:%02d", m / 60, m % 60)
+    }
+
+    fun formatBlockLine(block: PlanDraftBlock): String {
+        val timeRange = if (block.endMin > block.startMin) {
+            "${formatMinutesHm(block.startMin)}–${formatMinutesHm(block.endMin)} "
+        } else {
+            ""
+        }
+        val modeTag = if (block.lockMode == "verify") "[验收锁]" else "[${block.lockMode}]"
+        val deliv = if (block.deliverable.isNotBlank()) "\n  交付：${block.deliverable}" else ""
+        return "$timeRange${block.title} $modeTag$deliv"
+    }
+
+    fun validateNegotiationText(raw: String?): String? {
+        val t = raw?.trim().orEmpty()
+        return if (t.length >= 2) t.take(500) else null
+    }
+}
+
 /**
  * 主动发球的悬浮窗 (P1).
  *
@@ -61,17 +264,28 @@ import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
 object ProactiveOverlay {
     private const val TAG = "DshProactive"
     private const val MAX_TEXT = 4_000
-    private val main = Handler(Looper.getMainLooper())
+    private val main by lazy { Handler(Looper.getMainLooper()) }
     private var app: Context? = null
     private val live = LinkedHashMap<String, Card>()
     private var liveDice: DiceCard? = null
+    private var livePlanModal: PlanModalCard? = null
 
     fun install(context: Context) {
         app = context.applicationContext
     }
 
+    fun hasActiveChat(): Boolean = live.values.any { it.chatting() }
+
+    fun isPlanModalShowing(): Boolean = livePlanModal != null
+
     /** Adds the window; false means "no host" and the caller should fall back to the Activity. */
-    fun show(token: String, text: String, deadline: Long, why: String? = null): Boolean {
+    fun show(
+        token: String,
+        text: String,
+        deadline: Long,
+        why: String? = null,
+        spark: SuperSparkCardSpec? = null,
+    ): Boolean {
         val context = app ?: return false
         // He is chatting in the window that is up: the new ball joins that conversation instead of
         // wiping it (it used to replace the window, so "回一下就没了").
@@ -79,7 +293,7 @@ object ProactiveOverlay {
         if (chatting != null) {
             live.values.filter { it !== chatting }.forEach { it.destroy() }
             live.clear()
-            chatting.adopt(token, text)
+            chatting.adopt(token, text, spark)
             live[token] = chatting
             return true
         }
@@ -87,7 +301,7 @@ object ProactiveOverlay {
         live.values.toList().forEach { it.destroy() }
         live.clear()
         val host = host(context) ?: return false
-        val card = Card(context, host.first, host.second, token, deadline)
+        val card = Card(context, host.first, host.second, token, deadline, spark)
         return try {
             card.attach(text, why)
             live[token] = card
@@ -98,6 +312,36 @@ object ProactiveOverlay {
             card.abandon()
             false
         }
+    }
+
+    /** 弹出超级大肥鱼战术浮窗（附带 A 切刷题舱 / B 反锁 Gemini Live 双按钮）。 */
+    fun showSuperSpark(spec: SuperSparkCardSpec): Boolean {
+        val body = SuperSparkOverlayPolicy.formatCardBody(spec)
+        val why = spec.badge.ifBlank { null }
+        val deadline = System.currentTimeMillis() + COLLAPSE_AFTER_MS
+        return show(token = "spark:${spec.id}", text = body, deadline = deadline, why = why, spark = spec)
+    }
+
+    /** 弹出独立强制计划模态弹窗（不可点外部轻易划走，弹出时震动）。 */
+    fun showPlanModal(spec: PlanModalSpec): Boolean {
+        val context = app ?: return false
+        dismissPlanModal()
+        val host = host(context) ?: return false
+        val modal = PlanModalCard(context, host.first, host.second, spec)
+        return try {
+            modal.attach()
+            livePlanModal = modal
+            true
+        } catch (e: Exception) {
+            android.util.Log.i(TAG, "plan modal overlay add failed: ${e.javaClass.simpleName}")
+            modal.destroy()
+            false
+        }
+    }
+
+    fun dismissPlanModal() {
+        livePlanModal?.destroy()
+        livePlanModal = null
     }
 
     fun withdraw(token: String) {
@@ -111,6 +355,7 @@ object ProactiveOverlay {
         live.values.toList().forEach { it.destroy() }
         live.clear()
         dismissDice()
+        dismissPlanModal()
     }
 
     fun isShowing(token: String) = live.containsKey(token)
@@ -179,6 +424,7 @@ object ProactiveOverlay {
     fun yieldForLock() {
         live.values.toList().forEach { it.foldForLock() }
         dismissDice()
+        dismissPlanModal()
     }
 
     /** The accessibility service's own window context when it is on; else the overlay permission. */
@@ -205,6 +451,7 @@ object ProactiveOverlay {
         private var token: String,
         /** The coordinator's presentation deadline; kept for reference, the window lives 20 min. */
         private val deadline: Long,
+        private var currentSpark: SuperSparkCardSpec? = null,
     ) {
         private val palette = OverlayPalette.of(context)
         private val wm = context.getSystemService(WindowManager::class.java)
@@ -242,6 +489,7 @@ object ProactiveOverlay {
             root = view
             params = p
             wm!!.addView(view, p)
+            ProactiveHaptics.vibrateSuperSpark(app)
             main.postDelayed({ proveShown() }, 120L)
             // 回应窗口：20 分钟没动静就收成气泡（不删掉）。coordinator 自己的 60 秒时限只关事件，
             // 不关这个窗口——关闭它是人点「收起」或回复之后的事。
@@ -252,14 +500,16 @@ object ProactiveOverlay {
         fun chatting(): Boolean = talked && (root != null || bubble != null)
 
         /** A new ball while he is chatting here: same window, next line, new event. */
-        fun adopt(newToken: String, text: String) {
+        fun adopt(newToken: String, text: String, spark: SuperSparkCardSpec? = null) {
             token = newToken
             shownReported = false
             closedReported = false
             // The next line he sends answers this new event.
             chatted = false
+            if (spark != null) currentSpark = spark
             val (who, body) = splitSpeaker(text)
             append(if (who != null) "$who：$body" else body)
+            ProactiveHaptics.vibrateSuperSpark(app)
             main.removeCallbacks(shrink)
             if (collapsed) expand() else main.postDelayed(shrink, COLLAPSE_AFTER_MS)
             main.postDelayed({ proveShown() }, 120L)
@@ -336,6 +586,60 @@ object ProactiveOverlay {
                 bottomMargin = context.dp(6f)
             })
 
+            currentSpark?.let { spark ->
+                val (actA, actB) = SuperSparkOverlayPolicy.resolveTacticalActions(spark)
+                val tacticalRow = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, 0, 0, context.dp(8f))
+                }
+                fun sparkBtn(label: String, primary: Boolean, onTap: () -> Unit) = TextView(context).apply {
+                    this.text = label
+                    gravity = Gravity.CENTER
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(if (primary) palette.onAccent else palette.onTonal)
+                    setPadding(context.dp(10f), context.dp(9f), context.dp(10f), context.dp(9f))
+                    background = GradientDrawable().apply {
+                        cornerRadius = context.dp(12f).toFloat()
+                        setColor(if (primary) palette.accent else palette.tonal)
+                        if (!primary) setStroke(context.dp(1f).coerceAtLeast(1), palette.stroke)
+                    }
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { onTap() }
+                }
+                tacticalRow.addView(
+                    sparkBtn(actA.label, primary = false) {
+                        if (waiting) return@sparkBtn
+                        ProactiveRuntime.activateReverseCapsule(actA.capsuleMode, actA.capsuleMinutes)
+                        ProactiveRuntime.muteFor(SuperSparkOverlayPolicy.MUTE_MINUTES_MS)
+                        report(SurfaceReport.Answered("super_spark_a"))
+                        destroy()
+                    },
+                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        marginEnd = context.dp(6f)
+                    },
+                )
+                tacticalRow.addView(
+                    sparkBtn(actB.label, primary = true) {
+                        if (waiting) return@sparkBtn
+                        ProactiveRuntime.activateReverseCapsule(actB.capsuleMode, actB.capsuleMinutes)
+                        GeminiAutoLauncher.launchAndAutomateLive(
+                            app = app,
+                            topic = spark.geminiTopic.ifBlank { spark.title },
+                            brief = spark.geminiBrief.ifBlank { spark.ask },
+                            voiceLine = spark.voiceLine,
+                            mode = "instant",
+                            autoClickLive = spark.autoClickLive,
+                        )
+                        report(SurfaceReport.Answered("super_spark_b"))
+                        destroy()
+                    },
+                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+                )
+                card.addView(tacticalRow)
+            }
+
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.BOTTOM
@@ -386,17 +690,29 @@ object ProactiveOverlay {
             })
             refreshSendKey()
 
-            val actions = LinearLayout(context).apply {
+            val actionsTop = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
                 setPadding(0, context.dp(4f), 0, 0)
             }
+            actionsTop.addView(textAction("放空闭嘴 15m") {
+                if (waiting) return@textAction
+                ProactiveRuntime.muteFor(SuperSparkOverlayPolicy.MUTE_MINUTES_MS)
+                if (currentSpark != null) ProactiveRuntime.notifySuperSparkMuted15m()
+                close(SurfaceReport.Dismissed, muted = true)
+            })
             // 在开会 / 上课：一键「在忙，晚点回」（C4）。窗口收起，但**不算回过话、不开安静期**：
             // 插件只记一笔 busy；关窗后照常复查，5 分钟里在娱乐 App 累计 15 秒就算违抗。
-            actions.addView(textAction("在忙，晚点回") { // l10n:keep companion overlay quick reply
+            actionsTop.addView(textAction("在忙，晚点回") { // l10n:keep companion overlay quick reply
                 if (waiting) return@textAction
                 close(SurfaceReport.Dismissed, busy = true)
             })
+            card.addView(actionsTop)
+
+            val actions = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+            }
             // 不许装看不见：没回过一句，「别烦我」「收起」都不放他走（他要的：总得说几句）。
             actions.addView(textAction(AppStrings.get(app, R.string.proactive_overlay_mute)) {
                 if (!mayLeave()) return@textAction
@@ -1114,6 +1430,353 @@ object ProactiveOverlay {
                 canvas.drawCircle(pt.first, pt.second, r, pipPaint)
             }
             pipPaint.shader = null
+        }
+    }
+
+    /**
+     * 强制计划模态弹窗：弹出时调用 [ProactiveHaptics.vibratePlanModal]，展示草案块与今日验收锁提示，
+     * 拦截外部点击与返回键防止误划走；提供「确认并激活验收锁」「发给鲸澜重构计划」「延后 15 分钟」。
+     */
+    private class PlanModalCard(
+        private val app: Context,
+        private val context: Context,
+        private val type: Int,
+        private val spec: PlanModalSpec,
+    ) {
+        private val palette = OverlayPalette.of(context)
+        private val wm = context.getSystemService(WindowManager::class.java)
+        private var root: View? = null
+        private var input: EditText? = null
+        private var statusView: TextView? = null
+        private var confirmBtn: Button? = null
+        private var negotiateBtn: Button? = null
+        private var snoozeBtn: Button? = null
+        private var busy = false
+
+        fun attach() {
+            val view = buildView()
+            val p = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                type,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.CENTER
+                title = "大肥鱼强制计划模态"
+                @Suppress("DEPRECATION")
+                softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                if (Build.VERSION.SDK_INT >= 28) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+            }
+            root = view
+            wm!!.addView(view, p)
+            ProactiveHaptics.vibratePlanModal(app)
+        }
+
+        private fun buildView(): View {
+            val scrim = object : FrameLayout(context) {
+                override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                    if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+                        if (event.action == KeyEvent.ACTION_UP) {
+                            setStatus("请先确认今日计划或发给鲸澜调整（不可直接返回关闭）", isError = true)
+                        }
+                        return true
+                    }
+                    return super.dispatchKeyEvent(event)
+                }
+            }.apply {
+                setBackgroundColor(Color.argb(168, 12, 16, 24))
+                isClickable = true
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setOnClickListener {
+                    setStatus("计划未武装验收锁，不能点外部关闭；请确认、重构或延后", isError = true)
+                }
+            }
+
+            val maxW = minOf(
+                (context.resources.displayMetrics.widthPixels * 0.94f).toInt(),
+                context.dp(430f),
+            ).coerceAtLeast(context.dp(280f))
+
+            val card = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                val pad = context.dp(18f)
+                setPadding(pad, context.dp(16f), pad, context.dp(16f))
+                isClickable = true
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(22f).toFloat()
+                    setColor(palette.fill)
+                    setStroke(context.dp(1.5f).coerceAtLeast(1), palette.accent)
+                }
+                elevation = context.dp(10f).toFloat()
+            }
+
+            val topRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            topRow.addView(TextView(context).apply {
+                text = "⚡ 今日计划确认 · 激活验收锁"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(palette.onTonal)
+                setPadding(context.dp(10f), context.dp(4f), context.dp(10f), context.dp(4f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(999f).toFloat()
+                    setColor(palette.tonal)
+                }
+            })
+            val energyText = when (spec.energyLevel) {
+                "low" -> "低电量保底"
+                "high" -> "高精力冲刺"
+                else -> "标准推进"
+            }
+            topRow.addView(TextView(context).apply {
+                text = energyText
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setTextColor(palette.muted)
+                setPadding(context.dp(8f), context.dp(4f), 0, context.dp(4f))
+            })
+            card.addView(topRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = context.dp(8f)
+            })
+
+            card.addView(TextView(context).apply {
+                text = spec.headline.ifBlank { "今日必须确认计划并激活验收锁" }
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(palette.ink)
+                setLineSpacing(0f, 1.2f)
+            })
+
+            val promptText = buildString {
+                if (spec.prompt.isNotBlank()) append(spec.prompt)
+                if (isNotEmpty()) append("\n")
+                append("不确认今日计划，P3 验收锁无法正常武装；确认后到点未交付将自动触发验收锁。")
+            }
+            card.addView(TextView(context).apply {
+                text = promptText
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextColor(palette.muted)
+                setLineSpacing(0f, 1.3f)
+                setPadding(0, context.dp(6f), 0, context.dp(10f))
+            })
+
+            // 草案时间块清单
+            val blocksContainer = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(context.dp(10f), context.dp(8f), context.dp(10f), context.dp(8f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(14f).toFloat()
+                    setColor(palette.pressed)
+                    setStroke(context.dp(1f).coerceAtLeast(1), palette.stroke)
+                }
+            }
+            blocksContainer.addView(TextView(context).apply {
+                text = if (spec.draftBlocks.isNotEmpty()) {
+                    "今日草案时间块（共 ${spec.draftBlocks.size} 块 · 激活后带验收锁）"
+                } else {
+                    "今日尚未生成草案块：可直接点确认套用保底块，或在下方发给鲸澜生成"
+                }
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(palette.ink)
+                setPadding(0, 0, 0, context.dp(6f))
+            })
+            spec.draftBlocks.take(6).forEachIndexed { idx, blk ->
+                blocksContainer.addView(TextView(context).apply {
+                    text = "${idx + 1}. ${PlanModalPolicy.formatBlockLine(blk)}"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setTextColor(palette.ink)
+                    setLineSpacing(0f, 1.25f)
+                    setPadding(0, context.dp(3f), 0, context.dp(3f))
+                })
+            }
+            card.addView(blocksContainer, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = context.dp(10f)
+            })
+
+            val status = TextView(context).apply {
+                visibility = View.GONE
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setLineSpacing(0f, 1.25f)
+                setPadding(0, 0, 0, context.dp(8f))
+            }
+            statusView = status
+            card.addView(status)
+
+            val box = EditText(context).apply {
+                hint = "告诉鲸澜你怎么排今天（如：下午判断推理 40m，晚上申论复盘 45m）"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextColor(palette.ink)
+                setHintTextColor(palette.muted)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                minLines = 2
+                maxLines = 4
+                setPadding(context.dp(12f), context.dp(10f), context.dp(12f), context.dp(10f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(14f).toFloat()
+                    setColor(palette.pressed)
+                    setStroke(context.dp(1f).coerceAtLeast(1), palette.stroke)
+                }
+            }
+            input = box
+            card.addView(box, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = context.dp(10f)
+            })
+
+            fun modalBtn(label: String, style: Int, onTap: () -> Unit): Button = Button(context).apply {
+                // style: 0=primary, 1=tonal, 2=secondary
+                text = label
+                textSize = 14f
+                isAllCaps = false
+                setTextColor(
+                    when (style) {
+                        0 -> palette.onAccent
+                        1 -> palette.onTonal
+                        else -> palette.ink
+                    },
+                )
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(14f).toFloat()
+                    setColor(
+                        when (style) {
+                            0 -> palette.accent
+                            1 -> palette.tonal
+                            else -> palette.pressed
+                        },
+                    )
+                    if (style == 2) setStroke(context.dp(1f).coerceAtLeast(1), palette.stroke)
+                }
+                stateListAnimator = null
+                backgroundTintList = null
+                elevation = 0f
+                setOnClickListener { onTap() }
+            }
+
+            val cBtn = modalBtn("确认并激活验收锁", style = 0) {
+                if (busy) return@modalBtn
+                setBusy(true, "正在激活今日验收锁…")
+                ProactiveRuntime.confirmPlanModal(spec.draftBlocks) { ok, msg ->
+                    main.post {
+                        if (root == null) return@post
+                        if (ok) {
+                            runCatching { android.widget.Toast.makeText(app, "✓ 今日计划已确认并激活验收锁", android.widget.Toast.LENGTH_LONG).show() }
+                            dismissPlanModal()
+                        } else {
+                            setBusy(false)
+                            setStatus(msg ?: "激活失败，请重试或发给鲸澜重构", isError = true)
+                        }
+                    }
+                }
+            }
+            confirmBtn = cBtn
+            card.addView(cBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(46f)).apply {
+                bottomMargin = context.dp(8f)
+            })
+
+            val nBtn = modalBtn("发给鲸澜重构计划", style = 1) {
+                if (busy) return@modalBtn
+                val cleanText = PlanModalPolicy.validateNegotiationText(input?.text?.toString())
+                if (cleanText == null) {
+                    setStatus("请先在上方输入框写下今天安排（至少 2 个字）", isError = true)
+                    return@modalBtn
+                }
+                setBusy(true, "鲸澜正在重构计划并武装验收锁…")
+                ProactiveRuntime.negotiatePlanModal(cleanText) { ok, reply, armedCount, err ->
+                    main.post {
+                        if (root == null) return@post
+                        if (ok) {
+                            val note = reply?.takeIf { it.isNotBlank() } ?: "计划已重构"
+                            setStatus("✓ $note（已武装 $armedCount 块验收锁）", isError = false)
+                            main.postDelayed({ dismissPlanModal() }, 1_000L)
+                        } else {
+                            setBusy(false)
+                            setStatus(err ?: "重构失败，请重试", isError = true)
+                        }
+                    }
+                }
+            }
+            negotiateBtn = nBtn
+            card.addView(nBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(44f)).apply {
+                bottomMargin = context.dp(8f)
+            })
+
+            val snoozeAllowed = PlanModalPolicy.canSnooze(spec)
+            val snoozeLabel = if (snoozeAllowed) {
+                "延后 15 分钟（今日还剩 ${spec.snoozeLeft} 次）"
+            } else {
+                "今日必须确认计划（不可再延后）"
+            }
+            val sBtn = modalBtn(snoozeLabel, style = 2) {
+                if (busy || !snoozeAllowed) return@modalBtn
+                setBusy(true, "正在延后 15 分钟…")
+                ProactiveRuntime.snoozePlanModal(15) { ok, autoArmed, err ->
+                    main.post {
+                        if (root == null) return@post
+                        if (ok) {
+                            val toastMsg = if (autoArmed) {
+                                "延后已达上限，系统已自动钉入 25m 起手验收锁"
+                            } else {
+                                "已延后 15 分钟，到点请确认今日计划"
+                            }
+                            runCatching { android.widget.Toast.makeText(app, toastMsg, android.widget.Toast.LENGTH_LONG).show() }
+                            dismissPlanModal()
+                        } else {
+                            setBusy(false)
+                            setStatus(err ?: "延后失败，请直接确认或重构计划", isError = true)
+                        }
+                    }
+                }
+            }.apply {
+                isEnabled = snoozeAllowed
+                alpha = if (snoozeAllowed) 1f else 0.45f
+            }
+            snoozeBtn = sBtn
+            card.addView(sBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(42f)))
+
+            val scroll = ScrollView(context).apply {
+                isFillViewport = false
+                addView(card)
+            }
+            scrim.addView(
+                scroll,
+                FrameLayout.LayoutParams(maxW, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply {
+                    topMargin = context.dp(24f)
+                    bottomMargin = context.dp(24f)
+                },
+            )
+            return scrim
+        }
+
+        private fun setBusy(on: Boolean, statusMsg: String? = null) {
+            busy = on
+            confirmBtn?.isEnabled = !on
+            confirmBtn?.alpha = if (on) 0.5f else 1f
+            negotiateBtn?.isEnabled = !on
+            negotiateBtn?.alpha = if (on) 0.5f else 1f
+            val snoozeAllowed = PlanModalPolicy.canSnooze(spec)
+            snoozeBtn?.isEnabled = !on && snoozeAllowed
+            snoozeBtn?.alpha = if (!on && snoozeAllowed) 1f else 0.45f
+            if (statusMsg != null) setStatus(statusMsg, isError = false)
+        }
+
+        private fun setStatus(msg: String?, isError: Boolean) {
+            statusView?.apply {
+                text = msg ?: ""
+                visibility = if (msg.isNullOrBlank()) View.GONE else View.VISIBLE
+                setTextColor(if (isError) palette.danger else palette.accent)
+            }
+        }
+
+        fun destroy() {
+            val v = root ?: return
+            root = null
+            runCatching { wm?.removeViewImmediate(v) }
         }
     }
 }

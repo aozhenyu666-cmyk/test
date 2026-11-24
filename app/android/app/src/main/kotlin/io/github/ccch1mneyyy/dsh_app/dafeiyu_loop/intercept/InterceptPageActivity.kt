@@ -154,11 +154,27 @@ object QuizCardDisplayPolicy {
         val dailyEarned = (res?.get("dailyBankEarned") as? Number)?.toInt() ?: 60
         val dailyCap = (res?.get("dailyBankCap") as? Number)?.toInt() ?: 60
         val avail = (res?.get("availableFunLeft") as? Number)?.toInt()?.coerceAtLeast(0)
+        val spendBlockedReason = (res?.get("spendBlockedReason") as? String)?.trim().orEmpty()
         val availSuffix = if (avail != null) "（当前可用娱乐余额 $avail 分钟）" else ""
         if (capped && earnedAdded <= 0) {
+            val blockedTail = if (spendBlockedReason.isNotEmpty()) " 暂不可花余额：$spendBlockedReason。" else ""
             return Triple(
                 false,
-                "✓ 本轮已答满 $required 题！今日题库挣余额已达每日上限（$dailyEarned/$dailyCap 分钟），本次未新增$availSuffix。",
+                "✓ 本轮已答满 $required 题！今日题库挣余额已达每日上限（$dailyEarned/$dailyCap 分钟），本次未新增$availSuffix。$blockedTail",
+                avail,
+            )
+        }
+        if (earnedAdded > 0 && spendBlockedReason.isNotEmpty()) {
+            return Triple(
+                false,
+                "✓ 本轮 $required 题全部答对！已入账 +$earnedAdded 分钟娱乐余额$availSuffix。但当前暂不可花余额放行：$spendBlockedReason（余额已保存，解除限制后可用）。",
+                avail,
+            )
+        }
+        if (spendBlockedReason.isNotEmpty()) {
+            return Triple(
+                false,
+                "✓ 本轮已答满 $required 题$availSuffix，但当前暂不可花余额放行：$spendBlockedReason。",
                 avail,
             )
         }
@@ -613,7 +629,7 @@ class InterceptPageActivity : Activity() {
     }
 
     /** 花挣来的余额临时放行：选择时长 + 写一句理由 -> POST /seals action=spend -> 统一放行并打开目标 App。 */
-    private fun showSpendBalanceDialog(defaultReason: String = "") {
+    private fun showSpendBalanceDialog(prefillReason: String = "") {
         val ctx = this
         val durations = listOf(5, 10, 15, 30)
         val cachedLeft = ProactiveRuntime.cachedFunLeft()
@@ -694,7 +710,10 @@ class InterceptPageActivity : Activity() {
         syncChips()
         val reasonBox = EditText(ctx).apply {
             hint = "理由（花在什么上、为什么现在，至少 4 字）"
-            if (defaultReason.isNotBlank()) setText(defaultReason)
+            if (prefillReason.isNotBlank()) {
+                setText(prefillReason)
+                setSelection(prefillReason.length)
+            }
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextColor(palette.ink)
             setHintTextColor(palette.muted)
@@ -1118,9 +1137,14 @@ class InterceptPageActivity : Activity() {
                             setTextColor(Color.parseColor(if (isPositive) "#1D8F63" else "#B45309"))
                             text = summaryText
                         }
+                        val blockedReason = (res?.get("spendBlockedReason") as? String)?.trim().orEmpty()
                         quizSpendShortcutBtn?.apply {
                             visibility = View.VISIBLE
-                            if (avail != null && avail < 5) {
+                            if (blockedReason.isNotEmpty()) {
+                                isEnabled = false
+                                alpha = 0.5f
+                                text = "暂不可花余额：$blockedReason"
+                            } else if (avail != null && avail < 5) {
                                 isEnabled = false
                                 alpha = 0.5f
                                 text = "当前可用余额不足 5 分钟（$avail 分钟），可继续刷下一轮"
@@ -1744,7 +1768,7 @@ class InterceptPageActivity : Activity() {
                     bottomMargin = dp(6)
                 })
                 addView(pillButton("一键花余额放行", primary = true) {
-                    showSpendBalanceDialog("刷题挣到余额，放松休息")
+                    showSpendBalanceDialog(prefillReason = "刷题挣得余额放行")
                 }.apply {
                     quizSpendShortcutBtn = this
                     visibility = View.GONE

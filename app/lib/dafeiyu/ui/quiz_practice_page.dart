@@ -180,6 +180,12 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
   bool _hasChanges = false;
   String? _error;
 
+  num _practiceSolved = 0;
+  int _practiceRequired = 10;
+  int _unlockMinutes = 5;
+  int? _availableFunLeft;
+  bool _offlineFallback = false;
+
   @override
   void initState() {
     super.initState();
@@ -189,6 +195,7 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
       ];
       _loading = false;
       _startQuestionTimer();
+      unawaited(_refreshRewardSnapshot());
     } else {
       unawaited(_loadSession());
     }
@@ -235,6 +242,53 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
     _ticker = null;
   }
 
+  String _formatSolved(num v) => v == v.roundToDouble() ? '${v.round()}' : v.toStringAsFixed(1);
+
+  void _applyRewardFields(Map<String, dynamic> res, {bool fromAnswer = false}) {
+    final cfg = res['config'] is Map ? res['config'] as Map : const {};
+    final solvedRaw = res['practiceSolved'] ?? res['solved'] ?? res['roundSolved'];
+    final reqRaw = res['required'] ?? res['practiceRequired'] ?? cfg['requiredCount'];
+    final unlockRaw = res['unlockMinutes'] ?? cfg['unlockMinutes'];
+    final funRaw = res['availableFunLeft'] ?? res['funLeft'];
+    if (solvedRaw is num) _practiceSolved = solvedRaw;
+    if (reqRaw is num && reqRaw > 0) _practiceRequired = reqRaw.toInt();
+    if (unlockRaw is num && unlockRaw > 0) _unlockMinutes = unlockRaw.toInt();
+    if (funRaw is num) _availableFunLeft = funRaw.toInt();
+    if (fromAnswer) _offlineFallback = false;
+  }
+
+  Future<void> _refreshRewardSnapshot({bool forceFunLeft = false}) async {
+    final results = await Future.wait([
+      _channel.bankOp().catchError((_) => null),
+      _channel.todayStatus().catchError((_) => null),
+    ]);
+    if (!mounted) return;
+    final bankRes = results[0];
+    final todayRes = results[1];
+    setState(() {
+      if (bankRes != null && bankRes['ok'] == true) {
+        final cfg = bankRes['config'] is Map ? bankRes['config'] as Map : const {};
+        final solvedRaw = bankRes['practiceSolved'] ?? bankRes['solved'];
+        final reqRaw = bankRes['required'] ?? cfg['requiredCount'];
+        final unlockRaw = bankRes['unlockMinutes'] ?? cfg['unlockMinutes'];
+        final funRaw = bankRes['availableFunLeft'];
+        if (solvedRaw is num && _practiceSolved == 0) _practiceSolved = solvedRaw;
+        if (reqRaw is num && reqRaw > 0) _practiceRequired = reqRaw.toInt();
+        if (unlockRaw is num && unlockRaw > 0) _unlockMinutes = unlockRaw.toInt();
+        if (funRaw is num && (_availableFunLeft == null || forceFunLeft)) {
+          _availableFunLeft = funRaw.toInt();
+        }
+      }
+      if ((_availableFunLeft == null || forceFunLeft) && todayRes != null) {
+        final locks = todayRes['locksOverview'] is Map ? todayRes['locksOverview'] as Map : const {};
+        final wallet = locks['wallet'] is Map ? locks['wallet'] as Map : const {};
+        final tl = todayRes['timeLedger'] is Map ? todayRes['timeLedger'] as Map : const {};
+        final avail = wallet['availableMin'] ?? tl['funLeft'];
+        if (avail is num) _availableFunLeft = avail.toInt();
+      }
+    });
+  }
+
   Future<void> _loadSession({List<String> excludeIds = const []}) async {
     _stopQuestionTimer();
     setState(() {
@@ -242,6 +296,7 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
       _error = null;
       _finished = false;
       _revealed = false;
+      _offlineFallback = false;
       _currentIndex = 0;
       _records.clear();
     });
@@ -299,14 +354,17 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
           if (item is Map) Map<String, dynamic>.from(item),
     ];
 
+    final loadedRes = res;
     setState(() {
       _loading = false;
       _questions = list;
       _currentIndex = 0;
       _revealed = false;
       _finished = false;
+      _applyRewardFields(loadedRes);
     });
     _startQuestionTimer();
+    unawaited(_refreshRewardSnapshot());
   }
 
   _PracticeAnswerRecord _localFallbackJudge(
@@ -396,7 +454,9 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
     if (!mounted) return;
 
     final _PracticeAnswerRecord record;
+    final bool enteredOfflineFallback;
     if (res != null && res['ok'] == true) {
+      enteredOfflineFallback = false;
       final fsrs = res['fsrs'] is Map ? res['fsrs'] as Map : const {};
       record = _PracticeAnswerRecord(
         questionId: qid,
@@ -419,6 +479,7 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
             0,
       );
     } else {
+      enteredOfflineFallback = true;
       record = _localFallbackJudge(q, answer, rating, elapsedMs);
     }
 
@@ -426,6 +487,10 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
       _submitting = false;
       _revealed = true;
       _hasChanges = true;
+      _offlineFallback = enteredOfflineFallback;
+      if (res != null && res['ok'] == true) {
+        _applyRewardFields(res, fromAnswer: true);
+      }
       _records[qid] = record;
       _questions[_currentIndex] = {
         ..._questions[_currentIndex],
@@ -437,12 +502,18 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
 
     if (res != null && res['ok'] == true && res['roundComplete'] == true) {
       final earnedAdded = (res['earnedAdded'] as num?)?.toInt() ?? 0;
-      final reqCount = (res['required'] as num?)?.toInt() ?? 10;
-      final avail = (res['availableFunLeft'] as num?)?.toInt();
+      final reqCount = (res['required'] as num?)?.toInt() ?? _practiceRequired;
+      final avail = (res['availableFunLeft'] as num?)?.toInt() ?? _availableFunLeft;
+      final blockedReason = '${res['spendBlockedReason'] ?? ''}'.trim();
+      if (res['availableFunLeft'] is! num && earnedAdded > 0) {
+        unawaited(_refreshRewardSnapshot(forceFunLeft: true));
+      }
       final msg = earnedAdded > 0
-          ? (avail != null
-              ? '✓ 专练满 $reqCount 题，已入账 +$earnedAdded 分钟娱乐余额（当前可用 $avail 分钟）'
-              : '✓ 专练满 $reqCount 题，已入账 +$earnedAdded 分钟娱乐余额')
+          ? (blockedReason.isNotEmpty
+              ? '✓ 专练满 $reqCount 题已记入 +$earnedAdded 分钟（$blockedReason）'
+              : (avail != null
+                  ? '✓ 专练满 $reqCount 题，已入账 +$earnedAdded 分钟娱乐余额（当前可用 $avail 分钟）'
+                  : '✓ 专练满 $reqCount 题，已入账 +$earnedAdded 分钟娱乐余额'))
           : (res['capped'] == true
               ? '✓ 本轮已答满！今日题库挣余额已达上限（${res['dailyBankEarned'] ?? 60}/${res['dailyBankCap'] ?? 60} 分钟）'
               : null);
@@ -789,6 +860,64 @@ class _QuizPracticePageState extends State<QuizPracticePage> {
                 value: progress.clamp(0.0, 1.0),
                 minHeight: 4,
                 backgroundColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+              ),
+            ),
+          ],
+          if (!_loading && _questions.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              key: const ValueKey('practice-reward-capsule'),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                children: [
+                  Icon(AppIcons.balance, size: 14, color: theme.colorScheme.primary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '本轮专练奖励 ${_formatSolved(_practiceSolved)} / $_practiceRequired 题'
+                      '（满 $_practiceRequired 题 +${_unlockMinutes}m 娱乐余额 · 当前可用 ${_availableFunLeft != null ? '${_availableFunLeft}m' : '--m'}）',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.tabular(
+                        theme.textTheme.labelSmall!.copyWith(
+                          color: theme.colorScheme.onSecondaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (_offlineFallback) ...[
+            const SizedBox(height: 6),
+            Container(
+              key: const ValueKey('practice-offline-fallback-banner'),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: colors.dangerContainer.withValues(alpha: 0.85),
+                borderRadius: AppShape.radiusSm,
+                border: Border.all(color: colors.danger.withValues(alpha: 0.5)),
+              ),
+              child: Row(
+                children: [
+                  Icon(AppIcons.warning, size: 15, color: colors.danger),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '引擎未连接，本题仅本地记录、未计入娱乐余额',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colors.onDangerContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

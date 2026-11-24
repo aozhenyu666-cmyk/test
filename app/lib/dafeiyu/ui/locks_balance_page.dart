@@ -9,7 +9,9 @@ import '../../ui/common/status_chip.dart';
 import '../../ui/shell/page_frame.dart';
 import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
+import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
+import 'app_picker_dialog.dart';
 import 'plan_modality_page.dart';
 import 'usage_analytics_page.dart';
 
@@ -22,12 +24,14 @@ part 'locks_balance_dialogs.dart';
 /// 3) 全系统 6 只手与规则全景（P0–P6）；
 /// 4) 最近系统 & 双鱼设局轨迹（只读）。
 class LocksBalancePage extends StatefulWidget {
-  const LocksBalancePage({super.key, this.channel});
+  const LocksBalancePage({super.key, this.channel, this.loopChannel});
 
   final ProactiveChannel? channel;
+  final LoopChannel? loopChannel;
 
-  static Future<void> open(BuildContext context, {ProactiveChannel? channel}) => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => LocksBalancePage(channel: channel)),
+  static Future<void> open(BuildContext context, {ProactiveChannel? channel, LoopChannel? loopChannel}) =>
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => LocksBalancePage(channel: channel, loopChannel: loopChannel)),
       );
 
   @override
@@ -35,7 +39,15 @@ class LocksBalancePage extends StatefulWidget {
 }
 
 class _LocksBalancePageState extends State<LocksBalancePage> {
+  static const _defaultWhitelistPresets = <LoopApp>[
+    LoopApp('md.obsidian', 'Obsidian'),
+    LoopApp('com.tencent.mm', '微信'),
+    LoopApp('com.google.android.apps.bard', 'Gemini'),
+    LoopApp('com.tencent.mobileqq', 'QQ'),
+  ];
+
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
+  late final LoopChannel _loop = widget.loopChannel ?? LoopChannel();
 
   bool _loading = true;
   bool _busy = false;
@@ -45,6 +57,13 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
   Map<String, dynamic>? _seals;
   Map<String, Object?>? _wall;
   bool? _lockShadow;
+  List<String>? _defaultAllowOverride;
+  final Map<String, String> _knownLabels = {
+    'md.obsidian': 'Obsidian',
+    'com.tencent.mm': '微信',
+    'com.google.android.apps.bard': 'Gemini',
+    'com.tencent.mobileqq': 'QQ',
+  };
 
   @override
   void initState() {
@@ -481,6 +500,166 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  List<String> _resolveDefaultAllow(Map<String, dynamic> overview) {
+    if (_defaultAllowOverride != null && _defaultAllowOverride!.isNotEmpty) {
+      return _defaultAllowOverride!;
+    }
+    final fromToday = _today['defaultAllow'];
+    if (fromToday is List && fromToday.isNotEmpty) {
+      return [for (final p in fromToday) if ('$p'.trim().isNotEmpty) '$p'.trim()];
+    }
+    final eff = _asMap(overview['effectiveDecision']);
+    final allowList = _asListOfMaps(eff['allow']);
+    if (allowList.isNotEmpty) {
+      for (final item in allowList) {
+        final pkg = '${item['pkg'] ?? ''}'.trim();
+        final label = '${item['label'] ?? ''}'.trim();
+        if (pkg.isNotEmpty && label.isNotEmpty) _knownLabels[pkg] = label;
+      }
+      return [
+        for (final item in allowList)
+          if ('${item['pkg'] ?? ''}'.trim().isNotEmpty) '${item['pkg']}'.trim(),
+      ];
+    }
+    return const ['md.obsidian', 'com.tencent.mm'];
+  }
+
+  String _allowLabelOf(String pkg) => _knownLabels[pkg] ?? pkg;
+
+  Future<void> _handleEditDefaultAllow(Map<String, dynamic> overview) async {
+    if (_busy) return;
+    final current = _resolveDefaultAllow(overview);
+    final picked = await showInstalledAppsPicker(
+      context,
+      title: '调整手机默认专注白名单',
+      loop: _loop,
+      presets: _defaultWhitelistPresets,
+      presetsLabel: '常用工具 / 沟通应用快捷勾选',
+      initialSelected: current,
+      allowEmpty: false,
+      emptyError: '至少保留一个默认白名单应用',
+      confirmLabel: '保存并持久化',
+    );
+    if (picked == null || !mounted) return;
+    for (final a in picked) {
+      _knownLabels[a.package] = a.label;
+    }
+    final pkgs = picked.map((a) => a.package).toList();
+    setState(() => _busy = true);
+    final res = await _channel.setDefaultAllow(pkgs);
+    if (!mounted) return;
+    if (res != null && res['ok'] != false) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
+    final serverAllowRaw = res?['defaultAllow'] ?? res?['allow'];
+    final serverAllow = serverAllowRaw is List
+        ? [for (final p in serverAllowRaw) if ('$p'.trim().isNotEmpty) '$p'.trim()]
+        : const <String>[];
+    final rejectedRaw = res?['rejectedGames'];
+    final rejected = rejectedRaw is List
+        ? [for (final g in rejectedRaw) if ('$g'.trim().isNotEmpty) _allowLabelOf('$g'.trim())]
+        : const <String>[];
+    final toast = '${res?['toast'] ?? ''}'.trim();
+    if (res != null && res['ok'] != false) {
+      _defaultAllowOverride = serverAllow.isNotEmpty ? serverAllow : pkgs;
+    }
+    await _refresh();
+    if (!mounted) return;
+    final String msg;
+    if (res == null) {
+      msg = '引擎暂未响应，默认白名单未持久化';
+    } else if (res['ok'] == false) {
+      final err = toast.isNotEmpty ? toast : '${res['error'] ?? '引擎拒绝修改'}';
+      msg = rejected.isNotEmpty ? '$err（已拦截纯游戏：${rejected.join('、')}）' : err;
+    } else {
+      final count = (_defaultAllowOverride ?? pkgs).length;
+      final base = toast.isNotEmpty ? toast : '已持久化手机默认白名单（$count 个应用）';
+      msg = rejected.isNotEmpty ? '$base · 已拦截纯游戏：${rejected.join('、')}' : base;
+    }
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _handleReverseGeminiLive() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final capRes = await _channel.activateReverseCapsule(mode: 'gemini_only', minutes: 15);
+    final sparkRes = await _channel.superSparkOp(const {'action': 'trigger', 'modeHint': 'contrast_push'});
+    final spark = sparkRes?['spark'] is Map
+        ? Map<String, dynamic>.from(sparkRes!['spark'] as Map)
+        : (sparkRes ?? const <String, dynamic>{});
+    final topic = '${spark['geminiTopic'] ?? spark['title'] ?? '反锁进 Gemini 共脑 15m'}'.trim();
+    final brief = '${spark['geminiBrief'] ?? spark['ask'] ?? '已开启 Gemini 单开舱 15 分钟，请直接开考或推进手头核心题/交付'}'.trim();
+    final voiceLine = '${spark['voiceLine'] ?? '已锁定其他应用 15 分钟，只留 Gemini 与你直接开战'}'.trim();
+    final autoClickLive = spark['autoClickLive'] is bool ? spark['autoClickLive'] == true : true;
+    unawaited(_channel.tickNow().catchError((_) => false));
+    final launched = await _channel.triggerGeminiAutoLive(
+      topic: topic,
+      brief: brief,
+      voiceLine: voiceLine,
+      mode: 'instant',
+      autoClickLive: autoClickLive,
+    );
+    await _refresh();
+    if (!mounted) return;
+    final capMsg = '${capRes?['toast'] ?? (capRes?['ok'] == true ? '已启用 Gemini 单开舱（15m）' : '单开舱已请求')}';
+    final msg = launched ? '$capMsg · 已灌料拉起 Gemini Live' : '$capMsg · 已准备灌料简报';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _handleReverseQuizCapsule() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final res = await _channel.activateReverseCapsule(mode: 'quiz_only', minutes: 20);
+    if (res != null && res['ok'] != false) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
+    await _refresh();
+    if (!mounted) return;
+    final ok = res != null && res['ok'] != false;
+    final msg = ok
+        ? '${res['toast'] ?? '已启用刷题单开舱（20m）：仅保留考公刷题/笔记应用'}'
+        : '${res?['toast'] ?? res?['error'] ?? '开启刷题单开舱失败，请确认引擎在线'}';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _handleCommuteAudioSpark() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final sparkRes = await _channel.superSparkOp(const {'action': 'trigger', 'modeHint': 'commute_audio'});
+    final spark = sparkRes?['spark'] is Map
+        ? Map<String, dynamic>.from(sparkRes!['spark'] as Map)
+        : (sparkRes ?? const <String, dynamic>{});
+    final topic = '${spark['geminiTopic'] ?? spark['title'] ?? '骑车/做饭 · 语音抽背'}'.trim();
+    final brief = '${spark['geminiBrief'] ?? spark['ask'] ?? '当前处于骑车/做饭无纸笔场景，请直接口语快问快答抽背高频考点'}'.trim();
+    final voiceLine = '${spark['voiceLine'] ?? '语音抽背已就位，直接开口答题，不要客套'}'.trim();
+    final launched = await _channel.triggerGeminiAutoLive(
+      topic: topic,
+      brief: brief,
+      voiceLine: voiceLine,
+      mode: 'instant',
+      autoClickLive: true,
+    );
+    if (!mounted) return;
+    final msg = launched ? '⚡ 已拉起语音抽背并自动进 Gemini Live：$topic' : '语音抽背简报已就绪：$topic';
+    setState(() {
+      _busy = false;
+      _banner = msg;
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -571,6 +750,15 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
             child: Center(child: CircularProgressIndicator()),
           )
         else ...[
+          // 板块 -1 · 白名单快捷调整与反向单开舱（填平发呆洼地）
+          _buildTopWhitelistAndCapsuleCard(
+            context,
+            theme: theme,
+            colors: colors,
+            scheme: scheme,
+            overview: overview,
+          ),
+
           // 板块 0 · 此刻哪只手在发力 · 锁机探针
           _buildLockProbeCard(
             context,
@@ -594,6 +782,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
           // 板块 1 · 当前生效锁与验收锁强度
           OverviewCard(
             key: const ValueKey('locks-active-card'),
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             leading: OverviewGlyph(active ? AppIcons.lockActive : AppIcons.unlock, tint: active ? 3 : 6),
             title: Row(
               children: [
@@ -675,19 +864,19 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
 
           // 板块 2 · 手机可用娱乐余额大盘
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: GlassSurface(
               key: const ValueKey('locks-wallet-card'),
               tier: GlassTier.card,
               borderRadius: AppShape.radiusLg,
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(14),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Row(
                       children: [
-                        const OverviewGlyph(AppIcons.balance, tint: 4, size: 42),
+                        const OverviewGlyph(AppIcons.balance, tint: 4, size: 38),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
@@ -721,12 +910,12 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     Text(
                       '$currentWindowLabel · 自由花销：$nextFreeWindowText',
                       style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         _MiniBalanceMetric(label: '昨日结转', value: '${carryInMin}m', accent: colors.info),
@@ -740,9 +929,9 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    Text('分时花销规则（防白天碎片刷完 + 晚间温和封顶）', style: theme.textTheme.labelLarge),
                     const SizedBox(height: 10),
+                    Text('分时花销规则（防白天碎片刷完 + 晚间温和封顶）', style: theme.textTheme.labelLarge),
+                    const SizedBox(height: 6),
                     _WindowRuleMeter(
                       title: '① 白天工作零散槽位',
                       badgeText: floorPassed ? '已过保底·不限' : '$daytimeSpentMin / ${daytimeCapMin}m',
@@ -752,7 +941,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                           ? '今日保底已过，白天零散 30m 限制已自动解除'
                           : '白天零散上限 30m（剩 ${daytimeRemainingMin}m），过了今日保底自动解除',
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 6),
                     _WindowRuleMeter(
                       title: '② 午休自由时段（12:00–14:00）',
                       badgeText: currentWindow == 'lunch' ? '此刻自由' : '不占白天 30m',
@@ -760,7 +949,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                       accent: colors.success,
                       subtitle: '同晚间同等自由花余额（不占白天工作 30m 槽位）',
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 6),
                     _WindowRuleMeter(
                       title: '③ 晚间自由时段（18:00 起）',
                       badgeText: '$eveningSpentMin / ${eveningCapMin}m',
@@ -768,7 +957,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
                       accent: eveningRemainingMin <= 15 ? colors.warning : colors.info,
                       subtitle: '18:00 后温和封顶 ${eveningCapMin}m（还剩 ${eveningRemainingMin}m），用完防熬夜刷到凌晨',
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     Row(
                       children: [
                         Expanded(
@@ -802,7 +991,7 @@ class _LocksBalancePageState extends State<LocksBalancePage> {
           ListPageCard(
             key: const ValueKey('locks-all-card'),
             title: '全系统 6 只手与规则全景（P0–P6）',
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             children: [
               for (final item in allLocks)
                 () {

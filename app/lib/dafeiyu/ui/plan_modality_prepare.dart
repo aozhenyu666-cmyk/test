@@ -1,11 +1,86 @@
 part of 'plan_modality_page.dart';
 
 extension _PlanModalityPrepare on _PlanModalityPageState {
+  Widget _buildVerifyModalStatusCard(ThemeData theme, DshColors colors) {
+    final state = _verifyLockArmedState();
+    final armed = state.armed;
+    final draftBlocks = _planModal?['draftBlocks'] is List
+        ? _mapList(_planModal!['draftBlocks'])
+        : const <Map<String, dynamic>>[];
+
+    return GlassSurface(
+      key: const ValueKey('plan-modal-status-card'),
+      tier: GlassTier.card,
+      borderRadius: AppShape.radiusLg,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  armed ? AppIcons.lockActive : AppIcons.warning,
+                  size: 18,
+                  color: armed ? colors.success : colors.warning,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    armed ? '今日验收锁已武装（${state.count} 块）' : '今日尚未建计划 · 验收锁未激活',
+                    key: const ValueKey('plan-verify-lock-badge'),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: armed ? colors.success : colors.danger,
+                    ),
+                  ),
+                ),
+                StatusChip(
+                  tone: armed ? StatusTone.ok : StatusTone.warn,
+                  label: armed ? '已武装' : '未激活',
+                ),
+              ],
+            ),
+            if (!armed && draftBlocks.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                '待确认草案：${draftBlocks.take(3).map((b) => '${b['title'] ?? ''}').where((s) => s.isNotEmpty).join(' · ')}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  key: const ValueKey('plan-negotiate-modal-btn'),
+                  onPressed: _busy ? null : () => unawaited(_negotiatePlanModalLock()),
+                  icon: const Icon(AppIcons.chat, size: 16),
+                  label: const Text('立即沟通构建今日计划'),
+                ),
+                FilledButton.tonalIcon(
+                  key: const ValueKey('plan-confirm-modal-btn'),
+                  onPressed: _busy ? null : () => unawaited(_confirmPlanModalLock()),
+                  icon: const Icon(AppIcons.verified, size: 16),
+                  label: const Text('一键确认草案激活验收锁'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildCustodyPolicyCard(ThemeData theme, DshColors colors) {
     final custody = _custody ?? const <String, dynamic>{};
     final custodyActive = custody['active'] == true;
     final autoKick = _custodyPolicy?['autoKickoffEnabled'] == true;
     final adaptiveOn = _custodyPolicy?['adaptiveSplitEnabled'] != false;
+    final mandatoryModalOn = _custodyPolicy?['mandatoryPlanModalEnabled'] != false;
     final rebriefCount = _asInt(custody['rebriefCount'], 0);
     return GlassSurface(
       key: const ValueKey('plan-custody-policy-card'),
@@ -110,6 +185,29 @@ extension _PlanModalityPrepare on _PlanModalityPageState {
                   key: const ValueKey('plan-adaptive-split-switch'),
                   value: adaptiveOn,
                   onChanged: _busy ? null : (v) => unawaited(_setCustodyPolicy(adaptiveSplitEnabled: v)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('未建计划强制计划模态拦截', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                      Text(
+                        '工作清醒时段尚未武装今日验收锁时，自动弹窗引导构建并激活验收锁',
+                        style: theme.textTheme.labelSmall?.copyWith(color: colors.textTertiary),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Switch(
+                  key: const ValueKey('plan-mandatory-modal-switch'),
+                  value: mandatoryModalOn,
+                  onChanged: _busy ? null : (v) => unawaited(_setCustodyPolicy(mandatoryPlanModalEnabled: v)),
                 ),
               ],
             ),

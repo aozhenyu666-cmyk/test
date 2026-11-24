@@ -381,10 +381,26 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/horizons", body)
             }
             "planContractStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/plan-contract", null)
-            "planContractOp" -> {
+            "planContractOp", "planModalityOp" -> {
                 val body = linkedMapOf<String, Any?>()
                 (call.arguments as? Map<*, *>)?.forEach { (k, v) -> if (k is String) body[k] = v }
                 ProactiveRuntime.fetchPluginRoute(result, "POST", "/plan-contract", body)
+            }
+            "superSparkOp" -> {
+                val args = (call.arguments as? Map<*, *>)?.entries
+                    ?.mapNotNull { (k, v) -> (k as? String)?.let { it to v } }
+                    ?.toMap()
+                val action = (args?.get("action") as? String)?.trim().orEmpty()
+                if (args.isNullOrEmpty() || action == "status") {
+                    ProactiveRuntime.fetchPluginRoute(
+                        result, "GET", "/super-spark?timeZone=${BeijingClock.ZONE.id}", null,
+                    )
+                } else {
+                    val body = LinkedHashMap<String, Any?>()
+                    body["timeZone"] = BeijingClock.ZONE.id
+                    args.forEach { (k, v) -> if (k != "timeZone") body[k] = v }
+                    ProactiveRuntime.fetchPluginRoute(result, "POST", "/super-spark", body)
+                }
             }
             "bankStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/bank", null)
             "bankOp" -> {
@@ -431,6 +447,22 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                     brief = brief,
                     mode = mode,
                     preferVoice = preferVoice,
+                )
+                result.success(true)
+            }
+            "triggerGeminiAutoLive" -> {
+                val topic = call.argument<String>("topic").orEmpty()
+                val brief = call.argument<String>("brief").orEmpty()
+                val voiceLine = call.argument<String>("voiceLine").orEmpty()
+                val mode = call.argument<String>("mode")?.takeIf { it.isNotBlank() } ?: "instant"
+                val autoClickLive = call.argument<Boolean>("autoClickLive") != false
+                GeminiAutoLauncher.launchAndAutomateLive(
+                    app = context,
+                    topic = topic,
+                    brief = brief,
+                    voiceLine = voiceLine,
+                    mode = mode,
+                    autoClickLive = autoClickLive,
                 )
                 result.success(true)
             }

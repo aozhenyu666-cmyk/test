@@ -1,6 +1,93 @@
 part of 'locks_balance_page.dart';
 
 extension _LocksBalanceSections on _LocksBalancePageState {
+  Widget _buildTopWhitelistAndCapsuleCard(
+    BuildContext context, {
+    required ThemeData theme,
+    required DshColors colors,
+    required ColorScheme scheme,
+    required Map<String, dynamic> overview,
+  }) {
+    final defaultAllow = _resolveDefaultAllow(overview);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: GlassSurface(
+        key: const ValueKey('locks-reverse-capsule-card'),
+        tier: GlassTier.card,
+        borderRadius: AppShape.radiusLg,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(AppIcons.appRules, size: 18, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '反向白名单单开舱（填平发呆洼地）',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall,
+                    ),
+                  ),
+                  TextButton.icon(
+                    key: const ValueKey('locks-default-allow-btn'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    ),
+                    onPressed: _busy ? null : () => unawaited(_handleEditDefaultAllow(overview)),
+                    icon: const Icon(AppIcons.verified, size: 15),
+                    label: Text('调整手机默认白名单（${defaultAllow.length}）'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  FilledButton.tonalIcon(
+                    key: const ValueKey('locks-capsule-gemini-btn'),
+                    style: FilledButton.styleFrom(
+                      shape: AppShape.card,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: _busy ? null : () => unawaited(_handleReverseGeminiLive()),
+                    icon: const Icon(AppIcons.askAi, size: 15),
+                    label: const Text('仅留 Gemini 共脑 15m'),
+                  ),
+                  FilledButton.tonalIcon(
+                    key: const ValueKey('locks-capsule-quiz-btn'),
+                    style: FilledButton.styleFrom(
+                      shape: AppShape.card,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: _busy ? null : () => unawaited(_handleReverseQuizCapsule()),
+                    icon: const Icon(AppIcons.skill, size: 15),
+                    label: const Text('仅留刷题 App 20m'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('locks-capsule-commute-btn'),
+                    style: OutlinedButton.styleFrom(
+                      shape: AppShape.card,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: _busy ? null : () => unawaited(_handleCommuteAudioSpark()),
+                    icon: const Icon(AppIcons.voice, size: 15),
+                    label: const Text('骑车/做饭 · 语音抽背'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildVerifyCenterCard(
     BuildContext context, {
     required ThemeData theme,
@@ -307,19 +394,19 @@ extension _LocksBalanceSections on _LocksBalancePageState {
         winner?['id'] != 'CONTRACT_OVERDUE_STRICT';
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: GlassSurface(
         key: const ValueKey('locks-probe-card'),
         tier: GlassTier.card,
         borderRadius: AppShape.radiusLg,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 children: [
-                  const OverviewGlyph(AppIcons.verified, tint: 2, size: 38),
+                  const OverviewGlyph(AppIcons.verified, tint: 2, size: 36),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
@@ -361,9 +448,9 @@ extension _LocksBalanceSections on _LocksBalancePageState {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: scheme.surfaceContainerLow,
                   borderRadius: BorderRadius.circular(12),
@@ -394,7 +481,7 @@ extension _LocksBalanceSections on _LocksBalancePageState {
                 ),
               ),
               if (boutHand?['active'] == true) ...[
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 OutlinedButton.icon(
                   key: const ValueKey('locks-strict-off-btn'),
                   style: OutlinedButton.styleFrom(shape: AppShape.card),
@@ -403,9 +490,9 @@ extension _LocksBalanceSections on _LocksBalancePageState {
                   label: Text(canRevokeBout ? '撤回当前手动严格锁' : '逾期/夜间硬锁生效中（不可撤回）'),
                 ),
               ],
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               Text('6 只控制手实时状态', style: theme.textTheme.labelMedium?.copyWith(color: colors.textTertiary)),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
               for (final h in hands)
                 () {
                   final hId = '${h['id'] ?? ''}';
@@ -414,7 +501,7 @@ extension _LocksBalanceSections on _LocksBalancePageState {
                   final hRem = _asInt(h['remainingMin']);
                   return Padding(
                     key: ValueKey('locks-probe-hand-$hId'),
-                    padding: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.only(bottom: 4),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
