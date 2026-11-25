@@ -29,9 +29,47 @@ export const LIVE_CORE_DEFAULTS = Object.freeze({
   historyLimit: 40,
 })
 
+export const LIVE_ENERGY_TIERS = Object.freeze({
+  L0: Object.freeze({
+    key: 'L0',
+    label: 'L0 休息',
+    title: 'L0 刷题后零压休息态',
+    paceRule: '严禁布置学习任务、严禁催进度或掏错题！若用户想聊，只拿 1 个生活趣事或社会热点玩「变更要素猜后续」解闷，想歇随时收住。',
+  }),
+  L1: Object.freeze({
+    key: 'L1',
+    label: 'L1 定型',
+    title: 'L1 低带宽动作定型（15-30s）',
+    paceRule: '先给眼前 1-2 句完整靶子材料再提问（防工作记忆空白），每次只练 1 把手术刀，30 秒内交 1 个具体回答。',
+  }),
+  L2: Object.freeze({
+    key: 'L2',
+    label: 'L2 实战',
+    title: 'L2 实战抗噪与二阶博弈（45-90s）',
+    paceRule: '加干扰项或做无提示特征盲测；出现“差不多/很有道理”空话红牌重说；追问 1 个反例或变更要素偏移。',
+  }),
+  L3: Object.freeze({
+    key: 'L3',
+    label: 'L3 高压',
+    title: 'L3 满血高压与基准率推演（90-180s）',
+    paceRule: '锚定外部大样本基准率 + 多变量冲突统合 + 连续变更要素两连击，绝不放水过关。',
+  }),
+})
+
+export const THINKING_SCALPELS = Object.freeze([
+  { id: 'compress', name: '① 精简压缩', rule: '把眼前材料砍掉例子修饰，压成「对象 + 核心因果 + 边界」（≤25 字）' },
+  { id: 'predict', name: '② 前向预判', rule: '看答案前先猜下一步趋势、出题人埋坑点或对手二阶反制' },
+  { id: 'perturb', name: '③ 变更要素预测结果', rule: '锁死其余条件只改 1 个关键要素（数字/成本/规则/激励），逼推结果如何偏移及中间传导步' },
+  { id: 'analogy', name: '④ 同构联想', rule: '挂钩已有模型或生活经历，必须同时答出「1 个相同机制 + 1 个失效边界」' },
+  { id: 'premise', name: '⑤ 破前提提问', rule: '揪出未定义模糊词、缺失分母或暗中搭桥的脆弱假设' },
+  { id: 'tree', name: '⑥ 知识体系挂树', rule: '写成 IF [具体触发特征] -> THEN [优先动作]，指明替换或补充哪条旧分支' },
+  { id: 'feynman', name: '⑦ 闭卷回想 & 费曼讲解', rule: '遮住原文 30 秒口述骨架，用 3 句大白话讲给外行听（术语堆砌=假懂重讲）' },
+])
+
 export const LIVE_REASON_LABELS = Object.freeze({
   always_on_keeper: '常驻 Live 护航自动拉回',
   live_early_bailout: '进入 Live 秒退 · 严格强拉回',
+  headset_live_dropped: '息屏戴耳机掉麦 · 语音唤醒拉回',
   text_mode_grace: 'Gemini 文本沉淀窗 · 暂不切回 Live',
   switch_to_live: '手动切回 Gemini Live（含看屏）',
   switch_to_text: '手动切至 Gemini 文本（MCP 沉淀）',
@@ -138,6 +176,10 @@ function normalizeLiveState(raw) {
     wantScreenShare: s.wantScreenShare !== false,
     alwaysOnLive: Boolean(s.alwaysOnLive),
     keeperStrict: s.keeperStrict !== false,
+    headsetKeepalive: s.headsetKeepalive !== false,
+    energyTier: ['L0', 'L1', 'L2', 'L3'].includes(String(s.energyTier || '').toUpperCase())
+      ? String(s.energyTier).toUpperCase()
+      : 'L2',
     preferredMode: s.preferredMode === 'text' ? 'text' : 'live',
     textGraceUntil: Math.max(0, Number(s.textGraceUntil) || 0),
     earlyBailoutCount: Math.max(0, Number(s.earlyBailoutCount) || 0),
@@ -296,8 +338,16 @@ export function buildLiveCoreBrief({
   reason = '',
   targetMode = 'live',
   sisterFeed = null,
+  energyTier = 'L2',
+  customFeed = '',
+  scalpelHint = '',
 } = {}) {
   const face = dice || LIVE_DICE_FACES[0]
+  const tierKey = LIVE_ENERGY_TIERS[String(energyTier || '').toUpperCase()] ? String(energyTier).toUpperCase() : 'L2'
+  const tierObj = LIVE_ENERGY_TIERS[tierKey]
+  const scalpel = THINKING_SCALPELS.find((x) => x.id === scalpelHint) ||
+    THINKING_SCALPELS[((face.face || 1) - 1) % THINKING_SCALPELS.length]
+  const customText = String(customFeed || '').replace(/\r/g, '').trim().slice(0, 900)
   const setting = settingLines(settingText || DEFAULT_GEMINI_SETTING, 6)
   const frontLabel = cleanLine(phone?.label || phone?.app || '当前桌面/未知界面', 40)
   const frontMin = Math.max(0, Math.round(Number(phone?.minutes) || 0))
@@ -312,6 +362,7 @@ export function buildLiveCoreBrief({
       '【Gemini 文本模式衔接与 MCP 沉淀剧本（弥补 Live 短板）】',
       '刚才在 Live 语音模式无法稳定写库与展开长文本，现在由我切换为文字模式做结构化沉淀。',
       '严禁空谈方法论或陪聊借口！请直接：1) 承接上一轮口头思路给出严格拆解；2) 主动调 MCP 把刷到的错题与核心经历沉入卡池/验收单。',
+      ...(customText ? ['', '【用户即时投喂素材（剪贴板/链接/思考 · 文本模式可直接读取深拆）】', customText] : []),
       '',
       '【双鱼已备好的刷题与经历素材】',
       `- 当前考点锚点：${cleanLine(anchor?.topic || '综合复盘', 48)} — ${cleanLine(anchor?.prompt || '', 160)}`,
@@ -329,6 +380,20 @@ export function buildLiveCoreBrief({
     return textLines.join('\n').slice(0, 2800)
   }
 
+  if (tierKey === 'L0') {
+    const l0Lines = [
+      '【L0 刷题后零压休息模式（Thinking Gym OS）】',
+      tierObj.paceRule,
+      ...(customText ? ['', '【用户刚随手投喂的材料/链接（聊得动就按变更要素轻松猜 1 句，不想聊直接安静休息）】', customText] : []),
+      '',
+      '【今日轻松玩法（二选一，绝不强迫）】',
+      '1. 如果用户说想休息/放空：回复「收到，先安心歇着，有想聊的一声叫我」并保持安静陪伴。',
+      '2. 如果用户愿意顺口聊两句：把上面材料（或 1 个日常/社会热点）当靶子，只用「③ 变更要素预测结果」抛 1 个轻松脑洞（改 1 条规则或成本，猜各方会怎么反应），像朋友闲聊，严禁催任务、严禁掏错题！',
+      ...(feedExp.length ? ['', '【顺手参考的近期经历（仅作话题引子）】', ...feedExp.map((e) => `- ${e}`)] : []),
+    ]
+    return l0Lines.join('\n').slice(0, 2800)
+  }
+
   const sceneFlags = [
     phone?.mediaPlaying ? '正在播放音乐/音频' : '',
     phone?.headsetConnected ? '已戴耳机/蓝牙音频接入' : '',
@@ -343,7 +408,19 @@ export function buildLiveCoreBrief({
   const lines = [
     '【禁聊体系死命令】',
     '严禁陪聊情绪自怨自艾、方法论哲理、找自习室借口或重新讨论怎么搭建体系！',
-    '读完背景只回一句「收到，直接开始」，第一秒从本轮骰子脚本与真实考题开考。',
+    '读完背景只回一句「收到，直接开始」，第一秒把靶子材料放眼前、按当前精力档位与思考刀开考。',
+    '',
+    `【Thinking Gym 当前档位：${tierObj.title} · 本轮主刀：${scalpel.name}】`,
+    `- 节拍约束：${tierObj.paceRule}`,
+    `- 手术刀要求：${scalpel.rule}`,
+    ...(customText
+      ? [
+          '',
+          '【用户即时投喂素材（剪贴板/链接/思考 · 第一优先级靶子）】',
+          customText,
+          '- 若含网页链接而语音流无法直抓正文，先按链接文本/已粘贴上下文切 1 刀，必要时引导他点「切 Gemini 文本」读取全文。',
+        ]
+      : []),
     '',
     '【核心设定（Gemini设定.md）】',
     ...setting.map((s) => `- ${s}`),
@@ -408,10 +485,10 @@ export function buildLiveCoreBrief({
 
   lines.push(
     '',
-    '【三挡节拍（3-5 分钟高强度互动）】',
-    '1. 1 挡（0-30s 破冰）：别喊口号，顺着上面的画面或口语钩子先让他开口接 1 句。',
-    '2. 2 挡（30s-4m 练肌肉）：立刻切入「真实知识弹药」或「双鱼喂料的刷题/经历」，连续追问 2 轮不许含糊。',
-    '3. 3 挡（收口立契）：结束前逼他二选一拍板下一个 25 分钟验收动作，并严格按格式输出：',
+    '【三挡节拍 + 记忆增量尾行（3-5 分钟高强度互动）】',
+    '1. 1 挡（0-30s 破冰）：把上面的具体材料先念/贴在眼前，严禁抛空问“你怎么看”。',
+    '2. 2 挡（30s-4m 练肌肉）：盯紧本轮主刀追问（若秒回套话立刻打回；卡死超 90s 先示范再让他改 1 处）。',
+    '3. 3 挡（收口立契）：吐 1 句 `【记忆增量】触发特征 -> 核心结论/边界`，再逼他二选一拍板下一个 25 分钟验收动作：',
     RECEIPT_FORMAT,
   )
 
@@ -448,6 +525,8 @@ export function evaluateLiveCore({
   modeHint = '',
   diceHint = 0,
   targetMode = '',
+  customFeed = '',
+  scalpelHint = '',
   lastLiveDurationSec = 0,
   force = false,
   rng = Math.random,
@@ -472,7 +551,9 @@ export function evaluateLiveCore({
     reason,
     phase,
     urgent: false,
+    voiceOnly: false,
     targetMode: st.textGraceUntil > ts ? 'text' : 'live',
+    energyTier: st.energyTier,
     feedPreview: st.lastFeedPreview || null,
     dice: null,
     anchor: null,
@@ -501,7 +582,50 @@ export function evaluateLiveCore({
     if (voiceActiveNow) return yieldWith('live_running', 'live_active')
     if (inTextGrace) return yieldWith('text_mode_grace', 'text_mode')
     if (inGemini && !st.alwaysOnLive) return yieldWith('live_running', 'live_active')
-    if (phone?.screenOn === false) return yieldWith('screen_off', 'standby')
+    if (phone?.screenOn === false) {
+      const canHeadsetKeepalive = Boolean(
+        st.alwaysOnLive &&
+        st.headsetKeepalive &&
+        phone?.headsetConnected &&
+        !voiceActiveNow &&
+        st.lastVoiceActiveAt > 0 &&
+        st.lastVoiceActiveAt > st.lastVoiceDropHandledAt &&
+        dropAgoMs >= 20_000 &&
+        dropAgoMs <= LIVE_CORE_DEFAULTS.reengageMaxDropMs &&
+        (st.lastIgniteAt <= 0 || ts - st.lastIgniteAt >= 45_000),
+      )
+      if (canHeadsetKeepalive) {
+        const res = buildTriggeredResult({
+          ts,
+          nextBase,
+          reason: 'headset_live_dropped',
+          action: 'voice_nudge',
+          urgent: true,
+          voiceOnly: true,
+          targetMode: 'live',
+          bankState,
+          questionBank,
+          reviewCards,
+          recentQuizzes,
+          experiences,
+          horizons,
+          vault,
+          vaultSnippets,
+          settingText,
+          phone,
+          commitments,
+          recap,
+          bridge,
+          modeHint,
+          diceHint,
+          customFeed,
+          scalpelHint,
+          rng,
+        })
+        return res
+      }
+      return yieldWith('screen_off', 'standby')
+    }
 
     const quizCount = Math.max(0, Number(recentQuizAnswers) || 0)
     if (quizCount >= LIVE_CORE_DEFAULTS.quizReliefThreshold && st.mutedUntil <= ts) {
@@ -524,6 +648,7 @@ export function evaluateLiveCore({
     const liveDurSec = Math.max(0, Number(phone?.lastLiveDurationSec ?? lastLiveDurationSec) || 0)
     const minDropForBailout = st.keeperStrict ? LIVE_CORE_DEFAULTS.strictReengageMinDropMs : LIVE_CORE_DEFAULTS.reengageMinDropMs
     const isEarlyBailout = Boolean(
+      st.energyTier !== 'L0' &&
       st.alwaysOnLive &&
       st.autoReengage &&
       st.lastVoiceActiveAt > 0 &&
@@ -571,7 +696,7 @@ export function evaluateLiveCore({
       (['fun', 'game', 'other'].includes(fgTierNorm) && idleMin >= LIVE_CORE_DEFAULTS.idleTriggerMin)
     ) {
       triggerReason = 'dice_spark_live'
-    } else if (st.alwaysOnLive) {
+    } else if (st.alwaysOnLive && st.energyTier !== 'L0') {
       triggerReason = 'always_on_keeper'
     }
 
@@ -603,6 +728,8 @@ export function evaluateLiveCore({
       bridge,
       modeHint,
       diceHint,
+      customFeed,
+      scalpelHint,
       rng,
     })
   }
@@ -629,6 +756,8 @@ export function evaluateLiveCore({
     bridge,
     modeHint,
     diceHint,
+    customFeed,
+    scalpelHint,
     rng,
   })
 }
@@ -639,6 +768,7 @@ function buildTriggeredResult({
   reason,
   action,
   urgent = false,
+  voiceOnly = false,
   targetMode = 'live',
   bankState,
   questionBank,
@@ -655,6 +785,8 @@ function buildTriggeredResult({
   bridge,
   modeHint,
   diceHint,
+  customFeed = '',
+  scalpelHint = '',
   rng,
 }) {
   const mergedSnippets = [
@@ -701,27 +833,36 @@ function buildTriggeredResult({
     reason,
     targetMode,
     sisterFeed,
+    energyTier: nextBase.energyTier,
+    customFeed,
+    scalpelHint,
   })
   const shortAsk = cleanLine(anchor?.prompt || dice.ask, 64)
-  const voiceLine = targetMode === 'text'
-    ? '已切至 Gemini 文本模式并带上双鱼素材，直接粘贴发消息调 MCP 沉淀'
-    : (reason === 'live_early_bailout'
-        ? `刚才进 Live 秒退了，回来看屏直接接招：${cleanLine(dice.ask, 48)}`
-        : (reason === 'live_reengage'
-            ? `刚才连麦断了，别直接散掉，回 Live 接一句：${cleanLine(dice.ask, 54)}`
-            : `骰${dice.face}${dice.name}。${shortAsk}`))
+  const voiceLine = reason === 'headset_live_dropped'
+    ? '耳机里的 Gemini Live 刚才断了，别滑进发呆，按一下耳机或亮屏点回到 Live 继续聊'
+    : (targetMode === 'text'
+        ? '已切至 Gemini 文本模式并带上双鱼素材，直接粘贴发消息调 MCP 沉淀'
+        : (reason === 'live_early_bailout'
+            ? `刚才进 Live 秒退了，回来看屏直接接招：${cleanLine(dice.ask, 48)}`
+            : (reason === 'live_reengage'
+                ? `刚才连麦断了，别直接散掉，回 Live 接一句：${cleanLine(dice.ask, 54)}`
+                : `骰${dice.face}${dice.name}。${shortAsk}`)))
   const topic = targetMode === 'text'
     ? `文本沉淀：${cleanLine(anchor?.topic || '双鱼喂料与 MCP 落库', 40)}`
-    : `骰${dice.face}·${dice.name}：${cleanLine(anchor?.topic || '高密度拆题', 40)}`
-  const autoClickLive = targetMode !== 'text'
-  const requestScreenShare = targetMode !== 'text' && Boolean(nextBase.wantScreenShare)
+    : (reason === 'headset_live_dropped'
+        ? '息屏耳机 Live 掉线唤醒'
+        : `骰${dice.face}·${dice.name}：${cleanLine(anchor?.topic || '高密度拆题', 40)}`)
+  const autoClickLive = !voiceOnly && targetMode !== 'text'
+  const requestScreenShare = !voiceOnly && targetMode !== 'text' && Boolean(nextBase.wantScreenShare)
   const payload = {
     id: `live-${ts.toString(36)}-${dice.face}`,
     at: ts,
     reason,
     action,
     urgent: Boolean(urgent),
+    voiceOnly: Boolean(voiceOnly),
     targetMode,
+    energyTier: nextBase.energyTier,
     dice,
     anchorId: anchor?.id || '',
     anchorSource: anchor?.anchorSource || 'exam_pool',
@@ -733,11 +874,13 @@ function buildTriggeredResult({
     requestScreenShare,
     pullMode: 'instant',
   }
-  const nextPhase = targetMode === 'text' ? 'text_mode' : 'ignited'
+  const nextPhase = voiceOnly ? 'voice_nudge' : (targetMode === 'text' ? 'text_mode' : 'ignited')
   const nextState = {
     ...nextBase,
     lastIgniteAt: ts,
-    lastVoiceDropHandledAt: (reason === 'live_reengage' || reason === 'live_early_bailout') ? ts : nextBase.lastVoiceDropHandledAt,
+    lastVoiceDropHandledAt: (reason === 'live_reengage' || reason === 'live_early_bailout' || reason === 'headset_live_dropped')
+      ? ts
+      : nextBase.lastVoiceDropHandledAt,
     earlyBailoutCount: reason === 'live_early_bailout' ? (nextBase.earlyBailoutCount + 1) : nextBase.earlyBailoutCount,
     lastFeedPreview: sisterFeed,
     recentAnchorIds: cleanIdList([...nextBase.recentAnchorIds, anchor?.id], LIVE_CORE_DEFAULTS.recentMax),
@@ -752,7 +895,9 @@ function buildTriggeredResult({
     reason,
     phase: nextPhase,
     urgent: Boolean(urgent),
+    voiceOnly: Boolean(voiceOnly),
     targetMode,
+    energyTier: nextBase.energyTier,
     dice,
     anchor,
     feedPreview: sisterFeed,

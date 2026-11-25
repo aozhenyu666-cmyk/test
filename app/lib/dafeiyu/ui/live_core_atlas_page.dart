@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
@@ -11,6 +12,7 @@ import '../../ui/theme/app_icons.dart';
 import '../../ui/theme/theme.dart';
 import '../channels/loop_channel.dart';
 import '../channels/proactive_state.dart';
+import 'app_picker_dialog.dart';
 import 'bank_manager_page.dart';
 import 'gemini_bridge_page.dart';
 import 'locks_balance_page.dart';
@@ -194,14 +196,32 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     });
   }
 
-  Future<void> _switchModeAndOpen(String mode) async {
+  static const _atlasWhitelistPresets = <LoopApp>[
+    LoopApp('md.obsidian', 'Obsidian'),
+    LoopApp('com.tencent.mm', '微信'),
+    LoopApp('com.google.android.apps.bard', 'Gemini'),
+    LoopApp('com.google.android.googlequicksearchbox', 'Google / Live'),
+    LoopApp('com.tencent.mobileqq', 'QQ'),
+  ];
+
+  static const _energyTierOptions = <(String, String)>[
+    ('L0', 'L0 休息'),
+    ('L1', 'L1 定型'),
+    ('L2', 'L2 实战'),
+    ('L3', 'L3 高压'),
+  ];
+
+  Future<void> _switchModeAndOpen(String mode, {String customFeed = ''}) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
+      final cleanFeed = customFeed.trim();
+      final clippedFeed = cleanFeed.length > 900 ? cleanFeed.substring(0, 900) : cleanFeed;
       final res = await _channel.liveCoreOp({
         'action': 'switch_mode',
         'mode': mode,
         if (mode == 'text') 'minutes': 15,
+        if (clippedFeed.isNotEmpty) 'customFeed': clippedFeed,
       });
       final nested = _asMap(res?['liveCore']);
       final payload = _asMap(res?['payload']).isNotEmpty
@@ -224,7 +244,11 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
       if (!mounted) return;
       setState(() {
         _applyLiveCoreResponse(res);
-        if (isText) {
+        if (clippedFeed.isNotEmpty) {
+          _banner = launched
+              ? '📋 已将剪贴板内容封装进思维训练剧本并拉起 Gemini ${isText ? '文本' : 'Live'}'
+              : '📋 剪贴板素材已写入新剧本（切去 Gemini 即可直接推演）';
+        } else if (isText) {
           _banner = launched
               ? '💬 已切至 Gemini 文本模式（15 分钟沉淀保护窗 · 直接粘贴即可调 MCP）'
               : '💬 已备好文本衔接剧本并写入剪贴板（切去 Gemini 粘贴发送）';
@@ -237,6 +261,72 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _feedClipboardToLive() async {
+    if (_busy) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final raw = (data?.text ?? '').trim();
+    if (!mounted) return;
+    if (raw.isEmpty) {
+      setState(() {
+        _banner = '剪贴板为空：先复制题干、网页链接或零散想法，再点我即可直接包成思维训练剧本喂进 Live。';
+      });
+      return;
+    }
+    await _switchModeAndOpen('live', customFeed: raw);
+  }
+
+  Future<void> _editWhitelistFromAtlas() async {
+    if (_busy) return;
+    final overviewRes = await _channel.sealsOp(const {'action': 'locks_overview'});
+    if (!mounted) return;
+    final nested = _asMap(overviewRes?['locksOverview']);
+    final rawAllow = overviewRes?['defaultAllow'] ?? nested['defaultAllow'];
+    final current = rawAllow is List && rawAllow.isNotEmpty
+        ? [for (final p in rawAllow) if ('$p'.trim().isNotEmpty) '$p'.trim()]
+        : const <String>[
+            'md.obsidian',
+            'com.tencent.mm',
+            'com.google.android.apps.bard',
+            'com.google.android.googlequicksearchbox',
+          ];
+    final picked = await showInstalledAppsPicker(
+      context,
+      title: '调整手机默认专注白名单',
+      loop: widget.loopChannel ?? LoopChannel(),
+      presets: _atlasWhitelistPresets,
+      presetsLabel: '常用工具 / Gemini 宿主机一键勾选',
+      initialSelected: current,
+      allowEmpty: false,
+      emptyError: '至少保留一个默认白名单应用',
+      confirmLabel: '保存并立即生效',
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _busy = true);
+    final pkgs = picked.map((a) => a.package).toList();
+    final res = await _channel.setDefaultAllow(pkgs);
+    if (!mounted) return;
+    if (res != null && res['ok'] != false) {
+      unawaited(_channel.tickNow().catchError((_) => false));
+    }
+    setState(() {
+      _busy = false;
+      _banner = '${res?['toast'] ?? (res?['ok'] != false ? '已更新默认白名单（${pkgs.length} 个应用，立即生效）' : '白名单保存失败')}';
+    });
+  }
+
+  Future<void> _tapShizukuChip() async {
+    final ok = await _channel.openCapability('shizuku');
+    if (!mounted) return;
+    setState(() {
+      _banner = ok
+          ? '已唤起 Shizuku 授权 / 应用：点「始终允许」即可接管底层无障碍自愈与权限分配'
+          : '未检测到活跃 Shizuku 服务：请先在系统「无线调试」中启动 Shizuku';
+    });
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 900), () {
+      if (mounted) unawaited(_refresh());
+    }));
   }
 
   Future<void> _rerollFeedOnly() async {
@@ -500,8 +590,12 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     final caps = _proactiveStatus?.capabilities ?? const <String, bool>{};
     final a11yReady = caps['a11y'] == true;
     final shizukuReady = caps['shizuku'] == true;
+    final shizukuRunning = caps['shizukuRunning'] == true;
+    final a11yAutoHeal = caps['a11yAutoHeal'] == true;
     final overlayReady = caps['overlay'] == true;
     final bridgeReady = _bridgeStatus['healthy'] == true;
+    final energyTier = '${_liveCore['energyTier'] ?? 'L2'}';
+    final headsetKeepalive = _liveCore['headsetKeepalive'] != false;
 
     return [
       ListPageCard(
@@ -576,6 +670,38 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                 onPressed: _busy ? null : () => unawaited(_switchModeAndOpen('text')),
                 icon: const Icon(AppIcons.chat, size: 17),
                 label: const Text('💬 切 Gemini 文本'),
+              ),
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                key: const ValueKey('atlas-clipboard-live-btn'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                  shape: AppShape.card,
+                ),
+                onPressed: _busy ? null : () => unawaited(_feedClipboardToLive()),
+                icon: const Icon(AppIcons.copy, size: 16),
+                label: const Text('📋 喂剪贴板进 Live'),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: FilledButton.tonalIcon(
+                key: const ValueKey('atlas-whitelist-btn'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                  shape: AppShape.card,
+                ),
+                onPressed: _busy ? null : () => unawaited(_editWhitelistFromAtlas()),
+                icon: const Icon(AppIcons.taskBlocked, size: 16),
+                label: const Text('🛡️ 调手机白名单'),
               ),
             ),
           ],
@@ -669,32 +795,58 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
         ),
       ),
       ListPageCard(
-        title: '精简护航开关（只留这 3 项）',
+        title: '精简护航与能量挡位（Thinking Gym L0–L3）',
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 14),
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                FilterChip(
-                  key: const ValueKey('atlas-reengage-chip'),
-                  label: const Text('严守防秒退'),
-                  selected: keeperStrict,
-                  onSelected: _busy ? null : (v) => unawaited(_updateConfig({'keeperStrict': v, 'autoReengage': v})),
+                Wrap(
+                  key: const ValueKey('atlas-energy-row'),
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final opt in _energyTierOptions)
+                      ChoiceChip(
+                        key: ValueKey('atlas-energy-${opt.$1}'),
+                        label: Text(opt.$2),
+                        selected: energyTier == opt.$1,
+                        onSelected: _busy ? null : (v) => v ? unawaited(_updateConfig({'energyTier': opt.$1})) : null,
+                      ),
+                  ],
                 ),
-                FilterChip(
-                  key: const ValueKey('atlas-share-chip'),
-                  label: const Text('自动请求看屏'),
-                  selected: wantShare,
-                  onSelected: _busy ? null : (v) => unawaited(_updateConfig({'wantScreenShare': v})),
-                ),
-                ActionChip(
-                  key: const ValueKey('atlas-mute-chip'),
-                  avatar: const Icon(AppIcons.close, size: 14),
-                  label: const Text('暂停 15m'),
-                  onPressed: _busy ? null : () => unawaited(_mute15m()),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilterChip(
+                      key: const ValueKey('atlas-reengage-chip'),
+                      label: const Text('严守防秒退'),
+                      selected: keeperStrict,
+                      onSelected: _busy ? null : (v) => unawaited(_updateConfig({'keeperStrict': v, 'autoReengage': v})),
+                    ),
+                    FilterChip(
+                      key: const ValueKey('atlas-share-chip'),
+                      label: const Text('自动请求看屏'),
+                      selected: wantShare,
+                      onSelected: _busy ? null : (v) => unawaited(_updateConfig({'wantScreenShare': v})),
+                    ),
+                    FilterChip(
+                      key: const ValueKey('atlas-headset-chip'),
+                      label: const Text('息屏耳机保活'),
+                      selected: headsetKeepalive,
+                      onSelected: _busy ? null : (v) => unawaited(_updateConfig({'headsetKeepalive': v})),
+                    ),
+                    ActionChip(
+                      key: const ValueKey('atlas-mute-chip'),
+                      avatar: const Icon(AppIcons.close, size: 14),
+                      label: const Text('暂停 15m'),
+                      onPressed: _busy ? null : () => unawaited(_mute15m()),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -719,7 +871,19 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                       onTap: a11yReady ? null : () => unawaited(_channel.openCapability('a11y')),
                       child: StatusChip(tone: a11yReady ? StatusTone.ok : StatusTone.warn, label: a11yReady ? '无障碍已开' : '无障碍未开'),
                     ),
-                    StatusChip(tone: shizukuReady ? StatusTone.ok : StatusTone.idle, label: shizukuReady ? 'Shizuku 就绪' : 'Shizuku 未授'),
+                    GestureDetector(
+                      key: const ValueKey('atlas-shizuku-chip'),
+                      onTap: shizukuReady ? null : () => unawaited(_tapShizukuChip()),
+                      child: StatusChip(
+                        tone: shizukuReady ? StatusTone.ok : (shizukuRunning ? StatusTone.warn : StatusTone.idle),
+                        label: shizukuReady ? 'Shizuku 就绪' : (shizukuRunning ? 'Shizuku 运行中(点授权)' : 'Shizuku 未授'),
+                      ),
+                    ),
+                    StatusChip(
+                      key: const ValueKey('atlas-a11y-heal-chip'),
+                      tone: a11yAutoHeal ? StatusTone.ok : StatusTone.idle,
+                      label: a11yAutoHeal ? '无障碍自愈已开' : '无障碍自愈待授',
+                    ),
                     GestureDetector(
                       onTap: () => _openPillarRoute('bridge'),
                       child: StatusChip(tone: bridgeReady ? StatusTone.ok : StatusTone.idle, label: bridgeReady ? 'Gemini 桥在线' : 'Gemini 桥离线'),

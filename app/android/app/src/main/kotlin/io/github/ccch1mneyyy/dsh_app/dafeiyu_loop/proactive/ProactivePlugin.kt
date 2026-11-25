@@ -529,22 +529,45 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
         val nm = context.getSystemService(NotificationManager::class.java)
         val am = context.getSystemService(android.app.AlarmManager::class.java)
         val pm = context.getSystemService(PowerManager::class.java)
+        val shizukuRunning = runCatching { rikka.shizuku.Shizuku.pingBinder() }.getOrDefault(false)
+        val shizukuGranted = shizukuRunning && runCatching {
+            rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }.getOrDefault(false)
+        val a11yAutoHeal = runCatching {
+            io.github.ccch1mneyyy.dsh_app.phone.a11y.A11yKeeper.granted(context)
+        }.getOrDefault(false)
         return linkedMapOf(
             "a11y" to PhoneA11yService.isConnected(),
+            "a11yAutoHeal" to a11yAutoHeal,
             "overlay" to (PhoneA11yService.isConnected() || Settings.canDrawOverlays(context)),
             "notifications" to (nm?.areNotificationsEnabled() == true),
             "exactAlarm" to (Build.VERSION.SDK_INT < 31 || am?.canScheduleExactAlarms() == true),
             "battery" to (pm?.isIgnoringBatteryOptimizations(context.packageName) == true),
-            "shizuku" to runCatching {
-                rikka.shizuku.Shizuku.getBinder()?.isBinderAlive == true &&
-                    rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
-            }.getOrDefault(false),
+            "shizukuRunning" to shizukuRunning,
+            "shizuku" to shizukuGranted,
             // 2026-11-21 体检：引擎保活想不想要（他点过「停止」就是 false，之后不会自动拉起）。
             "keeper" to io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineKeeper.shouldKeep(context),
         )
     }
 
     private fun openCapability(kind: String?) {
+        if (kind == "shizuku") {
+            val running = runCatching { rikka.shizuku.Shizuku.pingBinder() }.getOrDefault(false)
+            val granted = running && runCatching {
+                rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+            }.getOrDefault(false)
+            if (running && !granted) {
+                runCatching {
+                    rikka.shizuku.Shizuku.requestPermission(4603)
+                }
+                return
+            }
+            val launchShizuku = context.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+            if (launchShizuku != null) {
+                runCatching { context.startActivity(launchShizuku.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }
+            return
+        }
         val intent = when (kind) {
             "a11y" -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             "overlay" -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.packageName))

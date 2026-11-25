@@ -4923,9 +4923,22 @@ export function apply(ctx) {
       } catch {}
     }
     if (mode === 'allow') {
-      patch.defaultAllow = [...new Set([...defaultAllowApps(), ...cleanPkgs])]
+      const safeAdd = cleanPkgs.filter((p) => !isPureGame(p))
+      patch.defaultAllow = [...new Set([...defaultAllowApps(), ...safeAdd])]
+      if (live?.apps && Array.isArray(live.apps.allow)) {
+        live.apps.allow = [...new Set([...live.apps.allow, ...safeAdd])]
+      }
+      if (config.aiWorkSession && typeof config.aiWorkSession === 'object' && Array.isArray(config.aiWorkSession.allow)) {
+        patch.aiWorkSession = {
+          ...config.aiWorkSession,
+          allow: [...new Set([...config.aiWorkSession.allow, ...safeAdd])],
+        }
+      }
     } else if (mode === 'restrict' && Array.isArray(config.defaultAllow)) {
       patch.defaultAllow = config.defaultAllow.filter((a) => !cleanPkgs.includes(a))
+      if (live?.apps && Array.isArray(live.apps.allow)) {
+        live.apps.allow = live.apps.allow.filter((a) => !cleanPkgs.includes(a))
+      }
     }
     return patch
   }
@@ -7415,9 +7428,11 @@ export function apply(ctx) {
       if (!qLines.length && !eLines.length) return ''
       return '【双鱼活素材 · 刷题与经历（用来聊具体内容或喂给 Gemini Live，严禁只会催计划）】\n' + [...qLines, ...eLines].join('\n')
     })()
-    const liveCopilotText = liveCoreNow.alwaysOnLive
-      ? '【常驻 Live 护航协同守则】当前用户正开启常驻 Gemini Live：禁止像老妈子一样循环催进度！你的职责是把上面他刷过的题、错题与个人经历拆成具体话头，协助灌进 Live 维持高压交互。'
-      : ''
+    const liveCopilotText = liveCoreNow.energyTier === 'L0'
+      ? '【L0 刷题后零压休息守则】用户刚刷完题处于耗竭休息态：严禁催进度、严禁发考题、严禁问“明天打算干嘛”！要么温柔陪休，要么拿 1 个生活/社会热点玩「改 1 个要素猜后续」轻松聊天。'
+      : (liveCoreNow.alwaysOnLive
+          ? '【常驻 Live 护航协同守则】当前用户正开启常驻 Gemini Live：禁止像老妈子一样循环催进度！你的职责是把上面他刷过的题、错题与个人经历拆成具体话头，协助灌进 Live 维持高压交互。'
+          : '')
 
     const blocks = [
       {
@@ -10177,7 +10192,7 @@ export function apply(ctx) {
       if (pending[pkg]) { delete pending[pkg]; saveTierPending(pending) }
       return { v: 1, ok: true, applied: true, tier, text: '本来就在「' + TIER_LABEL[tier] + '」。' }
     }
-    if (before === 'other' && tier === 'work') {
+    if ((before === 'other' || before === 'dual') && tier === 'work') {
       if (isPureGame(pkg, String(b.label || ''))) {
         return { v: 1, ok: false, error: 'pure-game', text: '硬规矩拦回：纯游戏不可设为工作白名单。' }
       }
@@ -10194,7 +10209,7 @@ export function apply(ctx) {
         applied: true,
         tier,
         defaultAllow: defaultAllowApps(),
-        text: TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '：未分级应用加入工作白名单，立即生效。',
+        text: TIER_LABEL[before] + ' → ' + TIER_LABEL[tier] + '：已加入工作白名单并同步当前局，立即生效。',
       }
     }
     const loosen = (TIER_RANK[tier] ?? 1) < (TIER_RANK[before] ?? 1)
@@ -10703,6 +10718,8 @@ export function apply(ctx) {
       modeHint: String(opts.modeHint || ''),
       diceHint: Number(opts.diceHint) || 0,
       targetMode: String(opts.targetMode || ''),
+      customFeed: String(opts.customFeed || ''),
+      scalpelHint: String(opts.scalpelHint || ''),
       lastLiveDurationSec: Number(phone?.lastLiveDurationSec || 0),
       force: Boolean(opts.force),
     })
@@ -10766,6 +10783,10 @@ export function apply(ctx) {
       wantScreenShare: st.wantScreenShare !== false,
       alwaysOnLive: Boolean(st.alwaysOnLive),
       keeperStrict: st.keeperStrict !== false,
+      headsetKeepalive: st.headsetKeepalive !== false,
+      energyTier: ['L0', 'L1', 'L2', 'L3'].includes(String(st.energyTier || '').toUpperCase())
+        ? String(st.energyTier).toUpperCase()
+        : 'L2',
       preferredMode: st.preferredMode === 'text' ? 'text' : 'live',
       textGraceUntil,
       textGraceActive: textGraceUntil > now,
@@ -10777,6 +10798,7 @@ export function apply(ctx) {
       reason: evalRes?.reason || st.lastReason || 'standby',
       triggered: Boolean(evalRes?.triggered),
       urgent: Boolean(evalRes?.urgent),
+      voiceOnly: Boolean(evalRes?.voiceOnly),
       lastVoiceActiveAt: Math.max(0, Number(st.lastVoiceActiveAt) || 0),
       lastIgniteAt: Math.max(0, Number(st.lastIgniteAt) || 0),
       quizReliefCount: Math.max(0, Number(st.quizReliefCount) || 0),
@@ -10872,6 +10894,7 @@ export function apply(ctx) {
     }
     if (action === 'set_config') {
       const cur = loadLiveCoreState()
+      const tierRaw = String(b.energyTier || '').trim().toUpperCase()
       const next = {
         ...cur,
         ...(b.enabled !== undefined ? { enabled: Boolean(b.enabled) } : {}),
@@ -10879,6 +10902,8 @@ export function apply(ctx) {
         ...(b.wantScreenShare !== undefined ? { wantScreenShare: Boolean(b.wantScreenShare) } : {}),
         ...(b.alwaysOnLive !== undefined ? { alwaysOnLive: Boolean(b.alwaysOnLive) } : {}),
         ...(b.keeperStrict !== undefined ? { keeperStrict: Boolean(b.keeperStrict) } : {}),
+        ...(b.headsetKeepalive !== undefined ? { headsetKeepalive: Boolean(b.headsetKeepalive) } : {}),
+        ...(['L0', 'L1', 'L2', 'L3'].includes(tierRaw) ? { energyTier: tierRaw } : {}),
         ...(b.preferredMode !== undefined ? { preferredMode: b.preferredMode === 'text' ? 'text' : 'live' } : {}),
         ...(b.autoCooldownMin !== undefined
           ? { autoCooldownMs: Math.max(1, Math.min(120, Math.round(Number(b.autoCooldownMin)))) * 60_000 }
@@ -10910,6 +10935,8 @@ export function apply(ctx) {
         targetMode: mode,
         modeHint: b.modeHint || '',
         diceHint: b.diceHint || b.dice || 0,
+        customFeed: b.customFeed || '',
+        scalpelHint: b.scalpelHint || '',
         phone: b.phone || lastPhone || {},
       })
       const summary = liveCoreSummary(now, res)
@@ -11024,6 +11051,8 @@ export function apply(ctx) {
         tz,
         modeHint: b.modeHint || b.mode || '',
         diceHint: b.diceHint || b.dice || 0,
+        customFeed: b.customFeed || '',
+        scalpelHint: b.scalpelHint || '',
         phone: b.phone || lastPhone || {},
       })
       const summary = liveCoreSummary(now, res)
@@ -12537,6 +12566,7 @@ export function apply(ctx) {
           mode: liveCoreRes.pullMode || 'instant',
           reason: liveCoreRes.reason,
           urgent: Boolean(liveCoreRes.urgent),
+          voiceOnly: Boolean(liveCoreRes.voiceOnly),
           alwaysOnLive: Boolean(liveCoreRes.nextState?.alwaysOnLive),
           earlyBailout: liveCoreRes.reason === 'live_early_bailout',
           preferVoice: true,
@@ -13651,7 +13681,10 @@ export function apply(ctx) {
         setRes = presetRt.setApps('current', live.apps, now, String(body?.by || 'panel'))
       }
       if (action === 'set_default_allow' || !live || body?.persistDefault !== false) {
-        config = { ...config, defaultAllow: allow }
+        const aiPatch = (config.aiWorkSession && typeof config.aiWorkSession === 'object')
+          ? { aiWorkSession: { ...config.aiWorkSession, allow } }
+          : {}
+        config = { ...config, defaultAllow: allow, ...aiPatch }
         try { writeConfig(config) } catch {}
       }
       if (live) {

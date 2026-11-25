@@ -1,16 +1,30 @@
 import 'package:dsh_app/dafeiyu/channels/proactive_state.dart';
 import 'package:dsh_app/dafeiyu/ui/live_core_atlas_page.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../phone/harness.dart';
 
 class _FakeAtlasChannel extends ProactiveChannel {
-  _FakeAtlasChannel({this.offline = false});
+  _FakeAtlasChannel({
+    this.offline = false,
+    this.shizukuReady = true,
+    this.shizukuRunning = true,
+  });
 
   final bool offline;
+  final bool shizukuReady;
+  final bool shizukuRunning;
   final List<Map<String, Object?>?> liveCoreCalls = [];
   final List<Map<String, Object?>> autoLiveCalls = [];
+  final List<String> openCapCalls = [];
+
+  @override
+  Future<bool> openCapability(String kind) async {
+    openCapCalls.add(kind);
+    return true;
+  }
 
   @override
   Future<Map<String, dynamic>?> liveCoreOp([Map<String, Object?>? body]) async {
@@ -19,6 +33,8 @@ class _FakeAtlasChannel extends ProactiveChannel {
     final action = body?['action'] ?? 'status';
     if (action == 'set_config') {
       final alwaysOn = body?['alwaysOnLive'] == true;
+      final energyTier = '${body?['energyTier'] ?? 'L2'}';
+      final headsetKeepalive = body?['headsetKeepalive'] != false;
       return {
         'v': 1,
         'ok': true,
@@ -26,6 +42,8 @@ class _FakeAtlasChannel extends ProactiveChannel {
         'alwaysOnLive': alwaysOn,
         'keeperStrict': body?['keeperStrict'] != false,
         'wantScreenShare': true,
+        'energyTier': energyTier,
+        'headsetKeepalive': headsetKeepalive,
         'phase': alwaysOn ? 'ignited' : 'standby',
         'reason': alwaysOn ? 'always_on_keeper' : 'standby',
         'feedPreview': const {
@@ -235,8 +253,14 @@ class _FakeAtlasChannel extends ProactiveChannel {
   @override
   Future<ProactiveStatus?> status() async {
     if (offline) return null;
-    return const ProactiveStatus(
-      capabilities: {'a11y': true, 'shizuku': true, 'overlay': true},
+    return ProactiveStatus(
+      capabilities: {
+        'a11y': true,
+        'shizuku': shizukuReady,
+        'shizukuRunning': shizukuRunning,
+        'a11yAutoHeal': shizukuReady,
+        'overlay': true,
+      },
     );
   }
 
@@ -366,5 +390,58 @@ void main() {
     await tester.tap(find.text('功能图谱'));
     await settlePhone(tester);
     expect(find.byKey(const ValueKey('atlas-pillar-ignite')), findsOneWidget);
+  });
+
+  testWidgets('剪贴板直喂 Live + L0–L3 能量档切换 + Shizuku 运行中可点授权', (tester) async {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.getData') {
+        return <String, dynamic>{'text': 'https://example.com/q1 削弱论证怎么找它因'};
+      }
+      return null;
+    });
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+
+    final ch = _FakeAtlasChannel(shizukuReady: false, shizukuRunning: true);
+    await pumpPhone(tester, LiveCoreAtlasPage(channel: ch));
+    await settlePhone(tester);
+
+    expect(find.byKey(const ValueKey('atlas-whitelist-btn')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('atlas-clipboard-live-btn')));
+    await settlePhone(tester);
+    expect(
+      ch.liveCoreCalls.any(
+        (c) =>
+            c?['action'] == 'switch_mode' &&
+            c?['mode'] == 'live' &&
+            '${c?['customFeed']}'.contains('https://example.com/q1'),
+      ),
+      isTrue,
+    );
+    expect(ch.autoLiveCalls.length, 1);
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('atlas-energy-L0')),
+      220,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.byKey(const ValueKey('atlas-energy-L0')));
+    await settlePhone(tester);
+    expect(
+      ch.liveCoreCalls.any((c) => c?['action'] == 'set_config' && c?['energyTier'] == 'L0'),
+      isTrue,
+    );
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('atlas-shizuku-chip')),
+      220,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Shizuku 运行中(点授权)'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('atlas-shizuku-chip')));
+    await tester.pump(const Duration(seconds: 1));
+    await settlePhone(tester);
+    expect(ch.openCapCalls, contains('shizuku'));
   });
 }

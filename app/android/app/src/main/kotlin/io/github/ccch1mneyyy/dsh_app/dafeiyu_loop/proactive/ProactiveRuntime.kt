@@ -2337,6 +2337,7 @@ object ProactiveRuntime {
                 ?: (autoPull["pullMode"] as? String)?.takeIf { it.isNotBlank() }
                 ?: "countdown_3s"
             val preferVoice = autoPull["preferVoice"] == true
+            val voiceOnly = autoPull["voiceOnly"] == true
             val autoClickLive = autoPull["autoClickLive"] == true
             val requestScreenShare = autoPull["requestScreenShare"] == true
             val pullUrgent = autoPull["urgent"] == true || autoPull["earlyBailout"] == true
@@ -2349,7 +2350,18 @@ object ProactiveRuntime {
             ) {
                 lastAutoPullAt = stamp
                 autoPulledNow = true
-                if (autoClickLive) {
+                if (voiceOnly) {
+                    if (voiceLine.isNotBlank()) {
+                        val spoken = VoicePlan.brief(voiceLine) ?: voiceLine.trim().take(VoicePlan.MAX_CHARS)
+                        if (spoken.isNotEmpty()) {
+                            runCatching {
+                                VoiceOut.install(app)
+                                VoiceOut.speak(VoicePlan(spoken, VoicePlan.DEFAULT_RATE, VoicePlan.DEFAULT_PITCH)) {}
+                            }
+                        }
+                    }
+                    Log.i(TAG, "geminiAutoPull(voiceOnly): topic=$pullTopic")
+                } else if (autoClickLive) {
                     GeminiAutoLauncher.launchAndAutomateLive(
                         app = app,
                         topic = pullTopic,
@@ -3461,13 +3473,26 @@ object ProactiveRuntime {
         )
     }
 
-    /** 在 Live 语音看屏 与 Gemini 文本（MCP 沉淀）之间一键切换。 */
-    fun switchLiveMode(mode: String, minutes: Int = 15, done: ((Boolean, String?) -> Unit)? = null) {
+    /** 在 Live 语音看屏 与 Gemini 文本（MCP 沉淀）之间一键切换，支持注入剪贴板素材与认知手术刀。 */
+    fun switchLiveMode(
+        mode: String,
+        minutes: Int = 15,
+        customFeed: String = "",
+        scalpelHint: String = "",
+        done: ((Boolean, String?) -> Unit)? = null,
+    ) {
         if (!::app.isInitialized) {
             done?.invoke(false, "未初始化")
             return
         }
         val normMode = if (mode == "text") "text" else "live"
+        val reqBody = linkedMapOf<String, Any?>(
+            "action" to "switch_mode",
+            "mode" to normMode,
+            "minutes" to minutes,
+        )
+        if (customFeed.isNotBlank()) reqBody["customFeed"] = customFeed.trim().take(900)
+        if (scalpelHint.isNotBlank()) reqBody["scalpelHint"] = scalpelHint.trim().take(48)
         fetchPluginRoute(
             routeCallback { res ->
                 val payload = (res["payload"] as? Map<*, *>)
@@ -3496,7 +3521,7 @@ object ProactiveRuntime {
             },
             "POST",
             "/live-core",
-            linkedMapOf<String, Any?>("action" to "switch_mode", "mode" to normMode, "minutes" to minutes),
+            reqBody,
         )
     }
 

@@ -27,7 +27,7 @@ export const BASE_EXTRA = Object.freeze([
 ])
 
 export const WORK_DEFAULT = Object.freeze([
-  'com.google.android.apps.bard', 'com.openai.chatgpt', 'com.anthropic.claude',
+  'com.google.android.apps.bard', 'com.google.android.googlequicksearchbox', 'com.openai.chatgpt', 'com.anthropic.claude',
   'com.baidu.netdisk', 'com.hpbr.bosszhipin', 'md.obsidian', 'cn.wps.moffice_eng',
 ])
 
@@ -43,7 +43,7 @@ export const TASK_APP_SCOPES = Object.freeze({
       'com.fenbi.android.solar', 'com.fenbi.android.leo', 'com.huatu.ztk', 'com.offcn.android',
       'com.ichi2.anki', 'com.duolingo', 'com.youdao.dict', 'com.eudic',
       'md.obsidian', 'cn.wps.moffice_eng', 'notion.id', 'com.baidu.netdisk',
-      'com.google.android.apps.bard',
+      'com.google.android.apps.bard', 'com.google.android.googlequicksearchbox',
     ]),
     hintRe: /(粉笔|华图|中公|题库|刷题|行测|做题|模考|词典|翻译|单词|百词斩|墨墨|不背|anki|duolingo|dict|eudic|youdao|fenbi|huatu|offcn|obsidian|notion|wps|学习|笔记)/i,
   }),
@@ -53,7 +53,7 @@ export const TASK_APP_SCOPES = Object.freeze({
     packages: Object.freeze([
       'md.obsidian', 'cn.wps.moffice_eng', 'notion.id', 'com.baidu.netdisk',
       'com.ss.android.lark', 'com.alibaba.android.rimet',
-      'com.google.android.apps.bard', 'com.openai.chatgpt', 'com.anthropic.claude',
+      'com.google.android.apps.bard', 'com.google.android.googlequicksearchbox', 'com.openai.chatgpt', 'com.anthropic.claude',
     ]),
     hintRe: /(笔记|写作|申论|文档|word|obsidian|notion|wps|网盘|netdisk|语雀|石墨|飞书|钉钉|typora|flomo|markdown|doc|note)/i,
   }),
@@ -61,7 +61,7 @@ export const TASK_APP_SCOPES = Object.freeze({
     key: 'think',
     label: '深度共脑(含Gemini)',
     packages: Object.freeze([
-      'com.google.android.apps.bard', 'com.openai.chatgpt', 'com.anthropic.claude',
+      'com.google.android.apps.bard', 'com.google.android.googlequicksearchbox', 'com.openai.chatgpt', 'com.anthropic.claude',
       'md.obsidian', 'notion.id', 'cn.wps.moffice_eng',
     ]),
     hintRe: /(gemini|bard|chatgpt|claude|共脑|思考|脑图|xmind|obsidian|notion|flomo|笔记)/i,

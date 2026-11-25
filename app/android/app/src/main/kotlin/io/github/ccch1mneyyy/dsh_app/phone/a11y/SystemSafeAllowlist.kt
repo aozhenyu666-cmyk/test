@@ -102,8 +102,12 @@ object SystemSafeAllowlist {
         "com.android.intentresolver",
     )
 
-    /** 2026-11-20 常驻 App：Gemini 本体（不含 Google App），和 DSH 自己同级，任何锁都不锁。和插件 never_lock.js 的 RESIDENT_PACKAGES 同一份。 */
-    val RESIDENT_PACKAGES = setOf("com.google.android.apps.bard")
+    /** 2026-11-25 常驻 App：Gemini 双包（bard + googlequicksearchbox 宿主）与 Shizuku，任何锁都不锁。和插件 never_lock.js 同步。 */
+    val RESIDENT_PACKAGES = setOf(
+        "com.google.android.apps.bard",
+        "com.google.android.googlequicksearchbox",
+        "moe.shizuku.privileged.api",
+    )
 
     val SAFE_BASE = EMERGENCY_PACKAGES + SYSTEM_UI_AND_LAUNCHERS + FILE_AND_ESSENTIAL_TOOLS + PROXY_PACKAGES + RESIDENT_PACKAGES
 

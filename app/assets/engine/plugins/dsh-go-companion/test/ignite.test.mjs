@@ -12,9 +12,10 @@ import { apply } from '../lib/index.js'
 
 const base = { now: 10_000_000_000, minuteOfDay: 10 * 60, frontApp: 'com.bbk.launcher2', frontTier: 'base', frontMinutes: 12, idleMin: 10, intensity: 'standard' }
 
-test('常驻：Gemini 本体永不锁；Google App 不是', () => {
+test('常驻：Gemini 双包与 Shizuku 永不锁', () => {
   assert.equal(isNeverLockPkg('com.google.android.apps.bard'), true)
-  assert.equal(isNeverLockPkg('com.google.android.googlequicksearchbox'), false)
+  assert.equal(isNeverLockPkg('com.google.android.googlequicksearchbox'), true)
+  assert.equal(isNeverLockPkg('moe.shizuku.privileged.api'), true)
   assert.equal(isNeverLockPkg('moe.nb4a'), true, 'NekoBox 本来就是常驻')
   assert.ok(GEMINI_MODES.plan && GEMINI_MODES.receipt)
 })
@@ -85,18 +86,19 @@ async function withHome(fn) {
   writeFileSync(join(home, 'companion', 'config.json'), JSON.stringify({ sessionId: 's1', quietStart: 12, quietEnd: 12 }))
   try { return await fn(home) } finally {
     if (old === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = old
-    rmSync(home, { recursive: true, force: true })
+    try { rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) } catch {}
   }
 }
 const cfg = (home) => JSON.parse(readFileSync(join(home, 'companion', 'config.json'), 'utf8'))
 const ledger = (home) => readFileSync(join(home, 'companion', 'ledger.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
 
-test('/plan 下发的永不锁名单里有 Gemini 本体', async () => {
+test('/plan 下发的永不锁名单里有 Gemini 双包与 Shizuku', async () => {
   await withHome(async () => {
     const h = host()
     const p = await call(h, '/plan', { v: 1, timeZone: 'Asia/Shanghai', phone: { app: 'com.bbk.launcher2', minutes: 1, screenOn: true, local: '10:00' } })
     assert.ok(p.neverLock.includes('com.google.android.apps.bard'))
-    assert.ok(!p.neverLock.includes('com.google.android.googlequicksearchbox'))
+    assert.ok(p.neverLock.includes('com.google.android.googlequicksearchbox'))
+    assert.ok(p.neverLock.includes('moe.shizuku.privileged.api'))
   })
 })
 

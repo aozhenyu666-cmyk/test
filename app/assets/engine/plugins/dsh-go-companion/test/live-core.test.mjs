@@ -429,3 +429,49 @@ test('LiveCore-7: alwaysOnLive 严格防秒退（15s 触发 live_early_bailout +
     tc.mock.timers.reset()
   }
 })
+
+test('LiveCore-8: L0 休息剧本 + customFeed 剪贴板投喂 + 息屏戴耳机掉麦语音唤醒 + 白名单即时同步', async (tc) => {
+  const T_1600 = Date.UTC(2026, 10, 24, 8, 0, 0)
+  tc.mock.timers.enable({ apis: ['Date'], now: T_1600 })
+  try {
+    const briefL0 = buildLiveCoreBrief({
+      energyTier: 'L0',
+      customFeed: 'https://example.com/news 新政策规定外卖平台须公开抽成比例',
+    })
+    assert.match(briefL0, /L0 刷题后零压休息模式/)
+    assert.match(briefL0, /变更要素预测结果/)
+    assert.match(briefL0, /外卖平台须公开抽成比例/)
+
+    const headsetDrop = evaluateLiveCore({
+      now: T_1600,
+      state: {
+        enabled: true,
+        alwaysOnLive: true,
+        headsetKeepalive: true,
+        lastVoiceActiveAt: T_1600 - 25_000,
+        lastVoiceDropHandledAt: 0,
+      },
+      phone: { screenOn: false, headsetConnected: true, geminiVoiceActive: false },
+    })
+    assert.equal(headsetDrop.triggered, true)
+    assert.equal(headsetDrop.reason, 'headset_live_dropped')
+    assert.equal(headsetDrop.voiceOnly, true)
+    assert.equal(headsetDrop.autoClickLive, false)
+
+    await withHome(async () => {
+      const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
+      await call(h(), 'POST', '/live-core', { action: 'set_config', energyTier: 'L1', headsetKeepalive: true })
+      const clipLive = (await call(h(), 'POST', '/live-core', {
+        action: 'switch_mode',
+        mode: 'live',
+        customFeed: '刚复制的思维卡片：为什么沉没成本要归零？',
+      })).body
+      assert.equal(clipLive.ok, true)
+      assert.equal(clipLive.energyTier, 'L1')
+      assert.match(clipLive.payload.brief, /用户即时投喂素材/)
+      assert.match(clipLive.payload.brief, /为什么沉没成本要归零/)
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
+})
