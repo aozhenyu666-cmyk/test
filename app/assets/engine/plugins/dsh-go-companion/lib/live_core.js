@@ -15,7 +15,11 @@ import { hm as zoneHm, ymd as zoneYmd, zoneOr } from './tz.js'
 export const LIVE_CORE_DEFAULTS = Object.freeze({
   reengageMinDropMs: 90_000,
   reengageMaxDropMs: 20 * 60_000,
+  strictReengageMinDropMs: 15_000,
   autoCooldownMs: 12 * 60_000,
+  strictAutoCooldownMs: 45_000,
+  earlyBailoutSec: 45,
+  textModeGraceMs: 15 * 60_000,
   idleTriggerMin: 3,
   musicTriggerMin: 5,
   muteDurationMs: 20 * 60_000,
@@ -26,6 +30,11 @@ export const LIVE_CORE_DEFAULTS = Object.freeze({
 })
 
 export const LIVE_REASON_LABELS = Object.freeze({
+  always_on_keeper: '常驻 Live 护航自动拉回',
+  live_early_bailout: '进入 Live 秒退 · 严格强拉回',
+  text_mode_grace: 'Gemini 文本沉淀窗 · 暂不切回 Live',
+  switch_to_live: '手动切回 Gemini Live（含看屏）',
+  switch_to_text: '手动切至 Gemini 文本（MCP 沉淀）',
   gaze_ignite_under_lock: '白天防分心窗空转点火',
   live_reengage: 'Live 断线未复盘拉回',
   manual_dice_roll: '手动摇骰灌料',
@@ -127,6 +136,12 @@ function normalizeLiveState(raw) {
     enabled: s.enabled !== false,
     autoReengage: s.autoReengage !== false,
     wantScreenShare: s.wantScreenShare !== false,
+    alwaysOnLive: Boolean(s.alwaysOnLive),
+    keeperStrict: s.keeperStrict !== false,
+    preferredMode: s.preferredMode === 'text' ? 'text' : 'live',
+    textGraceUntil: Math.max(0, Number(s.textGraceUntil) || 0),
+    earlyBailoutCount: Math.max(0, Number(s.earlyBailoutCount) || 0),
+    lastFeedPreview: s.lastFeedPreview && typeof s.lastFeedPreview === 'object' ? s.lastFeedPreview : null,
     autoCooldownMs: Math.max(60_000, Number(s.autoCooldownMs) || LIVE_CORE_DEFAULTS.autoCooldownMs),
     mutedUntil: Math.max(0, Number(s.mutedUntil) || 0),
     lastVoiceActiveAt: Math.max(0, Number(s.lastVoiceActiveAt) || 0),
@@ -143,6 +158,106 @@ function normalizeLiveState(raw) {
     lastYieldLoggedAt: Math.max(0, Number(s.lastYieldLoggedAt) || 0),
     lastYieldLoggedReason: String(s.lastYieldLoggedReason || ''),
     quizReliefCount: Math.max(0, Number(s.quizReliefCount) || 0),
+  }
+}
+
+/**
+ * 组装「两条鱼刚备好的实时喂料包」：汇集近期刷到的题/错题/到期复习卡 + 个人经历 + 笔记切片。
+ */
+export function buildSisterFeed({
+  bankState = null,
+  questionBank = [],
+  reviewCards = [],
+  recentQuizzes = [],
+  experiences = [],
+  vaultSnippets = [],
+  commitments = [],
+  phone = null,
+} = {}) {
+  const quizzes = []
+  const seenPrompts = new Set()
+  const pushQuiz = (topic, prompt, mistake = '') => {
+    const p = cleanLine(prompt, 96)
+    if (!p || seenPrompts.has(p)) return
+    seenPrompts.add(p)
+    quizzes.push({
+      topic: cleanLine(topic || '刷题抽考', 28),
+      prompt: p,
+      mistake: cleanLine(mistake, 48),
+    })
+  }
+
+  for (const rq of Array.isArray(recentQuizzes) ? recentQuizzes : []) {
+    if (quizzes.length >= 3) break
+    if (!rq || typeof rq !== 'object') continue
+    pushQuiz(
+      rq.topic || rq.subject || '刚刷的题',
+      rq.stem || rq.q || rq.prompt || rq.title,
+      rq.wrong === true || rq.ok === false ? '刚才答错待追问' : (rq.mistake || '刚做过可口头复盘'),
+    )
+  }
+
+  for (const rc of Array.isArray(reviewCards) ? reviewCards : []) {
+    if (quizzes.length >= 3) break
+    if (!rc || typeof rc !== 'object') continue
+    pushQuiz(
+      rc.topic || 'FSRS 到期卡',
+      rc.q || rc.prompt,
+      rc.lapses > 0 ? `错 ${rc.lapses} 次` : '今日到期记忆卡',
+    )
+  }
+
+  const wrongIds = new Set(Array.isArray(bankState?.wrongIds) ? bankState.wrongIds.map((x) => String(x)) : [])
+  const sortedBank = (Array.isArray(questionBank) ? questionBank : [])
+    .slice()
+    .sort((a, b) => (wrongIds.has(String(b?.id)) ? 1 : 0) - (wrongIds.has(String(a?.id)) ? 1 : 0))
+  for (const q of sortedBank) {
+    if (quizzes.length >= 3) break
+    if (!q || typeof q !== 'object') continue
+    pushQuiz(
+      q.topic || q.category || '行测题库',
+      q.stem || q.q || q.prompt,
+      wrongIds.has(String(q.id)) ? '错题本优先追问' : '高频考题',
+    )
+  }
+
+  const expList = []
+  const seenExp = new Set()
+  const pushExp = (raw) => {
+    const line = cleanLine(raw, 88)
+    if (!line || seenExp.has(line)) return
+    seenExp.add(line)
+    expList.push(line)
+  }
+  for (const ex of Array.isArray(experiences) ? experiences : []) {
+    if (expList.length >= 3) break
+    pushExp(typeof ex === 'string' ? ex : ex?.text || ex?.summary)
+  }
+  for (const c of Array.isArray(commitments) ? commitments : []) {
+    if (expList.length >= 3) break
+    pushExp(`承诺：${typeof c === 'string' ? c : c?.statement || ''}`)
+  }
+
+  const notes = []
+  for (const sn of Array.isArray(vaultSnippets) ? vaultSnippets : []) {
+    if (notes.length >= 2) break
+    const txt = cleanLine(typeof sn === 'string' ? sn : (sn?.title ? `${sn.title}: ${sn.snippet || sn.summary || ''}` : ''), 90)
+    if (txt) notes.push(txt)
+  }
+  const screenText = cleanLine(phone?.screenText || '', 80)
+  if (notes.length < 2 && screenText) {
+    notes.push(`当前屏幕：${screenText}`)
+  }
+
+  const sisterSummary = quizzes.length || expList.length
+    ? `鱼丸/鲸澜已备好 ${quizzes.length} 道刷题与记忆卡、${expList.length} 条个人经历`
+    : '已接入屏幕现场与默认题库，准备直接开考'
+
+  return {
+    quizzes,
+    experiences: expList,
+    notes,
+    sisterSummary,
   }
 }
 
@@ -166,7 +281,7 @@ function pickDiceFace({ diceHint = 0, modeHint = '', recentDice = [], rng = Math
 }
 
 /**
- * 拼装发给官方 Gemini Live 的总控灌料剧本（<= 2800 字）。
+ * 拼装发给官方 Gemini Live（或切文本沉淀模式）的总控灌料剧本（<= 2800 字）。
  */
 export function buildLiveCoreBrief({
   dice,
@@ -179,16 +294,48 @@ export function buildLiveCoreBrief({
   bridge = false,
   wantScreenShare = true,
   reason = '',
+  targetMode = 'live',
+  sisterFeed = null,
 } = {}) {
   const face = dice || LIVE_DICE_FACES[0]
   const setting = settingLines(settingText || DEFAULT_GEMINI_SETTING, 6)
   const frontLabel = cleanLine(phone?.label || phone?.app || '当前桌面/未知界面', 40)
   const frontMin = Math.max(0, Math.round(Number(phone?.minutes) || 0))
   const screenExcerpt = cleanLine(phone?.screenText || '', 240)
+  const feed = sisterFeed && typeof sisterFeed === 'object' ? sisterFeed : null
+  const feedQuizzes = Array.isArray(feed?.quizzes) ? feed.quizzes.slice(0, 2) : []
+  const feedExp = Array.isArray(feed?.experiences) ? feed.experiences.slice(0, 2) : []
+  const feedNotes = Array.isArray(feed?.notes) ? feed.notes.slice(0, 2) : []
+
+  if (targetMode === 'text') {
+    const textLines = [
+      '【Gemini 文本模式衔接与 MCP 沉淀剧本（弥补 Live 短板）】',
+      '刚才在 Live 语音模式无法稳定写库与展开长文本，现在由我切换为文字模式做结构化沉淀。',
+      '严禁空谈方法论或陪聊借口！请直接：1) 承接上一轮口头思路给出严格拆解；2) 主动调 MCP 把刷到的错题与核心经历沉入卡池/验收单。',
+      '',
+      '【双鱼已备好的刷题与经历素材】',
+      `- 当前考点锚点：${cleanLine(anchor?.topic || '综合复盘', 48)} — ${cleanLine(anchor?.prompt || '', 160)}`,
+      ...feedQuizzes.map((q) => `- 近期刷题/错题（${q.topic}）：${q.prompt}${q.mistake ? ` [${q.mistake}]` : ''}`),
+      ...feedExp.map((e) => `- 近期个人经历：${e}`),
+      ...feedNotes.map((n) => `- 笔记线索：${n}`),
+      ...(recap?.summary ? [`- 刚才 Live 复盘：${cleanLine(recap.summary, 140)}`] : []),
+      '',
+      '【MCP / BrainOS 沉淀动作】',
+      '- 优先调用 `@大肥鱼` 的 `dafeiyu_today` 对齐今天节点；',
+      '- 把本次敲定的题目与关键前提调 `dafeiyu_push_cards`（1-5 张）存进手机 FSRS；',
+      '- 若已完成口头/刷题拆解，调用 `dafeiyu_submit_receipt` 或 `dafeiyu_add_checkpoints` 写回验收单；如需深拆论证可联动 `@BrainOS`。',
+      '- 沉淀完毕后提醒我可以随时点「回到 Live（含看屏）」继续语音陪练与盯盘。',
+    ]
+    return textLines.join('\n').slice(0, 2800)
+  }
+
   const sceneFlags = [
     phone?.mediaPlaying ? '正在播放音乐/音频' : '',
     phone?.headsetConnected ? '已戴耳机/蓝牙音频接入' : '',
     phone?.fun ? '停留在娱乐/非学习区' : '',
+    phone?.screenShareLikely ? '当前疑似已开启共享屏幕，可结合画面盯盘施压' : '',
+    reason === 'live_early_bailout' ? '刚才进 Live 不足 45 秒就退出逃跑，现强制拉回' : '',
+    reason === 'always_on_keeper' ? '处于「常驻 Live 护航」态，必须保持持续交互与看屏监督' : '',
     reason === 'live_reengage' ? '刚才 Live 中途退出未交复盘，现被重新拉回' : '',
     reason === 'gaze_ignite_under_lock' ? '处于白天工作保护锁窗却闲置空转' : '',
   ].filter(Boolean)
@@ -206,7 +353,7 @@ export function buildLiveCoreBrief({
     ...(sceneFlags.length ? [`- 现场状态：${sceneFlags.join('；')}`] : []),
     ...(screenExcerpt ? [`- 屏幕摘录：${screenExcerpt}`] : []),
     ...(wantScreenShare
-      ? ['- 窥视介入指令：请主动让他点「共享屏幕」或开摄像头让你看见当下画面；一旦看见他切去刷视频/发呆/看券，直接打断拆穿并拉回当下第一步。']
+      ? ['- 窥视介入指令：请主动让他点「共享屏幕」或开摄像头让你看见当下画面；一旦看见他切去刷视频/发呆/看券，直接打断拆穿并给予明确心理与训练压力！']
       : ['- 现场介入指令：如看不清他在干嘛，先抛 1 句具体问题核实屏幕内容，别猜着夸他。']),
     '',
     `【本轮骰${face.face}玩法 · ${face.name}】`,
@@ -218,6 +365,16 @@ export function buildLiveCoreBrief({
     `- 核心考题/材料：${cleanLine(anchor?.prompt || '用 15 秒拆出“加强论证”里排他对比与解释原因的区别。', 220)}`,
     `- 判分底牌：${cleanLine(anchor?.answerKey || '答对核心条件或举出 1 个准确反例才算过。', 160)}`,
   ]
+
+  if (feedQuizzes.length || feedExp.length) {
+    lines.push('', '【双鱼实时喂料（刷到的题 + 近期经历）】')
+    for (const q of feedQuizzes) {
+      lines.push(`- 刷到的题（${q.topic}）：${q.prompt}${q.mistake ? ` [${q.mistake}]` : ''}`)
+    }
+    for (const ex of feedExp) {
+      lines.push(`- 个人经历与线索：${ex}`)
+    }
+  }
 
   const extraSnippets = (Array.isArray(vaultSnippets) ? vaultSnippets : [])
     .map((x) => cleanLine(typeof x === 'string' ? x : (x?.title ? `${x.title}: ${x.snippet || x.summary || ''}` : ''), 110))
@@ -245,7 +402,7 @@ export function buildLiveCoreBrief({
       '【MCP / 大肥鱼桥工具联动】',
       '- 开聊优先调用 dafeiyu_today 对齐今天验收点与时间账；',
       '- 他口头定下下一步 25 分钟任务或抄写产出后，调用 dafeiyu_add_checkpoints 写入（只增不改小）；',
-      '- 结束时先追问 2 个问题拿到他的原话回答，再调用 dafeiyu_submit_receipt 交回执。',
+      '- 结束前追问 2 个问题后调用 dafeiyu_submit_receipt 交回执（如需长文深拆可提示切去「Gemini 文本模式」沉淀）。',
     )
   }
 
@@ -253,7 +410,7 @@ export function buildLiveCoreBrief({
     '',
     '【三挡节拍（3-5 分钟高强度互动）】',
     '1. 1 挡（0-30s 破冰）：别喊口号，顺着上面的画面或口语钩子先让他开口接 1 句。',
-    '2. 2 挡（30s-4m 练肌肉）：立刻切入「真实知识弹药」或「微抄写盯盘」，连续追问 2 轮不许含糊。',
+    '2. 2 挡（30s-4m 练肌肉）：立刻切入「真实知识弹药」或「双鱼喂料的刷题/经历」，连续追问 2 轮不许含糊。',
     '3. 3 挡（收口立契）：结束前逼他二选一拍板下一个 25 分钟验收动作，并严格按格式输出：',
     RECEIPT_FORMAT,
   )
@@ -279,6 +436,8 @@ export function evaluateLiveCore({
   bankState = null,
   questionBank = [],
   reviewCards = [],
+  recentQuizzes = [],
+  experiences = [],
   horizons = null,
   vault = null,
   vaultSnippets = [],
@@ -288,6 +447,8 @@ export function evaluateLiveCore({
   bridge = false,
   modeHint = '',
   diceHint = 0,
+  targetMode = '',
+  lastLiveDurationSec = 0,
   force = false,
   rng = Math.random,
 } = {}) {
@@ -297,6 +458,7 @@ export function evaluateLiveCore({
   const explicitDropAgoMs = Math.max(0, Number(phone?.liveDroppedAgoMs) || 0)
   const inferredDropAgoMs = (!voiceActiveNow && st.lastVoiceActiveAt > 0) ? Math.max(0, ts - st.lastVoiceActiveAt) : 0
   const dropAgoMs = explicitDropAgoMs > 0 ? explicitDropAgoMs : inferredDropAgoMs
+  const resolvedTargetMode = targetMode === 'text' ? 'text' : (targetMode === 'live' ? 'live' : 'live')
 
   const nextBase = {
     ...st,
@@ -309,6 +471,9 @@ export function evaluateLiveCore({
     action: 'yield',
     reason,
     phase,
+    urgent: false,
+    targetMode: st.textGraceUntil > ts ? 'text' : 'live',
+    feedPreview: st.lastFeedPreview || null,
     dice: null,
     anchor: null,
     voiceLine: '',
@@ -332,7 +497,10 @@ export function evaluateLiveCore({
     if (arbiter?.priority === 'P1.2') return yieldWith('break', 'yielded_break')
     if (planModal?.active) return yieldWith('plan_modal_priority', 'yielded_plan_modal')
     if (mealOrQuiet) return yieldWith('meal_or_quiet', 'standby')
-    if (voiceActiveNow || inGemini) return yieldWith('live_running', 'live_active')
+    const inTextGrace = st.textGraceUntil > ts && (st.preferredMode === 'text' || (inGemini && !voiceActiveNow))
+    if (voiceActiveNow) return yieldWith('live_running', 'live_active')
+    if (inTextGrace) return yieldWith('text_mode_grace', 'text_mode')
+    if (inGemini && !st.alwaysOnLive) return yieldWith('live_running', 'live_active')
     if (phone?.screenOn === false) return yieldWith('screen_off', 'standby')
 
     const quizCount = Math.max(0, Number(recentQuizAnswers) || 0)
@@ -353,22 +521,43 @@ export function evaluateLiveCore({
 
     if (st.mutedUntil > ts || Number(config?.muteUntil) > ts) return yieldWith('muted', 'muted')
 
-    const canReengage = Boolean(
+    const liveDurSec = Math.max(0, Number(phone?.lastLiveDurationSec ?? lastLiveDurationSec) || 0)
+    const minDropForBailout = st.keeperStrict ? LIVE_CORE_DEFAULTS.strictReengageMinDropMs : LIVE_CORE_DEFAULTS.reengageMinDropMs
+    const isEarlyBailout = Boolean(
+      st.alwaysOnLive &&
       st.autoReengage &&
       st.lastVoiceActiveAt > 0 &&
       st.lastVoiceActiveAt > st.lastVoiceDropHandledAt &&
       !voiceActiveNow &&
       !st.receiptSinceLastLive &&
-      dropAgoMs >= LIVE_CORE_DEFAULTS.reengageMinDropMs &&
+      liveDurSec > 0 &&
+      liveDurSec < LIVE_CORE_DEFAULTS.earlyBailoutSec &&
+      dropAgoMs >= minDropForBailout &&
       dropAgoMs <= LIVE_CORE_DEFAULTS.reengageMaxDropMs,
     )
 
-    if (!canReengage && st.lastIgniteAt > 0 && ts - st.lastIgniteAt < st.autoCooldownMs) {
+    const canReengage = Boolean(
+      !isEarlyBailout &&
+      st.autoReengage &&
+      st.lastVoiceActiveAt > 0 &&
+      st.lastVoiceActiveAt > st.lastVoiceDropHandledAt &&
+      !voiceActiveNow &&
+      !st.receiptSinceLastLive &&
+      dropAgoMs >= (st.alwaysOnLive && st.keeperStrict ? LIVE_CORE_DEFAULTS.strictReengageMinDropMs : LIVE_CORE_DEFAULTS.reengageMinDropMs) &&
+      dropAgoMs <= LIVE_CORE_DEFAULTS.reengageMaxDropMs,
+    )
+
+    const keeperCooldownMs = st.alwaysOnLive
+      ? (st.keeperStrict ? LIVE_CORE_DEFAULTS.strictAutoCooldownMs : Math.min(st.autoCooldownMs, 120_000))
+      : st.autoCooldownMs
+    if (!canReengage && !isEarlyBailout && st.lastIgniteAt > 0 && ts - st.lastIgniteAt < keeperCooldownMs) {
       return yieldWith('cooldown', 'standby')
     }
 
     let triggerReason = ''
-    if (canReengage) {
+    if (isEarlyBailout) {
+      triggerReason = 'live_early_bailout'
+    } else if (canReengage) {
       triggerReason = 'live_reengage'
     } else if (
       (arbiter?.priority === 'P4' || arbiter?.source === 'DAY_WORK_WALL' || arbiter?.source === 'BOUT_STRICT') &&
@@ -382,18 +571,28 @@ export function evaluateLiveCore({
       (['fun', 'game', 'other'].includes(fgTierNorm) && idleMin >= LIVE_CORE_DEFAULTS.idleTriggerMin)
     ) {
       triggerReason = 'dice_spark_live'
+    } else if (st.alwaysOnLive) {
+      triggerReason = 'always_on_keeper'
     }
 
     if (!triggerReason) return yieldWith('standby', 'standby')
+
+    const urgent = triggerReason === 'live_early_bailout' ||
+      (triggerReason === 'always_on_keeper' && Boolean(st.keeperStrict)) ||
+      (triggerReason === 'live_reengage' && Boolean(st.alwaysOnLive && st.keeperStrict))
 
     return buildTriggeredResult({
       ts,
       nextBase,
       reason: triggerReason,
-      action: triggerReason === 'live_reengage' ? 'reengage' : 'ignite',
+      action: (triggerReason === 'live_reengage' || triggerReason === 'live_early_bailout') ? 'reengage' : 'ignite',
+      urgent,
+      targetMode: 'live',
       bankState,
       questionBank,
       reviewCards,
+      recentQuizzes,
+      experiences,
       horizons,
       vault,
       vaultSnippets,
@@ -411,11 +610,15 @@ export function evaluateLiveCore({
   return buildTriggeredResult({
     ts,
     nextBase,
-    reason: 'manual_dice_roll',
+    reason: resolvedTargetMode === 'text' ? 'switch_to_text' : 'manual_dice_roll',
     action: 'roll_dice',
+    urgent: resolvedTargetMode === 'live' && Boolean(st.alwaysOnLive && st.keeperStrict),
+    targetMode: resolvedTargetMode,
     bankState,
     questionBank,
     reviewCards,
+    recentQuizzes,
+    experiences,
     horizons,
     vault,
     vaultSnippets,
@@ -435,9 +638,13 @@ function buildTriggeredResult({
   nextBase,
   reason,
   action,
+  urgent = false,
+  targetMode = 'live',
   bankState,
   questionBank,
   reviewCards,
+  recentQuizzes = [],
+  experiences = [],
   horizons,
   vault,
   vaultSnippets,
@@ -471,6 +678,16 @@ function buildTriggeredResult({
     rng,
     reason,
   })
+  const sisterFeed = buildSisterFeed({
+    bankState,
+    questionBank,
+    reviewCards,
+    recentQuizzes,
+    experiences,
+    vaultSnippets: mergedSnippets,
+    commitments,
+    phone,
+  })
   const brief = buildLiveCoreBrief({
     dice,
     anchor,
@@ -480,36 +697,52 @@ function buildTriggeredResult({
     commitments,
     recap,
     bridge,
-    wantScreenShare: nextBase.wantScreenShare,
+    wantScreenShare: targetMode !== 'text' && nextBase.wantScreenShare,
     reason,
+    targetMode,
+    sisterFeed,
   })
   const shortAsk = cleanLine(anchor?.prompt || dice.ask, 64)
-  const voiceLine = reason === 'live_reengage'
-    ? `刚才连麦断了，别直接散掉，回 Live 接一句：${cleanLine(dice.ask, 54)}`
-    : `骰${dice.face}${dice.name}。${shortAsk}`
-  const topic = `骰${dice.face}·${dice.name}：${cleanLine(anchor?.topic || '高密度拆题', 40)}`
+  const voiceLine = targetMode === 'text'
+    ? '已切至 Gemini 文本模式并带上双鱼素材，直接粘贴发消息调 MCP 沉淀'
+    : (reason === 'live_early_bailout'
+        ? `刚才进 Live 秒退了，回来看屏直接接招：${cleanLine(dice.ask, 48)}`
+        : (reason === 'live_reengage'
+            ? `刚才连麦断了，别直接散掉，回 Live 接一句：${cleanLine(dice.ask, 54)}`
+            : `骰${dice.face}${dice.name}。${shortAsk}`))
+  const topic = targetMode === 'text'
+    ? `文本沉淀：${cleanLine(anchor?.topic || '双鱼喂料与 MCP 落库', 40)}`
+    : `骰${dice.face}·${dice.name}：${cleanLine(anchor?.topic || '高密度拆题', 40)}`
+  const autoClickLive = targetMode !== 'text'
+  const requestScreenShare = targetMode !== 'text' && Boolean(nextBase.wantScreenShare)
   const payload = {
     id: `live-${ts.toString(36)}-${dice.face}`,
     at: ts,
     reason,
     action,
+    urgent: Boolean(urgent),
+    targetMode,
     dice,
     anchorId: anchor?.id || '',
     anchorSource: anchor?.anchorSource || 'exam_pool',
     topic,
     voiceLine,
     brief,
-    autoClickLive: true,
-    requestScreenShare: Boolean(nextBase.wantScreenShare),
+    feedPreview: sisterFeed,
+    autoClickLive,
+    requestScreenShare,
     pullMode: 'instant',
   }
+  const nextPhase = targetMode === 'text' ? 'text_mode' : 'ignited'
   const nextState = {
     ...nextBase,
     lastIgniteAt: ts,
-    lastVoiceDropHandledAt: reason === 'live_reengage' ? ts : nextBase.lastVoiceDropHandledAt,
+    lastVoiceDropHandledAt: (reason === 'live_reengage' || reason === 'live_early_bailout') ? ts : nextBase.lastVoiceDropHandledAt,
+    earlyBailoutCount: reason === 'live_early_bailout' ? (nextBase.earlyBailoutCount + 1) : nextBase.earlyBailoutCount,
+    lastFeedPreview: sisterFeed,
     recentAnchorIds: cleanIdList([...nextBase.recentAnchorIds, anchor?.id], LIVE_CORE_DEFAULTS.recentMax),
     recentDice: cleanDiceList([...nextBase.recentDice, dice.face], 3),
-    lastPhase: 'ignited',
+    lastPhase: nextPhase,
     lastReason: reason,
     lastPayload: payload,
   }
@@ -517,14 +750,17 @@ function buildTriggeredResult({
     triggered: true,
     action,
     reason,
-    phase: 'ignited',
+    phase: nextPhase,
+    urgent: Boolean(urgent),
+    targetMode,
     dice,
     anchor,
+    feedPreview: sisterFeed,
     voiceLine,
     topic,
     brief,
-    autoClickLive: true,
-    requestScreenShare: Boolean(nextBase.wantScreenShare),
+    autoClickLive,
+    requestScreenShare,
     pullMode: 'instant',
     payload,
     nextState,
@@ -644,6 +880,22 @@ function normalizeHistoryEntry(entry, idx, tzName) {
     }
   }
 
+  if (st === 'live-core-switch') {
+    const mode = String(entry.mode || 'live')
+    const reason = String(entry.reason || (mode === 'text' ? 'switch_to_text' : 'switch_to_live'))
+    return {
+      id: `lc-sw-${at}-${idx}`,
+      at,
+      hm,
+      kind: mode === 'text' ? 'yield' : 'ignite',
+      badge: mode === 'text' ? '切文本沉淀' : '切回 Live',
+      title: reasonLabelOf(reason),
+      detail: mode === 'text' ? '15 分钟 MCP 文本沉淀保护窗已开启' : '强拉回语音 + 实时看屏监督',
+      diceFace: 0,
+      reason,
+    }
+  }
+
   if (st === 'checkpoints-by-ai') {
     const n = Math.max(0, Number(entry.added) || 0)
     if (n <= 0) return null
@@ -748,7 +1000,11 @@ export function buildLiveCoreAtlas({
 
   const igniteStatus = lc.enabled === false
     ? 'off'
-    : (lc.muted ? 'yielded' : (phase === 'live_active' || phase === 'ignited' ? 'active' : (phase.startsWith('yielded') ? 'yielded' : 'ready')))
+    : (lc.muted
+        ? 'yielded'
+        : (phase === 'live_active' || phase === 'ignited' || lc.alwaysOnLive
+            ? 'active'
+            : (phase.startsWith('yielded') || phase === 'text_mode' ? 'yielded' : 'ready')))
   const locksStatus = arbiter?.active ? 'active' : 'ready'
   const planStatus = activePrio === 'P3' ? 'active' : (todaySeals.length > 0 ? 'ready' : 'ready')
   const quizStatus = lc.reason === 'quiz_relief_valve' ? 'yielded' : (quizAnsweredToday > 0 ? 'active' : 'ready')
@@ -763,13 +1019,13 @@ export function buildLiveCoreAtlas({
     {
       step: 2,
       key: 'dice',
-      label: '骰子灌料',
-      status: lc.dice?.face ? 'active' : 'ready',
+      label: '双鱼喂料',
+      status: lc.dice?.face || lc.feedPreview?.quizzes?.length ? 'active' : 'ready',
     },
     {
       step: 3,
       key: 'live',
-      label: '官方 Live',
+      label: phase === 'text_mode' ? '文本沉淀' : '官方 Live',
       status: phase === 'live_active' ? 'active' : (bridgeHealthy ? 'ready' : 'fallback'),
     },
     {
@@ -783,15 +1039,15 @@ export function buildLiveCoreAtlas({
   const pillars = [
     {
       id: 'ignite',
-      title: '① 窥视点火（1 颗骰子）',
-      tagline: '后台整合设定/错题/笔记/屏幕摘录，一键灌进官方 Gemini Live',
-      triggerRule: '白天防分心窗空转/听歌/断线未复盘时自动点火',
-      yieldRule: '刷题/学习/睡眠/计划模态/连刷 5 题时绝对让路',
+      title: '① 常驻护航与双鱼喂料（Always-On Live）',
+      tagline: '后台整合设定/错题/近期经历/屏幕摘录，一键灌进官方 Gemini Live',
+      triggerRule: lc.alwaysOnLive ? '已开启常驻护航：秒退/断线 15s-45s 严守拉回' : '白天防分心窗空转/听歌/断线未复盘时自动点火',
+      yieldRule: '文本沉淀窗/刷题/学习/睡眠/计划模态/连刷 5 题时绝对让路',
       status: igniteStatus,
       statusLabel: igniteStatus === 'active'
-        ? (phase === 'live_active' ? 'Live 在线' : '已点火')
-        : (igniteStatus === 'yielded' ? '已让路' : (igniteStatus === 'off' ? '已关闭' : '待命中')),
-      metricText: `今日点火 ${ignites} 次 · 拉回 ${reengages} 次`,
+        ? (phase === 'live_active' ? 'Live 在线' : (lc.alwaysOnLive ? '常驻护航中' : '已点火'))
+        : (phase === 'text_mode' ? '文本沉淀窗' : (igniteStatus === 'yielded' ? '已让路' : (igniteStatus === 'off' ? '已关闭' : '待命中'))),
+      metricText: `今日点火 ${ignites} 次 · 拉回 ${reengages} 次 · 拦截秒退 ${Number(lc.earlyBailoutCount) || 0} 次`,
       route: 'live_core',
     },
     {

@@ -738,6 +738,34 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
 
 
 
+  Widget _buildLiveKeeperEntryCard(DshColors colors) {
+    final lcRaw = _today['liveCore'];
+    final lc = lcRaw is Map ? Map<String, dynamic>.from(lcRaw) : const <String, dynamic>{};
+    final alwaysOn = lc['alwaysOnLive'] == true;
+    final phase = '${lc['phase'] ?? 'standby'}';
+    final earlyCount = (lc['earlyBailoutCount'] as num?)?.round() ?? 0;
+    final (tone, chipLabel) = switch ((phase, alwaysOn)) {
+      ('live_active', _) => (StatusTone.ok, 'Live 在线'),
+      ('text_mode', _) => (StatusTone.warn, '文本沉淀中'),
+      (_, true) => (StatusTone.ok, '常驻护航开启'),
+      _ => (StatusTone.idle, '待命可开启'),
+    };
+    final subtitle = alwaysOn
+        ? 'Live 语音/看屏严守拉回${earlyCount > 0 ? ' · 今日拦截秒退 $earlyCount 次' : ''} · 随时切文本调 MCP'
+        : '点进脑核调度台：开常驻 Live 看屏护航、双鱼喂料与文本一键互切';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: OverviewCard(
+        key: const ValueKey('today-live-keeper-card'),
+        leading: const OverviewGlyph(AppIcons.voice, tint: 3),
+        title: const Text('Live 脑核调度台'),
+        subtitle: Text(subtitle),
+        trailing: StatusChip(tone: tone, label: chipLabel),
+        onTap: () => unawaited(LiveCoreAtlasPage.open(context, channel: _channel, loopChannel: _loop)),
+      ),
+    );
+  }
+
   Widget _buildActionCapsules(DshColors colors) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -945,6 +973,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
           child: Center(child: CircularProgressIndicator()),
         )
       else ...[
+        inset(_buildLiveKeeperEntryCard(colors)),
         inset(_buildFocusHeroCard(colors), bottom: 16),
         ?_buildActiveContractCard(colors),
         TodayUsageCard(

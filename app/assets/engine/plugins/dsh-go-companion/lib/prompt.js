@@ -178,6 +178,16 @@ export function buildPrompt(input) {
     lines.push(KIND_RULES[topic.kind] || KIND_RULES.share)
     if (topic.lastSummary) lines.push('上次聊到：' + String(topic.lastSummary).slice(0, 200))
   }
+  const liveFeed = input.liveFeed && typeof input.liveFeed === 'object' ? input.liveFeed : null
+  if (liveFeed) {
+    const fQuizzes = Array.isArray(liveFeed.quizzes) ? liveFeed.quizzes.slice(0, 2) : []
+    const fExp = Array.isArray(liveFeed.experiences) ? liveFeed.experiences.slice(0, 2) : []
+    if (fQuizzes.length || fExp.length) {
+      lines.push('【双鱼协助素材（拿去直接抛给用户或灌进 Live，严禁催“今天计划呢/怎么还不开始”）】')
+      for (const q of fQuizzes) lines.push('- 最近刷题/错题（' + String(q.topic || '') + '）：' + String(q.prompt || '').slice(0, 120))
+      for (const ex of fExp) lines.push('- 近期经历切片：' + String(ex || '').slice(0, 120))
+    }
+  }
   if (facts.length) {
     lines.push('背景（只是让你别问错，不要逐条复述）：')
     for (const f of facts) lines.push('- ' + String(f).slice(0, 200))

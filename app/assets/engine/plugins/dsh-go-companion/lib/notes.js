@@ -56,7 +56,7 @@ export function knowledgeLines(dir, role, opts = {}) {
 
 /**
  * 拆成独立小块进预算器（2026-11）：防止单一 1000+ 字大块被 fitBudget 整块丢弃。
- * 返回顺序按重要性：kb-self（12）> kb-cog（10）> kb-judge（8）> kb-rule（5）。
+ * 优先级（2026-11-25 抬高）：kb-self（78）> kb-judge（68）> kb-cog（62）> kb-rule（15），绝不被 handoff 挤掉。
  */
 export function knowledgeBlocks(dir, role, opts = {}) {
   const self = selfDigest(dir)
@@ -65,13 +65,13 @@ export function knowledgeBlocks(dir, role, opts = {}) {
   if (self) {
     blocks.push({
       id: 'kb-self',
-      priority: 12,
+      priority: 78,
       text: '他自己写的规则（' + KB_DIR + '/' + SELF_FILE + '，冲突时以它为准）：\n' + self.slice(0, 750),
     })
   } else {
     blocks.push({
       id: 'kb-self',
-      priority: 12,
+      priority: 78,
       text: '他还没写 ' + KB_DIR + '/' + SELF_FILE + '（目标、红线、希望怎么对他）。' +
         (role === 'strategist' ? '抽空用 kb_write file=self 起草一版让他改。' : '提醒姐姐起草或让他自己写。'),
     })
@@ -85,7 +85,7 @@ export function knowledgeBlocks(dir, role, opts = {}) {
     if (cog.present && cog.text) {
       blocks.push({
         id: 'kb-cog',
-        priority: 10,
+        priority: 62,
         text: 'Cognitive OS 体系（先查旧账、实然优先、侦察先于开方、不篡改 01_Inbox_Raw）：\n' + cog.text,
       })
     }
@@ -93,13 +93,13 @@ export function knowledgeBlocks(dir, role, opts = {}) {
   if (judge) {
     blocks.push({
       id: 'kb-judge',
-      priority: 8,
+      priority: 68,
       text: (role === 'strategist' ? '你之前写下的判断（' : '姐姐写下的对他的判断（') + KB_DIR + '/' + JUDGE_FILE + '）：\n' + judge,
     })
   }
   blocks.push({
     id: 'kb-rule',
-    priority: 5,
+    priority: 15,
     text: '笔记库边界：仅可写 ' + KB_DIR + '/、Gemini/ 与追加 01_Inbox_Raw/；其余只读，日记/私密目录不读。',
   })
   return blocks

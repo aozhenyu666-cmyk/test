@@ -270,7 +270,7 @@ import { classifyApp, isDualUseApp, isPureGame, resolveAppNames } from './app_re
 import { evalBehaviorRadar } from './behavior_radar.js'
 import { cleanBankUnlockState } from './bank_unlock.js'
 import { SUPER_SPARK_DEFAULTS, generateSuperSpark } from './super_spark.js'
-import { LIVE_CORE_DEFAULTS, buildLiveCoreAtlas, evaluateLiveCore, formatLiveCoreHistory } from './live_core.js'
+import { LIVE_CORE_DEFAULTS, buildLiveCoreAtlas, buildLiveCoreBrief, buildSisterFeed, evaluateLiveCore, formatLiveCoreHistory } from './live_core.js'
 
 export const name = 'dsh-go-companion'
 // Without this, `ctx.tools` below throws "cannot get property tools without inject"
@@ -814,6 +814,22 @@ export function apply(ctx) {
         facts,
         episodes,
         commitments,
+        liveFeed: (() => {
+          try {
+            return collectSisterFeed(now, {
+              ledgerEntries: entries,
+              questionBank: loadAllBankQuestions(),
+              bankState: cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null)),
+              reviewCards: dueCards(loadReviewCards(), now, { limit: 6 }),
+              commitments,
+              vault,
+              phone,
+              experiences: [...facts, ...episodes],
+            }).sisterFeed
+          } catch {
+            return null
+          }
+        })(),
         mood: mood ? mood.mood : undefined,
         replyClass: lastReplyClass(entries),
         serveType,
@@ -7378,6 +7394,30 @@ export function apply(ctx) {
     const kbSplits = knowledgeBlocks(kbDir(notesDir(), home()), role, { notesDir: notesDir() })
       .map((b) => ({ id: b.id, layer: 'content', priority: b.priority, text: b.text }))
     const intradayBlock = v4Hub?.getStorylinePromptBlock?.(nowMs) || ''
+    const liveCoreNow = loadLiveCoreState()
+    const liveFeedBundle = (() => {
+      try {
+        return collectSisterFeed(nowMs, {
+          ledgerEntries: ledgerRecent,
+          commitments: activeCommitments.map((c) => c.statement),
+          vault: vaultContext(nowMs),
+          phone: lastPhone,
+        })
+      } catch {
+        return { sisterFeed: null }
+      }
+    })()
+    const liveFeedDigestText = (() => {
+      const sf = liveFeedBundle?.sisterFeed
+      if (!sf) return ''
+      const qLines = (sf.quizzes || []).slice(0, 2).map((q) => `- 刚刷题/错题（${q.topic}）：${q.prompt}`)
+      const eLines = (sf.experiences || []).slice(0, 2).map((e) => `- 个人经历：${e}`)
+      if (!qLines.length && !eLines.length) return ''
+      return '【双鱼活素材 · 刷题与经历（用来聊具体内容或喂给 Gemini Live，严禁只会催计划）】\n' + [...qLines, ...eLines].join('\n')
+    })()
+    const liveCopilotText = liveCoreNow.alwaysOnLive
+      ? '【常驻 Live 护航协同守则】当前用户正开启常驻 Gemini Live：禁止像老妈子一样循环催进度！你的职责是把上面他刷过的题、错题与个人经历拆成具体话头，协助灌进 Live 维持高压交互。'
+      : ''
 
     const blocks = [
       {
@@ -7394,9 +7434,9 @@ export function apply(ctx) {
       // 所以放状态层最高优先级、自己封顶 850 字（budget.js 另有单块上限兜底）。
       { id: 'covenant', layer: 'state', priority: 80, text: covenantText(role) },
       // 2026-11-18 会话换班：新对话头 3 天 / 30 轮带上上一个对话的交接。
-      { id: 'handoff', layer: 'content', priority: 80, text: (() => { try { return handoffBlockText(role, nowMs) } catch { return '' } })() },
+      { id: 'handoff', layer: 'content', priority: 56, text: (() => { try { return handoffBlockText(role, nowMs) } catch { return '' } })() },
       { id: 'plan', layer: 'constraint', priority: 86, text: planText() },
-      { id: 'v4-skills', layer: 'content', priority: 66, text: v4Hub.skillsPromptFor(live?.department || 'dept:govern') },
+      { id: 'v4-skills', layer: 'content', priority: 44, text: v4Hub.skillsPromptFor(live?.department || 'dept:govern') },
       // 2026-11-18 验收器：截止日 + 昨天的判决，两姐妹每一轮都看得到（读不到就不放）。
       { id: 'verifier', layer: 'content', priority: 72, text: (() => {
         try {
@@ -7407,7 +7447,9 @@ export function apply(ctx) {
         }
       })() },
       { id: 'telemetry', layer: 'content', priority: 9, text: telemetryText },
-      ...(loreText ? [{ id: 'lorebook', layer: 'content', priority: 7, text: '【情境记忆】\n' + loreText }] : []),
+      ...(liveCopilotText ? [{ id: 'live-copilot', layer: 'content', priority: 79, text: liveCopilotText }] : []),
+      ...(liveFeedDigestText ? [{ id: 'live-feed-digest', layer: 'content', priority: 75, text: liveFeedDigestText }] : []),
+      ...(loreText ? [{ id: 'lorebook', layer: 'content', priority: 76, text: '【情境记忆】\n' + loreText }] : []),
       ...(contradiction?.contradicted
         ? [{ id: 'telemetry-contradiction', layer: 'state', priority: 72, text: telemetryContradictionHint(contradiction) }]
         : []),
@@ -7436,12 +7478,12 @@ export function apply(ctx) {
       // B2：夜间整理的底稿。进内容层（可裁）——它是背景素材，不是规矩，不该占状态层的位置。
       { id: 'nightly', layer: 'content', priority: 16, text: nightlyLines(loadNightly(), nowMs) },
       // 2026-11-18 思考层：她们最近在想的（要紧、规律、想跟他提的、她自己的日常）。
-      { id: 'reflect', layer: 'content', priority: 70, text: (() => { try { return reflectLines(loadReflect(), role, nowMs) } catch { return '' } })() },
+      { id: 'reflect', layer: 'content', priority: 58, text: (() => { try { return reflectLines(loadReflect(), role, nowMs) } catch { return '' } })() },
       // A4：块刚结束的这一句进内容层（可裁），不进约束层——它是随机的一句话，不是规矩。
       { id: 'slot-ask', layer: 'content', priority: 18, text: slotAskNext && nowMs - slotAskNext.at < 30 * 60_000 ? slotAskNext.text : '' },
       { id: 'notes', layer: 'content', priority: 10, text: noteLines.join('\n') },
       // 2026-11：概率随手翻一篇旧笔记，有时翻有时不翻。
-      ...(vaultDraw ? [{ id: 'vault-pick', layer: 'content', priority: 14, text: vaultDraw }] : []),
+      ...(vaultDraw ? [{ id: 'vault-pick', layer: 'content', priority: 64, text: vaultDraw }] : []),
       ...(living.spontaneousTool ? [{ id: 'spontaneous-tool', layer: 'content', priority: 11, text: living.spontaneousTool }] : []),
       // R9 第五项：妹妹报的线索，只有姐姐这一轮看得到（content 层，可裁）。
       { id: 'clues', layer: 'content', priority: 12, text: cueLines.join('\n') },
@@ -10528,32 +10570,108 @@ export function apply(ctx) {
     return list.some((e) => (e?.state === 'bank-quiz-answer' || e?.state === 'quiz-solved') && now - Number(e?.at || 0) <= 2 * 60_000)
   }
 
-  function evaluateLiveCoreNow(now = Date.now(), opts = {}) {
-    const st = loadLiveCoreState()
-    const phone = opts.phone || lastPhone || {}
-    const tz = opts.tz || zoneOr(config.timeZone)
+  function collectSisterFeed(now = Date.now(), opts = {}) {
+    const ledgerEntries = Array.isArray(opts.ledgerEntries) ? opts.ledgerEntries : readLedger(home(), 120)
+    const bankState = opts.bankState || cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
+    const questionBank = Array.isArray(opts.questionBank) ? opts.questionBank : loadAllBankQuestions()
+    const reviewCards = Array.isArray(opts.reviewCards) ? opts.reviewCards : dueCards(loadReviewCards(), now, { limit: 10 })
+    const qById = new Map()
+    for (const q of questionBank) {
+      if (q?.id !== undefined) qById.set(String(q.id), q)
+    }
+    const recentQuizzes = []
+    for (let i = ledgerEntries.length - 1; i >= 0 && recentQuizzes.length < 4; i -= 1) {
+      const e = ledgerEntries[i]
+      if (!e || (e.state !== 'bank-quiz-answer' && e.state !== 'quiz-solved')) continue
+      const matched = e.questionId !== undefined ? qById.get(String(e.questionId)) : null
+      recentQuizzes.push({
+        topic: e.topic || e.category || matched?.topic || matched?.category || '刚刷的题',
+        stem: e.stem || e.question || e.title || matched?.stem || matched?.q || '',
+        wrong: e.ok === false || e.correct === false,
+      })
+    }
+
+    let experiences = Array.isArray(opts.experiences) ? [...opts.experiences] : []
+    if (!experiences.length) {
+      let db = null
+      try {
+        db = openMemoryDb(home(), { readonly: true })
+        const candidates = loadCandidates(db, { sessionId: config.sessionId || '', now })
+        const facts = backgroundFacts(candidates, 4)
+        const eps = (candidates.episodes || []).slice(0, 3).map((x) => x.text)
+        experiences = [...facts, ...eps].filter(Boolean)
+      } catch {
+      } finally {
+        try {
+          db?.close?.()
+        } catch {}
+      }
+    }
+
     const dir = notesDir()
+    const vault = opts.vault || vaultContext(now)
     let settingText = ''
     try {
       settingText = loadGeminiSetting(dir ? kbDir(dir, home()) : '')
     } catch {}
-    const bankState = cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
-    const questionBank = loadAllBankQuestions()
-    const reviewCards = dueCards(loadReviewCards(), now, { limit: 10 })
-    const horizons = readState(stateFile('horizons.json'), null)
-    const vault = vaultContext(now)
+    const commitments = Array.isArray(opts.commitments)
+      ? opts.commitments
+      : readCommitments(home(), now, 3).map((c) => c.statement)
+    const phone = opts.phone || lastPhone || {}
+    const sisterFeed = buildSisterFeed({
+      bankState,
+      questionBank,
+      reviewCards,
+      recentQuizzes,
+      experiences,
+      vaultSnippets: Array.isArray(vault?.recent) ? vault.recent : [],
+      commitments,
+      phone,
+    })
+    return {
+      ledgerEntries,
+      bankState,
+      questionBank,
+      reviewCards,
+      recentQuizzes,
+      experiences,
+      vault,
+      settingText,
+      commitments,
+      phone,
+      sisterFeed,
+    }
+  }
+
+  function evaluateLiveCoreNow(now = Date.now(), opts = {}) {
+    const st = loadLiveCoreState()
+    const tz = opts.tz || zoneOr(config.timeZone)
+    const feedBundle = collectSisterFeed(now, {
+      ledgerEntries: Array.isArray(opts.ledger) ? opts.ledger : undefined,
+      phone: opts.phone || lastPhone || {},
+    })
+    const {
+      ledgerEntries,
+      bankState,
+      questionBank,
+      reviewCards,
+      recentQuizzes,
+      experiences,
+      vault,
+      settingText,
+      commitments,
+      phone,
+    } = feedBundle
     const gemSt = loadGemini()
     const recaps = Array.isArray(gemSt?.recaps) ? gemSt.recaps : []
     const lastGemRecap = recaps.length ? recaps[recaps.length - 1] : null
     const lastRecap = (st?.lastRecap && (!lastGemRecap || (Number(st.lastRecap.at) || 0) >= (Number(lastGemRecap.at) || 0)))
       ? st.lastRecap
       : lastGemRecap
-    const commitments = readCommitments(home(), now, 3).map((c) => c.statement)
     const fgPkg = String(phone?.app || '')
     const fgTier = fgPkg ? tierFnNow()(fgPkg, String(phone?.label || '')) : 'other'
     const gemGate = loadGeminiGate(now, tz)
     const externalMutedUntil = Math.max(Number(config.muteUntil) || 0, Number(gemGate?.snoozeUntil) || 0)
-    const ledgerEntries = Array.isArray(opts.ledger) ? opts.ledger : readLedger(home(), 120)
     const quizSince = Math.max(Number(st.lastIgniteAt) || 0, Number(st.lastQuizReliefAt) || 0, now - 30 * 60_000)
     const recentQuizAnswers = ledgerEntries.filter(
       (e) => (e?.state === 'bank-quiz-answer' || e?.state === 'quiz-solved') && Number(e?.at) > quizSince,
@@ -10574,7 +10692,9 @@ export function apply(ctx) {
       bankState,
       questionBank,
       reviewCards,
-      horizons,
+      recentQuizzes,
+      experiences,
+      horizons: readState(stateFile('horizons.json'), null),
       vault,
       settingText,
       commitments,
@@ -10582,6 +10702,8 @@ export function apply(ctx) {
       bridge: bridgeHealthy(now),
       modeHint: String(opts.modeHint || ''),
       diceHint: Number(opts.diceHint) || 0,
+      targetMode: String(opts.targetMode || ''),
+      lastLiveDurationSec: Number(phone?.lastLiveDurationSec || 0),
       force: Boolean(opts.force),
     })
 
@@ -10605,6 +10727,7 @@ export function apply(ctx) {
           'break',
           'emergency',
           'live_running',
+          'text_mode_grace',
         ])
         const sameRecentYield = res.reason === st.lastYieldLoggedReason && now - (Number(st.lastYieldLoggedAt) || 0) < LIVE_CORE_DEFAULTS.yieldLogDedupMs
         if (informativeYields.has(res.reason) && !sameRecentYield) {
@@ -10629,22 +10752,37 @@ export function apply(ctx) {
   function liveCoreSummary(now = Date.now(), evalRes = null) {
     const st = evalRes?.nextState || loadLiveCoreState()
     const mutedUntil = Math.max(0, Number(st.mutedUntil) || 0)
+    const textGraceUntil = Math.max(0, Number(st.textGraceUntil) || 0)
+    let feedPreview = evalRes?.feedPreview || st.lastFeedPreview || null
+    if (!feedPreview) {
+      try {
+        feedPreview = collectSisterFeed(now).sisterFeed
+      } catch {}
+    }
     return {
       v: 1,
       enabled: st.enabled !== false,
       autoReengage: st.autoReengage !== false,
       wantScreenShare: st.wantScreenShare !== false,
+      alwaysOnLive: Boolean(st.alwaysOnLive),
+      keeperStrict: st.keeperStrict !== false,
+      preferredMode: st.preferredMode === 'text' ? 'text' : 'live',
+      textGraceUntil,
+      textGraceActive: textGraceUntil > now,
+      earlyBailoutCount: Math.max(0, Number(st.earlyBailoutCount) || 0),
       autoCooldownMs: Math.max(60_000, Number(st.autoCooldownMs) || LIVE_CORE_DEFAULTS.autoCooldownMs),
       muted: mutedUntil > now,
       mutedUntil,
       phase: evalRes?.phase || st.lastPhase || 'standby',
       reason: evalRes?.reason || st.lastReason || 'standby',
       triggered: Boolean(evalRes?.triggered),
+      urgent: Boolean(evalRes?.urgent),
       lastVoiceActiveAt: Math.max(0, Number(st.lastVoiceActiveAt) || 0),
       lastIgniteAt: Math.max(0, Number(st.lastIgniteAt) || 0),
       quizReliefCount: Math.max(0, Number(st.quizReliefCount) || 0),
       lastRecap: st.lastRecap || null,
       dice: evalRes?.dice || st.lastPayload?.dice || null,
+      feedPreview,
       payload: evalRes?.payload || st.lastPayload || null,
     }
   }
@@ -10739,13 +10877,56 @@ export function apply(ctx) {
         ...(b.enabled !== undefined ? { enabled: Boolean(b.enabled) } : {}),
         ...(b.autoReengage !== undefined ? { autoReengage: Boolean(b.autoReengage) } : {}),
         ...(b.wantScreenShare !== undefined ? { wantScreenShare: Boolean(b.wantScreenShare) } : {}),
+        ...(b.alwaysOnLive !== undefined ? { alwaysOnLive: Boolean(b.alwaysOnLive) } : {}),
+        ...(b.keeperStrict !== undefined ? { keeperStrict: Boolean(b.keeperStrict) } : {}),
+        ...(b.preferredMode !== undefined ? { preferredMode: b.preferredMode === 'text' ? 'text' : 'live' } : {}),
         ...(b.autoCooldownMin !== undefined
           ? { autoCooldownMs: Math.max(1, Math.min(120, Math.round(Number(b.autoCooldownMin)))) * 60_000 }
           : {}),
       }
       saveLiveCoreState(next)
       const summary = liveCoreSummary(now, { nextState: next })
-      return { v: 1, ok: true, ...summary, liveCore: summary, toast: '已更新 Gemini 窥视核心设置' }
+      const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
+      return { v: 1, ok: true, ...summary, liveCore: summary, atlas, history, toast: '已更新 Gemini 窥视核心设置' }
+    }
+    if (action === 'switch_mode') {
+      const mode = b.mode === 'text' ? 'text' : 'live'
+      const mins = Math.max(5, Math.min(60, Math.round(Number(b.minutes) || 15)))
+      const cur = loadLiveCoreState()
+      const basePatch = mode === 'text'
+        ? { ...cur, preferredMode: 'text', textGraceUntil: now + mins * 60_000, receiptSinceLastLive: true }
+        : { ...cur, preferredMode: 'live', textGraceUntil: 0 }
+      saveLiveCoreState(basePatch)
+      record({
+        state: 'live-core-switch',
+        at: now,
+        mode,
+        reason: mode === 'text' ? 'switch_to_text' : 'switch_to_live',
+        minutes: mins,
+      })
+      const res = evaluateLiveCoreNow(now, {
+        force: true,
+        tz,
+        targetMode: mode,
+        modeHint: b.modeHint || '',
+        diceHint: b.diceHint || b.dice || 0,
+        phone: b.phone || lastPhone || {},
+      })
+      const summary = liveCoreSummary(now, res)
+      const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
+      return {
+        v: 1,
+        ok: true,
+        ...summary,
+        liveCore: summary,
+        atlas,
+        history,
+        payload: res.payload,
+        result: res,
+        toast: mode === 'text'
+          ? `已切至 Gemini 文本模式（${mins} 分钟沉淀保护窗）`
+          : '已生成最新喂料并切回 Gemini Live（语音 + 看屏）',
+      }
     }
     if (action === 'commit_relay' || action === 'submit_recap') {
       const modeRaw = String(b.mode || (action === 'submit_recap' ? 'recap_only' : 'checkpoint_25m')).trim()
@@ -12355,8 +12536,11 @@ export function apply(ctx) {
           topic: liveCoreRes.topic,
           mode: liveCoreRes.pullMode || 'instant',
           reason: liveCoreRes.reason,
+          urgent: Boolean(liveCoreRes.urgent),
+          alwaysOnLive: Boolean(liveCoreRes.nextState?.alwaysOnLive),
+          earlyBailout: liveCoreRes.reason === 'live_early_bailout',
           preferVoice: true,
-          autoClickLive: true,
+          autoClickLive: liveCoreRes.autoClickLive !== false,
           requestScreenShare: Boolean(liveCoreRes.requestScreenShare),
           voiceLine: liveCoreRes.voiceLine,
           brief: liveCoreRes.brief,

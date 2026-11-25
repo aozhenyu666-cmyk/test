@@ -25,10 +25,12 @@ export const DEFAULT_BUDGET = {
  * 约束层不设单块上限（它永不裁，超了照旧抛错）。没列出的块不限。
  */
 export const BLOCK_CAPS = Object.freeze({
-  handoff: 1000,
+  handoff: 480,
   covenant: 900,
   reflect: 520,
   verifier: 420,
+  'live-feed-digest': 360,
+  'live-copilot': 180,
   'v4-skills': 320,
   'intraday-storyline': 320,
   nightly: 300,

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { apply, setStatePin } from '../lib/index.js'
-import { LIVE_CORE_DEFAULTS, LIVE_DICE_FACES, buildLiveCoreAtlas, buildLiveCoreBrief, evaluateLiveCore, formatLiveCoreHistory } from '../lib/live_core.js'
+import { LIVE_CORE_DEFAULTS, LIVE_DICE_FACES, buildLiveCoreAtlas, buildLiveCoreBrief, buildSisterFeed, evaluateLiveCore, formatLiveCoreHistory } from '../lib/live_core.js'
 
 const TZ = 'Asia/Shanghai'
 const SIS = 'session-sis'
@@ -356,6 +356,74 @@ test('LiveCore-6: POST /live-core commit_relay (25m 验收点 + 20m 纯刷题舱
       assert.ok(atlasRes.history.length >= 2)
       assert.equal(atlasRes.atlas.todayMetrics.relays, 2)
       assert.equal(atlasRes.atlas.todayMetrics.capsules, 1)
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
+})
+
+test('LiveCore-7: alwaysOnLive 严格防秒退（15s 触发 live_early_bailout + urgent）与文本保护窗 switch_mode', async (tc) => {
+  const T_1510 = Date.UTC(2026, 10, 24, 7, 10, 0)
+  tc.mock.timers.enable({ apis: ['Date'], now: T_1510 })
+  try {
+    const bailout = evaluateLiveCore({
+      now: T_1510,
+      state: {
+        enabled: true,
+        alwaysOnLive: true,
+        keeperStrict: true,
+        lastVoiceActiveAt: T_1510 - 16_000,
+        lastVoiceDropHandledAt: 0,
+        receiptSinceLastLive: false,
+      },
+      phone: { app: 'com.bbk.launcher2', label: '桌面', minutes: 1, screenOn: true, geminiVoiceActive: false, lastLiveDurationSec: 18 },
+      recentQuizzes: [{ topic: '数量关系', stem: '工程问题合作效率差计算', wrong: true }],
+      experiences: ['昨天拆穿了自己刷视频逃避推导的老毛病'],
+    })
+    assert.equal(bailout.triggered, true)
+    assert.equal(bailout.reason, 'live_early_bailout')
+    assert.equal(bailout.urgent, true)
+    assert.equal(bailout.nextState.earlyBailoutCount, 1)
+    assert.match(bailout.brief, /双鱼实时喂料/)
+    assert.match(bailout.brief, /工程问题合作效率差计算/)
+    assert.match(bailout.brief, /昨天拆穿了自己刷视频逃避推导/)
+
+    const feed = buildSisterFeed({
+      recentQuizzes: [{ topic: '判断推理', stem: '论证削弱之另有他因', wrong: true }],
+      experiences: ['晨间立誓先啃硬骨头'],
+    })
+    assert.equal(feed.quizzes.length, 1)
+    assert.equal(feed.experiences.length, 1)
+
+    await withHome(async () => {
+      const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
+      const cfg = (await call(h(), 'POST', '/live-core', { action: 'set_config', alwaysOnLive: true, keeperStrict: true })).body
+      assert.equal(cfg.alwaysOnLive, true)
+
+      const toText = (await call(h(), 'POST', '/live-core', { action: 'switch_mode', mode: 'text', minutes: 15 })).body
+      assert.equal(toText.ok, true)
+      assert.equal(toText.preferredMode, 'text')
+      assert.equal(toText.textGraceActive, true)
+      assert.equal(toText.payload.autoClickLive, false)
+      assert.equal(toText.payload.requestScreenShare, false)
+      assert.match(toText.payload.brief, /Gemini 文本模式衔接与 MCP 沉淀剧本/)
+
+      const blockedDuringGrace = evaluateLiveCore({
+        now: T_1510 + 10_000,
+        state: toText.liveCore,
+        inGemini: true,
+        phone: { app: 'com.google.android.apps.bard', label: 'Gemini', minutes: 2, screenOn: true, geminiVoiceActive: false },
+      })
+      assert.equal(blockedDuringGrace.triggered, false)
+      assert.equal(blockedDuringGrace.reason, 'text_mode_grace')
+      assert.equal(blockedDuringGrace.phase, 'text_mode')
+
+      const toLive = (await call(h(), 'POST', '/live-core', { action: 'switch_mode', mode: 'live' })).body
+      assert.equal(toLive.ok, true)
+      assert.equal(toLive.preferredMode, 'live')
+      assert.equal(toLive.textGraceActive, false)
+      assert.equal(toLive.payload.autoClickLive, true)
+      assert.equal(toLive.payload.requestScreenShare, true)
     })
   } finally {
     tc.mock.timers.reset()

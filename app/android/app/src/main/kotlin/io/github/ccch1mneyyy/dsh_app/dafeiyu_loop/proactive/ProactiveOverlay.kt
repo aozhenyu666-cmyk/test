@@ -365,6 +365,10 @@ object ProactiveOverlay {
         onCheckpoint25m: () -> Unit,
         onQuizCapsule20m: () -> Unit,
         onRecapOnly: () -> Unit,
+        earlyBailout: Boolean = false,
+        onReturnToLive: (() -> Unit)? = null,
+        onSwitchToText: (() -> Unit)? = null,
+        onPauseKeeper15m: (() -> Unit)? = null,
     ): Boolean {
         val context = app ?: return false
         dismissPostLiveRelay()
@@ -376,6 +380,10 @@ object ProactiveOverlay {
             onCheckpoint25m = onCheckpoint25m,
             onQuizCapsule20m = onQuizCapsule20m,
             onRecapOnly = onRecapOnly,
+            earlyBailout = earlyBailout,
+            onReturnToLive = onReturnToLive,
+            onSwitchToText = onSwitchToText,
+            onPauseKeeper15m = onPauseKeeper15m,
         )
         return try {
             card.attach()
@@ -1835,7 +1843,7 @@ object ProactiveOverlay {
     }
 
     /**
-     * 本轮 Gemini Live 结束后的零打字 3 键接力卡（签 25m 验收点 / 进 20m 纯刷题舱 / 仅记复盘收起）。
+     * 本轮 Gemini Live 结束后的零打字 3 键接力卡（或秒退防逃离护航卡）。
      */
     private class PostLiveRelayCard(
         private val context: Context,
@@ -1844,6 +1852,10 @@ object ProactiveOverlay {
         private val onCheckpoint25m: () -> Unit,
         private val onQuizCapsule20m: () -> Unit,
         private val onRecapOnly: () -> Unit,
+        private val earlyBailout: Boolean = false,
+        private val onReturnToLive: (() -> Unit)? = null,
+        private val onSwitchToText: (() -> Unit)? = null,
+        private val onPauseKeeper15m: (() -> Unit)? = null,
     ) {
         private val palette = OverlayPalette.of(context)
         private val wm = context.getSystemService(WindowManager::class.java)
@@ -1874,7 +1886,9 @@ object ProactiveOverlay {
             }
             root = view
             wm!!.addView(view, p)
-            main.postDelayed(autoTimeout, 45_000L)
+            if (!earlyBailout) {
+                main.postDelayed(autoTimeout, 45_000L)
+            }
         }
 
         private fun buildView(): View {
@@ -1894,23 +1908,33 @@ object ProactiveOverlay {
                 gravity = Gravity.CENTER_VERTICAL
             }
             head.addView(TextView(context).apply {
-                text = "🎙️ 本轮 Live 结束（${PostLiveRelayPolicy.formatDuration(durationSec)}）"
+                text = if (earlyBailout) {
+                    "⚡ 刚进 Live 仅 ${PostLiveRelayPolicy.formatDuration(durationSec)} 就退出了"
+                } else {
+                    "🎙️ 本轮 Live 结束（${PostLiveRelayPolicy.formatDuration(durationSec)}）"
+                }
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 setTextColor(palette.accent)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            head.addView(TextView(context).apply {
-                text = "收起"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setTextColor(palette.muted)
-                setPadding(context.dp(8f), context.dp(4f), context.dp(2f), context.dp(4f))
-                isClickable = true
-                setOnClickListener { destroy() }
-            })
+            if (!earlyBailout) {
+                head.addView(TextView(context).apply {
+                    text = "收起"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextColor(palette.muted)
+                    setPadding(context.dp(8f), context.dp(4f), context.dp(2f), context.dp(4f))
+                    isClickable = true
+                    setOnClickListener { destroy() }
+                })
+            }
             card.addView(head)
 
             card.addView(TextView(context).apply {
-                text = "趁脑子还热，立刻接下一棒，别滑回桌面发呆："
+                text = if (earlyBailout) {
+                    "常驻 Live 护航开启中：选定下一步继续训练，别静默溜走："
+                } else {
+                    "趁脑子还热，立刻接下一棒或切文本调 MCP 沉淀："
+                }
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
                 setTextColor(palette.ink)
                 setPadding(0, context.dp(4f), 0, context.dp(10f))
@@ -1934,22 +1958,49 @@ object ProactiveOverlay {
                 }
             }
 
-            card.addView(
-                actionBtn("签 25m 验收点", accent = true, onTap = onCheckpoint25m),
-                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = context.dp(6f)
-                },
-            )
-            card.addView(
-                actionBtn("进 20m 纯刷题舱", accent = false, onTap = onQuizCapsule20m),
-                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = context.dp(6f)
-                },
-            )
-            card.addView(
-                actionBtn("仅记复盘收起", accent = false, onTap = onRecapOnly),
-                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT),
-            )
+            if (earlyBailout) {
+                card.addView(
+                    actionBtn("🎙️ 回到 Live（语音 + 看屏）", accent = true) { onReturnToLive?.invoke() },
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = context.dp(6f)
+                    },
+                )
+                card.addView(
+                    actionBtn("💬 切 Gemini 文本（MCP 沉淀）", accent = false) { onSwitchToText?.invoke() },
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = context.dp(6f)
+                    },
+                )
+                card.addView(
+                    actionBtn("⏸ 暂停护航 15 分钟", accent = false) { onPauseKeeper15m?.invoke() },
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT),
+                )
+            } else {
+                card.addView(
+                    actionBtn("签 25m 验收点", accent = true, onTap = onCheckpoint25m),
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = context.dp(6f)
+                    },
+                )
+                if (onSwitchToText != null) {
+                    card.addView(
+                        actionBtn("💬 切 Gemini 文本（MCP 沉淀）", accent = false, onTap = onSwitchToText),
+                        LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                            bottomMargin = context.dp(6f)
+                        },
+                    )
+                }
+                card.addView(
+                    actionBtn("进 20m 纯刷题舱", accent = false, onTap = onQuizCapsule20m),
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = context.dp(6f)
+                    },
+                )
+                card.addView(
+                    actionBtn("仅记复盘收起", accent = false, onTap = onRecapOnly),
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT),
+                )
+            }
             return card
         }
 

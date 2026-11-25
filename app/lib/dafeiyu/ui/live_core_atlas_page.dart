@@ -194,37 +194,69 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     });
   }
 
-  Future<void> _rollAndEnterLive() async {
+  Future<void> _switchModeAndOpen(String mode) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final res = await _channel.liveCoreOp(const {'action': 'roll_dice'});
+      final res = await _channel.liveCoreOp({
+        'action': 'switch_mode',
+        'mode': mode,
+        if (mode == 'text') 'minutes': 15,
+      });
       final nested = _asMap(res?['liveCore']);
       final payload = _asMap(res?['payload']).isNotEmpty
           ? _asMap(res?['payload'])
           : _asMap(nested['payload']);
-      final dice = _asMap(payload['dice']).isNotEmpty ? _asMap(payload['dice']) : _asMap(res?['dice']);
-      final topic = '${payload['topic'] ?? '骰子触发 · 进 Gemini Live'}'.trim();
-      final brief = '${payload['brief'] ?? '请直接基于当下屏幕与题源开考，禁聊体系与找地方'}'.trim();
-      final voiceLine = '${payload['voiceLine'] ?? '骰子已落定，进 Live 直接开答'}'.trim();
-      final wantShare = res?['wantScreenShare'] != false && (_liveCore['wantScreenShare'] != false);
+      final isText = mode == 'text';
+      final topic = '${payload['topic'] ?? (isText ? 'Gemini 文本 · MCP 沉淀' : '回到 Gemini Live')}'.trim();
+      final brief = '${payload['brief'] ?? '请直接承接当前刷题与经历继续推进'}'.trim();
+      final voiceLine = '${payload['voiceLine'] ?? ''}'.trim();
+      final wantShare = !isText && res?['wantScreenShare'] != false && (_liveCore['wantScreenShare'] != false);
 
       final launched = await _channel.triggerGeminiAutoLive(
         topic: topic,
         brief: brief,
         voiceLine: voiceLine,
         mode: 'instant',
-        autoClickLive: true,
+        autoClickLive: !isText,
         requestScreenShare: wantShare,
       );
       if (!mounted) return;
+      setState(() {
+        _applyLiveCoreResponse(res);
+        if (isText) {
+          _banner = launched
+              ? '💬 已切至 Gemini 文本模式（15 分钟沉淀保护窗 · 直接粘贴即可调 MCP）'
+              : '💬 已备好文本衔接剧本并写入剪贴板（切去 Gemini 粘贴发送）';
+        } else {
+          _banner = launched
+              ? '🎙️ 已带双鱼喂料切回官方 Gemini Live（语音 + 看屏）'
+              : '🎙️ Live 剧本已进剪贴板（切去 Gemini 点 Live 即可开始）';
+        }
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _rerollFeedOnly() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.liveCoreOp(const {'action': 'roll_dice'});
+      if (!mounted) return;
+      final nested = _asMap(res?['liveCore']);
+      final payload = _asMap(res?['payload']).isNotEmpty
+          ? _asMap(res?['payload'])
+          : _asMap(nested['payload']);
+      final dice = _asMap(payload['dice']).isNotEmpty ? _asMap(payload['dice']) : _asMap(res?['dice']);
       final face = dice['face'];
       final faceName = '${dice['name'] ?? ''}'.trim();
       setState(() {
         _applyLiveCoreResponse(res);
-        _banner = launched
-            ? '🎲 已摇到「骰$face · $faceName」，正在拉起并灌入官方 Gemini Live'
-            : '🎲 已生成「骰$face · $faceName」剧本（已写入剪贴板，切去 Gemini 即可开始）';
+        _banner = face != null
+            ? '🎲 已刷新双鱼喂料（骰$face · $faceName）'
+            : '🎲 已刷新双鱼喂料预览';
       });
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -307,15 +339,15 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     }
   }
 
-  Future<void> _mute20m() async {
+  Future<void> _mute15m() async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final res = await _channel.liveCoreOp(const {'action': 'mute', 'minutes': 20});
+      final res = await _channel.liveCoreOp(const {'action': 'mute', 'minutes': 15});
       if (!mounted) return;
       setState(() {
         _applyLiveCoreResponse(res);
-        _banner = '${res?['toast'] ?? '已静音 Gemini 窥视调度 20 分钟'}';
+        _banner = '${res?['toast'] ?? '已暂停 Live 护航 15 分钟'}';
       });
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -326,10 +358,14 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     final phase = '${_liveCore['phase'] ?? 'standby'}';
     final enabled = _liveCore['enabled'] != false;
     final muted = _liveCore['muted'] == true;
+    final alwaysOn = _liveCore['alwaysOnLive'] == true;
+    final textGrace = _liveCore['textGraceActive'] == true || phase == 'text_mode';
     if (!enabled) return (StatusTone.idle, '已关闭');
-    if (muted || phase == 'muted' || phase == 'yielded_quiz_relief') return (StatusTone.warn, '静音泄压中');
-    if (phase == 'live_active') return (StatusTone.ok, 'Live 在线');
-    if (phase == 'ignited') return (StatusTone.ok, '已点火');
+    if (muted || phase == 'muted' || phase == 'yielded_quiz_relief') return (StatusTone.warn, '暂停泄压中');
+    if (phase == 'live_active') return (StatusTone.ok, 'Live 在线（看屏/语音）');
+    if (textGrace) return (StatusTone.warn, '文本沉淀窗');
+    if (phase == 'ignited') return (StatusTone.ok, '已点火拉回');
+    if (alwaysOn) return (StatusTone.ok, '常驻护航中');
     if (phase.startsWith('yielded')) return (StatusTone.idle, '已让路');
     return (StatusTone.idle, '待命中');
   }
@@ -337,16 +373,25 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
   String _phaseExplain() {
     final phase = '${_liveCore['phase'] ?? 'standby'}';
     final reason = '${_liveCore['reason'] ?? 'standby'}';
+    final alwaysOn = _liveCore['alwaysOnLive'] == true;
+    if (_liveCore['textGraceActive'] == true || phase == 'text_mode') {
+      return 'Gemini 文本沉淀保护窗（15 分钟内不强拉回 Live）：适合调 @大肥鱼 / @BrainOS 沉淀写库。';
+    }
+    if (alwaysOn && reason == 'standby') {
+      return '常驻 Live 护航已开启：只要未在刷题或文本保护窗内，断开或秒退将严格拉回并请求共享屏幕。';
+    }
     return switch ((phase, reason)) {
-      ('live_active', _) => '正在 Gemini Live 中：专注当下口头考辩，绝不重复弹扰。',
+      ('live_active', _) => '正在 Gemini Live 中：专注当下口头考辩与看屏盯盘，绝不重复弹扰。',
       ('yielded_quiz_relief', _) => '连刷 5 题已自动激活 20m 静音泄压，安心继续。',
       (_, 'active_study_or_quiz') => '检测到正在刷题或使用学习应用，窥视核心已自动让路。',
       (_, 'plan_modal_priority') => '今日计划模态尚未定档，优先由计划弹窗把关。',
       (_, 'sleeping') => '处于深夜睡眠守护窗，已静默让路。',
       (_, 'break') => '处于合法放风/午休窗口，放松期间不打扰。',
+      (_, 'live_early_bailout') => '检测到刚进 Live 秒退：已触发严守强拉回。',
+      (_, 'always_on_keeper') => '常驻 Live 护航生效中：正在持续保持与 Gemini Live 沟通。',
       (_, 'live_reengage') => '刚才 Live 中途退回，若无接力复盘会自动拉回。',
-      ('muted', _) => '手动静音冷却中，期间只响应一键主动开麦。',
-      _ => '白天防分心窗内若停滞/听歌空转，将用 1 颗骰子自动点火进 Live。',
+      ('muted', _) => '手动暂停护航冷却中，期间只响应一键主动切换。',
+      _ => '白天防分心窗内若停滞/听歌空转，将用双鱼喂料自动点火进 Live。',
     };
   }
 
@@ -373,8 +418,8 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
   Widget build(BuildContext context) {
     final colors = DshColors.of(context);
     return AppPage.list(
-      title: 'Live 窥视核心 · 图谱与记录',
-      subtitle: const Text('极简控制面 × 四维能力全景 × 透明运行流水'),
+      title: 'Live 脑核调度台',
+      subtitle: const Text('常驻 Live 护航 · 双鱼实时喂料 · 语音⇄文本秒切'),
       actions: [
         GlassIconButton(
           tooltip: '刷新',
@@ -439,11 +484,19 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
   List<Widget> _buildActionTab(BuildContext context, DshColors colors) {
     final theme = Theme.of(context);
     final (tone, badge) = _heroBadge();
+    final alwaysOnLive = _liveCore['alwaysOnLive'] == true;
+    final keeperStrict = _liveCore['keeperStrict'] != false;
+    final wantShare = _liveCore['wantScreenShare'] != false;
+    final earlyBailouts = (_liveCore['earlyBailoutCount'] as num?)?.round() ?? 0;
     final dice = _asMap(_liveCore['dice']);
     final diceFace = (dice['face'] as num?)?.round() ?? 0;
     final diceName = '${dice['name'] ?? ''}'.trim();
-    final wantShare = _liveCore['wantScreenShare'] != false;
-    final autoReengage = _liveCore['autoReengage'] != false;
+    final feed = _asMap(_liveCore['feedPreview']);
+    final feedQuizzes = _asList(feed['quizzes']);
+    final feedExp = (feed['experiences'] is List)
+        ? [for (final e in feed['experiences'] as List) if ('$e'.trim().isNotEmpty) '$e'.trim()]
+        : const <String>[];
+    final feedSummary = '${feed['sisterSummary'] ?? ''}'.trim();
     final caps = _proactiveStatus?.capabilities ?? const <String, bool>{};
     final a11yReady = caps['a11y'] == true;
     final shizukuReady = caps['shizuku'] == true;
@@ -451,28 +504,146 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     final bridgeReady = _bridgeStatus['healthy'] == true;
 
     return [
-      OverviewCard(
-        leading: const OverviewGlyph(AppIcons.voice, tint: 3),
-        title: Text(diceFace > 0 ? '最近骰$diceFace · $diceName' : 'Gemini Live 窥视总调度'),
-        subtitle: Text(_phaseExplain()),
-        trailing: StatusChip(key: const ValueKey('atlas-phase-chip'), tone: tone, label: badge),
+      ListPageCard(
+        key: const ValueKey('atlas-always-on-card'),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const OverviewGlyph(AppIcons.voice, tint: 3),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '常驻 Gemini Live 护航',
+                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 2),
+                          StatusChip(key: const ValueKey('atlas-phase-chip'), tone: tone, label: badge),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      key: const ValueKey('atlas-always-on-switch'),
+                      value: alwaysOnLive,
+                      onChanged: _busy
+                          ? null
+                          : (v) => unawaited(_updateConfig({'alwaysOnLive': v, 'keeperStrict': keeperStrict})),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _phaseExplain() + (earlyBailouts > 0 ? '\n今日已拦截秒退 $earlyBailouts 次' : ''),
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        child: FilledButton.icon(
-          key: const ValueKey('atlas-roll-live-btn'),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-            shape: AppShape.card,
-          ),
-          onPressed: _busy ? null : () => unawaited(_rollAndEnterLive()),
-          icon: const Icon(AppIcons.voice, size: 18),
-          label: const Text('🎲 摇骰子灌料进 Live'),
+        child: Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                key: const ValueKey('atlas-roll-live-btn'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                  shape: AppShape.card,
+                ),
+                onPressed: _busy ? null : () => unawaited(_switchModeAndOpen('live')),
+                icon: const Icon(AppIcons.voice, size: 17),
+                label: const Text('🎙️ 启动/回到 Live'),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: FilledButton.tonalIcon(
+                key: const ValueKey('atlas-switch-text-btn'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                  shape: AppShape.card,
+                ),
+                onPressed: _busy ? null : () => unawaited(_switchModeAndOpen('text')),
+                icon: const Icon(AppIcons.chat, size: 17),
+                label: const Text('💬 切 Gemini 文本'),
+              ),
+            ),
+          ],
         ),
+      ),
+      ListPageCard(
+        key: const ValueKey('atlas-feed-preview-card'),
+        title: diceFace > 0 ? '两条鱼备料包（骰$diceFace · $diceName）' : '两条鱼刚备好的实时喂料',
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (feedSummary.isNotEmpty)
+                  Text(
+                    feedSummary,
+                    style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.w600),
+                  ),
+                if (feedQuizzes.isEmpty && feedExp.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      '暂无近期错题与经历切片：点右侧「换一包料」或先刷 2 题，两条鱼会自动把素材装进下一轮 Live。',
+                      style: theme.textTheme.bodySmall?.copyWith(color: colors.textTertiary),
+                    ),
+                  )
+                else ...[
+                  for (final q in feedQuizzes.take(2))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        '• 题源 [${q['topic'] ?? '考题'}]：${q['prompt'] ?? ''}${'${q['mistake'] ?? ''}'.isNotEmpty ? '（${q['mistake']}）' : ''}',
+                        style: theme.textTheme.bodySmall,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  for (final ex in feedExp.take(2))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        '• 经历：$ex',
+                        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    key: const ValueKey('atlas-reroll-feed-btn'),
+                    onPressed: _busy ? null : () => unawaited(_rerollFeedOnly()),
+                    icon: const Icon(AppIcons.refresh, size: 15),
+                    label: const Text('🎲 换一包料'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
       Padding(
         key: const ValueKey('atlas-relay-row'),
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
         child: Row(
           children: [
             Expanded(
@@ -498,7 +669,7 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
         ),
       ),
       ListPageCard(
-        title: '精简开关（只保留这 3 项）',
+        title: '精简护航开关（只留这 3 项）',
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 14),
         children: [
           Padding(
@@ -508,22 +679,22 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
               runSpacing: 8,
               children: [
                 FilterChip(
-                  key: const ValueKey('atlas-share-chip'),
-                  label: const Text('窥视共享屏幕'),
-                  selected: wantShare,
-                  onSelected: _busy ? null : (v) => unawaited(_updateConfig({'wantScreenShare': v})),
+                  key: const ValueKey('atlas-reengage-chip'),
+                  label: const Text('严守防秒退'),
+                  selected: keeperStrict,
+                  onSelected: _busy ? null : (v) => unawaited(_updateConfig({'keeperStrict': v, 'autoReengage': v})),
                 ),
                 FilterChip(
-                  key: const ValueKey('atlas-reengage-chip'),
-                  label: const Text('断线自动拉回'),
-                  selected: autoReengage,
-                  onSelected: _busy ? null : (v) => unawaited(_updateConfig({'autoReengage': v})),
+                  key: const ValueKey('atlas-share-chip'),
+                  label: const Text('自动请求看屏'),
+                  selected: wantShare,
+                  onSelected: _busy ? null : (v) => unawaited(_updateConfig({'wantScreenShare': v})),
                 ),
                 ActionChip(
                   key: const ValueKey('atlas-mute-chip'),
                   avatar: const Icon(AppIcons.close, size: 14),
-                  label: const Text('静音 20m'),
-                  onPressed: _busy ? null : () => unawaited(_mute20m()),
+                  label: const Text('暂停 15m'),
+                  onPressed: _busy ? null : () => unawaited(_mute15m()),
                 ),
               ],
             ),

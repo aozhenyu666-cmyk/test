@@ -1756,6 +1756,10 @@ object ProactiveRuntime {
     @Volatile private var lastGeminiVoiceDroppedAt: Long = 0L
     @Volatile private var lastLiveDurationSec: Long = 0L
     @Volatile private var lastPostLiveRelayPromptAt: Long = 0L
+    @Volatile private var liveCoreAlwaysOn: Boolean = false
+    @Volatile private var liveCoreStrict: Boolean = true
+    @Volatile private var liveCoreWantShare: Boolean = true
+    @Volatile private var liveCoreTextGraceUntil: Long = 0L
     private val shownSparkIds = LinkedHashSet<String>()
     private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
 
@@ -2313,6 +2317,13 @@ object ProactiveRuntime {
             geminiDueAt = 0L
             fireGeminiDue()
         }
+        val lcMap = map["liveCore"] as? Map<*, *>
+        if (lcMap != null) {
+            liveCoreAlwaysOn = lcMap["alwaysOnLive"] == true
+            liveCoreStrict = lcMap["keeperStrict"] != false
+            liveCoreWantShare = lcMap["wantScreenShare"] != false
+            liveCoreTextGraceUntil = (lcMap["textGraceUntil"] as? Number)?.toLong() ?: 0L
+        }
         val autoPull = map["geminiAutoPull"] as? Map<*, *>
         var autoPulledNow = false
         val interceptHeldForPull = VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) ||
@@ -2328,11 +2339,13 @@ object ProactiveRuntime {
             val preferVoice = autoPull["preferVoice"] == true
             val autoClickLive = autoPull["autoClickLive"] == true
             val requestScreenShare = autoPull["requestScreenShare"] == true
+            val pullUrgent = autoPull["urgent"] == true || autoPull["earlyBailout"] == true
+            val pullCooldownMs = LiveKeeperPolicy.effectivePullCooldownMs(pullUrgent)
             val voiceLine = (autoPull["voiceLine"] as? String).orEmpty()
             val pullStamp = (autoPull["at"] as? Number)?.toLong() ?: stamp
             if ((pullTopic.isNotBlank() || pullBrief.isNotBlank()) &&
-                stamp - lastAutoPullAt >= AUTO_PULL_COOLDOWN_MS &&
-                pullStamp > stamp - AUTO_PULL_COOLDOWN_MS
+                stamp - lastAutoPullAt >= pullCooldownMs &&
+                pullStamp > stamp - pullCooldownMs
             ) {
                 lastAutoPullAt = stamp
                 autoPulledNow = true
@@ -2929,7 +2942,7 @@ object ProactiveRuntime {
         } else false
         val textLive = frontPkgNow != null && frontPkgNow in GEMINI_PACKAGES && !screenText.isNullOrBlank() &&
             (screenText.contains("Live") || screenText.contains("正在聆听") || screenText.contains("静音") || screenText.contains("结束语音"))
-        inComm || recActive || textLive
+        inComm || recActive || textLive || LiveKeeperPolicy.isScreenShareText(screenText)
     }.getOrDefault(false)
 
     private fun isShizukuReady(): Boolean = runCatching {
@@ -2999,20 +3012,36 @@ object ProactiveRuntime {
                 .map { it.first }
                 .filter { it !in GEMINI_PACKAGES }
                 .toSet()
-            if (PostLiveRelayPolicy.shouldPrompt(
-                    durationSec = durationJustEnded,
-                    nowMs = wall,
-                    lastPromptAtMs = lastPostLiveRelayPromptAt,
-                    interceptHeld = VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) ||
-                        VisibleSurface.isHeldBy(VisibleSurface.OWNER_FOCUS),
-                    planModalShowing = ProactiveOverlay.isPlanModalShowing(),
-                    emergencyActive = emergNow,
-                    inNightWindow = nightNow,
-                    frontPkg = front,
-                    selfPkg = app.packageName,
-                    workOrQuizPackages = studyPkgs,
-                )
-            ) {
+            val screenShareLikely = LiveKeeperPolicy.isScreenShareText(screenText)
+            val inTextGrace = liveCoreTextGraceUntil > wall
+            val earlyBailout = LiveKeeperPolicy.shouldTriggerEarlyBailoutGuard(
+                alwaysOnLive = liveCoreAlwaysOn,
+                strict = liveCoreStrict,
+                durationSec = durationJustEnded,
+                inTextGrace = inTextGrace,
+                emergencyActive = emergNow,
+                inNightWindow = nightNow,
+                interceptHeld = VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) ||
+                    VisibleSurface.isHeldBy(VisibleSurface.OWNER_FOCUS),
+                planModalShowing = ProactiveOverlay.isPlanModalShowing(),
+                frontPkg = front,
+                selfPkg = app.packageName,
+                workOrQuizPackages = studyPkgs,
+            )
+            val promptRelay = PostLiveRelayPolicy.shouldPrompt(
+                durationSec = durationJustEnded,
+                nowMs = wall,
+                lastPromptAtMs = lastPostLiveRelayPromptAt,
+                interceptHeld = VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) ||
+                    VisibleSurface.isHeldBy(VisibleSurface.OWNER_FOCUS),
+                planModalShowing = ProactiveOverlay.isPlanModalShowing(),
+                emergencyActive = emergNow,
+                inNightWindow = nightNow,
+                frontPkg = front,
+                selfPkg = app.packageName,
+                workOrQuizPackages = studyPkgs,
+            )
+            if (earlyBailout || promptRelay) {
                 lastPostLiveRelayPromptAt = wall
                 main.post {
                     if (!ProactiveOverlay.isPlanModalShowing() &&
@@ -3024,12 +3053,19 @@ object ProactiveRuntime {
                             onCheckpoint25m = { commitLiveRelay(mode = "checkpoint_25m", minutes = 25, nextTitle = "Live 接力 25m 产出") },
                             onQuizCapsule20m = { commitLiveRelay(mode = "quiz_only", minutes = 20, nextTitle = "Live 接力 · 纯考公刷题舱") },
                             onRecapOnly = { commitLiveRelay(mode = "recap_only", minutes = 25, nextTitle = "Live 口头对练已复盘闭环") },
+                            earlyBailout = earlyBailout,
+                            onReturnToLive = { triggerLiveCoreRoll() },
+                            onSwitchToText = { switchLiveMode(mode = "text", minutes = 15) },
+                            onPauseKeeper15m = { pauseLiveCore(minutes = 15) },
                         )
                     }
                 }
+            } else if (screenShareLikely) {
+                Log.d(TAG, "screenShareLikely active on hangup boundary")
             }
         }
         lastGeminiVoiceActive = geminiVoiceActive
+        val screenShareLikelyNow = LiveKeeperPolicy.isScreenShareText(screenText)
         val liveDroppedAgoMs = if (!geminiVoiceActive && lastGeminiVoiceActiveAt > 0L) {
             (wall - lastGeminiVoiceActiveAt).coerceAtLeast(0L)
         } else 0L
@@ -3068,6 +3104,7 @@ object ProactiveRuntime {
             "mediaPlaying" to mediaPlaying,
             "headsetConnected" to headsetConnected,
             "geminiVoiceActive" to geminiVoiceActive,
+            "screenShareLikely" to screenShareLikelyNow,
             "liveDroppedAgoMs" to liveDroppedAgoMs,
             "lastVoiceActiveAt" to lastGeminiVoiceActiveAt,
             "lastLiveDurationSec" to lastLiveDurationSec,
@@ -3421,6 +3458,67 @@ object ProactiveRuntime {
             "POST",
             "/live-core",
             body,
+        )
+    }
+
+    /** 在 Live 语音看屏 与 Gemini 文本（MCP 沉淀）之间一键切换。 */
+    fun switchLiveMode(mode: String, minutes: Int = 15, done: ((Boolean, String?) -> Unit)? = null) {
+        if (!::app.isInitialized) {
+            done?.invoke(false, "未初始化")
+            return
+        }
+        val normMode = if (mode == "text") "text" else "live"
+        fetchPluginRoute(
+            routeCallback { res ->
+                val payload = (res["payload"] as? Map<*, *>)
+                    ?: ((res["liveCore"] as? Map<*, *>)?.get("payload") as? Map<*, *>)
+                val topic = (payload?.get("topic") as? String)?.takeIf { it.isNotBlank() }
+                    ?: if (normMode == "text") "Gemini 文本（MCP 沉淀）" else "回到 Gemini Live"
+                val brief = (payload?.get("brief") as? String)?.takeIf { it.isNotBlank() }
+                    ?: "请承接上轮内容继续推进。"
+                val voiceLine = (payload?.get("voiceLine") as? String).orEmpty()
+                val autoClickLive = normMode == "live" && payload?.get("autoClickLive") != false
+                val wantShare = normMode == "live" && (res["wantScreenShare"] != false)
+                liveCoreTextGraceUntil = (res["textGraceUntil"] as? Number)?.toLong() ?: 0L
+                main.post {
+                    GeminiAutoLauncher.launchAndAutomateLive(
+                        app = app,
+                        topic = topic,
+                        brief = brief,
+                        voiceLine = voiceLine,
+                        mode = "instant",
+                        autoClickLive = autoClickLive,
+                        requestScreenShare = wantShare,
+                    ) { opened ->
+                        done?.invoke(opened, topic)
+                    }
+                }
+            },
+            "POST",
+            "/live-core",
+            linkedMapOf<String, Any?>("action" to "switch_mode", "mode" to normMode, "minutes" to minutes),
+        )
+    }
+
+    /** 暂停 Live 护航指定分钟数。 */
+    fun pauseLiveCore(minutes: Int = 15, done: ((Boolean) -> Unit)? = null) {
+        if (!::app.isInitialized) {
+            done?.invoke(false)
+            return
+        }
+        fetchPluginRoute(
+            routeCallback { res ->
+                val ok = res["ok"] == true
+                val msg = (res["toast"] as? String)?.takeIf { it.isNotBlank() } ?: "已暂停 Live 护航 $minutes 分钟"
+                main.post {
+                    runCatching { Toast.makeText(app, msg, Toast.LENGTH_SHORT).show() }
+                    if (ok) consultPlanSoon(minGapMs = 0L)
+                    done?.invoke(ok)
+                }
+            },
+            "POST",
+            "/live-core",
+            linkedMapOf<String, Any?>("action" to "mute", "minutes" to minutes),
         )
     }
 

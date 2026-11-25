@@ -17,16 +17,77 @@ class _FakeAtlasChannel extends ProactiveChannel {
     liveCoreCalls.add(body);
     if (offline) return null;
     final action = body?['action'] ?? 'status';
+    if (action == 'set_config') {
+      final alwaysOn = body?['alwaysOnLive'] == true;
+      return {
+        'v': 1,
+        'ok': true,
+        'enabled': true,
+        'alwaysOnLive': alwaysOn,
+        'keeperStrict': body?['keeperStrict'] != false,
+        'wantScreenShare': true,
+        'phase': alwaysOn ? 'ignited' : 'standby',
+        'reason': alwaysOn ? 'always_on_keeper' : 'standby',
+        'feedPreview': const {
+          'quizzes': [
+            {'topic': '判断推理', 'prompt': '论证削弱之另有他因', 'mistake': '刚才答错'},
+          ],
+          'experiences': ['昨天主动用 Live 拆通了逻辑链条'],
+          'sisterSummary': '鱼丸/鲸澜已备好 1 道刷题与记忆卡、1 条个人经历',
+        },
+        'toast': '已更新 Gemini 窥视核心设置',
+      };
+    }
+    if (action == 'switch_mode') {
+      final isText = body?['mode'] == 'text';
+      return {
+        'v': 1,
+        'ok': true,
+        'enabled': true,
+        'alwaysOnLive': true,
+        'keeperStrict': true,
+        'wantScreenShare': !isText,
+        'preferredMode': isText ? 'text' : 'live',
+        'textGraceActive': isText,
+        'phase': isText ? 'text_mode' : 'ignited',
+        'reason': isText ? 'switch_to_text' : 'switch_to_live',
+        'dice': const {'face': 3, 'name': '错题追击战'},
+        'payload': {
+          'topic': isText ? '文本沉淀：MCP落库' : '骰3·错题追击战：测试考点',
+          'brief': isText ? '【Gemini 文本模式衔接与 MCP 沉淀剧本】' : '【禁聊体系死命令】直接开考',
+          'voiceLine': isText ? '已切至文本模式' : '进 Live 开考',
+          'autoClickLive': !isText,
+          'requestScreenShare': !isText,
+          'dice': const {'face': 3, 'name': '错题追击战'},
+        },
+        'feedPreview': const {
+          'quizzes': [
+            {'topic': '判断推理', 'prompt': '论证削弱之另有他因', 'mistake': '刚才答错'},
+          ],
+          'experiences': ['昨天主动用 Live 拆通了逻辑链条'],
+          'sisterSummary': '鱼丸/鲸澜已备好 1 道刷题与记忆卡、1 条个人经历',
+        },
+      };
+    }
     if (action == 'roll_dice') {
       return {
         'v': 1,
         'ok': true,
         'enabled': true,
+        'alwaysOnLive': true,
+        'keeperStrict': true,
         'autoReengage': true,
         'wantScreenShare': true,
         'phase': 'ignited',
         'reason': 'manual_dice_roll',
         'dice': {'face': 2, 'name': '笔记翻旧账', 'roleHint': '从近期笔记抽 1 条逼他口述反例'},
+        'feedPreview': const {
+          'quizzes': [
+            {'topic': '资料分析', 'prompt': '基期比重差计算速算', 'mistake': '高频错题'},
+          ],
+          'experiences': ['早上已用 25m 验收锁启动'],
+          'sisterSummary': '鱼丸/鲸澜已备好 1 道刷题与记忆卡、1 条个人经历',
+        },
         'payload': {
           'topic': '骰2·笔记翻旧账：测试考点',
           'brief': '【禁聊体系死命令】直接开考',
@@ -69,12 +130,21 @@ class _FakeAtlasChannel extends ProactiveChannel {
       'v': 1,
       'ok': true,
       'enabled': true,
+      'alwaysOnLive': false,
+      'keeperStrict': true,
       'autoReengage': true,
       'wantScreenShare': true,
       'muted': false,
       'phase': 'standby',
       'reason': 'standby',
       'dice': const {'face': 1, 'name': '窥屏现抓'},
+      'feedPreview': const {
+        'quizzes': [
+          {'topic': '判断推理', 'prompt': '论证削弱之另有他因', 'mistake': '刚才答错'},
+        ],
+        'experiences': ['昨天主动用 Live 拆通了逻辑链条'],
+        'sisterSummary': '鱼丸/鲸澜已备好 1 道刷题与记忆卡、1 条个人经历',
+      },
       'atlas': const {
         'pipeline': [
           {'step': 1, 'key': 'sense', 'label': '感知现场', 'status': 'ready'},
@@ -198,21 +268,52 @@ class _FakeAtlasChannel extends ProactiveChannel {
 }
 
 void main() {
-  testWidgets('此刻操作：1 键摇骰子灌料进 Live 与 1 键接力 20m 纯刷题舱 + 就绪灯', (tester) async {
+  testWidgets('此刻操作：常驻 Live 护航总开关 + 双模一键互切 + 双鱼喂料预览 + 20m 纯刷题接力', (tester) async {
     final ch = _FakeAtlasChannel();
     await pumpPhone(tester, LiveCoreAtlasPage(channel: ch));
     await settlePhone(tester);
 
     expect(find.byKey(const ValueKey('atlas-phase-chip')), findsOneWidget);
+    expect(find.byKey(const ValueKey('atlas-always-on-switch')), findsOneWidget);
+    expect(find.byKey(const ValueKey('atlas-feed-preview-card')), findsOneWidget);
+    expect(find.textContaining('论证削弱之另有他因'), findsOneWidget);
+    expect(find.textContaining('昨天主动用 Live 拆通了逻辑链条'), findsOneWidget);
     expect(find.text('无障碍已开'), findsOneWidget);
     expect(find.text('Shizuku 就绪'), findsOneWidget);
     expect(find.text('Gemini 桥在线'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('atlas-roll-live-btn')));
+    await tester.tap(find.byKey(const ValueKey('atlas-always-on-switch')));
+    await settlePhone(tester);
+    expect(
+      ch.liveCoreCalls.any((c) => c?['action'] == 'set_config' && c?['alwaysOnLive'] == true),
+      isTrue,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('atlas-reroll-feed-btn')));
     await settlePhone(tester);
     expect(ch.liveCoreCalls.any((c) => c?['action'] == 'roll_dice'), isTrue);
+    expect(find.textContaining('基期比重差计算速算'), findsOneWidget);
+    expect(ch.autoLiveCalls, isEmpty);
+
+    await tester.tap(find.byKey(const ValueKey('atlas-roll-live-btn')));
+    await settlePhone(tester);
+    expect(
+      ch.liveCoreCalls.any((c) => c?['action'] == 'switch_mode' && c?['mode'] == 'live'),
+      isTrue,
+    );
     expect(ch.autoLiveCalls.length, 1);
+    expect(ch.autoLiveCalls.first['autoClickLive'], isTrue);
     expect(ch.autoLiveCalls.first['requestScreenShare'], isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('atlas-switch-text-btn')));
+    await settlePhone(tester);
+    expect(
+      ch.liveCoreCalls.any((c) => c?['action'] == 'switch_mode' && c?['mode'] == 'text'),
+      isTrue,
+    );
+    expect(ch.autoLiveCalls.length, 2);
+    expect(ch.autoLiveCalls.last['autoClickLive'], isFalse);
+    expect(ch.autoLiveCalls.last['requestScreenShare'], isFalse);
 
     await tester.tap(find.byKey(const ValueKey('atlas-relay-quiz-btn')));
     await settlePhone(tester);
