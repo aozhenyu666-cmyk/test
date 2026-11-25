@@ -97,7 +97,7 @@ class _FakePlanModalityChannel extends ProactiveChannel {
             'deliverable': '14:00 准时回工位',
             'lockMode': 'gentle',
             'allowedApps': ['md.obsidian', 'com.tencent.mm'],
-            'status': 'pending',
+            'status': 'done',
             'isBreak': true,
           },
         ],
