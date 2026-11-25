@@ -1759,6 +1759,7 @@ object ProactiveRuntime {
     @Volatile private var liveCoreAlwaysOn: Boolean = false
     @Volatile private var liveCoreStrict: Boolean = true
     @Volatile private var liveCoreWantShare: Boolean = true
+    @Volatile private var liveCoreHeadsetKeepalive: Boolean = true
     @Volatile private var liveCoreTextGraceUntil: Long = 0L
     private val shownSparkIds = LinkedHashSet<String>()
     private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
@@ -2322,6 +2323,7 @@ object ProactiveRuntime {
             liveCoreAlwaysOn = lcMap["alwaysOnLive"] == true
             liveCoreStrict = lcMap["keeperStrict"] != false
             liveCoreWantShare = lcMap["wantScreenShare"] != false
+            liveCoreHeadsetKeepalive = lcMap["headsetKeepalive"] != false
             liveCoreTextGraceUntil = (lcMap["textGraceUntil"] as? Number)?.toLong() ?: 0L
         }
         val autoPull = map["geminiAutoPull"] as? Map<*, *>
@@ -3053,7 +3055,30 @@ object ProactiveRuntime {
                 selfPkg = app.packageName,
                 workOrQuizPackages = studyPkgs,
             )
-            if (earlyBailout || promptRelay) {
+            if (durationJustEnded >= 3L) {
+                logLiveSessionEnd(
+                    durationSec = durationJustEnded,
+                    screenOn = s.screenOn,
+                    headsetConnected = headsetConnected,
+                    frontPkg = front,
+                    earlyBailout = earlyBailout,
+                )
+            }
+            if (!s.screenOn && headsetConnected && liveCoreAlwaysOn && liveCoreHeadsetKeepalive &&
+                durationJustEnded >= 15L && !nightNow && !emergNow && !inTextGrace
+            ) {
+                runCatching {
+                    VoiceOut.install(app)
+                    VoiceOut.speak(
+                        VoicePlan(
+                            "耳机里的 Gemini 连麦刚断了，亮屏可一键续聊，累了就切 L0 歇着",
+                            VoicePlan.DEFAULT_RATE,
+                            VoicePlan.DEFAULT_PITCH,
+                        )
+                    ) {}
+                }
+                consultPlanSoon(minGapMs = 0L)
+            } else if (earlyBailout || promptRelay) {
                 lastPostLiveRelayPromptAt = wall
                 main.post {
                     if (!ProactiveOverlay.isPlanModalShowing() &&
@@ -3522,6 +3547,29 @@ object ProactiveRuntime {
             "POST",
             "/live-core",
             reqBody,
+        )
+    }
+
+    private fun logLiveSessionEnd(
+        durationSec: Long,
+        screenOn: Boolean,
+        headsetConnected: Boolean,
+        frontPkg: String?,
+        earlyBailout: Boolean,
+    ) {
+        if (!::app.isInitialized) return
+        fetchPluginRoute(
+            routeCallback { },
+            "POST",
+            "/live-core",
+            linkedMapOf<String, Any?>(
+                "action" to "log_session_end",
+                "durationSec" to durationSec,
+                "screenOn" to screenOn,
+                "headsetConnected" to headsetConnected,
+                "frontPkg" to frontPkg.orEmpty(),
+                "earlyBailout" to earlyBailout,
+            ),
         )
     }
 

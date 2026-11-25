@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../ui/common/list_page_row.dart';
 import '../../ui/common/overview_card.dart';
@@ -32,11 +35,13 @@ class LiveCoreAtlasPage extends StatefulWidget {
     this.channel,
     this.loopChannel,
     this.initialTab = LiveCoreAtlasTab.action,
+    this.onShareFile,
   });
 
   final ProactiveChannel? channel;
   final LoopChannel? loopChannel;
   final LiveCoreAtlasTab initialTab;
+  final Future<void> Function(String filename, String content)? onShareFile;
 
   static Future<void> open(
     BuildContext context, {
@@ -316,17 +321,154 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     });
   }
 
-  Future<void> _tapShizukuChip() async {
-    final ok = await _channel.openCapability('shizuku');
+  Future<void> _tapShizukuChip({String kind = 'shizuku'}) async {
+    final ok = await _channel.openCapability(kind);
     if (!mounted) return;
     setState(() {
       _banner = ok
-          ? '已唤起 Shizuku 授权 / 应用：点「始终允许」即可接管底层无障碍自愈与权限分配'
+          ? '已唤起 Shizuku 授权并自动连锁授予无障碍自愈（点「始终允许」即可全自动生效）'
           : '未检测到活跃 Shizuku 服务：请先在系统「无线调试」中启动 Shizuku';
     });
     unawaited(Future<void>.delayed(const Duration(milliseconds: 900), () {
       if (mounted) unawaited(_refresh());
     }));
+  }
+
+  Future<void> _runAutopilotIgnite() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.liveCoreOp(const {'action': 'autopilot_ignite'});
+      if (!mounted) return;
+      final payload = _asMap(res?['payload']);
+      final topic = '${payload['topic'] ?? '全自动托管 · 回到 Gemini Live'}'.trim();
+      final brief = '${payload['brief'] ?? '已启动今日全自动托管 2×25m 验收点，直接开干'}'.trim();
+      final voiceLine = '${payload['voiceLine'] ?? ''}'.trim();
+      final wantShare = res?['wantScreenShare'] != false;
+      await _channel.triggerGeminiAutoLive(
+        topic: topic,
+        brief: brief,
+        voiceLine: voiceLine,
+        mode: 'instant',
+        autoClickLive: true,
+        requestScreenShare: wantShare,
+      );
+      if (!mounted) return;
+      setState(() {
+        _applyLiveCoreResponse(res);
+        _banner = '${res?['toast'] ?? '⚡ 全自动托管已启动：2×25m 验收点 + 常驻 Live 护航已联机'}';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _shareMarkdownFile(String filename, String content) async {
+    if (widget.onShareFile != null) {
+      await widget.onShareFile!(filename, content);
+      return;
+    }
+    final tmp = await getTemporaryDirectory();
+    final dir = Directory('${tmp.path}/dsh_diag');
+    await dir.create(recursive: true);
+    final file = File('${dir.path}/$filename');
+    await file.writeAsString(content, flush: true);
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(file.path, mimeType: 'text/markdown', name: filename)],
+        subject: filename,
+        text: '大肥鱼 72h 实证诊断包（可直接发给 AI 分析）',
+      ),
+    );
+  }
+
+  Future<void> _exportDiagnosticBundle() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    Map<String, dynamic>? res;
+    try {
+      final caps = _proactiveStatus?.capabilities ?? const <String, bool>{};
+      res = await _channel.liveCoreOp({
+        'action': 'export_diagnostic',
+        'days': 3,
+        'capabilities': caps,
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    final markdown = '${res?['markdown'] ?? ''}'.trim();
+    if (markdown.isEmpty) {
+      setState(() => _banner = '引擎暂未返回诊断数据，请确认大肥鱼引擎在线后重试。');
+      return;
+    }
+    final filename = '${res?['filename'] ?? 'dafeiyu_72h_diagnostic.md'}'.trim();
+    final obsidianPath = '${res?['obsidianPath'] ?? ''}'.trim();
+    final metrics = _asMap(res?['metrics']);
+    final liveM = _asMap(metrics['live']);
+    final outM = _asMap(metrics['output']);
+    final summaryLine =
+        '近 72h：连麦 ${liveM['sessionsRecorded'] ?? 0} 次（均 ${liveM['avgDurationSec'] ?? 0}s） · 点火 ${liveM['igniteCount'] ?? 0} 次 · 刷题 ${outM['quizTotal'] ?? 0} 题 · 验收 ${outM['sealsDone'] ?? 0}/${outM['sealsTotal'] ?? 0}';
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('72h 实证诊断包已生成'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(summaryLine, style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+              if (obsidianPath.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text('已自动备份到 Obsidian：$obsidianPath', style: Theme.of(ctx).textTheme.bodySmall),
+              ],
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Theme.of(ctx).colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  markdown.length > 520 ? '${markdown.substring(0, 520)}\n...' : markdown,
+                  style: Theme.of(ctx).textTheme.labelSmall,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('关闭')),
+          FilledButton.tonalIcon(
+            key: const ValueKey('atlas-diag-copy-btn'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: markdown));
+              if (!ctx.mounted) return;
+              Navigator.of(ctx).pop();
+              if (mounted) setState(() => _banner = '📋 已复制完整 72h 诊断包（直接粘贴发给 AI 即可）');
+            },
+            icon: const Icon(AppIcons.copy, size: 15),
+            label: const Text('复制全文'),
+          ),
+          FilledButton.icon(
+            key: const ValueKey('atlas-diag-share-btn'),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              try {
+                await _shareMarkdownFile(filename, markdown);
+                if (mounted) setState(() => _banner = '📤 已调起系统分享：$filename');
+              } catch (e) {
+                if (mounted) setState(() => _banner = '分享调起失败，可点「复制全文」粘贴发送：$e');
+              }
+            },
+            icon: const Icon(AppIcons.share, size: 15),
+            label: const Text('分享 .md 文件'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _rerollFeedOnly() async {
@@ -592,10 +734,15 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     final shizukuReady = caps['shizuku'] == true;
     final shizukuRunning = caps['shizukuRunning'] == true;
     final a11yAutoHeal = caps['a11yAutoHeal'] == true;
+    final batteryReady = caps['battery'] == true;
+    final exactAlarmReady = caps['exactAlarm'] == true;
     final overlayReady = caps['overlay'] == true;
     final bridgeReady = _bridgeStatus['healthy'] == true;
     final energyTier = '${_liveCore['energyTier'] ?? 'L2'}';
     final headsetKeepalive = _liveCore['headsetKeepalive'] != false;
+    final activeDept = _asMap(_liveCore['activeDepartment']);
+    final deptLabel = '${activeDept['label'] ?? ''}'.trim();
+    final nextDeptLabel = '${activeDept['nextLabel'] ?? ''}'.trim();
 
     return [
       ListPageCard(
@@ -638,6 +785,17 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                   _phaseExplain() + (earlyBailouts > 0 ? '\n今日已拦截秒退 $earlyBailouts 次' : ''),
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
+                if (deptLabel.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    '🏛️ 自动值班：$deptLabel${nextDeptLabel.isNotEmpty ? ' → 下一跳：$nextDeptLabel' : ''}',
+                    key: const ValueKey('atlas-dept-line'),
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -702,6 +860,38 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                 onPressed: _busy ? null : () => unawaited(_editWhitelistFromAtlas()),
                 icon: const Icon(AppIcons.taskBlocked, size: 16),
                 label: const Text('🛡️ 调手机白名单'),
+              ),
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                key: const ValueKey('atlas-autopilot-btn'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                  shape: AppShape.card,
+                ),
+                onPressed: _busy ? null : () => unawaited(_runAutopilotIgnite()),
+                icon: const Icon(AppIcons.running, size: 16),
+                label: const Text('⚡ 1 键托管今日'),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: FilledButton.tonalIcon(
+                key: const ValueKey('atlas-export-diag-btn'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                  shape: AppShape.card,
+                ),
+                onPressed: _busy ? null : () => unawaited(_exportDiagnosticBundle()),
+                icon: const Icon(AppIcons.share, size: 16),
+                label: const Text('📤 导出诊断包'),
               ),
             ),
           ],
@@ -873,16 +1063,35 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                     ),
                     GestureDetector(
                       key: const ValueKey('atlas-shizuku-chip'),
-                      onTap: shizukuReady ? null : () => unawaited(_tapShizukuChip()),
+                      onTap: shizukuReady && a11yAutoHeal ? null : () => unawaited(_tapShizukuChip(kind: 'shizuku')),
                       child: StatusChip(
                         tone: shizukuReady ? StatusTone.ok : (shizukuRunning ? StatusTone.warn : StatusTone.idle),
                         label: shizukuReady ? 'Shizuku 就绪' : (shizukuRunning ? 'Shizuku 运行中(点授权)' : 'Shizuku 未授'),
                       ),
                     ),
-                    StatusChip(
+                    GestureDetector(
                       key: const ValueKey('atlas-a11y-heal-chip'),
-                      tone: a11yAutoHeal ? StatusTone.ok : StatusTone.idle,
-                      label: a11yAutoHeal ? '无障碍自愈已开' : '无障碍自愈待授',
+                      onTap: a11yAutoHeal ? null : () => unawaited(_tapShizukuChip(kind: 'a11yAutoHeal')),
+                      child: StatusChip(
+                        tone: a11yAutoHeal ? StatusTone.ok : StatusTone.warn,
+                        label: a11yAutoHeal ? '无障碍自愈已开' : '无障碍自愈待授',
+                      ),
+                    ),
+                    GestureDetector(
+                      key: const ValueKey('atlas-battery-chip'),
+                      onTap: batteryReady ? null : () => unawaited(_channel.openCapability('battery')),
+                      child: StatusChip(
+                        tone: batteryReady ? StatusTone.ok : StatusTone.warn,
+                        label: batteryReady ? '电池免杀已开' : '电池免杀待开',
+                      ),
+                    ),
+                    GestureDetector(
+                      key: const ValueKey('atlas-alarm-chip'),
+                      onTap: exactAlarmReady ? null : () => unawaited(_channel.openCapability('exactAlarm')),
+                      child: StatusChip(
+                        tone: exactAlarmReady ? StatusTone.ok : StatusTone.idle,
+                        label: exactAlarmReady ? '精准闹钟已开' : '精准闹钟待开',
+                      ),
                     ),
                     GestureDetector(
                       onTap: () => _openPillarRoute('bridge'),
@@ -1091,6 +1300,14 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
       ListPageCard(
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         children: [
+          ListPageRow(
+            key: const ValueKey('atlas-records-export-diag'),
+            icon: AppIcons.share,
+            title: '导出 72h 实证诊断包（发给 AI 体检）',
+            subtitle: '自动汇总连麦时长、断线原因、四部门流转与误锁名单，无需手工记录',
+            chevron: true,
+            onTap: _busy ? null : () => unawaited(_exportDiagnosticBundle()),
+          ),
           ListPageRow(
             key: const ValueKey('atlas-open-raw-records'),
             icon: AppIcons.history,

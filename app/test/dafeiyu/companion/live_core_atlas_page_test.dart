@@ -124,6 +124,41 @@ class _FakeAtlasChannel extends ProactiveChannel {
         ],
       };
     }
+    if (action == 'autopilot_ignite') {
+      return {
+        'v': 1,
+        'ok': true,
+        'enabled': true,
+        'alwaysOnLive': true,
+        'keeperStrict': true,
+        'wantScreenShare': true,
+        'headsetKeepalive': true,
+        'energyTier': 'L2',
+        'phase': 'ignited',
+        'reason': 'autopilot_ignite',
+        'activeDepartment': const {'id': 'dept:dispatch', 'label': '统筹规划部', 'nextLabel': '督办审计部'},
+        'payload': const {
+          'topic': '全自动托管 · 2×25m 验收点',
+          'brief': '【四部门自动值班：统筹规划部】直接开干',
+          'voiceLine': '全自动托管已启动',
+        },
+        'toast': '⚡ 全自动托管已启动：自动挂好 2 个 25m 验收点 + 常驻 Live 护航',
+      };
+    }
+    if (action == 'export_diagnostic') {
+      return {
+        'v': 1,
+        'ok': true,
+        'filename': '2026-11-25_1800_72h实证诊断包.md',
+        'obsidianPath': '/vault/诊断导出/2026-11-25_1800_72h实证诊断包.md',
+        'metrics': const {
+          'live': {'sessionsRecorded': 4, 'avgDurationSec': 210, 'igniteCount': 6},
+          'output': {'quizTotal': 18, 'sealsDone': 2, 'sealsTotal': 3},
+        },
+        'markdown': '# 大肥鱼 × Gemini Live 72h 实证诊断包\n- 连麦 4 次',
+        'toast': '已生成 72h 实证诊断包',
+      };
+    }
     if (action == 'commit_relay') {
       final mode = '${body?['mode'] ?? 'checkpoint_25m'}';
       return {
@@ -443,5 +478,40 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await settlePhone(tester);
     expect(ch.openCapCalls, contains('shizuku'));
+  });
+
+  testWidgets('1 键全自动托管今日 + 72h 实证诊断包导出与分享 + 四部门值班展示', (tester) async {
+    String? sharedName;
+    String? sharedBody;
+    final ch = _FakeAtlasChannel();
+    await pumpPhone(
+      tester,
+      LiveCoreAtlasPage(
+        channel: ch,
+        onShareFile: (name, body) async {
+          sharedName = name;
+          sharedBody = body;
+        },
+      ),
+    );
+    await settlePhone(tester);
+
+    await tester.tap(find.byKey(const ValueKey('atlas-autopilot-btn')));
+    await settlePhone(tester);
+    expect(ch.liveCoreCalls.any((c) => c?['action'] == 'autopilot_ignite'), isTrue);
+    expect(find.byKey(const ValueKey('atlas-dept-line')), findsOneWidget);
+    expect(find.textContaining('统筹规划部'), findsOneWidget);
+    expect(ch.autoLiveCalls.length, 1);
+
+    await tester.tap(find.byKey(const ValueKey('atlas-export-diag-btn')));
+    await settlePhone(tester);
+    expect(ch.liveCoreCalls.any((c) => c?['action'] == 'export_diagnostic'), isTrue);
+    expect(find.text('72h 实证诊断包已生成'), findsOneWidget);
+    expect(find.textContaining('连麦 4 次'), findsWidgets);
+
+    await tester.tap(find.byKey(const ValueKey('atlas-diag-share-btn')));
+    await settlePhone(tester);
+    expect(sharedName, '2026-11-25_1800_72h实证诊断包.md');
+    expect(sharedBody, contains('72h 实证诊断包'));
   });
 }

@@ -204,6 +204,7 @@ import {
   markWorkStatus, migrateLegacyToWorkStore, mirrorWorkStoreToLegacy, normalizeWorkStore,
   removeWorkItem, replaceWorkSource, upsertWorkItem,
 } from './work_store.js'
+import { buildDiagnosticExport } from './diagnostic_export.js'
 
 /**
  * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
@@ -10692,6 +10693,13 @@ export function apply(ctx) {
       (e) => (e?.state === 'bank-quiz-answer' || e?.state === 'quiz-solved') && Number(e?.at) > quizSince,
     ).length
 
+    let hasTodayPlan = true
+    try {
+      const todaySeals = loadSeals(now, tz)
+      hasTodayPlan = Array.isArray(todaySeals?.seals) && todaySeals.seals.length > 0
+    } catch {}
+    const hasRunningBout = Boolean(runningBoutNow())
+
     const res = evaluateLiveCore({
       now,
       state: st,
@@ -10720,6 +10728,8 @@ export function apply(ctx) {
       targetMode: String(opts.targetMode || ''),
       customFeed: String(opts.customFeed || ''),
       scalpelHint: String(opts.scalpelHint || ''),
+      hasTodayPlan,
+      runningBout: hasRunningBout,
       lastLiveDurationSec: Number(phone?.lastLiveDurationSec || 0),
       force: Boolean(opts.force),
     })
@@ -10734,6 +10744,8 @@ export function apply(ctx) {
           reason: res.reason,
           diceFace: res.dice?.face || 0,
           anchorId: res.anchor?.id || '',
+          department: res.department?.id || '',
+          hasCustomFeed: Boolean(String(opts.customFeed || '').trim()),
         })
       } else {
         const informativeYields = new Set([
@@ -10803,6 +10815,7 @@ export function apply(ctx) {
       lastIgniteAt: Math.max(0, Number(st.lastIgniteAt) || 0),
       quizReliefCount: Math.max(0, Number(st.quizReliefCount) || 0),
       lastRecap: st.lastRecap || null,
+      activeDepartment: evalRes?.department || st.lastDepartment || st.lastPayload?.department || null,
       dice: evalRes?.dice || st.lastPayload?.dice || null,
       feedPreview,
       payload: evalRes?.payload || st.lastPayload || null,
@@ -10914,6 +10927,144 @@ export function apply(ctx) {
       const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
       return { v: 1, ok: true, ...summary, liveCore: summary, atlas, history, toast: '已更新 Gemini 窥视核心设置' }
     }
+    if (action === 'log_session_end') {
+      const durationSec = Math.max(0, Math.round(Number(b.durationSec) || 0))
+      record({
+        state: 'live-session-end',
+        at: now,
+        durationSec,
+        screenOn: b.screenOn !== false,
+        headsetConnected: Boolean(b.headsetConnected),
+        frontPkg: String(b.frontPkg || '').trim().slice(0, 80),
+        earlyBailout: Boolean(b.earlyBailout),
+        reason: String(b.reason || 'ended').trim().slice(0, 48),
+      })
+      return { v: 1, ok: true, durationSec }
+    }
+    if (action === 'export_diagnostic') {
+      const days = Math.max(1, Math.min(14, Math.round(Number(b.days) || 3)))
+      const ledgerEntries = readLedger(home(), 800)
+      let locksOv = null
+      try { locksOv = buildLocksOverview(now, tz) } catch {}
+      let planState = null
+      try { planState = loadSeals(now, tz) } catch {}
+      const bankStats = cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
+      const historyStore = readState(stateFile('history-365.json'), null)
+      const caps = b.capabilities && typeof b.capabilities === 'object'
+        ? b.capabilities
+        : { a11y: Boolean(lastPhone?.a11yConnected), shizuku: Boolean(lastPhone?.shizukuReady) }
+      const exported = buildDiagnosticExport({
+        now,
+        days,
+        tz,
+        ledgerEntries,
+        liveCoreState: loadLiveCoreState(),
+        locksOverview: locksOv,
+        bankStats,
+        planState,
+        historyStore,
+        phone: lastPhone,
+        capabilities: caps,
+        kbDir: (() => { try { return kbDir(notesDir(), home()) } catch { return '' } })(),
+      })
+      return {
+        v: 1,
+        ...exported,
+        toast: exported.obsidianPath
+          ? `已生成 ${days * 24}h 实证诊断包并同步至 Obsidian`
+          : `已生成 ${days * 24}h 实证诊断包（可一键复制或分享文件）`,
+      }
+    }
+    if (action === 'autopilot_ignite') {
+      const cur = loadLiveCoreState()
+      const nextTier = cur.energyTier === 'L0' ? 'L2' : (cur.energyTier || 'L2')
+      const nextCfg = {
+        ...cur,
+        enabled: true,
+        alwaysOnLive: true,
+        keeperStrict: true,
+        headsetKeepalive: true,
+        energyTier: nextTier,
+        preferredMode: 'live',
+        textGraceUntil: 0,
+      }
+      saveLiveCoreState(nextCfg)
+      const curMin = zoneMinuteOfDay(now, tz)
+      const isLate = curMin >= 22 * 60 + 15
+      const target = isLate ? 'tomorrow' : 'today'
+      let due1 = isLate ? (9 * 60 + 30) : (curMin + 30)
+      if (!isLate && due1 >= 12 * 60 && due1 < 14 * 60) due1 = 14 * 60 + 25
+      due1 = Math.min(22 * 60 + 45, due1)
+      let due2 = due1 + 45
+      if (!isLate && due2 >= 12 * 60 && due2 < 14 * 60) due2 = 14 * 60 + 50
+      due2 = Math.min(22 * 60 + 55, due2)
+      const blocks = [
+        {
+          title: '全自动托管 · 25m 核心刷题/推进',
+          kind: 'bout_minutes',
+          stretch: 25,
+          floor: 15,
+          estMinutes: 25,
+          dueMinute: due1,
+        },
+        {
+          title: '全自动托管 · 25m 错因复盘巩固',
+          kind: 'bout_minutes',
+          stretch: 25,
+          floor: 15,
+          estMinutes: 25,
+          dueMinute: due2,
+        },
+      ]
+      let planRes = null
+      try {
+        planRes = sealsRoute({ action: 'plan-day', target, seals: blocks, by: 'live-autopilot' })
+      } catch {}
+      const curBout = runningBoutNow()
+      if (curBout?.id) {
+        try {
+          routeBoutDepartment({
+            db: openBoutsDb(home()),
+            home: home(),
+            boutId: curBout.id,
+            currentDept: curBout.department || '',
+            input: { explicitDepartment: 'dept:govern' },
+            now,
+          })
+        } catch {}
+      }
+      const addedCount = Array.isArray(planRes?.added) ? planRes.added.length : 0
+      record({
+        state: 'live-core-autopilot',
+        at: now,
+        target,
+        addedCount,
+        energyTier: nextTier,
+      })
+      const res = evaluateLiveCoreNow(now, {
+        force: true,
+        tz,
+        targetMode: 'live',
+        modeHint: 'autopilot_ignite',
+        diceHint: 1,
+        phone: b.phone || lastPhone || {},
+      })
+      const summary = liveCoreSummary(now, res)
+      const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
+      return {
+        v: 1,
+        ok: true,
+        ...summary,
+        liveCore: summary,
+        atlas,
+        history,
+        payload: res.payload,
+        autopilot: { target, addedCount, blocks },
+        toast: addedCount > 0
+          ? `⚡ 全自动托管已启动：自动挂好 ${addedCount} 个 25m 验收点 + 常驻 Live 护航`
+          : '⚡ 全自动托管已启动：常驻 Live 护航与今日验收锁已联动',
+      }
+    }
     if (action === 'switch_mode') {
       const mode = b.mode === 'text' ? 'text' : 'live'
       const mins = Math.max(5, Math.min(60, Math.round(Number(b.minutes) || 15)))
@@ -10922,13 +11073,6 @@ export function apply(ctx) {
         ? { ...cur, preferredMode: 'text', textGraceUntil: now + mins * 60_000, receiptSinceLastLive: true }
         : { ...cur, preferredMode: 'live', textGraceUntil: 0 }
       saveLiveCoreState(basePatch)
-      record({
-        state: 'live-core-switch',
-        at: now,
-        mode,
-        reason: mode === 'text' ? 'switch_to_text' : 'switch_to_live',
-        minutes: mins,
-      })
       const res = evaluateLiveCoreNow(now, {
         force: true,
         tz,
@@ -10938,6 +11082,15 @@ export function apply(ctx) {
         customFeed: b.customFeed || '',
         scalpelHint: b.scalpelHint || '',
         phone: b.phone || lastPhone || {},
+      })
+      record({
+        state: 'live-core-switch',
+        at: now,
+        mode,
+        reason: mode === 'text' ? 'switch_to_text' : 'switch_to_live',
+        minutes: mins,
+        hasCustomFeed: Boolean(String(b.customFeed || '').trim()),
+        department: res?.department?.id || '',
       })
       const summary = liveCoreSummary(now, res)
       const { atlas, history } = buildLiveCoreAtlasAndHistory(now, tz, summary, b)
@@ -11015,6 +11168,20 @@ export function apply(ctx) {
           installedApps: lastPhone?.installedApps,
         })
         toast = capsuleResult?.toast || `已切入 ${minutes}m 纯考公刷题舱`
+      }
+
+      const curBoutRelay = runningBoutNow()
+      if (curBoutRelay?.id) {
+        try {
+          routeBoutDepartment({
+            db: openBoutsDb(home()),
+            home: home(),
+            boutId: curBoutRelay.id,
+            currentDept: curBoutRelay.department || '',
+            input: { explicitDepartment: mode === 'recap_only' ? 'dept:collect' : 'dept:govern' },
+            now,
+          })
+        } catch {}
       }
 
       record({
@@ -12597,7 +12764,8 @@ export function apply(ctx) {
     const ssNotFocused = !runningBoutNow() && !reverseSess
     const hasDoneToday = (Number(timeLedger?.earnedBout) || 0) > 0 || Boolean(v4Hub?.getDayVerifySummary?.(now)?.passedCount)
     const ssLowOutput = Boolean(phone?.fun || Number(phone?.minutes || 0) >= 3 || !hasDoneToday)
-    if (ssAwakeWork && ssNotBlocked && ssNotFocused && ssIntervalDue && ssLowOutput) {
+    const ssQuietForLive = liveCoreOut?.energyTier === 'L0' || Boolean(liveCoreOut?.alwaysOnLive)
+    if (ssAwakeWork && ssNotBlocked && ssNotFocused && ssIntervalDue && ssLowOutput && !ssQuietForLive) {
       const cand = buildSuperSparkNow(now, { phone, idleMinutes: Number(phone?.minutes || 0) })
       if (cand?.triggered) superSpark = cand
     }

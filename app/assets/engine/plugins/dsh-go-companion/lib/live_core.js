@@ -8,9 +8,85 @@
  * 4. 6 面骰子只是「1 挡火花塞」，后台把设定、屏幕摘录、笔记、错题/FSRS 与【禁聊体系死命令】一起灌进官方 Gemini Live。
  */
 
+import { DEPT_LABELS, inferDepartment } from './departments.js'
+import { runMainlineAlignmentAudit, runRedFlagScamAudit } from './dept_skills.js'
 import { collectAnchorCandidates, pickWeightedCandidate } from './super_spark.js'
 import { DEFAULT_GEMINI_SETTING, RECEIPT_FORMAT, settingLines } from './trigger.js'
 import { hm as zoneHm, ymd as zoneYmd, zoneOr } from './tz.js'
+
+export const DEPT_FLOW_NEXT = Object.freeze({
+  'dept:collect': 'dept:strategize',
+  'dept:strategize': 'dept:dispatch',
+  'dept:dispatch': 'dept:govern',
+  'dept:govern': 'dept:collect',
+})
+
+const DEPT_SOP_HINTS = Object.freeze({
+  'dept:collect': '先把眼前链接/新素材压成 1 条 ≤25 字靶子问题 + 至少 1 条核验事实，命中交易/买课红旗立刻叫停。',
+  'dept:strategize': '锁定 1 个卡脖子前提或错因，用「变更要素预测结果」逼出二阶推演，拒绝空话和折腾工具逃避。',
+  'dept:dispatch': '别只停在聊懂：30 秒内拍板下一个 25 分钟微验收块（交付物 + 截止点），并压成三段因果链。',
+  'dept:govern': '聚焦手头正在跑的局/验收锁：只核对当前最小可见产出与过关底线，不开启新话题发散。',
+})
+
+/**
+ * 四部门自动协同路由：无需用户手工选部门，按输入材料、当前骰面与锁态自动确定值班部门与下一跳。
+ */
+export function resolveLiveDepartmentFlow({
+  customFeed = '',
+  dice = null,
+  anchor = null,
+  energyTier = 'L2',
+  arbiter = null,
+  hasTodayPlan = true,
+  runningBout = false,
+  reason = '',
+} = {}) {
+  const custom = String(customFeed || '').trim()
+  const combinedText = [custom, anchor?.topic, anchor?.prompt, dice?.name].filter(Boolean).join(' ')
+  const redFlag = custom ? runRedFlagScamAudit(custom) : null
+  const redFlagAlert = redFlag && redFlag.verdict !== 'CLEAR' ? redFlag.recommendation : ''
+  const mainline = custom ? runMainlineAlignmentAudit(custom) : null
+  const mainlineAlert = mainline && mainline.isToolEscapeRisk ? mainline.advice : ''
+
+  let id = 'dept:strategize'
+  let routeReason = 'cognitive-training'
+
+  if (redFlagAlert || /(https?:\/\/|链接|查一下|是什么|真假|原文|截图|资料|笔记|线索)/.test(custom)) {
+    id = 'dept:collect'
+    routeReason = redFlagAlert ? 'red-flag-audit' : 'clipboard-material-intake'
+  } else if (mainlineAlert) {
+    id = 'dept:strategize'
+    routeReason = 'anti-sunk-cost-audit'
+  } else if (dice?.face === 6 || hasTodayPlan === false || reason === 'autopilot_ignite') {
+    id = 'dept:dispatch'
+    routeReason = hasTodayPlan === false ? 'missing-today-plan' : 'relay-scheduling'
+  } else if (runningBout || arbiter?.priority === 'P3' || arbiter?.priority === 'P4' || dice?.face === 1 || dice?.face === 4) {
+    id = 'dept:govern'
+    routeReason = runningBout ? 'active-bout-execution' : 'lock-or-screen-supervision'
+  } else {
+    const inferred = inferDepartment({
+      text: combinedText,
+      hasNewMaterial: Boolean(custom),
+      runningBout: Boolean(runningBout),
+    })
+    id = inferred.department || 'dept:strategize'
+    routeReason = inferred.reason || 'auto-inferred'
+  }
+
+  const nextId = DEPT_FLOW_NEXT[id] || 'dept:govern'
+  return {
+    id,
+    label: DEPT_LABELS[id] || id,
+    reason: routeReason,
+    nextId,
+    nextLabel: DEPT_LABELS[nextId] || nextId,
+    sopHint: energyTier === 'L0'
+      ? '当前 L0 休整态：四部门退居静默，绝不派任务，仅做轻松闲聊或随时休眠。'
+      : (DEPT_SOP_HINTS[id] || DEPT_SOP_HINTS['dept:strategize']),
+    ...(redFlagAlert ? { redFlagAlert } : {}),
+    ...(mainlineAlert ? { mainlineAlert } : {}),
+  }
+}
 
 export const LIVE_CORE_DEFAULTS = Object.freeze({
   reengageMinDropMs: 90_000,
@@ -196,6 +272,7 @@ function normalizeLiveState(raw) {
     lastPhase: String(s.lastPhase || 'standby'),
     lastReason: String(s.lastReason || ''),
     lastPayload: s.lastPayload && typeof s.lastPayload === 'object' ? s.lastPayload : null,
+    lastDepartment: s.lastDepartment && typeof s.lastDepartment === 'object' ? s.lastDepartment : null,
     lastRecap: normalizeRecap(s.lastRecap),
     lastYieldLoggedAt: Math.max(0, Number(s.lastYieldLoggedAt) || 0),
     lastYieldLoggedReason: String(s.lastYieldLoggedReason || ''),
@@ -341,12 +418,16 @@ export function buildLiveCoreBrief({
   energyTier = 'L2',
   customFeed = '',
   scalpelHint = '',
+  department = null,
 } = {}) {
   const face = dice || LIVE_DICE_FACES[0]
   const tierKey = LIVE_ENERGY_TIERS[String(energyTier || '').toUpperCase()] ? String(energyTier).toUpperCase() : 'L2'
   const tierObj = LIVE_ENERGY_TIERS[tierKey]
   const scalpel = THINKING_SCALPELS.find((x) => x.id === scalpelHint) ||
     THINKING_SCALPELS[((face.face || 1) - 1) % THINKING_SCALPELS.length]
+  const dept = department && typeof department === 'object'
+    ? department
+    : resolveLiveDepartmentFlow({ customFeed, dice: face, anchor, energyTier: tierKey, reason })
   const customText = String(customFeed || '').replace(/\r/g, '').trim().slice(0, 900)
   const setting = settingLines(settingText || DEFAULT_GEMINI_SETTING, 6)
   const frontLabel = cleanLine(phone?.label || phone?.app || '当前桌面/未知界面', 40)
@@ -362,6 +443,9 @@ export function buildLiveCoreBrief({
       '【Gemini 文本模式衔接与 MCP 沉淀剧本（弥补 Live 短板）】',
       '刚才在 Live 语音模式无法稳定写库与展开长文本，现在由我切换为文字模式做结构化沉淀。',
       '严禁空谈方法论或陪聊借口！请直接：1) 承接上一轮口头思路给出严格拆解；2) 主动调 MCP 把刷到的错题与核心经历沉入卡池/验收单。',
+      `【四部门自动值班：${dept.label} → 下一跳：${dept.nextLabel}】${dept.sopHint}`,
+      ...(dept.redFlagAlert ? [`- 🚨 红旗防骗预警：${dept.redFlagAlert}`] : []),
+      ...(dept.mainlineAlert ? [`- ⚠️ 主航道提醒：${dept.mainlineAlert}`] : []),
       ...(customText ? ['', '【用户即时投喂素材（剪贴板/链接/思考 · 文本模式可直接读取深拆）】', customText] : []),
       '',
       '【双鱼已备好的刷题与经历素材】',
@@ -384,6 +468,7 @@ export function buildLiveCoreBrief({
     const l0Lines = [
       '【L0 刷题后零压休息模式（Thinking Gym OS）】',
       tierObj.paceRule,
+      ...(dept.redFlagAlert ? [`- 🚨 红旗防骗预警（即便休息也须先停手）：${dept.redFlagAlert}`] : []),
       ...(customText ? ['', '【用户刚随手投喂的材料/链接（聊得动就按变更要素轻松猜 1 句，不想聊直接安静休息）】', customText] : []),
       '',
       '【今日轻松玩法（二选一，绝不强迫）】',
@@ -413,6 +498,10 @@ export function buildLiveCoreBrief({
     `【Thinking Gym 当前档位：${tierObj.title} · 本轮主刀：${scalpel.name}】`,
     `- 节拍约束：${tierObj.paceRule}`,
     `- 手术刀要求：${scalpel.rule}`,
+    `【四部门自动值班：${dept.label} → 下一跳：${dept.nextLabel}】`,
+    `- 部门动作：${dept.sopHint}`,
+    ...(dept.redFlagAlert ? [`- 🚨 红旗防骗预警：${dept.redFlagAlert}`] : []),
+    ...(dept.mainlineAlert ? [`- ⚠️ 主航道提醒：${dept.mainlineAlert}`] : []),
     ...(customText
       ? [
           '',
@@ -527,6 +616,8 @@ export function evaluateLiveCore({
   targetMode = '',
   customFeed = '',
   scalpelHint = '',
+  hasTodayPlan = true,
+  runningBout = false,
   lastLiveDurationSec = 0,
   force = false,
   rng = Math.random,
@@ -620,6 +711,9 @@ export function evaluateLiveCore({
           diceHint,
           customFeed,
           scalpelHint,
+          arbiter,
+          hasTodayPlan,
+          runningBout,
           rng,
         })
         return res
@@ -730,6 +824,9 @@ export function evaluateLiveCore({
       diceHint,
       customFeed,
       scalpelHint,
+      arbiter,
+      hasTodayPlan,
+      runningBout,
       rng,
     })
   }
@@ -758,6 +855,9 @@ export function evaluateLiveCore({
     diceHint,
     customFeed,
     scalpelHint,
+    arbiter,
+    hasTodayPlan,
+    runningBout,
     rng,
   })
 }
@@ -787,6 +887,9 @@ function buildTriggeredResult({
   diceHint,
   customFeed = '',
   scalpelHint = '',
+  arbiter = null,
+  hasTodayPlan = true,
+  runningBout = false,
   rng,
 }) {
   const mergedSnippets = [
@@ -820,6 +923,16 @@ function buildTriggeredResult({
     commitments,
     phone,
   })
+  const department = resolveLiveDepartmentFlow({
+    customFeed,
+    dice,
+    anchor,
+    energyTier: nextBase.energyTier,
+    arbiter,
+    hasTodayPlan,
+    runningBout,
+    reason: modeHint || reason,
+  })
   const brief = buildLiveCoreBrief({
     dice,
     anchor,
@@ -836,6 +949,7 @@ function buildTriggeredResult({
     energyTier: nextBase.energyTier,
     customFeed,
     scalpelHint,
+    department,
   })
   const shortAsk = cleanLine(anchor?.prompt || dice.ask, 64)
   const voiceLine = reason === 'headset_live_dropped'
@@ -863,6 +977,7 @@ function buildTriggeredResult({
     voiceOnly: Boolean(voiceOnly),
     targetMode,
     energyTier: nextBase.energyTier,
+    department,
     dice,
     anchorId: anchor?.id || '',
     anchorSource: anchor?.anchorSource || 'exam_pool',
@@ -883,6 +998,7 @@ function buildTriggeredResult({
       : nextBase.lastVoiceDropHandledAt,
     earlyBailoutCount: reason === 'live_early_bailout' ? (nextBase.earlyBailoutCount + 1) : nextBase.earlyBailoutCount,
     lastFeedPreview: sisterFeed,
+    lastDepartment: department,
     recentAnchorIds: cleanIdList([...nextBase.recentAnchorIds, anchor?.id], LIVE_CORE_DEFAULTS.recentMax),
     recentDice: cleanDiceList([...nextBase.recentDice, dice.face], 3),
     lastPhase: nextPhase,
@@ -898,6 +1014,7 @@ function buildTriggeredResult({
     voiceOnly: Boolean(voiceOnly),
     targetMode,
     energyTier: nextBase.energyTier,
+    department,
     dice,
     anchor,
     feedPreview: sisterFeed,

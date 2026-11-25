@@ -551,15 +551,16 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
     }
 
     private fun openCapability(kind: String?) {
-        if (kind == "shizuku") {
+        if (kind == "shizuku" || kind == "a11yAutoHeal") {
             val running = runCatching { rikka.shizuku.Shizuku.pingBinder() }.getOrDefault(false)
-            val granted = running && runCatching {
-                rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
-            }.getOrDefault(false)
-            if (running && !granted) {
-                runCatching {
-                    rikka.shizuku.Shizuku.requestPermission(4603)
-                }
+            if (running) {
+                // Uses the sanctioned PhoneControl.grantSecureSettings flow:
+                // if Shizuku permission is missing it asks first and automatically chains WRITE_SECURE_SETTINGS + A11yKeeper.
+                Thread({
+                    runCatching {
+                        io.github.ccch1mneyyy.dsh_app.phone.PhoneControl.get(context).grantSecureSettings { true }
+                    }
+                }, "dsh-shizuku-grant").start()
                 return
             }
             val launchShizuku = context.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")

@@ -470,6 +470,55 @@ test('LiveCore-8: L0 休息剧本 + customFeed 剪贴板投喂 + 息屏戴耳机
       assert.equal(clipLive.energyTier, 'L1')
       assert.match(clipLive.payload.brief, /用户即时投喂素材/)
       assert.match(clipLive.payload.brief, /为什么沉没成本要归零/)
+      assert.ok(clipLive.activeDepartment?.label)
+    })
+  } finally {
+    tc.mock.timers.reset()
+  }
+})
+
+test('LiveCore-9: 四部门自动路由 + 红旗防骗预警 + 1 键全自动托管今日 + 72h 实证诊断包导出', async (tc) => {
+  const T_1500 = Date.UTC(2026, 10, 25, 7, 0, 0) // 15:00 Asia/Shanghai
+  tc.mock.timers.enable({ apis: ['Date'], now: T_1500 })
+  try {
+    const scamBrief = buildLiveCoreBrief({
+      energyTier: 'L2',
+      customFeed: '闲鱼卖家说先付定金私聊微信，限时优惠不退不换',
+    })
+    assert.match(scamBrief, /信息收集部/)
+    assert.match(scamBrief, /红旗防骗预警/)
+
+    await withHome(async () => {
+      const h = host({ [SIS]: agentOf(SIS), [BIG]: agentOf(BIG) })
+      const auto = (await call(h(), 'POST', '/live-core', { action: 'autopilot_ignite' })).body
+      assert.equal(auto.ok, true)
+      assert.equal(auto.alwaysOnLive, true)
+      assert.equal(auto.keeperStrict, true)
+      assert.equal(auto.headsetKeepalive, true)
+      assert.ok(auto.autopilot?.addedCount >= 1)
+      assert.ok(auto.activeDepartment?.label)
+
+      const logged = (await call(h(), 'POST', '/live-core', {
+        action: 'log_session_end',
+        durationSec: 185,
+        screenOn: false,
+        headsetConnected: true,
+        frontPkg: 'com.google.android.googlequicksearchbox',
+      })).body
+      assert.equal(logged.ok, true)
+
+      const diag = (await call(h(), 'POST', '/live-core', {
+        action: 'export_diagnostic',
+        days: 3,
+      })).body
+      assert.equal(diag.ok, true)
+      assert.match(diag.filename, /72h实证诊断包\.md$/)
+      assert.equal(diag.metrics.live.sessionsRecorded, 1)
+      assert.equal(diag.metrics.live.avgDurationSec, 185)
+      assert.equal(diag.metrics.live.screenOffDropCount, 1)
+      assert.equal(diag.metrics.live.autopilotCount, 1)
+      assert.match(diag.markdown, /72h 实证诊断包/)
+      assert.match(diag.markdown, /四部门自动齿轮流转/)
     })
   } finally {
     tc.mock.timers.reset()
