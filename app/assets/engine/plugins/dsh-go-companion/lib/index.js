@@ -205,6 +205,7 @@ import {
   removeWorkItem, replaceWorkSource, upsertWorkItem,
 } from './work_store.js'
 import { buildDiagnosticExport } from './diagnostic_export.js'
+import { countPerfunctoryStreak, distillPartnerMemory, pickDualTrackNextStep } from './partner_brain.js'
 
 /**
  * R7 P0-3：主状态是按钟点算的（深夜锁 00:30–07:00、吃饭时段都是钟点条件），而工具子集又跟着
@@ -661,6 +662,12 @@ export function apply(ctx) {
         const note = why.reason === 'handoff' ? why.note || pendingHandoff(now) : null
         const candidates = loadCandidates(db, { sessionId, now })
         const vault = vaultContext(now)
+        const stratFacts = backgroundFacts(candidates, BACKGROUND_LIMIT)
+        const stratDigest = distillPartnerMemory({
+          facts: stratFacts,
+          horizons: readState(stateFile('horizons.json'), null),
+          vaultRecent: vault?.recent,
+        }).digestLines
         const prompt = buildPrompt({
           role: 'strategist',
           reason: why.reason,
@@ -671,7 +678,8 @@ export function apply(ctx) {
           phone: phoneOf(req?.phone),
           intraday: v4Hub?.getStorylinePromptBlock?.(now) || '',
           commitments: readCommitments(home(), now, 3),
-          facts: backgroundFacts(candidates, BACKGROUND_LIMIT),
+          facts: stratFacts,
+          partnerDigest: stratDigest,
           vault,
           names: roleNames(config),
           owner: config.owner,
@@ -810,18 +818,33 @@ export function apply(ctx) {
       const stockHit = stockRewriteHint
         ? (stockHitRaw ? stockHitRaw + '｜改写要求：' + stockRewriteHint : stockRewriteHint)
         : stockHitRaw
+      const feedBankState = cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
+      const feedAllBank = loadAllBankQuestions()
+      const feedReviewCards = dueCards(loadReviewCards(), now, { limit: 6 })
+      const compHorizons = readState(stateFile('horizons.json'), null)
+      const partnerDigest = distillPartnerMemory({
+        facts,
+        horizons: compHorizons,
+        wrongQuestions: feedAllBank.slice(0, 2),
+        reviewCards: feedReviewCards,
+        vaultRecent: vault?.recent,
+      }).digestLines
+      const liveCoreCfg = loadLiveCoreState()
       const basePrompt = buildPrompt({
         topic,
         facts,
+        partnerDigest,
+        perfunctoryStreak: countPerfunctoryStreak(entries, classifyReply),
+        energyTier: liveCoreCfg?.energyTier || 'L2',
         episodes,
         commitments,
         liveFeed: (() => {
           try {
             return collectSisterFeed(now, {
               ledgerEntries: entries,
-              questionBank: loadAllBankQuestions(),
-              bankState: cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null)),
-              reviewCards: dueCards(loadReviewCards(), now, { limit: 6 }),
+              questionBank: feedAllBank,
+              bankState: feedBankState,
+              reviewCards: feedReviewCards,
               commitments,
               vault,
               phone,
@@ -10586,7 +10609,17 @@ export function apply(ctx) {
     return list.some((e) => (e?.state === 'bank-quiz-answer' || e?.state === 'quiz-solved') && now - Number(e?.at || 0) <= 2 * 60_000)
   }
 
+  let sisterFeedCache = { home: '', at: 0, value: null }
+
   function collectSisterFeed(now = Date.now(), opts = {}) {
+    const hasOverrides = Boolean(
+      opts.ledgerEntries || opts.bankState || opts.questionBank || opts.reviewCards ||
+      opts.experiences || opts.vault || opts.commitments || opts.phone,
+    )
+    const curHome = home()
+    if (!hasOverrides && sisterFeedCache.value && sisterFeedCache.home === curHome && now - sisterFeedCache.at < 15_000) {
+      return sisterFeedCache.value
+    }
     const ledgerEntries = Array.isArray(opts.ledgerEntries) ? opts.ledgerEntries : readLedger(home(), 120)
     const bankState = opts.bankState || cleanBankUnlockState(readState(stateFile('bank-unlock.json'), null))
     const questionBank = Array.isArray(opts.questionBank) ? opts.questionBank : loadAllBankQuestions()
@@ -10644,7 +10677,7 @@ export function apply(ctx) {
       commitments,
       phone,
     })
-    return {
+    const bundle = {
       ledgerEntries,
       bankState,
       questionBank,
@@ -10657,6 +10690,10 @@ export function apply(ctx) {
       phone,
       sisterFeed,
     }
+    if (!hasOverrides) {
+      sisterFeedCache = { home: curHome, at: now, value: bundle }
+    }
+    return bundle
   }
 
   function evaluateLiveCoreNow(now = Date.now(), opts = {}) {
@@ -10796,6 +10833,9 @@ export function apply(ctx) {
       alwaysOnLive: Boolean(st.alwaysOnLive),
       keeperStrict: st.keeperStrict !== false,
       headsetKeepalive: st.headsetKeepalive !== false,
+      pulseIntervalMin: [0, 5, 10, 15].includes(Math.round(Number(st.pulseIntervalMin)))
+        ? Math.round(Number(st.pulseIntervalMin))
+        : 0,
       energyTier: ['L0', 'L1', 'L2', 'L3'].includes(String(st.energyTier || '').toUpperCase())
         ? String(st.energyTier).toUpperCase()
         : 'L2',
@@ -10816,6 +10856,10 @@ export function apply(ctx) {
       quizReliefCount: Math.max(0, Number(st.quizReliefCount) || 0),
       lastRecap: st.lastRecap || null,
       activeDepartment: evalRes?.department || st.lastDepartment || st.lastPayload?.department || null,
+      dualTrackNext: evalRes?.dualTrackNext || st.lastPayload?.dualTrackNext || pickDualTrackNextStep({
+        horizons: readState(stateFile('horizons.json'), null),
+        wrongQuestions: feedPreview?.quizzes || [],
+      }),
       dice: evalRes?.dice || st.lastPayload?.dice || null,
       feedPreview,
       payload: evalRes?.payload || st.lastPayload || null,
@@ -10916,6 +10960,9 @@ export function apply(ctx) {
         ...(b.alwaysOnLive !== undefined ? { alwaysOnLive: Boolean(b.alwaysOnLive) } : {}),
         ...(b.keeperStrict !== undefined ? { keeperStrict: Boolean(b.keeperStrict) } : {}),
         ...(b.headsetKeepalive !== undefined ? { headsetKeepalive: Boolean(b.headsetKeepalive) } : {}),
+        ...(b.pulseIntervalMin !== undefined && [0, 5, 10, 15].includes(Math.round(Number(b.pulseIntervalMin)))
+          ? { pulseIntervalMin: Math.round(Number(b.pulseIntervalMin)) }
+          : {}),
         ...(['L0', 'L1', 'L2', 'L3'].includes(tierRaw) ? { energyTier: tierRaw } : {}),
         ...(b.preferredMode !== undefined ? { preferredMode: b.preferredMode === 'text' ? 'text' : 'live' } : {}),
         ...(b.autoCooldownMin !== undefined
@@ -10984,6 +11031,7 @@ export function apply(ctx) {
         alwaysOnLive: true,
         keeperStrict: true,
         headsetKeepalive: true,
+        pulseIntervalMin: 5,
         energyTier: nextTier,
         preferredMode: 'live',
         textGraceUntil: 0,
@@ -12734,6 +12782,8 @@ export function apply(ctx) {
           reason: liveCoreRes.reason,
           urgent: Boolean(liveCoreRes.urgent),
           voiceOnly: Boolean(liveCoreRes.voiceOnly),
+          playChime: Boolean(liveCoreRes.playChime),
+          pulseIntervalMin: Number(liveCoreRes.nextState?.pulseIntervalMin || 0),
           alwaysOnLive: Boolean(liveCoreRes.nextState?.alwaysOnLive),
           earlyBailout: liveCoreRes.reason === 'live_early_bailout',
           preferVoice: true,

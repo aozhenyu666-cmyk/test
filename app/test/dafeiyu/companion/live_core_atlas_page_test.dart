@@ -35,6 +35,7 @@ class _FakeAtlasChannel extends ProactiveChannel {
       final alwaysOn = body?['alwaysOnLive'] == true;
       final energyTier = '${body?['energyTier'] ?? 'L2'}';
       final headsetKeepalive = body?['headsetKeepalive'] != false;
+      final pulseIntervalMin = (body?['pulseIntervalMin'] as num?)?.round() ?? 0;
       return {
         'v': 1,
         'ok': true,
@@ -44,6 +45,7 @@ class _FakeAtlasChannel extends ProactiveChannel {
         'wantScreenShare': true,
         'energyTier': energyTier,
         'headsetKeepalive': headsetKeepalive,
+        'pulseIntervalMin': pulseIntervalMin,
         'phase': alwaysOn ? 'ignited' : 'standby',
         'reason': alwaysOn ? 'always_on_keeper' : 'standby',
         'feedPreview': const {
@@ -465,6 +467,18 @@ void main() {
     await settlePhone(tester);
     expect(
       ch.liveCoreCalls.any((c) => c?['action'] == 'set_config' && c?['energyTier'] == 'L0'),
+      isTrue,
+    );
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('atlas-pulse-chip')),
+      180,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.byKey(const ValueKey('atlas-pulse-chip')));
+    await settlePhone(tester);
+    expect(
+      ch.liveCoreCalls.any((c) => c?['action'] == 'set_config' && c?['pulseIntervalMin'] == 5),
       isTrue,
     );
 

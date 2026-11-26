@@ -10,6 +10,7 @@ import { temperLine } from './temper.js'
 import { drillLines, opLines } from './drills.js'
 import { trackLines } from './tracks.js'
 import { COMPANION_REPLY_LINE, COMPANION_SERVE_RULES, companionBallFrame, companionSpecialLines, strategistBallFrame } from './roles.js'
+import { buildAntiPerfunctoryDirective, sanitizeFactLine } from './partner_brain.js'
 import { hm } from './tz.js'
 
 const KIND_RULES = {
@@ -87,7 +88,10 @@ export function buildPrompt(input) {
     }
     if (facts.length) {
       lines.push('你记得的事（别逐条复述）：')
-      for (const f of facts) lines.push('- ' + String(f).slice(0, 200))
+      for (const f of facts) lines.push('- ' + sanitizeFactLine(String(f).slice(0, 200)))
+    }
+    if (Array.isArray(input.partnerDigest) && input.partnerDigest.length) {
+      for (const l of input.partnerDigest) lines.push(String(l))
     }
     for (const l of vaultLines(input.vault)) lines.push(l)
     return lines.join('\n')
@@ -188,9 +192,12 @@ export function buildPrompt(input) {
       for (const ex of fExp) lines.push('- 近期经历切片：' + String(ex || '').slice(0, 120))
     }
   }
+  if (Array.isArray(input.partnerDigest) && input.partnerDigest.length) {
+    for (const l of input.partnerDigest) lines.push(String(l))
+  }
   if (facts.length) {
     lines.push('背景（只是让你别问错，不要逐条复述）：')
-    for (const f of facts) lines.push('- ' + String(f).slice(0, 200))
+    for (const f of facts) lines.push('- ' + sanitizeFactLine(String(f).slice(0, 200)))
   }
   if (episodes.length) {
     lines.push('最近发生（可以自然带一句，不要罗列）：')
@@ -208,7 +215,12 @@ export function buildPrompt(input) {
   if (Number.isFinite(mood)) {
     lines.push('现在的心情值 ' + Math.round(mood) + '/100：只影响语气，不要在句子里报这个数字。')
   }
-  if (REPLY_HINTS[replyClass]) lines.push(REPLY_HINTS[replyClass])
+  const antiPerf = buildAntiPerfunctoryDirective(replyClass, {
+    streak: Number(input.perfunctoryStreak) || 0,
+    energyTier: String(input.energyTier || 'L2'),
+  })
+  if (antiPerf) lines.push(antiPerf)
+  else if (REPLY_HINTS[replyClass]) lines.push(REPLY_HINTS[replyClass])
   if (input.grace) {
     lines.push('他刚才讲了一个站得住的理由，你答应先松一会儿（大约 20 分钟不锁）。别食言，也别假装没这回事。')
   }

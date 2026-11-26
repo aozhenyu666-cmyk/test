@@ -481,7 +481,9 @@ export function createV4Hub(deps) {
     if (modal.active && (!cur.planModalLastShownAt || cur.planModalLastShownAt < (cur.planModalSnoozeUntil || 0))) {
       saveDayPlan({ ...cur, day, planModalLastShownAt: now }, now)
     }
-    return modal
+    return modal.active
+      ? { ...modal, shownAt: Number(cur.planModalLastShownAt) || now }
+      : modal
   }
 
   function funBudgetMinNow(now = Date.now()) {
@@ -675,13 +677,22 @@ export function createV4Hub(deps) {
 
   function submitDelivery(body = {}, now = Date.now()) {
     const cur = loadDayPlan(now)
+    const blockIdArg = body?.blockId ?? body?.id ?? ''
     const res = submitDayBlockDelivery(cur, {
-      blockId: body?.blockId ?? body?.id ?? '',
+      blockId: blockIdArg,
       summary: body?.summary ?? body?.submissionText ?? '',
       evidenceUrl: body?.evidenceUrl ?? '',
+      pasteDetected: Boolean(body?.pasteDetected),
+      spotCheckAnswer: body?.spotCheckAnswer ?? '',
+      voiceProof: Boolean(body?.voiceProof),
       now,
     })
-    if (!res.ok) return { v: 1, ...res }
+    if (!res.ok) {
+      if (res.error === 'paste-blocked') {
+        record({ state: 'delivery-paste-blocked', at: now, blockId: String(blockIdArg || '') })
+      }
+      return { v: 1, ...res }
+    }
     const saved = saveDayPlan(res.state, now)
     record({ state: 'dayblock-delivery-submitted', at: now, blockId: res.block.id, title: res.block.title })
     recordStoryline({

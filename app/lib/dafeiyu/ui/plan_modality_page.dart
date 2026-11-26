@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../ui/common/capsule_chip.dart';
 import '../../ui/common/overview_card.dart';
@@ -866,9 +867,13 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
 
     if (needsHardVerify) {
       final sumCtrl = TextEditingController(text: '${block['submissionText'] ?? ''}');
+      final spotCtrl = TextEditingController();
       var notifyBoss = true;
+      var pasteDetected = false;
+      var prevLen = 0;
+      var photoPath = '';
       String? errorText;
-      final result = await showDialog<(String, bool)>(
+      final result = await showDialog<(String, bool, bool, String, String)>(
         context: context,
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setDialog) => AlertDialog(
@@ -887,9 +892,57 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
                       controller: sumCtrl,
                       minLines: 3,
                       maxLines: 6,
+                      onChanged: (val) {
+                        final delta = val.length - prevLen;
+                        prevLen = val.length;
+                        if (delta >= 12) {
+                          unawaited(Clipboard.getData(Clipboard.kTextPlain).then((clip) {
+                            final c = (clip?.text ?? '').trim();
+                            if (c.length >= 12 && val.contains(c.substring(0, 12)) && ctx.mounted) {
+                              setDialog(() => pasteDetected = true);
+                            }
+                          }));
+                        }
+                      },
                       decoration: const InputDecoration(
                         labelText: '真实物理产出 / 题量 / 文件增量（至少 12 字）',
                         border: OutlineInputBorder(),
+                      ),
+                    ),
+                    if (pasteDetected) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        '⚠️ 检测到剪贴板整段粘贴：需拍手写凭证或手打下方变更要素抽查才可送审',
+                        style: TextStyle(color: DshColors.of(ctx).danger, fontSize: 12),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      key: const ValueKey('verify-photo-btn'),
+                      onPressed: () async {
+                        try {
+                          final picked = await ImagePicker().pickImage(
+                            source: ImageSource.camera,
+                            imageQuality: 70,
+                          );
+                          if (picked != null && ctx.mounted) {
+                            setDialog(() => photoPath = picked.path);
+                          }
+                        } catch (_) {}
+                      },
+                      icon: Icon(photoPath.isNotEmpty ? AppIcons.verified : AppIcons.camera, size: 16),
+                      label: Text(photoPath.isNotEmpty ? '✓ 已附手写/现场拍照凭证' : '📷 拍手写草稿凭证（推荐）'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      key: const ValueKey('verify-spotcheck-input'),
+                      controller: spotCtrl,
+                      minLines: 1,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: '🧠 变更要素 1 句抽查（改 1 条件结论怎么偏？≥8 字加奖 +5m）',
+                        border: OutlineInputBorder(),
+                        isDense: true,
                       ),
                     ),
                     if (errorText != null) ...[
@@ -917,7 +970,7 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
                     setDialog(() => errorText = '验收块交付至少 12 个字（当前 ${text.length} 字），严禁空口过关');
                     return;
                   }
-                  Navigator.pop(ctx, (text, notifyBoss));
+                  Navigator.pop(ctx, (text, notifyBoss, pasteDetected, spotCtrl.text.trim(), photoPath));
                 },
                 child: const Text('提交交付送审'),
               ),
@@ -926,10 +979,29 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
         ),
       );
       disposeAfterRoute(sumCtrl);
+      disposeAfterRoute(spotCtrl);
       if (!mounted || result == null) return;
 
       final submitted = result.$1;
       final sendBoss = result.$2;
+      final wasPasted = result.$3;
+      final spotAnswer = result.$4;
+      final evidencePhoto = result.$5;
+      final submitRes = await _channel.planContractOp({
+        'action': 'submit_delivery',
+        'blockId': id,
+        'summary': submitted,
+        if (wasPasted) 'pasteDetected': true,
+        if (spotAnswer.isNotEmpty) 'spotCheckAnswer': spotAnswer,
+        if (evidencePhoto.isNotEmpty) 'evidenceUrl': evidencePhoto,
+      });
+      if (!mounted) return;
+      if (submitRes != null && submitRes['ok'] == false) {
+        final msg = '${submitRes['text'] ?? '提交未通过真实性校验'}';
+        setState(() => _banner = msg);
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(msg)));
+        return;
+      }
       setState(() {
         _hasLocalBlockEdits = true;
         _dayBlocks = [
@@ -940,11 +1012,6 @@ class _PlanModalityPageState extends State<PlanModalityPage> {
               b,
         ];
         _banner = '✓ 已提交「$title」交付，等待主管/Gemini 终审解锁';
-      });
-      await _channel.planContractOp({
-        'action': 'submit_delivery',
-        'blockId': id,
-        'summary': submitted,
       });
       if (sendBoss) {
         unawaited(_channel.wallBossChat({'action': 'request_judge', 'blockId': id}).catchError((_) => null));

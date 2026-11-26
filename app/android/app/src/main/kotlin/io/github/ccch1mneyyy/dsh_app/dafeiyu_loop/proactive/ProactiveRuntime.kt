@@ -2340,6 +2340,7 @@ object ProactiveRuntime {
                 ?: "countdown_3s"
             val preferVoice = autoPull["preferVoice"] == true
             val voiceOnly = autoPull["voiceOnly"] == true
+            val playChime = autoPull["playChime"] == true
             val autoClickLive = autoPull["autoClickLive"] == true
             val requestScreenShare = autoPull["requestScreenShare"] == true
             val pullUrgent = autoPull["urgent"] == true || autoPull["earlyBailout"] == true
@@ -2352,6 +2353,9 @@ object ProactiveRuntime {
             ) {
                 lastAutoPullAt = stamp
                 autoPulledNow = true
+                if (playChime) {
+                    ProactiveHaptics.playHeartbeatChime(app, urgent = pullUrgent)
+                }
                 if (voiceOnly) {
                     if (voiceLine.isNotBlank()) {
                         val spoken = VoicePlan.brief(voiceLine) ?: voiceLine.trim().take(VoicePlan.MAX_CHARS)

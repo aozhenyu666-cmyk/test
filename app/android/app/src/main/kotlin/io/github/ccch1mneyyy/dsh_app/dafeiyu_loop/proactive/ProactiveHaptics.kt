@@ -1,8 +1,13 @@
 package io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive
 
 import android.content.Context
+import android.media.AudioManager
+import android.media.RingtoneManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.CombinedVibration
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -34,6 +39,27 @@ object ProactiveHaptics {
     /** 轻柔提示震动：单次短促微振。 */
     fun vibrateGentleNudge(ctx: Context?) {
         vibrateWaveform(ctx, GENTLE_NUDGE_TIMINGS, GENTLE_NUDGE_AMPLITUDES)
+    }
+
+    /** 5 分钟声学节拍钟：即使手机息屏放桌上未触碰，也发出清晰双音铃声 + 震动打破超级降频。 */
+    fun playHeartbeatChime(ctx: Context?, urgent: Boolean = false) {
+        if (ctx == null) return
+        vibrateSuperSpark(ctx)
+        runCatching {
+            val vol = if (urgent) 92 else 72
+            val tg = ToneGenerator(AudioManager.STREAM_NOTIFICATION, vol)
+            val tone = if (urgent) ToneGenerator.TONE_PROP_BEEP2 else ToneGenerator.TONE_PROP_ACK
+            tg.startTone(tone, 260)
+            Handler(Looper.getMainLooper()).postDelayed({
+                runCatching { tg.release() }
+            }, 340L)
+        }.onFailure {
+            runCatching {
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION) ?: return@runCatching
+                val ring = RingtoneManager.getRingtone(ctx.applicationContext ?: ctx, uri)
+                ring?.play()
+            }
+        }
     }
 
     private fun vibrateWaveform(ctx: Context?, timings: LongArray, amplitudes: IntArray) {

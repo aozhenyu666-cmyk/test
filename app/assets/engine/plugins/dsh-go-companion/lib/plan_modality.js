@@ -2012,16 +2012,86 @@ export function evaluateDayBlocksTick(rawState, {
 /**
  * 提交某条计划块的物理交付物/因果结论，进入待终审状态（不会直接松开 P3 验收锁，须经终审 PASS）。
  */
-export function submitDayBlockDelivery(rawState, { blockId = '', summary = '', evidenceUrl = '', now = Date.now() } = {}) {
+export const SPOT_CHECK_QUESTIONS = Object.freeze([
+  '把你刚交的内容里最关键的 1 个条件改反，结论会怎么变？（用自己大白话手打 ≥8 字）',
+  '挑出 1 个最容易忽略的反例或例外条件（口头能讲给外行听懂，手打 ≥8 字）',
+  '用一句话说清「如果 feature X 成立 -> 下次行动是 Y」的触发条件（≥8 字）',
+])
+
+const AI_BOILERPLATE_RE = /(综上所述|解题步骤如下|答案解析[：:]|参考答案如下|首先[，,].{4,}其次[，,].{4,}最后|\*\*[^*]{2,20}\*\*[：:])/s
+
+/**
+ * 交付防敷衍审计（治“复制粘贴 AI 答案秒过验收锁”）：
+ * 命中 AI 模板套话或检测到剪贴板整段粘贴且无照片/语音/变更要素抽查时直接拦截。
+ */
+export function auditDeliveryAuthenticity({
+  text = '',
+  evidenceUrl = '',
+  pasteDetected = false,
+  spotCheckAnswer = '',
+  voiceProof = false,
+} = {}) {
+  const s = String(text || '').trim()
+  const hasPhotoOrLink = Boolean(String(evidenceUrl || '').trim())
+  const hasSpotCheck = String(spotCheckAnswer || '').trim().length >= 8
+  const hasVoice = Boolean(voiceProof)
+  const aiHit = AI_BOILERPLATE_RE.test(s)
+  const flaggedPaste = Boolean(pasteDetected) || aiHit
+  const spotCheckPrompt = SPOT_CHECK_QUESTIONS[s.length % SPOT_CHECK_QUESTIONS.length]
+
+  if (flaggedPaste && !hasPhotoOrLink && !hasSpotCheck && !hasVoice) {
+    return {
+      ok: false,
+      error: 'paste-blocked',
+      reason: '检测到整段粘贴或 AI 模板套话！禁止拿 AI 答案糊弄验收锁——请改用自己大白话手打、拍摄手写草稿，或填写下方「变更要素 1 句抽查」。',
+      spotCheckPrompt,
+    }
+  }
+  const verifiedHuman = hasPhotoOrLink || hasSpotCheck || hasVoice
+  return {
+    ok: true,
+    authenticity: verifiedHuman ? 'verified_human' : 'typed_text',
+    bonusMin: verifiedHuman ? 5 : 0,
+    spotCheckPrompt,
+  }
+}
+
+export function submitDayBlockDelivery(rawState, {
+  blockId = '',
+  summary = '',
+  evidenceUrl = '',
+  pasteDetected = false,
+  spotCheckAnswer = '',
+  voiceProof = false,
+  now = Date.now(),
+} = {}) {
   const cur = cleanDayPlanState(rawState, { now })
   const text = String(summary || '').trim()
   const extra = String(evidenceUrl || '').trim()
+  const spotCheck = String(spotCheckAnswer || '').trim().slice(0, 300)
   const combined = extra ? `${text}\n[附件/路径] ${extra}`.trim() : text
   if (combined.length < 12) {
     return {
       ok: false,
       error: 'too-short',
       text: '交付说明至少 12 个字，请写清真实产出、文件/题量或核心因果结论',
+      block: null,
+      state: cur,
+    }
+  }
+  const audit = auditDeliveryAuthenticity({
+    text,
+    evidenceUrl: extra,
+    pasteDetected,
+    spotCheckAnswer: spotCheck,
+    voiceProof,
+  })
+  if (!audit.ok) {
+    return {
+      ok: false,
+      error: audit.error,
+      text: audit.reason,
+      spotCheckPrompt: audit.spotCheckPrompt,
       block: null,
       state: cur,
     }
@@ -2034,11 +2104,14 @@ export function submitDayBlockDelivery(rawState, { blockId = '', summary = '', e
   if (!target) {
     return { ok: false, error: 'no-block', text: '未找到待交付的验收时间块', block: null, state: cur }
   }
+  const finalSubmission = spotCheck ? `${combined}\n[变更要素抽查] ${spotCheck}` : combined
   const nextBlocks = cur.dayBlocks.map((b) => (
     b.id === target.id
       ? {
           ...b,
-          submissionText: combined.slice(0, 1200),
+          submissionText: finalSubmission.slice(0, 1200),
+          authenticity: audit.authenticity,
+          bonusMin: audit.bonusMin,
           submittedAt: now,
           verifyStatus: 'submitted',
           judgeVerdict: '',
@@ -2049,6 +2122,8 @@ export function submitDayBlockDelivery(rawState, { blockId = '', summary = '', e
   const updatedBlock = nextBlocks.find((b) => b.id === target.id)
   return {
     ok: true,
+    authenticity: audit.authenticity,
+    bonusMin: audit.bonusMin,
     block: updatedBlock,
     state: { ...cur, dayBlocks: nextBlocks, updatedAt: now },
   }

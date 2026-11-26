@@ -1084,6 +1084,8 @@ object ProactiveOverlay {
         private var input: EditText? = null
         private var statusView: TextView? = null
         private var submitBtn: TextView? = null
+        private var escapeBtn: TextView? = null
+        private var escapeStage = 0
         private var typing = false
         private var busy = false
         private val idleTimeout = Runnable { close() }
@@ -1156,14 +1158,27 @@ object ProactiveOverlay {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            headerLine.addView(TextView(context).apply {
-                text = "收起"
+            val dismissLabel = TextView(context).apply {
+                text = "稍后"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setTextColor(palette.muted)
                 setPadding(context.dp(8f), context.dp(4f), context.dp(2f), context.dp(4f))
                 isClickable = true
-                setOnClickListener { close() }
-            })
+                setOnClickListener {
+                    val typedLen = input?.text?.toString()?.trim()?.length ?: 0
+                    if (typedLen >= 6 || escapeStage >= 1) {
+                        close()
+                    } else {
+                        escapeStage = 1
+                        text = "确认休整"
+                        setTextColor(palette.accent)
+                        ProactiveHaptics.vibrateGentleNudge(context)
+                        setStatus("不能顺手收起绕过：点「灌料进 Live」或写 ≥6 字卡点；真没电再点一次确认休整")
+                    }
+                }
+            }
+            escapeBtn = dismissLabel
+            headerLine.addView(dismissLabel)
             metaCol.addView(headerLine)
 
             if (anchor.isNotBlank()) {
@@ -1917,16 +1932,6 @@ object ProactiveOverlay {
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 setTextColor(palette.accent)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            if (!earlyBailout) {
-                head.addView(TextView(context).apply {
-                    text = "收起"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                    setTextColor(palette.muted)
-                    setPadding(context.dp(8f), context.dp(4f), context.dp(2f), context.dp(4f))
-                    isClickable = true
-                    setOnClickListener { destroy() }
-                })
-            }
             card.addView(head)
 
             card.addView(TextView(context).apply {

@@ -740,9 +740,13 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     final bridgeReady = _bridgeStatus['healthy'] == true;
     final energyTier = '${_liveCore['energyTier'] ?? 'L2'}';
     final headsetKeepalive = _liveCore['headsetKeepalive'] != false;
+    final pulseMin = (_liveCore['pulseIntervalMin'] as num?)?.round() ?? 0;
     final activeDept = _asMap(_liveCore['activeDepartment']);
     final deptLabel = '${activeDept['label'] ?? ''}'.trim();
     final nextDeptLabel = '${activeDept['nextLabel'] ?? ''}'.trim();
+    final dualTrack = _asMap(_liveCore['dualTrackNext']);
+    final dualLong = '${dualTrack['longTitle'] ?? ''}'.trim();
+    final dualMicro = '${dualTrack['microTask'] ?? ''}'.trim();
 
     return [
       ListPageCard(
@@ -794,6 +798,16 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                       color: theme.colorScheme.primary,
                       fontWeight: FontWeight.w600,
                     ),
+                  ),
+                ],
+                if (dualMicro.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '🎯 双轨微步：${dualLong.isNotEmpty ? '$dualLong → ' : ''}$dualMicro',
+                    key: const ValueKey('atlas-dualtrack-line'),
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ],
@@ -1029,6 +1043,12 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                       label: const Text('息屏耳机保活'),
                       selected: headsetKeepalive,
                       onSelected: _busy ? null : (v) => unawaited(_updateConfig({'headsetKeepalive': v})),
+                    ),
+                    FilterChip(
+                      key: const ValueKey('atlas-pulse-chip'),
+                      label: Text(pulseMin > 0 ? '🔔 ${pulseMin}m 声学节拍钟已开' : '🔔 5m 声学节拍钟'),
+                      selected: pulseMin > 0,
+                      onSelected: _busy ? null : (v) => unawaited(_updateConfig({'pulseIntervalMin': v ? 5 : 0})),
                     ),
                     ActionChip(
                       key: const ValueKey('atlas-mute-chip'),

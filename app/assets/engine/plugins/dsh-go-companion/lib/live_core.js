@@ -10,6 +10,7 @@
 
 import { DEPT_LABELS, inferDepartment } from './departments.js'
 import { runMainlineAlignmentAudit, runRedFlagScamAudit } from './dept_skills.js'
+import { pickDualTrackNextStep } from './partner_brain.js'
 import { collectAnchorCandidates, pickWeightedCandidate } from './super_spark.js'
 import { DEFAULT_GEMINI_SETTING, RECEIPT_FORMAT, settingLines } from './trigger.js'
 import { hm as zoneHm, ymd as zoneYmd, zoneOr } from './tz.js'
@@ -146,6 +147,8 @@ export const LIVE_REASON_LABELS = Object.freeze({
   always_on_keeper: '常驻 Live 护航自动拉回',
   live_early_bailout: '进入 Live 秒退 · 严格强拉回',
   headset_live_dropped: '息屏戴耳机掉麦 · 语音唤醒拉回',
+  pulse_super_downclock: '5分钟声学节拍 · 打破不碰手机降频',
+  no_plan_acoustic_ignite: '未定计划超时 · 声学破冰接管',
   text_mode_grace: 'Gemini 文本沉淀窗 · 暂不切回 Live',
   switch_to_live: '手动切回 Gemini Live（含看屏）',
   switch_to_text: '手动切至 Gemini 文本（MCP 沉淀）',
@@ -253,6 +256,10 @@ function normalizeLiveState(raw) {
     alwaysOnLive: Boolean(s.alwaysOnLive),
     keeperStrict: s.keeperStrict !== false,
     headsetKeepalive: s.headsetKeepalive !== false,
+    pulseIntervalMin: [0, 5, 10, 15].includes(Math.round(Number(s.pulseIntervalMin)))
+      ? Math.round(Number(s.pulseIntervalMin))
+      : 0,
+    lastPulseAt: Math.max(0, Number(s.lastPulseAt) || 0),
     energyTier: ['L0', 'L1', 'L2', 'L3'].includes(String(s.energyTier || '').toUpperCase())
       ? String(s.energyTier).toUpperCase()
       : 'L2',
@@ -643,6 +650,7 @@ export function evaluateLiveCore({
     phase,
     urgent: false,
     voiceOnly: false,
+    playChime: false,
     targetMode: st.textGraceUntil > ts ? 'text' : 'live',
     energyTier: st.energyTier,
     feedPreview: st.lastFeedPreview || null,
@@ -667,7 +675,9 @@ export function evaluateLiveCore({
     if (arbiter?.priority === 'P0' || config?.emergencyActive) return yieldWith('emergency', 'yielded_emergency')
     if (arbiter?.priority === 'P1') return yieldWith('sleeping', 'yielded_night')
     if (arbiter?.priority === 'P1.2') return yieldWith('break', 'yielded_break')
-    if (planModal?.active) return yieldWith('plan_modal_priority', 'yielded_plan_modal')
+    const modalShownAt = Math.max(0, Number(planModal?.shownAt) || 0)
+    const modalStale = modalShownAt > 0 && ts - modalShownAt >= 10 * 60_000
+    if (planModal?.active && !modalStale) return yieldWith('plan_modal_priority', 'yielded_plan_modal')
     if (mealOrQuiet) return yieldWith('meal_or_quiet', 'standby')
     const inTextGrace = st.textGraceUntil > ts && (st.preferredMode === 'text' || (inGemini && !voiceActiveNow))
     if (voiceActiveNow) return yieldWith('live_running', 'live_active')
@@ -693,6 +703,7 @@ export function evaluateLiveCore({
           action: 'voice_nudge',
           urgent: true,
           voiceOnly: true,
+          playChime: true,
           targetMode: 'live',
           bankState,
           questionBank,
@@ -717,6 +728,50 @@ export function evaluateLiveCore({
           rng,
         })
         return res
+      }
+      const hmNow = zoneHm(ts, config?.timeZone || 'Asia/Shanghai')
+      const hhNow = Number(hmNow.slice(0, 2)) || 0
+      const awakeDaytime = hhNow >= 8 && hhNow < 22
+      const pulseGapMs = st.pulseIntervalMin > 0 ? st.pulseIntervalMin * 60_000 : 0
+      const lastAcousticRef = Math.max(st.lastPulseAt, st.lastVoiceActiveAt, st.lastIgniteAt)
+      const canAcousticPulse = Boolean(
+        pulseGapMs > 0 &&
+        awakeDaytime &&
+        st.energyTier !== 'L0' &&
+        (lastAcousticRef <= 0 || ts - lastAcousticRef >= pulseGapMs),
+      )
+      if (canAcousticPulse) {
+        return buildTriggeredResult({
+          ts,
+          nextBase,
+          reason: 'pulse_super_downclock',
+          action: 'acoustic_pulse',
+          urgent: true,
+          voiceOnly: true,
+          playChime: true,
+          targetMode: 'live',
+          bankState,
+          questionBank,
+          reviewCards,
+          recentQuizzes,
+          experiences,
+          horizons,
+          vault,
+          vaultSnippets,
+          settingText,
+          phone,
+          commitments,
+          recap,
+          bridge,
+          modeHint,
+          diceHint,
+          customFeed,
+          scalpelHint,
+          arbiter,
+          hasTodayPlan,
+          runningBout,
+          rng,
+        })
       }
       return yieldWith('screen_off', 'standby')
     }
@@ -806,6 +861,10 @@ export function evaluateLiveCore({
       reason: triggerReason,
       action: (triggerReason === 'live_reengage' || triggerReason === 'live_early_bailout') ? 'reengage' : 'ignite',
       urgent,
+      playChime: Boolean(
+        triggerReason === 'live_early_bailout' ||
+        (st.pulseIntervalMin > 0 && (triggerReason === 'always_on_keeper' || triggerReason === 'gaze_ignite_under_lock' || triggerReason === 'live_reengage')),
+      ),
       targetMode: 'live',
       bankState,
       questionBank,
@@ -869,6 +928,7 @@ function buildTriggeredResult({
   action,
   urgent = false,
   voiceOnly = false,
+  playChime = false,
   targetMode = 'live',
   bankState,
   questionBank,
@@ -951,21 +1011,31 @@ function buildTriggeredResult({
     scalpelHint,
     department,
   })
+  const dualTrackNext = pickDualTrackNextStep({
+    horizons,
+    wrongQuestions: sisterFeed?.quizzes || [],
+    reviewCards,
+    vaultRecent: mergedSnippets,
+  })
   const shortAsk = cleanLine(anchor?.prompt || dice.ask, 64)
-  const voiceLine = reason === 'headset_live_dropped'
-    ? '耳机里的 Gemini Live 刚才断了，别滑进发呆，按一下耳机或亮屏点回到 Live 继续聊'
-    : (targetMode === 'text'
-        ? '已切至 Gemini 文本模式并带上双鱼素材，直接粘贴发消息调 MCP 沉淀'
-        : (reason === 'live_early_bailout'
-            ? `刚才进 Live 秒退了，回来看屏直接接招：${cleanLine(dice.ask, 48)}`
-            : (reason === 'live_reengage'
-                ? `刚才连麦断了，别直接散掉，回 Live 接一句：${cleanLine(dice.ask, 54)}`
-                : `骰${dice.face}${dice.name}。${shortAsk}`)))
+  const voiceLine = reason === 'pulse_super_downclock'
+    ? dualTrackNext.voiceCue
+    : (reason === 'headset_live_dropped'
+        ? '耳机里的 Gemini Live 刚才断了，别滑进发呆，按一下耳机或亮屏点回到 Live 继续聊'
+        : (targetMode === 'text'
+            ? '已切至 Gemini 文本模式并带上双鱼素材，直接粘贴发消息调 MCP 沉淀'
+            : (reason === 'live_early_bailout'
+                ? `刚才进 Live 秒退了，回来看屏直接接招：${cleanLine(dice.ask, 48)}`
+                : (reason === 'live_reengage'
+                    ? `刚才连麦断了，别直接散掉，回 Live 接一句：${cleanLine(dice.ask, 54)}`
+                    : `骰${dice.face}${dice.name}。${shortAsk}`))))
   const topic = targetMode === 'text'
     ? `文本沉淀：${cleanLine(anchor?.topic || '双鱼喂料与 MCP 落库', 40)}`
-    : (reason === 'headset_live_dropped'
-        ? '息屏耳机 Live 掉线唤醒'
-        : `骰${dice.face}·${dice.name}：${cleanLine(anchor?.topic || '高密度拆题', 40)}`)
+    : (reason === 'pulse_super_downclock'
+        ? `5m 声学节拍：${cleanLine(dualTrackNext.microTask, 40)}`
+        : (reason === 'headset_live_dropped'
+            ? '息屏耳机 Live 掉线唤醒'
+            : `骰${dice.face}·${dice.name}：${cleanLine(anchor?.topic || '高密度拆题', 40)}`))
   const autoClickLive = !voiceOnly && targetMode !== 'text'
   const requestScreenShare = !voiceOnly && targetMode !== 'text' && Boolean(nextBase.wantScreenShare)
   const payload = {
@@ -975,9 +1045,11 @@ function buildTriggeredResult({
     action,
     urgent: Boolean(urgent),
     voiceOnly: Boolean(voiceOnly),
+    playChime: Boolean(playChime),
     targetMode,
     energyTier: nextBase.energyTier,
     department,
+    dualTrackNext,
     dice,
     anchorId: anchor?.id || '',
     anchorSource: anchor?.anchorSource || 'exam_pool',
@@ -993,6 +1065,7 @@ function buildTriggeredResult({
   const nextState = {
     ...nextBase,
     lastIgniteAt: ts,
+    lastPulseAt: reason === 'pulse_super_downclock' ? ts : nextBase.lastPulseAt,
     lastVoiceDropHandledAt: (reason === 'live_reengage' || reason === 'live_early_bailout' || reason === 'headset_live_dropped')
       ? ts
       : nextBase.lastVoiceDropHandledAt,
@@ -1012,9 +1085,11 @@ function buildTriggeredResult({
     phase: nextPhase,
     urgent: Boolean(urgent),
     voiceOnly: Boolean(voiceOnly),
+    playChime: Boolean(playChime),
     targetMode,
     energyTier: nextBase.energyTier,
     department,
+    dualTrackNext,
     dice,
     anchor,
     feedPreview: sisterFeed,
