@@ -18,6 +18,7 @@ import 'locks_balance_page.dart';
 import 'seal_page.dart';
 import 'today_cards.dart';
 import 'usage_analytics_page.dart';
+import 'wanshiming_page.dart';
 
 /// DSH Go · 三层战略作战室（3 页签：长期 · 北极星 / 中期 · 战役 / 今日 · 计划与验收锁）。
 class StrategyHorizonsPage extends StatefulWidget {
@@ -509,6 +510,7 @@ class _StrategyHorizonsPageState extends State<StrategyHorizonsPage> {
       title: '三层战略作战室',
       subtitle: const Text('长期北极星 · 中期战役 · 今日计划与验收锁'),
       actions: [
+        WanshimingCornerSealButton(channel: _channel),
         GlassIconButton(
           icon: AppIcons.lock,
           tooltip: '锁与余额总控',

@@ -296,6 +296,9 @@ object BuiltinPluginGuest {
                 "lib/wall_boss_runtime.js",
                 "lib/super_spark.js",
                 "lib/live_core.js",
+                "lib/diagnostic_export.js",
+                "lib/partner_brain.js",
+                "lib/v6_engine.js",
             ),
         ),
     )

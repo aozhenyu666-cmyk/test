@@ -273,6 +273,21 @@ import { evalBehaviorRadar } from './behavior_radar.js'
 import { cleanBankUnlockState } from './bank_unlock.js'
 import { SUPER_SPARK_DEFAULTS, generateSuperSpark } from './super_spark.js'
 import { LIVE_CORE_DEFAULTS, buildLiveCoreAtlas, buildLiveCoreBrief, buildSisterFeed, evaluateLiveCore, formatLiveCoreHistory } from './live_core.js'
+import {
+  applyAppeal as v6ApplyAppeal,
+  buildInterrogationPrompt as v6BuildInterrogationPrompt,
+  buildNineGrid as v6BuildNineGrid,
+  computePoolTelemetry as v6ComputePoolTelemetry,
+  deleteStele as v6DeleteStele,
+  evaluateWindowMode as v6EvaluateWindowMode,
+  ingestClipboardOrText as v6IngestClipboardOrText,
+  loadV6State,
+  normalizeFramework as v6NormalizeFramework,
+  recordMicroQuizAnswer as v6RecordMicroQuizAnswer,
+  sampleKnowledgeItems as v6SampleKnowledgeItems,
+  sweepForgetting as v6SweepForgetting,
+  upsertStele as v6UpsertStele,
+} from './v6_engine.js'
 
 export const name = 'dsh-go-companion'
 // Without this, `ctx.tools` below throws "cannot get property tools without inject"
@@ -663,9 +678,16 @@ export function apply(ctx) {
         const candidates = loadCandidates(db, { sessionId, now })
         const vault = vaultContext(now)
         const stratFacts = backgroundFacts(candidates, BACKGROUND_LIMIT)
+        const stratV6Samples = (() => {
+          try {
+            const v6s = loadV6State(readState, stateFile('v6-state.json'), now)
+            return v6SampleKnowledgeItems(v6s.pool, v6s.framework, { count: 2, now, markShown: false }).map((x) => ({ stem: x.claim }))
+          } catch { return [] }
+        })()
         const stratDigest = distillPartnerMemory({
           facts: stratFacts,
           horizons: readState(stateFile('horizons.json'), null),
+          wrongQuestions: stratV6Samples,
           vaultRecent: vault?.recent,
         }).digestLines
         const prompt = buildPrompt({
@@ -822,10 +844,16 @@ export function apply(ctx) {
       const feedAllBank = loadAllBankQuestions()
       const feedReviewCards = dueCards(loadReviewCards(), now, { limit: 6 })
       const compHorizons = readState(stateFile('horizons.json'), null)
+      const compV6Samples = (() => {
+        try {
+          const v6s = loadV6State(readState, stateFile('v6-state.json'), now)
+          return v6SampleKnowledgeItems(v6s.pool, v6s.framework, { count: 2, now, markShown: false }).map((x) => ({ stem: x.claim }))
+        } catch { return [] }
+      })()
       const partnerDigest = distillPartnerMemory({
         facts,
         horizons: compHorizons,
-        wrongQuestions: feedAllBank.slice(0, 2),
+        wrongQuestions: [...compV6Samples, ...feedAllBank.slice(0, 2)],
         reviewCards: feedReviewCards,
         vaultRecent: vault?.recent,
       }).digestLines
@@ -8296,7 +8324,7 @@ export function apply(ctx) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.slice(PREFIX.length)
     try {
-      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/wall/boss-brief' || path === '/wall/boss-chat' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/plan-modality' || path === '/super-spark' || path === '/live-core' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
+      if (req.method === 'POST' && (path === '/request' || path === '/cancel' || path === '/config' || path === '/intensity' || path === '/plan' || path === '/outcome' || path === '/say' || path === '/event' || path === '/session' || path === '/wall' || path === '/wall/appeal' || path === '/wall/boss-brief' || path === '/wall/boss-chat' || path === '/sisters' || path === '/deposit' || path === '/mount' || path === '/drill-op' || path === '/workflows' || path === '/gemini/due' || path === '/bouts' || path === '/presets' || path === '/plan/day' || path === '/brain' || path === '/emergency-pass' || path === '/lease' || path === '/elastic-check' || path === '/protocols/compose' || path === '/departments' || path === '/clock' || path === '/dice/roll' || path === '/dice/thought' || path === '/memory/import' || path === '/handoff' || path === '/today/start' || path === '/today/task' || path === '/horizons' || path === '/bank' || path === '/plan-contract' || path === '/plan-modality' || path === '/super-spark' || path === '/live-core' || path === '/v6' || path === '/skills/audit' || path === '/analytics' || path === '/storyline' || path === '/rotate' || path === '/card' || path === '/tiers' || path === '/seals' || path === '/covenant' || path === '/gemini-bridge' || path === '/health' || path === '/review')) {
         const body = await readJson(req)
         if (body.error) {
           return send(res, body.error, {
@@ -8374,6 +8402,7 @@ export function apply(ctx) {
         if (path === '/plan-contract' || path === '/plan-modality') return send(res, 200, v4Hub.planContractRoute(body.value || {}))
         if (path === '/super-spark') return send(res, 200, superSparkRoute(body.value || {}, 'POST'))
         if (path === '/live-core') return send(res, 200, await liveCoreRoute(body.value || {}, 'POST'))
+        if (path === '/v6') return send(res, 200, v6Route(body.value || {}, 'POST'))
         if (path === '/skills/audit') return send(res, 200, v4Hub.skillsAuditRoute(body.value || {}))
         if (path === '/analytics') return send(res, 200, v4Hub.analyticsRoute(body.value || {}))
         if (path === '/storyline') return send(res, 200, v4Hub.storylineRoute(body.value || {}))
@@ -8717,6 +8746,7 @@ export function apply(ctx) {
       if (req.method === 'GET' && (path === '/plan-contract' || path === '/plan-modality')) return send(res, 200, v4Hub.planContractRoute({ action: 'status' }))
       if (req.method === 'GET' && path === '/super-spark') return send(res, 200, superSparkRoute(Object.fromEntries(url.searchParams.entries()), 'GET'))
       if (req.method === 'GET' && path === '/live-core') return send(res, 200, await liveCoreRoute(Object.fromEntries(url.searchParams.entries()), 'GET'))
+      if (req.method === 'GET' && path === '/v6') return send(res, 200, v6Route(Object.fromEntries(url.searchParams.entries()), 'GET'))
       if (req.method === 'GET' && path === '/autonomy') return send(res, 200, { v: 1, ok: true, autonomy: v4Hub.computeAutonomy() })
       if (req.method === 'GET' && path === '/analytics') {
         return send(res, 200, v4Hub.analyticsRoute({
@@ -10599,6 +10629,235 @@ export function apply(ctx) {
         detail: h.detail,
       })),
     }
+  }
+
+  function loadV6(now = Date.now()) {
+    return loadV6State(readState, stateFile('v6-state.json'), now)
+  }
+
+  function saveV6(next) {
+    if (!next || typeof next !== 'object') return
+    writeJson(stateFile('v6-state.json'), { ...next, v: 1 })
+  }
+
+  function armContractFromV6(contract, now = Date.now()) {
+    try {
+      const tz = zoneOr(config.timeZone)
+      const modNow = zoneMinuteOfDay(now, tz)
+      const mins = Math.max(5, Math.min(180, Number(contract?.durationMin) || 25))
+      const block = {
+        id: `v6-contract-${now.toString(36)}`,
+        slot: 'v6_contract',
+        startMin: modNow,
+        endMin: modNow + mins,
+        title: String(contract?.target || '今日契约切片').slice(0, 60),
+        deliverable: String(contract?.verifyRule || '交出实质结果').slice(0, 120),
+        lockMode: 'verify',
+        allowedApps: Array.isArray(contract?.allowApps) && contract.allowApps.length ? contract.allowApps : ['md.obsidian', 'com.google.android.apps.bard'],
+      }
+      return v4Hub?.planContractRoute?.({
+        action: 'confirm_plan_modal',
+        timeZone: tz,
+        blocks: [block],
+      }) || { ok: true }
+    } catch {
+      return { ok: false }
+    }
+  }
+
+  function v6Route(body = {}, method = 'POST') {
+    const now = Date.now()
+    const b = body && typeof body === 'object' ? body : {}
+    const tz = zoneOr(b.timeZone || config.timeZone)
+    const day = dayString(now, tz)
+    const mod = zoneMinuteOfDay(now, tz)
+    const st = loadV6(now)
+    const action = String(b.action || (method === 'GET' ? 'status' : 'status'))
+    const horizons = readState(stateFile('horizons.json'), null)
+
+    if (action === 'status') {
+      const telemetry = v6ComputePoolTelemetry(st.pool, now)
+      return {
+        v: 1,
+        ok: true,
+        framework: st.framework,
+        windowMode: v6EvaluateWindowMode(st.framework, mod),
+        telemetry,
+        appeals: st.appeals?.day === day ? st.appeals : { day, total: 0, physio: 0 },
+        nineGrid: v6BuildNineGrid({ pool: st.pool, stelesCount: st.steles.length, now }),
+        stelesCount: st.steles.length,
+        lastContract: st.lastContract,
+        liveVoiceActive: Boolean(lastPhone?.geminiVoiceActive),
+      }
+    }
+
+    if (action === 'framework_save' || action === 'framework_import') {
+      const rawCfg = action === 'framework_import' && typeof b.json === 'string'
+        ? JSON.parse(b.json)
+        : (b.framework && typeof b.framework === 'object' ? b.framework : b)
+      st.framework = v6NormalizeFramework(rawCfg)
+      saveV6(st)
+      record({ state: 'v6-framework-save', at: now })
+      return { v: 1, ok: true, framework: st.framework, windowMode: v6EvaluateWindowMode(st.framework, mod) }
+    }
+
+    if (action === 'pool_ingest') {
+      const text = String(b.text || '').trim()
+      if (!text) return { v: 1, ok: false, error: '剪贴板或输入为空' }
+      const res = v6IngestClipboardOrText(st.pool, text, { source: String(b.source || 'gemini'), now })
+      if (res.kind === 'contract' && res.contract) {
+        st.lastContract = { ...res.contract, armedAt: now }
+        saveV6(st)
+        const armRes = armContractFromV6(res.contract, now)
+        record({ state: 'v6-contract-armed', at: now, target: res.contract.target })
+        return {
+          v: 1,
+          ok: true,
+          kind: 'contract',
+          contract: res.contract,
+          armed: Boolean(armRes?.ok),
+          telemetry: v6ComputePoolTelemetry(st.pool, now),
+        }
+      }
+      st.pool = res.pool
+      saveV6(st)
+      record({ state: 'v6-pool-ingest', at: now, added: res.added.length, source: String(b.source || 'gemini') })
+      return {
+        v: 1,
+        ok: res.added.length > 0,
+        kind: 'knowledge',
+        addedCount: res.added.length,
+        skippedCount: res.skipped,
+        telemetry: v6ComputePoolTelemetry(st.pool, now),
+      }
+    }
+
+    if (action === 'pool_sample') {
+      const count = Math.max(1, Math.min(8, Number(b.count) || 1))
+      const items = v6SampleKnowledgeItems(st.pool, st.framework, { count, now, markShown: b.markShown === true })
+      if (b.markShown === true) saveV6(st)
+      return {
+        v: 1,
+        ok: items.length > 0,
+        items,
+        telemetry: v6ComputePoolTelemetry(st.pool, now),
+        framework: st.framework,
+      }
+    }
+
+    if (action === 'pool_answer') {
+      const ans = v6RecordMicroQuizAnswer(st.pool, st.framework, {
+        itemId: String(b.itemId || ''),
+        userTrue: b.userTrue === true || b.userTrue === 'true',
+        elapsedMs: Number(b.elapsedMs) || 1200,
+        now,
+      })
+      saveV6(st)
+      record({ state: 'v6-wake-quiz-answer', at: now, itemId: ans.itemId, correct: ans.correct, antiMashPenalty: ans.antiMashPenalty })
+      return {
+        v: 1,
+        ...ans,
+        telemetry: v6ComputePoolTelemetry(st.pool, now),
+      }
+    }
+
+    if (action === 'pool_sweep') {
+      const swept = v6SweepForgetting(st.pool, st.framework, now)
+      st.pool = swept.pool
+      saveV6(st)
+      return {
+        v: 1,
+        ok: true,
+        archivedCount: swept.archivedCount,
+        decayedCount: swept.decayedCount,
+        telemetry: v6ComputePoolTelemetry(st.pool, now),
+      }
+    }
+
+    if (action === 'interrogate_prompt') {
+      const promptText = v6BuildInterrogationPrompt({
+        horizons,
+        pool: st.pool,
+        now,
+        energyHint: String(b.energyHint || '待自报'),
+      })
+      return { v: 1, ok: true, prompt: promptText }
+    }
+
+    if (action === 'interrogate_commit') {
+      const contract = {
+        target: String(b.target || '').trim().slice(0, 140),
+        durationMin: Math.max(5, Math.min(180, Number(b.durationMin) || 25)),
+        verifyRule: String(b.verifyRule || '交出实质结果').trim().slice(0, 120),
+        allowApps: Array.isArray(b.allowApps) ? b.allowApps : [],
+      }
+      if (!contract.target) return { v: 1, ok: false, error: '请填写具体靶子动作' }
+      st.lastContract = { ...contract, armedAt: now }
+      saveV6(st)
+      const armRes = armContractFromV6(contract, now)
+      return { v: 1, ok: true, contract, armed: Boolean(armRes?.ok) }
+    }
+
+    if (action === 'nine_grid') {
+      return {
+        v: 1,
+        ok: true,
+        nineGrid: v6BuildNineGrid({ pool: st.pool, stelesCount: st.steles.length, now }),
+      }
+    }
+
+    if (action === 'appeal') {
+      const res = v6ApplyAppeal(st.appeals, st.framework, {
+        kind: String(b.kind || ''),
+        now,
+        day,
+      })
+      if (res.ok) {
+        st.appeals = res.usage
+        saveV6(st)
+        if (res.grantMinutes > 0) {
+          const curExt = loadExternal()
+          saveExternal({
+            ...curExt,
+            emergencyPass: {
+              active: true,
+              grantedAt: now,
+              until: now + res.grantMinutes * 60_000,
+              reason: `V6 申诉(${res.kind})`,
+              day,
+              countToday: Number(curExt?.emergencyPass?.countToday) || 0,
+            },
+          })
+        }
+        record({ state: 'v6-appeal', at: now, kind: res.kind, grantMinutes: res.grantMinutes })
+      }
+      return { v: 1, ...res }
+    }
+
+    if (action === 'wanshiming_list') {
+      return { v: 1, ok: true, steles: st.steles, horizons: horizons || { long: [], medium: [] } }
+    }
+
+    if (action === 'wanshiming_save') {
+      const res = v6UpsertStele(st.steles, b, now)
+      if (res.ok) {
+        st.steles = res.steles
+        saveV6(st)
+        record({ state: 'wanshiming-save', at: now, steleId: res.item.id })
+      }
+      return { v: 1, ...res }
+    }
+
+    if (action === 'wanshiming_delete') {
+      const res = v6DeleteStele(st.steles, String(b.id || ''))
+      if (res.ok) {
+        st.steles = res.steles
+        saveV6(st)
+      }
+      return { v: 1, ...res }
+    }
+
+    return { v: 1, ok: false, error: `未知的 V6 操作: ${action}` }
   }
 
   function isRunningQuizNow(now, phone, ledgerEntries) {
@@ -12819,10 +13078,36 @@ export function apply(ctx) {
       const cand = buildSuperSparkNow(now, { phone, idleMinutes: Number(phone?.minutes || 0) })
       if (cand?.triggered) superSpark = cand
     }
+    const v6Snap = (() => {
+      try {
+        const s = loadV6(now)
+        const tel = v6ComputePoolTelemetry(s.pool, now)
+        const win = v6EvaluateWindowMode(s.framework, modNowTop)
+        const livePassActive = Boolean(s.framework.liveKeepAliveUnlock && phone?.geminiVoiceActive && !nightLocked && !emergencyActive)
+        return { framework: s.framework, windowMode: win, poolActive: tel.active, liveUnlockedNow: livePassActive }
+      } catch {
+        return null
+      }
+    })()
+    if (v6Snap?.liveUnlockedNow && lockArbiter && !['P0', 'P1'].includes(lockArbiter.priority)) {
+      lockArbiter = {
+        active: false,
+        priority: 'P2',
+        source: 'GEMINI_LIVE_KEEPALIVE_UNLOCK',
+        label: 'Gemini Live 在线常驻免锁中',
+        why: 'Live 硬件状态已在线（麦/虚拟屏持续感知中），保持自由交互免锁',
+        allow: ['*'],
+        unlockHow: 'Live 断线后自动恢复原调度锁',
+      }
+      if (lockDecision) {
+        lockDecision = { ...lockDecision, mode: 'free', deny: [], needPass: [], why: lockArbiter.why, unlockHow: lockArbiter.unlockHow }
+      }
+    }
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
       planModal,
       liveCore: liveCoreOut,
+      ...(v6Snap ? { v6: v6Snap } : {}),
       ...(superSpark ? { superSpark } : {}),
       boutId: liveBoutId,
       sealId: liveSealId,

@@ -1205,6 +1205,43 @@ class ProactiveChannel {
     }
   }
 
+  /// V6 统一中枢：动态框架 / 知识海 / 剪贴板吞吐 / 九宫格 / 严锁申诉 / 万世铭（`GET / POST /v6`）。
+  Future<Map<String, dynamic>?> v6Op([Map<String, Object?>? body]) async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('v6Op', body);
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 查询本地硬件 Live 三合一监测灯状态（音频通话态 / 麦克风采集 / 虚拟共享副屏）。
+  Future<Map<String, dynamic>?> v6LiveSignals() async {
+    try {
+      final raw = await _methods.invokeMethod<Object?>('v6LiveSignals');
+      if (raw is! Map) return null;
+      return {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 立即弹出一次 #1 亮屏 1 秒左右盲点微题（端内手测 / 申诉降档触发）。
+  Future<bool> triggerWakeQuizNow() async {
+    try {
+      return await _methods.invokeMethod<bool>('triggerWakeQuizNow') ?? false;
+    } on Exception {
+      return false;
+    }
+  }
+
   /// 拉起通知 + 震动 + 语音开场 + 无障碍自动灌料并点进官方 Gemini Live。
   Future<bool> triggerGeminiAutoLive({
     String topic = '',

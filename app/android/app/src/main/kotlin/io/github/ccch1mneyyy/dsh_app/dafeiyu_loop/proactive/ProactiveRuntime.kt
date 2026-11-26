@@ -1761,6 +1761,11 @@ object ProactiveRuntime {
     @Volatile private var liveCoreWantShare: Boolean = true
     @Volatile private var liveCoreHeadsetKeepalive: Boolean = true
     @Volatile private var liveCoreTextGraceUntil: Long = 0L
+    @Volatile private var v6WakeQuizEnabled: Boolean = true
+    @Volatile private var v6WakeQuizCooldownMin: Int = 10
+    @Volatile private var v6LiveKeepAliveUnlock: Boolean = true
+    @Volatile private var lastWakeQuizAt: Long = 0L
+    @Volatile private var latestLiveSignals: LiveSignalSnapshot = LiveSignalSnapshot()
     private val shownSparkIds = LinkedHashSet<String>()
     private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
 
@@ -2325,6 +2330,18 @@ object ProactiveRuntime {
             liveCoreWantShare = lcMap["wantScreenShare"] != false
             liveCoreHeadsetKeepalive = lcMap["headsetKeepalive"] != false
             liveCoreTextGraceUntil = (lcMap["textGraceUntil"] as? Number)?.toLong() ?: 0L
+        }
+        val v6Map = map["v6"] as? Map<*, *>
+        if (v6Map != null) {
+            val fw = v6Map["framework"] as? Map<*, *>
+            if (fw != null) {
+                v6WakeQuizEnabled = fw["wakeQuizEnabled"] != false
+                v6WakeQuizCooldownMin = ((fw["wakeQuizCooldownMin"] as? Number)?.toInt() ?: 10).coerceIn(1, 180)
+                v6LiveKeepAliveUnlock = fw["liveKeepAliveUnlock"] != false
+            }
+            if (v6Map["liveUnlockedNow"] == true) {
+                releaseCompanionLock()
+            }
         }
         val autoPull = map["geminiAutoPull"] as? Map<*, *>
         var autoPulledNow = false
@@ -2953,15 +2970,110 @@ object ProactiveRuntime {
     }.getOrDefault(false)
 
     private fun isVoiceModalityActive(frontPkgNow: String?, screenText: String?): Boolean = runCatching {
-        val am = app.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return@runCatching false
-        val inComm = am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION || am.mode == android.media.AudioManager.MODE_IN_CALL
-        val recActive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            am.activeRecordingConfigurations.isNotEmpty()
-        } else false
-        val textLive = frontPkgNow != null && frontPkgNow in GEMINI_PACKAGES && !screenText.isNullOrBlank() &&
-            (screenText.contains("Live") || screenText.contains("正在聆听") || screenText.contains("静音") || screenText.contains("结束语音"))
-        inComm || recActive || textLive || LiveKeeperPolicy.isScreenShareText(screenText)
+        val snap = LiveSignalMonitor.probe(app, frontPkgNow, screenText)
+        latestLiveSignals = snap
+        snap.liveOnline
     }.getOrDefault(false)
+
+    fun liveSignalMap(context: Context = app): Map<String, Any?> {
+        if (!::app.isInitialized) ensure(context)
+        val snap = runCatching {
+            val s = NowFeed.snapshot(SystemClock.elapsedRealtime())
+            val screenText = runCatching {
+                io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.MaskedSummaryHelper.maskedSummary(800)
+            }.getOrNull()
+            LiveSignalMonitor.probe(app, s.app, screenText)
+        }.getOrDefault(latestLiveSignals)
+        latestLiveSignals = snap
+        return linkedMapOf<String, Any?>(
+            "ok" to true,
+            "liveKeepAliveUnlock" to v6LiveKeepAliveUnlock,
+            "wakeQuizEnabled" to v6WakeQuizEnabled,
+            "wakeQuizCooldownMin" to v6WakeQuizCooldownMin,
+        ).apply { putAll(snap.toMap()) }
+    }
+
+    fun triggerWakeMicroQuizNow(manual: Boolean = true, done: ((Boolean) -> Unit)? = null) {
+        if (!::app.isInitialized) {
+            done?.invoke(false)
+            return
+        }
+        val wall = System.currentTimeMillis()
+        if (!manual) {
+            if (!v6WakeQuizEnabled) {
+                done?.invoke(false)
+                return
+            }
+            val cooldownMs = v6WakeQuizCooldownMin.coerceIn(1, 180) * 60_000L
+            if (lastWakeQuizAt > 0L && wall - lastWakeQuizAt < cooldownMs) {
+                done?.invoke(false)
+                return
+            }
+            val snap = LiveSignalMonitor.probe(app, NowFeed.snapshot(SystemClock.elapsedRealtime()).app, null)
+            latestLiveSignals = snap
+            if (snap.liveOnline || inEmergencyPass(wall) || ProactiveOverlay.isPlanModalShowing() ||
+                VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT) ||
+                VisibleSurface.isHeldBy(VisibleSurface.OWNER_FOCUS)
+            ) {
+                done?.invoke(false)
+                return
+            }
+        }
+        lastWakeQuizAt = wall
+        main.post {
+            fetchPluginRoute(routeCallback { m ->
+                val items = m["items"] as? List<*>
+                val first = items?.firstOrNull() as? Map<*, *>
+                val itemId = (first?.get("id") as? String).orEmpty()
+                val claim = (first?.get("claim") as? String).orEmpty()
+                if (itemId.isBlank() || claim.isBlank()) {
+                    done?.invoke(false)
+                    return@routeCallback
+                }
+                val tel = m["telemetry"] as? Map<*, *>
+                val activeCount = (tel?.get("active") as? Number)?.toInt() ?: 0
+                val srcLabel = when (first?.get("source") as? String) {
+                    "gemini" -> "Gemini喂料"
+                    "obsidian" -> "认知模型"
+                    "bout" -> "局回流"
+                    else -> "真题库"
+                }
+                val fw = m["framework"] as? Map<*, *>
+                val antiMashMs = (fw?.get("wakeQuizAntiMashMs") as? Number)?.toInt() ?: 320
+                val shown = ProactiveOverlay.showWakeMicroQuiz(
+                    WakeQuizSpec(
+                        itemId = itemId,
+                        claim = claim,
+                        sourceLabel = srcLabel,
+                        activePoolCount = activeCount,
+                        antiMashMs = antiMashMs,
+                    ),
+                ) { userTrue, elapsedMs, feedback ->
+                    fetchPluginRoute(routeCallback { ans ->
+                        val correct = ans["correct"] == true
+                        val correction = (ans["correction"] as? String).orEmpty()
+                        val mashPenalty = ans["antiMashPenalty"] == true
+                        feedback(correct, if (mashPenalty) "手速过快疑似盲戳！$correction" else correction)
+                        if (mashPenalty) {
+                            main.postDelayed({ triggerWakeMicroQuizNow(manual = true) }, 1400L)
+                        }
+                    }, "POST", "/v6", linkedMapOf(
+                        "action" to "pool_answer",
+                        "itemId" to itemId,
+                        "userTrue" to userTrue,
+                        "elapsedMs" to elapsedMs,
+                        "timeZone" to BeijingClock.ZONE.id,
+                    ))
+                }
+                done?.invoke(shown)
+            }, "POST", "/v6", linkedMapOf(
+                "action" to "pool_sample",
+                "count" to 1,
+                "markShown" to true,
+                "timeZone" to BeijingClock.ZONE.id,
+            ))
+        }
+    }
 
     private fun isShizukuReady(): Boolean = runCatching {
         rikka.shizuku.Shizuku.getBinder()?.isBinderAlive == true &&
@@ -3396,7 +3508,11 @@ object ProactiveRuntime {
                 override fun onReceive(c: Context?, intent: Intent?) {
                     when (intent?.action) {
                         Intent.ACTION_SCREEN_OFF -> updateShakeSensor(false)
-                        Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> updateShakeSensor(true)
+                        Intent.ACTION_SCREEN_ON -> updateShakeSensor(true)
+                        Intent.ACTION_USER_PRESENT -> {
+                            updateShakeSensor(true)
+                            triggerWakeMicroQuizNow(manual = false)
+                        }
                     }
                 }
             }

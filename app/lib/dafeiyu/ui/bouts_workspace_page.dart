@@ -31,6 +31,8 @@ import 'plan_modality_page.dart';
 import 'records_page.dart';
 import 'strategy_horizons_page.dart';
 import 'usage_analytics_page.dart';
+import 'v6_command_page.dart';
+import 'wanshiming_page.dart';
 import 'task_card.dart';
 import 'today_cards.dart';
 import '../../ui/common/dispose_after_route.dart';
@@ -867,6 +869,12 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                 label: const Text('图谱与Live'),
                 onPressed: () => unawaited(LiveCoreAtlasPage.open(context, channel: _channel, loopChannel: _loop)),
               ),
+              ActionChip(
+                key: const ValueKey('today-capsule-v6'),
+                avatar: const Icon(Icons.auto_awesome, size: 15),
+                label: const Text('V6 知识海'),
+                onPressed: () => unawaited(V6CommandPage.open(context, channel: _channel)),
+              ),
             ],
           ),
         ),
@@ -880,6 +888,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
     final theme = Theme.of(context);
     final topInset = MediaQuery.paddingOf(context).top;
     final headerActions = [
+      WanshimingCornerSealButton(channel: _channel),
       GlassIconButton(
         tooltip: '刷新状态',
         icon: AppIcons.refresh,

@@ -83,6 +83,15 @@ data class PlanModalSpec(
     val energyLevel: String = "mid",
 )
 
+/** #1 亮屏 1 秒左右盲点微题规格（无关闭键，左对右错）。 */
+data class WakeQuizSpec(
+    val itemId: String,
+    val claim: String,
+    val sourceLabel: String = "知识海",
+    val activePoolCount: Int = 0,
+    val antiMashMs: Int = 320,
+)
+
 /** 纯 JVM 可测：超级大肥鱼战术浮窗解析、去重互斥与 A/B 反向阻力按钮动作策略。 */
 object SuperSparkOverlayPolicy {
     const val MUTE_MINUTES_MS = 15 * 60_000L
@@ -270,6 +279,7 @@ object ProactiveOverlay {
     private var liveDice: DiceCard? = null
     private var livePlanModal: PlanModalCard? = null
     private var livePostRelay: PostLiveRelayCard? = null
+    private var liveWakeQuiz: WakeQuizCard? = null
 
     fun install(context: Context) {
         app = context.applicationContext
@@ -2015,6 +2025,182 @@ object ProactiveOverlay {
             root = null
             runCatching { wm?.removeView(v) }
             if (livePostRelay === this) livePostRelay = null
+        }
+    }
+
+    /** 弹出 #1 亮屏 1 秒左右盲点微题（无收起/关闭键，玄墨金箔风格，左半对 / 右半错）。 */
+    fun showWakeMicroQuiz(
+        spec: WakeQuizSpec,
+        onAnswered: (userTrue: Boolean, elapsedMs: Long, feedback: (Boolean, String) -> Unit) -> Unit,
+    ): Boolean {
+        val context = app ?: return false
+        dismissWakeMicroQuiz()
+        val host = host(context) ?: return false
+        val card = WakeQuizCard(context, host.first, host.second, spec, onAnswered)
+        return try {
+            card.attach()
+            liveWakeQuiz = card
+            true
+        } catch (e: Exception) {
+            android.util.Log.i(TAG, "wake micro quiz add failed: ${e.javaClass.simpleName}")
+            card.destroy()
+            false
+        }
+    }
+
+    fun dismissWakeMicroQuiz() {
+        liveWakeQuiz?.destroy()
+        liveWakeQuiz = null
+    }
+
+    private class WakeQuizCard(
+        private val context: Context,
+        private val wm: WindowManager?,
+        private val windowType: Int,
+        private val spec: WakeQuizSpec,
+        private val onAnswered: (userTrue: Boolean, elapsedMs: Long, feedback: (Boolean, String) -> Unit) -> Unit,
+    ) {
+        private var root: View? = null
+        private var shownAtMs: Long = 0L
+        private var answered: Boolean = false
+        private lateinit var claimView: TextView
+        private lateinit var feedbackView: TextView
+        private lateinit var btnRow: LinearLayout
+
+        fun attach() {
+            shownAtMs = System.currentTimeMillis()
+            val v = buildView()
+            val p = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                windowType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                y = context.dp(34f)
+                title = "大肥鱼亮屏微题"
+                if (Build.VERSION.SDK_INT >= 28) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+                if (Build.VERSION.SDK_INT >= 30) setFitInsetsTypes(0)
+                val maxW = (context.resources.displayMetrics.widthPixels * 0.94f).toInt()
+                width = minOf(maxW, context.dp(420f))
+            }
+            root = v
+            wm?.addView(v, p)
+        }
+
+        private fun buildView(): View {
+            val obsidianBg = Color.parseColor("#EE0B0B0F")
+            val gold = Color.parseColor("#C5A059")
+            val goldBright = Color.parseColor("#E8CF82")
+            val ink = Color.parseColor("#ECE7DC")
+            val sealRed = Color.parseColor("#A63429")
+
+            val container = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                val pad = context.dp(16f)
+                setPadding(pad, context.dp(14f), pad, context.dp(14f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(18f).toFloat()
+                    setColor(obsidianBg)
+                    setStroke(context.dp(1.2f).coerceAtLeast(1), gold)
+                }
+            }
+
+            val topRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            topRow.addView(TextView(context).apply {
+                text = "万世铭 · ${spec.sourceLabel} · 弹药 ${spec.activePoolCount}"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setTextColor(gold)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            topRow.addView(TextView(context).apply {
+                text = "点判即过"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setTextColor(Color.parseColor("#FAF5EB"))
+                setPadding(context.dp(7f), context.dp(2f), context.dp(7f), context.dp(2f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(4f).toFloat()
+                    setColor(sealRed)
+                }
+            })
+            container.addView(topRow)
+
+            claimView = TextView(context).apply {
+                text = spec.claim
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+                setLineSpacing(context.dp(3f).toFloat(), 1f)
+                setTextColor(ink)
+                setPadding(0, context.dp(10f), 0, context.dp(12f))
+            }
+            container.addView(claimView)
+
+            feedbackView = TextView(context).apply {
+                visibility = View.GONE
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setPadding(0, 0, 0, context.dp(10f))
+            }
+            container.addView(feedbackView)
+
+            fun halfBtn(label: String, strokeColor: Int, textColor: Int, userTrue: Boolean): TextView = TextView(context).apply {
+                text = label
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(textColor)
+                setPadding(context.dp(10f), context.dp(13f), context.dp(10f), context.dp(13f))
+                background = GradientDrawable().apply {
+                    cornerRadius = context.dp(12f).toFloat()
+                    setColor(Color.parseColor("#181820"))
+                    setStroke(context.dp(1f).coerceAtLeast(1), strokeColor)
+                }
+                isClickable = true
+                setOnClickListener {
+                    if (answered) return@setOnClickListener
+                    answered = true
+                    val elapsed = (System.currentTimeMillis() - shownAtMs).coerceAtLeast(1L)
+                    onAnswered(userTrue, elapsed) { ok, correction ->
+                        main.post {
+                            feedbackView.visibility = View.VISIBLE
+                            feedbackView.setTextColor(if (ok) goldBright else Color.parseColor("#F08A7E"))
+                            feedbackView.text = if (ok) {
+                                "✓ 判得准 · ${correction.ifBlank { "已记账消解" }}"
+                            } else {
+                                "✕ 踩坑了 · ${correction.ifBlank { "注意纠偏" }}"
+                            }
+                            btnRow.alpha = 0.45f
+                            main.postDelayed({ destroy() }, if (ok) 520L else 1250L)
+                        }
+                    }
+                }
+            }
+
+            btnRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            btnRow.addView(
+                halfBtn("✓ 对 / 成立", gold, goldBright, true),
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = context.dp(8f)
+                },
+            )
+            btnRow.addView(
+                halfBtn("✕ 错 / 有坑", sealRed, Color.parseColor("#F2D8D4"), false),
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            container.addView(btnRow)
+            return container
+        }
+
+        fun destroy() {
+            val v = root ?: return
+            root = null
+            runCatching { wm?.removeView(v) }
+            if (liveWakeQuiz === this) liveWakeQuiz = null
         }
     }
 }

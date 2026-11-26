@@ -418,6 +418,26 @@ class ProactivePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventCha
                     ProactiveRuntime.fetchPluginRoute(result, "POST", "/live-core", body)
                 }
             }
+            "v6Op" -> {
+                val args = (call.arguments as? Map<*, *>)?.entries
+                    ?.mapNotNull { (k, v) -> (k as? String)?.let { it to v } }
+                    ?.toMap()
+                val action = (args?.get("action") as? String)?.trim().orEmpty()
+                if (args.isNullOrEmpty() || action == "status") {
+                    ProactiveRuntime.fetchPluginRoute(
+                        result, "GET", "/v6?timeZone=${BeijingClock.ZONE.id}", null,
+                    )
+                } else {
+                    val body = LinkedHashMap<String, Any?>()
+                    body["timeZone"] = BeijingClock.ZONE.id
+                    args.forEach { (k, v) -> if (k != "timeZone") body[k] = v }
+                    ProactiveRuntime.fetchPluginRoute(result, "POST", "/v6", body)
+                }
+            }
+            "v6LiveSignals" -> result.success(ProactiveRuntime.liveSignalMap(context))
+            "triggerWakeQuizNow" -> ProactiveRuntime.triggerWakeMicroQuizNow(manual = true) { ok ->
+                result.success(ok)
+            }
             "bankStatus" -> ProactiveRuntime.fetchPluginRoute(result, "GET", "/bank", null)
             "bankOp" -> {
                 val body = linkedMapOf<String, Any?>()
