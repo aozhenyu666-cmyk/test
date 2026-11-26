@@ -2036,7 +2036,7 @@ object ProactiveOverlay {
         val context = app ?: return false
         dismissWakeMicroQuiz()
         val host = host(context) ?: return false
-        val card = WakeQuizCard(context, host.first, host.second, spec, onAnswered)
+        val card = WakeQuizCard(host.first, host.second, spec, onAnswered)
         return try {
             card.attach()
             liveWakeQuiz = card
@@ -2055,11 +2055,11 @@ object ProactiveOverlay {
 
     private class WakeQuizCard(
         private val context: Context,
-        private val wm: WindowManager?,
         private val windowType: Int,
         private val spec: WakeQuizSpec,
         private val onAnswered: (userTrue: Boolean, elapsedMs: Long, feedback: (Boolean, String) -> Unit) -> Unit,
     ) {
+        private val wm = context.getSystemService(WindowManager::class.java)
         private var root: View? = null
         private var shownAtMs: Long = 0L
         private var answered: Boolean = false
