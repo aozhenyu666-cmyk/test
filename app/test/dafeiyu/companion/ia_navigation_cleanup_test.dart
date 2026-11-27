@@ -184,16 +184,27 @@ void main() {
     for (final k in const [
       'today-capsule-plan',
       'today-capsule-locks',
+      'today-secondary-strip',
+      'today-capsule-dice',
+      'today-capsule-atlas',
+      'today-toggle-more-capsules',
+    ]) {
+      expect(find.byKey(ValueKey(k)), findsOneWidget, reason: '缺少入口 $k');
+    }
+
+    await tester.ensureVisible(find.byKey(const ValueKey('today-toggle-more-capsules')));
+    await tester.tap(find.byKey(const ValueKey('today-toggle-more-capsules')));
+    await settlePhone(tester);
+
+    for (final k in const [
       'today-capsule-bank',
       'today-capsule-analytics',
       'today-capsule-bridge',
       'today-capsule-hub',
-      'today-secondary-strip',
-      'today-capsule-dice',
       'today-capsule-records',
       'today-capsule-strategy',
     ]) {
-      expect(find.byKey(ValueKey(k)), findsOneWidget, reason: '缺少入口 $k');
+      expect(find.byKey(ValueKey(k)), findsOneWidget, reason: '展开后缺少入口 $k');
     }
 
     await tester.ensureVisible(find.byKey(const ValueKey('today-capsule-plan')));
@@ -229,6 +240,9 @@ void main() {
     expect(find.textContaining('8 道锁'), findsNothing);
 
     Navigator.of(tester.element(find.byType(LocksBalancePage))).pop();
+    await settlePhone(tester);
+    await tester.ensureVisible(find.byKey(const ValueKey('today-toggle-more-capsules')));
+    await tester.tap(find.byKey(const ValueKey('today-toggle-more-capsules')));
     await settlePhone(tester);
     await tester.ensureVisible(find.byKey(const ValueKey('today-capsule-bridge')));
     await tester.tap(find.byKey(const ValueKey('today-capsule-bridge')));

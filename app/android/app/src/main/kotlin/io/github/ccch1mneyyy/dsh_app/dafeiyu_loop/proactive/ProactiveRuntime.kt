@@ -3564,10 +3564,19 @@ object ProactiveRuntime {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(c: Context?, intent: Intent?) {
                     when (intent?.action) {
-                        Intent.ACTION_SCREEN_OFF -> updateShakeSensor(false)
-                        Intent.ACTION_SCREEN_ON -> updateShakeSensor(true)
+                        Intent.ACTION_SCREEN_OFF -> {
+                            updateShakeSensor(false)
+                            cancelSessionActiveTick()
+                            main.removeCallbacks(highFreqClockTick)
+                        }
+                        Intent.ACTION_SCREEN_ON -> {
+                            updateShakeSensor(true)
+                            if (sessionActive()) scheduleSessionActiveTick()
+                            if (clockEngine != null) tick("screen_on")
+                        }
                         Intent.ACTION_USER_PRESENT -> {
                             updateShakeSensor(true)
+                            if (sessionActive()) scheduleSessionActiveTick()
                             triggerWakeMicroQuizNow(manual = false)
                         }
                     }

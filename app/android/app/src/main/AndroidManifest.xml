@@ -468,6 +468,20 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity
+            android:name=".dafeiyu_loop.proactive.ShareFeedActivity"
+            android:exported="true"
+            android:label="喂进大肥鱼知识海"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
 
         <!-- Chat artifacts: hands one file at a time to the app that opens it (files/FilesPlugin.kt). -->
         <provider

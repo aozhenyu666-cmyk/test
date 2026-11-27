@@ -15,6 +15,121 @@ import 'wanshiming_page.dart';
 
 enum V6CommandTab { poolAndBus, nineGridAndAppeal, framework }
 
+Map<String, dynamic> _v6AsMap(Object? raw) =>
+    raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+
+/// 可复用的「残局挑刺官」弹窗（V6CommandPage / LiveCoreAtlasPage / Today 工作台共用）。
+/// 返回过关后的文案；若取消或拉取失败返回 null。
+Future<String?> showV6FlawSpotDialog(
+  BuildContext context,
+  ProactiveChannel channel, {
+  Map<String, dynamic>? initialChallenge,
+}) async {
+  var ch = initialChallenge != null ? Map<String, dynamic>.from(initialChallenge) : <String, dynamic>{};
+  if ((ch['steps'] is! List) || (ch['steps'] as List).isEmpty) {
+    final draw = await channel.v6Op({'action': 'flaw_draw'});
+    if (!context.mounted) return null;
+    ch = _v6AsMap(draw?['challenge']);
+  }
+  if ((ch['steps'] is! List) || (ch['steps'] as List).isEmpty) {
+    return null;
+  }
+
+  var submitting = false;
+  String? feedback;
+
+  return showDialog<String?>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setDlg) {
+        final topic = '${ch['topic'] ?? '残局挑刺'}';
+        final stem = '${ch['stem'] ?? ''}';
+        final steps = (ch['steps'] as List).map((e) => '$e').toList();
+        final chId = '${ch['id'] ?? ''}';
+
+        Future<void> pickStep(int idx) async {
+          if (submitting) return;
+          setDlg(() => submitting = true);
+          Map<String, dynamic>? ver;
+          try {
+            ver = await channel.v6Op({
+              'action': 'flaw_verify',
+              'id': chId,
+              'pickedIndex': idx,
+              'unlockCadence': true,
+              'continueNext': true,
+            });
+          } finally {
+            if (ctx.mounted) {
+              setDlg(() => submitting = false);
+            }
+          }
+          if (!ctx.mounted) return;
+          if (ver?['correct'] == true) {
+            final msg = '${ver?['explanation'] ?? ver?['message'] ?? '过关'}';
+            Navigator.of(ctx).pop('✅ 识破漏洞：$msg');
+          } else {
+            final nextCh = _v6AsMap(ver?['nextChallenge']);
+            final err = ver?['error'] as String?;
+            setDlg(() {
+              feedback = err != null && err.isNotEmpty
+                  ? '❌ $err'
+                  : '❌ 没抓准：${ver?['explanation'] ?? '已换下一题继续挑'}';
+              if (nextCh.isNotEmpty) {
+                ch = nextCh;
+              }
+            });
+          }
+        }
+
+        return AlertDialog(
+          title: Text('🔍 残局挑刺 · $topic', style: const TextStyle(fontSize: 16)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (feedback != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    margin: const EdgeInsets.only(bottom: 10),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      color: const Color(0x28B84A39),
+                      border: Border.all(color: const Color(0x88E57373)),
+                    ),
+                    child: Text(
+                      feedback!,
+                      style: const TextStyle(fontSize: 12, color: Color(0xFFFFB4AB), height: 1.35),
+                    ),
+                  ),
+                ],
+                Text(stem, style: const TextStyle(fontSize: 13, height: 1.45)),
+                const SizedBox(height: 10),
+                const Text('直接点出唯一有漏洞/偷换前提的一步（无需打字）：', style: TextStyle(fontSize: 12, color: Color(0xFFE8CF82))),
+                const SizedBox(height: 8),
+                for (int i = 0; i < steps.length; i++) ...[
+                  OutlinedButton(
+                    onPressed: submitting ? null : () => unawaited(pickStep(i)),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('${i + 1}. ${steps[i]}', style: const TextStyle(fontSize: 12.5, height: 1.35)),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('收起')),
+          ],
+        );
+      },
+    ),
+  );
+}
+
 /// V6 统一主动调度中枢：
 /// 1) 知识海储量动效表 + Live 三合一监测灯 + 剪贴板双向总线
 /// 2) 强关联九宫格 + 3步追问立约 + 严锁 4 类申诉减压阀
@@ -54,10 +169,12 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
   late V6CommandTab _tab = widget.initialTab;
   bool _loading = true;
   bool _busy = false;
+  bool _moatOverride = false;
   String? _banner;
 
   Map<String, dynamic> _v6 = const {};
   Map<String, dynamic> _liveSignals = const {};
+  Map<String, dynamic>? _lastRoll;
 
   // Framework editable fields
   bool _wakeQuizEnabled = true;
@@ -202,6 +319,85 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
       _busy = false;
       _banner = ok ? '⚡ 已弹出 #1 亮屏 1 秒左右盲点微题，请看悬浮卡' : '未弹出：请先授予悬浮窗/无障碍权限或确认引擎已连';
     });
+  }
+
+  Future<void> _rollNineGrid() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    var shouldOpenFlaw = false;
+    try {
+      final prevTile = _asMap(_lastRoll?['tile']);
+      final res = await _channel.v6Op({
+        'action': 'nine_grid_roll',
+        'autoArm': true,
+        if (prevTile['id'] != null) 'excludeTileId': '${prevTile['id']}',
+        if (_lastRoll?['diceFace'] != null) 'excludeDiceFace': _lastRoll!['diceFace'],
+      });
+      await _refresh();
+      if (!mounted) return;
+      final roll = _asMap(res?['roll']);
+      final tile = _asMap(roll['tile']);
+      final face = _asInt(roll['diceFace'], 1);
+      final dName = '${roll['diceName'] ?? ''}';
+      final rec = '${roll['recommendedAction'] ?? 'cadence_5m'}';
+      shouldOpenFlaw = rec == 'flaw_spot';
+      setState(() {
+        _lastRoll = roll.isEmpty ? null : roll;
+        _banner = rec == 'live_dice'
+            ? '🎲 已抽中「${tile['title'] ?? '切片'}」× 骰$face·$dName，可直接跳 Live 或开 5m 严验收'
+            : '🎲 已替你落子「${tile['title'] ?? '切片'}」× 骰$face·$dName（${res?['cadenceArmed'] == true ? '已自动开启 5m 严验收' : '已备妥挑刺切口'}）';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (shouldOpenFlaw && mounted) {
+      unawaited(_openFlawSpotDialog());
+    }
+  }
+
+  Future<void> _startCadenceFromTile(Map<String, dynamic> cell) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final target = '${cell['recommendedTarget'] ?? cell['title'] ?? '当前核心切片'}'.trim();
+      final res = await _channel.v6Op({
+        'action': 'cadence_start',
+        'target': target,
+        'intervalSec': _fiveMinBoutSec,
+      });
+      await _refresh();
+      if (!mounted) return;
+      setState(() {
+        _banner = res?['ok'] == true
+            ? '⏱️ 已从九宫格「${cell['title']}」直接开启 5m 严验收（P4→P3 锁生效）'
+            : '${res?['error'] ?? '启动 5m 严验收失败'}';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _openFlawSpotDialog() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    Map<String, dynamic>? draw;
+    try {
+      draw = await _channel.v6Op({'action': 'flaw_draw'});
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    final ch = _asMap(draw?['challenge']);
+    if ((ch['steps'] is! List) || (ch['steps'] as List).isEmpty) {
+      setState(() => _banner = '残局题目拉取失败');
+      return;
+    }
+
+    final passBanner = await showV6FlawSpotDialog(context, _channel, initialChallenge: ch);
+    if (passBanner != null && mounted) {
+      await _refresh();
+      if (mounted) setState(() => _banner = passBanner);
+    }
   }
 
   Future<void> _sweepPool() async {
@@ -474,6 +670,7 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
     final liveOnline = _liveSignals['liveOnline'] == true || _v6['liveVoiceActive'] == true;
     final sigAudio = _liveSignals['audioInComm'] == true;
     final sigMic = _liveSignals['micRecording'] == true;
+    final sigVoice = _liveSignals['voicePlayback'] == true;
     final sigVDisplay = _liveSignals['virtualDisplayActive'] == true;
 
     return [
@@ -504,6 +701,7 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
               children: [
                 _hwLamp('音频通话态', sigAudio),
                 _hwLamp('麦克风采集', sigMic),
+                _hwLamp('VoIP/助手语音流', sigVoice),
                 _hwLamp('虚拟共享副屏', sigVDisplay),
               ],
             ),
@@ -592,6 +790,11 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
                   icon: const Icon(Icons.touch_app, size: 16),
                   label: const Text('试测 #1 亮屏微题'),
                 ),
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : () => unawaited(_openFlawSpotDialog()),
+                  icon: const Icon(Icons.troubleshoot, size: 16),
+                  label: const Text('🔍 试测残局挑刺官'),
+                ),
                 TextButton(
                   onPressed: _busy ? null : () => unawaited(_sweepPool()),
                   child: const Text('清理遗忘沉底'),
@@ -607,15 +810,71 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
   List<Widget> _buildNineGridTab(DshColors colors, List<dynamic> nineGrid, Map<String, dynamic> appeals) {
     final usedTotal = _asInt(appeals['total'], 0);
     final usedPhysio = _asInt(appeals['physio'], 0);
+    final rolledTileId = '${_asMap(_lastRoll?['tile'])['id'] ?? ''}';
 
     return [
       _v6Card(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('强关联 3×3 九宫格（替代旧 6 骰子）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+            const Text('强关联 3×3 九宫格（融合 6 骰与 5m 严验收）', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
             const SizedBox(height: 4),
-            Text('上行：知识海高权切口 | 中行：真题速杀 | 下行：生活防耗 & 万世铭', style: TextStyle(color: colors.textTertiary, fontSize: 12)),
+            Text('主动性见底时别挑：点按钮让系统分时段替你落子；手点知识/行测格直接开 5m 严锁。', style: TextStyle(color: colors.textTertiary, fontSize: 12)),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                key: const ValueKey('v6-nine-grid-roll-btn'),
+                onPressed: _busy ? null : () => unawaited(_rollNineGrid()),
+                icon: const Icon(Icons.casino_outlined, size: 18),
+                label: const Text('🎲 零决策随机替我落子（自动开 5m 严验收 / 配 6 骰）'),
+              ),
+            ),
+            if (_lastRoll != null) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  color: const Color(0x20C5A059),
+                  border: Border.all(color: const Color(0x70E8CF82)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '🎯 骰${_lastRoll!['diceFace']}·${_lastRoll!['diceName']} ：${_lastRoll!['diceAsk'] ?? ''}',
+                      style: const TextStyle(color: Color(0xFFE8CF82), fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text('${_lastRoll!['target'] ?? ''}', style: const TextStyle(fontSize: 12)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        OutlinedButton(
+                          onPressed: _busy
+                              ? null
+                              : () => unawaited(
+                                    _channel.triggerGeminiAutoLive(
+                                      topic: '${_asMap(_lastRoll!['tile'])['title'] ?? '九宫格推进'}',
+                                      brief: '${_lastRoll!['brief'] ?? ''}',
+                                      voiceLine: '九宫格抽到骰${_lastRoll!['diceFace']}，进 Live 直接开答',
+                                      autoClickLive: true,
+                                    ),
+                                  ),
+                          child: const Text('🎙️ 带这骰进 Live'),
+                        ),
+                        TextButton(
+                          onPressed: _busy ? null : () => unawaited(_openFlawSpotDialog()),
+                          child: const Text('🔍 改用残局挑刺'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             GridView.builder(
               shrinkWrap: true,
@@ -630,6 +889,7 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
               itemBuilder: (ctx, idx) {
                 final cell = idx < nineGrid.length ? _asMap(nineGrid[idx]) : <String, dynamic>{'title': '待填充', 'kind': 'knowledge'};
                 final kind = '${cell['kind'] ?? 'knowledge'}';
+                final isRolled = rolledTileId.isNotEmpty && rolledTileId == '${cell['id'] ?? ''}';
                 return InkWell(
                   borderRadius: BorderRadius.circular(10),
                   onTap: () {
@@ -640,21 +900,24 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
                     } else if (kind == 'interrogate') {
                       unawaited(_openInAppContractDialog());
                     } else {
-                      unawaited(_testWakeQuizNow());
+                      unawaited(_startCadenceFromTile(cell));
                     }
                   },
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(10),
-                      color: const Color(0x16C5A059),
-                      border: Border.all(color: const Color(0x40C5A059)),
+                      color: isRolled ? const Color(0x33E8CF82) : const Color(0x16C5A059),
+                      border: Border.all(
+                        color: isRolled ? const Color(0xFFE8CF82) : const Color(0x40C5A059),
+                        width: isRolled ? 1.8 : 1.0,
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${cell['badge'] ?? ''}',
+                          '${cell['badge'] ?? ''}${cell['diceFace'] != null ? ' · 骰${cell['diceFace']}' : ''}',
                           style: const TextStyle(color: Color(0xFFE8CF82), fontSize: 10, fontWeight: FontWeight.w600),
                         ),
                         const Spacer(),
@@ -721,6 +984,9 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
   }
 
   List<Widget> _buildFrameworkTab(DshColors colors) {
+    final win = _asMap(_v6['windowMode']);
+    final moatLocked = win['mode'] == 'desk_moat' && !_moatOverride;
+
     return [
       _v6Card(
         child: Column(
@@ -730,6 +996,44 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
             const SizedBox(height: 4),
             Text('修改即时落盘，不需改代码重编 APK。', style: TextStyle(color: colors.textTertiary, fontSize: 12)),
             const SizedBox(height: 10),
+            if (moatLocked) ...[
+              Container(
+                key: const ValueKey('v6-desk-moat-shield'),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: const Color(0x28B84A39),
+                  border: Border.all(color: const Color(0xFFE8CF82)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      '🛡️ 桌前清脆护城河生效中 · 禁调体系参数防逃避',
+                      style: TextStyle(color: Color(0xFFE8CF82), fontSize: 14, fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '当前正处于「${win['label'] ?? '桌前学习窗'}」。大脑想靠改参数替代直面眼前的题时，请先回九宫格抽一刀或跑完 5 分钟切片。',
+                      style: const TextStyle(fontSize: 12.5, height: 1.4),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                      onPressed: () => setState(() => _tab = V6CommandTab.nineGridAndAppeal),
+                      child: const Text('返回当前 5m 切片 / 九宫格'),
+                    ),
+                    const SizedBox(height: 6),
+                    TextButton(
+                      onPressed: () => setState(() => _moatOverride = true),
+                      child: Text(
+                        '确有紧急故障，临时解锁 1 次',
+                        style: TextStyle(color: colors.textTertiary, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('#1 亮屏 1 秒左右盲点微题'),
@@ -786,6 +1090,7 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
                 ),
               ],
             ),
+            ],
           ],
         ),
       ),

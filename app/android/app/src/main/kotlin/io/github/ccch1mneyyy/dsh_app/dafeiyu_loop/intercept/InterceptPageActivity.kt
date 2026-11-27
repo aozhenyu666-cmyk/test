@@ -587,6 +587,113 @@ class InterceptPageActivity : Activity() {
         }
     }
 
+    private fun showFlawSpotDialog() {
+        val ctx = this
+        ProactiveRuntime.callV6Op(mapOf("action" to "flaw_draw")) { res ->
+            val ch = res?.get("challenge") as? Map<*, *>
+            val chId = (ch?.get("id") as? String).orEmpty()
+            val topic = (ch?.get("topic") as? String).orEmpty().ifBlank { "残局挑刺" }
+            val stem = (ch?.get("stem") as? String).orEmpty()
+            val steps = (ch?.get("steps") as? List<*>)?.mapNotNull { it as? String }.orEmpty()
+            if (steps.isEmpty()) {
+                android.widget.Toast.makeText(ctx, "残局题目拉取失败，请改交文字结论或连答3题", android.widget.Toast.LENGTH_SHORT).show()
+                return@callV6Op
+            }
+            fun present(curId: String, curTopic: String, curStem: String, curSteps: List<String>) {
+                if (isFinishing || isDestroyed) return
+                var submitting = false
+                val stepButtons = ArrayList<Button>(curSteps.size)
+                lateinit var dialog: android.app.AlertDialog
+
+                val body = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(18), dp(12), dp(18), dp(8))
+                    if (curStem.isNotBlank()) {
+                        addView(TextView(ctx).apply {
+                            text = curStem
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                            setLineSpacing(0f, 1.35f)
+                            setPadding(0, 0, 0, dp(10))
+                        })
+                    }
+                    addView(TextView(ctx).apply {
+                        text = "点出唯一假动作/漏洞（无需打字）："
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                        setTypeface(typeface, Typeface.BOLD)
+                        setTextColor(palette.accent)
+                        setPadding(0, 0, 0, dp(8))
+                    })
+                }
+
+                curSteps.forEachIndexed { pickedIdx, stepText ->
+                    val btn = Button(ctx).apply {
+                        text = "${pickedIdx + 1}. $stepText"
+                        isAllCaps = false
+                        gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        setOnClickListener {
+                            if (submitting) return@setOnClickListener
+                            submitting = true
+                            stepButtons.forEach { it.isEnabled = false }
+                            ProactiveRuntime.callV6Op(
+                                mapOf(
+                                    "action" to "flaw_verify",
+                                    "id" to curId,
+                                    "pickedIndex" to pickedIdx,
+                                    "unlockCadence" to true,
+                                    "continueNext" to true,
+                                ),
+                                refreshPlanAfter = true,
+                            ) { v ->
+                                if (isFinishing || isDestroyed) return@callV6Op
+                                if (v == null) {
+                                    submitting = false
+                                    stepButtons.forEach { it.isEnabled = true }
+                                    android.widget.Toast.makeText(ctx, "校验请求失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                                    return@callV6Op
+                                }
+                                val correct = v["correct"] == true
+                                val explanation = (v["explanation"] as? String).orEmpty()
+                                if (correct) {
+                                    val msg = (v["message"] as? String).orEmpty().ifBlank { "识破漏洞！" }
+                                    if (dialog.isShowing) dialog.dismiss()
+                                    android.widget.Toast.makeText(ctx, "✅ $msg\n$explanation", android.widget.Toast.LENGTH_LONG).show()
+                                    releaseAfterV6Pass("v6_flaw_spot")
+                                } else {
+                                    if (dialog.isShowing) dialog.dismiss()
+                                    android.widget.Toast.makeText(ctx, "❌ 没抓准漏洞：$explanation", android.widget.Toast.LENGTH_LONG).show()
+                                    val nextCh = v["nextChallenge"] as? Map<*, *>
+                                    val nId = (nextCh?.get("id") as? String).orEmpty()
+                                    val nTopic = (nextCh?.get("topic") as? String).orEmpty().ifBlank { "残局挑刺" }
+                                    val nStem = (nextCh?.get("stem") as? String).orEmpty()
+                                    val nSteps = (nextCh?.get("steps") as? List<*>)?.mapNotNull { it as? String }.orEmpty()
+                                    if (nSteps.isNotEmpty()) {
+                                        present(nId, nTopic, nStem, nSteps)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    stepButtons.add(btn)
+                    body.addView(btn, LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { bottomMargin = dp(8) })
+                }
+
+                val scroll = ScrollView(ctx).apply { addView(body) }
+                dialog = android.app.AlertDialog.Builder(ctx)
+                    .setTitle("🔍 残局挑刺 · $curTopic")
+                    .setView(scroll)
+                    .setNegativeButton("取消", null)
+                    .create()
+                dialog.show()
+            }
+            present(chId, topic, stem, steps)
+        }
+    }
+
     private fun showV6AppealDialog() {
         val ctx = this
         val labels = arrayOf(
@@ -1557,8 +1664,8 @@ class InterceptPageActivity : Activity() {
             } else if (freshArbiter?.priority == "P3") {
                 addView(LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
-                    addView(pillButton("✅ 交 5m 结论", primary = true, weight = 1f) {
-                        showCadenceSubmitDialog()
+                    addView(pillButton("🔍 残局挑刺销锁", primary = true, weight = 1f) {
+                        showFlawSpotDialog()
                     }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(6) })
                     addView(pillButton("⚡ 连答 3 题", secondary = true, weight = 1f) {
                         startMicroQuizStreakUnlock()
@@ -1566,9 +1673,15 @@ class InterceptPageActivity : Activity() {
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                     bottomMargin = dp(6)
                 })
-                addView(pillButton("🆘 4 类严锁申诉（降档/重抽/转Live/休15m）", secondary = true) {
-                    showV6AppealDialog()
-                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)).apply {
+                addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(pillButton("✅ 写 5m 结论", secondary = true, weight = 1f) {
+                        showCadenceSubmitDialog()
+                    }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
+                    addView(pillButton("🆘 4类严锁申诉", secondary = true, weight = 1f) {
+                        showV6AppealDialog()
+                    }, LinearLayout.LayoutParams(0, dp(44), 1f))
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                     bottomMargin = dp(10)
                 })
             }

@@ -31,6 +31,7 @@ import 'plan_modality_page.dart';
 import 'records_page.dart';
 import 'strategy_horizons_page.dart';
 import 'usage_analytics_page.dart';
+import 'v6_command_page.dart';
 import 'wanshiming_page.dart';
 import 'task_card.dart';
 import 'today_cards.dart';
@@ -94,6 +95,7 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
   };
   bool _allowDirty = false;
   bool _strictMode = true;
+  bool _showAllCapsules = false;
   _HorizonTab _horizonTab = _HorizonTab.today;
   final _goalCtrl = TextEditingController();
   final _horizonCtrl = TextEditingController();
@@ -662,14 +664,64 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
   }
 
   Future<void> _rollDice() async {
-    final res = await _channel.rollDiceNow();
-    if (!mounted) return;
-    final d = res?['dice'];
-    final n = res?['name'] ?? '';
-    final a = res?['ask'] ?? '';
-    setState(() {
-      _banner = d != null ? '🎲 骰$d · $n：$a' : '已唤醒六骰思维微干预浮窗';
-    });
+    if (_busy) return;
+    setState(() => _busy = true);
+    var shouldOpenFlaw = false;
+    try {
+      final v6Res = await _channel.v6Op({'action': 'nine_grid_roll', 'autoArm': true});
+      if (v6Res != null && v6Res['ok'] == true && mounted) {
+        final roll = v6Res['roll'] is Map ? Map<String, dynamic>.from(v6Res['roll'] as Map) : const <String, dynamic>{};
+        final tile = roll['tile'] is Map ? Map<String, dynamic>.from(roll['tile'] as Map) : const <String, dynamic>{};
+        final tileTitle = '${tile['title'] ?? '随机切片'}';
+        final diceFace = roll['diceFace'] ?? 1;
+        final diceName = '${roll['diceName'] ?? ''}';
+        final recAction = '${roll['recommendedAction'] ?? 'cadence_5m'}';
+        final brief = '${roll['brief'] ?? ''}';
+        final armed = v6Res['cadenceArmed'] == true;
+        if (recAction == 'live_dice') {
+          unawaited(_channel.triggerGeminiAutoLive(
+            topic: tileTitle,
+            brief: brief,
+            voiceLine: '九宫格抽中$tileTitle，用骰$diceFace$diceName 直接开答',
+            autoClickLive: true,
+          ));
+          setState(() {
+            _banner = '🎲 九宫格×骰$diceFace($diceName) 抽中「$tileTitle」→ 已拉起 Gemini Live';
+          });
+          return;
+        }
+        shouldOpenFlaw = recAction == 'flaw_spot';
+        await _refresh(silent: true);
+        if (!mounted) return;
+        setState(() {
+          _banner = shouldOpenFlaw
+              ? '🎲 九宫格×骰$diceFace($diceName) 抽中残局挑刺「$tileTitle」'
+              : (armed
+                  ? '🎲 九宫格×骰$diceFace($diceName) 已落子「$tileTitle」并自动开启 5m 严验收（P4→P3 锁生效）'
+                  : '🎲 九宫格×骰$diceFace($diceName) 已抽中「$tileTitle」');
+        });
+        return;
+      }
+      final res = await _channel.rollDiceNow();
+      if (!mounted) return;
+      final d = res?['dice'];
+      final n = res?['name'] ?? '';
+      final a = res?['ask'] ?? '';
+      setState(() {
+        _banner = d != null ? '🎲 骰$d · $n：$a' : '已唤醒六骰思维微干预浮窗';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+      if (shouldOpenFlaw && mounted) {
+        unawaited(() async {
+          final passBanner = await showV6FlawSpotDialog(context, _channel);
+          if (passBanner != null && mounted) {
+            await _refresh(silent: true);
+            if (mounted) setState(() => _banner = passBanner);
+          }
+        }());
+      }
+    }
   }
 
   Future<void> _controlClock(String id, String op) async {
@@ -794,46 +846,48 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
               subtitle: '实时锁源 · 验收锁 · 余额',
               onTap: () => unawaited(LocksBalancePage.open(context, channel: _channel)),
             ),
-            FeatureCard(
-              key: const ValueKey('today-capsule-bank'),
-              icon: AppIcons.skill,
-              tint: 2,
-              badge: '10题5分',
-              title: '题库与复习',
-              subtitle: '刷题挣余额 · FSRS 复习',
-              onTap: () => unawaited(BankManagerPage.open(context, channel: _channel)),
-            ),
-            FeatureCard(
-              key: const ValueKey('today-capsule-analytics'),
-              icon: AppIcons.chart,
-              tint: 1,
-              badge: '趋势',
-              title: '统计与复盘',
-              subtitle: '24h 切片 · 90 天 · AI 总报',
-              onTap: () => unawaited(UsageAnalyticsPage.open(context, channel: _channel)),
-            ),
-            FeatureCard(
-              key: const ValueKey('today-capsule-bridge'),
-              icon: AppIcons.link,
-              tint: 3,
-              badge: 'MCP',
-              title: 'Gemini 桥',
-              subtitle: '一键配桥 · 4 场景直呼',
-              onTap: () => unawaited(
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => GeminiBridgePage(channel: _channel)),
+            if (_showAllCapsules) ...[
+              FeatureCard(
+                key: const ValueKey('today-capsule-bank'),
+                icon: AppIcons.skill,
+                tint: 2,
+                badge: '10题5分',
+                title: '题库与复习',
+                subtitle: '刷题挣余额 · FSRS 复习',
+                onTap: () => unawaited(BankManagerPage.open(context, channel: _channel)),
+              ),
+              FeatureCard(
+                key: const ValueKey('today-capsule-analytics'),
+                icon: AppIcons.chart,
+                tint: 1,
+                badge: '趋势',
+                title: '统计与复盘',
+                subtitle: '24h 切片 · 90 天 · AI 总报',
+                onTap: () => unawaited(UsageAnalyticsPage.open(context, channel: _channel)),
+              ),
+              FeatureCard(
+                key: const ValueKey('today-capsule-bridge'),
+                icon: AppIcons.link,
+                tint: 3,
+                badge: 'MCP',
+                title: 'Gemini 桥',
+                subtitle: '一键配桥 · 4 场景直呼',
+                onTap: () => unawaited(
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => GeminiBridgePage(channel: _channel)),
+                  ),
                 ),
               ),
-            ),
-            FeatureCard(
-              key: const ValueKey('today-capsule-hub'),
-              icon: AppIcons.settings,
-              tint: 6,
-              badge: '四组',
-              title: '中枢设置',
-              subtitle: '两条鱼 · 锁规则 · 数据 · 诊断',
-              onTap: () => unawaited(CompanionHubPage.open(context, channel: _channel)),
-            ),
+              FeatureCard(
+                key: const ValueKey('today-capsule-hub'),
+                icon: AppIcons.settings,
+                tint: 6,
+                badge: '四组',
+                title: '中枢设置',
+                subtitle: '两条鱼 · 锁规则 · 数据 · 诊断',
+                onTap: () => unawaited(CompanionHubPage.open(context, channel: _channel)),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 10),
@@ -847,20 +901,8 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
               ActionChip(
                 key: const ValueKey('today-capsule-dice'),
                 avatar: const Icon(AppIcons.overlayBall, size: 15),
-                label: const Text('摇一骰'),
+                label: const Text('🎲 零决策随机一局'),
                 onPressed: _busy ? null : () => unawaited(_rollDice()),
-              ),
-              ActionChip(
-                key: const ValueKey('today-capsule-records'),
-                avatar: const Icon(AppIcons.history, size: 15),
-                label: const Text('执行记录'),
-                onPressed: () => unawaited(RecordsPage.open(context)),
-              ),
-              ActionChip(
-                key: const ValueKey('today-capsule-strategy'),
-                avatar: const Icon(AppIcons.planMode, size: 15),
-                label: const Text('三层战略'),
-                onPressed: () => unawaited(StrategyHorizonsPage.open(context, channel: _channel)),
               ),
               ActionChip(
                 key: const ValueKey('today-capsule-atlas'),
@@ -868,6 +910,26 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
                 label: const Text('图谱 · Live · 5m严锁'),
                 onPressed: () => unawaited(LiveCoreAtlasPage.open(context, channel: _channel, loopChannel: _loop)),
               ),
+              ActionChip(
+                key: const ValueKey('today-toggle-more-capsules'),
+                avatar: Icon(_showAllCapsules ? AppIcons.close : AppIcons.more, size: 15),
+                label: Text(_showAllCapsules ? '收起工具' : '展开更多工具 (4)'),
+                onPressed: () => setState(() => _showAllCapsules = !_showAllCapsules),
+              ),
+              if (_showAllCapsules) ...[
+                ActionChip(
+                  key: const ValueKey('today-capsule-records'),
+                  avatar: const Icon(AppIcons.history, size: 15),
+                  label: const Text('执行记录'),
+                  onPressed: () => unawaited(RecordsPage.open(context)),
+                ),
+                ActionChip(
+                  key: const ValueKey('today-capsule-strategy'),
+                  avatar: const Icon(AppIcons.planMode, size: 15),
+                  label: const Text('三层战略'),
+                  onPressed: () => unawaited(StrategyHorizonsPage.open(context, channel: _channel)),
+                ),
+              ],
             ],
           ),
         ),

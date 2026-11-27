@@ -275,6 +275,7 @@ import { SUPER_SPARK_DEFAULTS, generateSuperSpark } from './super_spark.js'
 import { LIVE_CORE_DEFAULTS, buildLiveCoreAtlas, buildLiveCoreBrief, buildSisterFeed, evaluateLiveCore, formatLiveCoreHistory } from './live_core.js'
 import {
   applyAppeal as v6ApplyAppeal,
+  buildFlawChallenge as v6BuildFlawChallenge,
   buildInterrogationPrompt as v6BuildInterrogationPrompt,
   buildNineGrid as v6BuildNineGrid,
   computePoolTelemetry as v6ComputePoolTelemetry,
@@ -285,6 +286,7 @@ import {
   loadV6State,
   normalizeFramework as v6NormalizeFramework,
   recordMicroQuizAnswer as v6RecordMicroQuizAnswer,
+  rollNineGridTrigger as v6RollNineGridTrigger,
   sampleKnowledgeItems as v6SampleKnowledgeItems,
   startCadence as v6StartCadence,
   stopCadence as v6StopCadence,
@@ -292,6 +294,7 @@ import {
   sweepForgetting as v6SweepForgetting,
   tickCadence as v6TickCadence,
   upsertStele as v6UpsertStele,
+  verifyFlawAnswer as v6VerifyFlawAnswer,
 } from './v6_engine.js'
 
 export const name = 'dsh-go-companion'
@@ -5765,6 +5768,13 @@ export function apply(ctx) {
     let topic = String(input?.topic || '').trim()
     let anchor = String(input?.anchor || '').trim()
     const appLabel = String(input?.appLabel || lastPhone?.label || lastPhone?.app || '').trim()
+    if (!anchor && Math.random() < 0.5) {
+      try {
+        const stV6 = loadV6(now)
+        const v6Pick = v6SampleKnowledgeItems(stV6.pool, stV6.framework, { count: 1, now, markShown: false })[0]
+        if (v6Pick?.claim) anchor = String(v6Pick.claim).slice(0, 72)
+      } catch {}
+    }
     let db = null
     try {
       db = openMemoryDb(memoryPath())
@@ -5792,6 +5802,22 @@ export function apply(ctx) {
       seed: input?.seed ?? null,
     })
     lastRolledDice = card.dice
+    let cadenceArmed = false
+    if (input?.armCadence === true) {
+      try {
+        const stV6 = loadV6(now)
+        const tz = zoneOr(config.timeZone)
+        const day = dayString(now, tz)
+        stV6.cadence = v6StartCadence(stV6.cadence, stV6.framework, {
+          target: `骰${card.dice}·${card.name}：${card.anchor || card.topic || card.ask}`.slice(0, 120),
+          now,
+          day,
+        })
+        saveV6(stV6)
+        cadenceArmed = true
+        presetWatchUntil = now + 2 * 60_000
+      } catch {}
+    }
     // 2026-11-18 触发器：骰子 → 一整份 Gemini 简报（设定 + 当下事实 + 这一骰的思维方式 + 回执），
     // 手机「连 Gemini」直接带着它去开 Live；骰子卡原来那几行放在最前面。
     try {
@@ -5829,7 +5855,7 @@ export function apply(ctx) {
       manual: input?.manual !== false,
       app: lastPhone?.app || '',
     })
-    return { v: 1, ok: true, ...card }
+    return { v: 1, ok: true, cadenceArmed, ...card }
   }
 
   function diceThoughtRoute(input = {}) {
@@ -7500,6 +7526,27 @@ export function apply(ctx) {
       : (liveCoreNow.alwaysOnLive
           ? '【常驻 Live 护航协同守则】当前用户正开启常驻 Gemini Live：禁止像老妈子一样循环催进度！你的职责是把上面他刷过的题、错题与个人经历拆成具体话头，协助灌进 Live 维持高压交互。'
           : '')
+    const v6PartnerDigestText = (() => {
+      try {
+        const v6St = loadV6(nowMs)
+        const win = v6EvaluateWindowMode(v6St.framework, zoneMinuteOfDay(nowMs, tzActive))
+        const cadTick = v6TickCadence(v6St.cadence, nowMs, dayString(nowMs, tzActive))
+        const samples = v6SampleKnowledgeItems(v6St.pool, v6St.framework, { count: 2, now: nowMs, markShown: false, seed: livingSlot })
+        const lines = []
+        if (win?.mode === 'desk_moat') {
+          lines.push('【桌前清脆护城河激活】严禁和用户讨论修改系统架构/参数/方法论，立刻拉回眼前真题或 5m 切片！')
+        }
+        if (cadTick.cadence?.active) {
+          lines.push(`当前 5m 严验收靶子（第${cadTick.cadence.round}轮 · 连胜${cadTick.cadence.streak}）：${cadTick.cadence.target}`)
+        }
+        for (const s of samples) {
+          lines.push(`- 知识海弹药[${s.source}]：${String(s.claim || '').slice(0, 72)}`)
+        }
+        return lines.join('\n').slice(0, 240)
+      } catch {
+        return ''
+      }
+    })()
 
     const blocks = [
       {
@@ -7531,6 +7578,7 @@ export function apply(ctx) {
       { id: 'telemetry', layer: 'content', priority: 9, text: telemetryText },
       ...(liveCopilotText ? [{ id: 'live-copilot', layer: 'content', priority: 79, text: liveCopilotText }] : []),
       ...(liveFeedDigestText ? [{ id: 'live-feed-digest', layer: 'content', priority: 75, text: liveFeedDigestText }] : []),
+      ...(v6PartnerDigestText ? [{ id: 'v6-partner-digest', layer: 'content', priority: 74, text: v6PartnerDigestText }] : []),
       ...(loreText ? [{ id: 'lorebook', layer: 'content', priority: 76, text: '【情境记忆】\n' + loreText }] : []),
       ...(contradiction?.contradicted
         ? [{ id: 'telemetry-contradiction', layer: 'state', priority: 72, text: telemetryContradictionHint(contradiction) }]
@@ -10659,20 +10707,47 @@ export function apply(ctx) {
   function maybeHarvestV6Pool(st, now = Date.now(), horizons = null) {
     if (!st || now - lastV6HarvestAt < 10 * 60_000) return false
     lastV6HarvestAt = now
+    let dirty = false
     try {
+      const swept = v6SweepForgetting(st.pool, st.framework, now)
+      if (swept.archivedCount > 0 || swept.decayedCount > 0) {
+        st.pool = swept.pool
+        dirty = true
+      }
       const bankQuestions = loadAllBankQuestions()
       const reviewCards = dueCards(loadReviewCards(), now, { limit: 6 })
       const vault = vaultContext(now)
+      let memoryFacts = []
+      let memDb = null
+      try {
+        memDb = openMemoryDb(memoryPath())
+        if (memDb) {
+          memoryFacts = backgroundFacts(loadCandidates(memDb, { sessionId: config.sessionId, now }), 8)
+        }
+      } catch {
+      } finally {
+        try { memDb?.close?.() } catch {}
+      }
       const harvested = v6HarvestKnowledgeSources(st.pool, {
         questionBank: bankQuestions,
         reviewCards,
         vaultSnippets: Array.isArray(vault?.recent) ? vault.recent : [],
         horizons,
+        memoryFacts,
       }, now)
       if (harvested.addedCount > 0) {
         st.pool = harvested.pool
+        dirty = true
+      }
+      if (dirty) {
         saveV6(st)
-        record({ state: 'v6-pool-harvest', at: now, added: harvested.addedCount })
+        record({
+          state: 'v6-pool-harvest',
+          at: now,
+          added: harvested.addedCount,
+          archived: swept.archivedCount,
+          decayed: swept.decayedCount,
+        })
         return true
       }
     } catch {}
@@ -10920,6 +10995,136 @@ export function apply(ctx) {
         v: 1,
         ok: true,
         nineGrid: v6BuildNineGrid({ pool: st.pool, stelesCount: st.steles.length, now }),
+      }
+    }
+
+    if (action === 'nine_grid_roll') {
+      const win = v6EvaluateWindowMode(st.framework, mod)
+      const roll = v6RollNineGridTrigger({
+        pool: st.pool,
+        stelesCount: st.steles.length,
+        windowMode: win,
+        cadence: st.cadence,
+        excludeTileId: String(b.excludeTileId || ''),
+        excludeDiceFace: Number(b.excludeDiceFace) || lastRolledDice || 0,
+        now,
+      })
+      if (roll.diceFace) lastRolledDice = roll.diceFace
+      let cadenceArmed = false
+      if (b.autoArm !== false && roll.recommendedAction === 'cadence_5m') {
+        st.cadence = v6StartCadence(st.cadence, st.framework, {
+          target: roll.target,
+          now,
+          day,
+        })
+        saveV6(st)
+        presetWatchUntil = now + 2 * 60_000
+        cadenceArmed = true
+      }
+      record({
+        state: 'v6-nine-grid-roll',
+        at: now,
+        tileId: roll.tile?.id || '',
+        diceFace: roll.diceFace,
+        action: roll.recommendedAction,
+        cadenceArmed,
+      })
+      return {
+        v: 1,
+        ok: true,
+        roll,
+        cadenceArmed,
+        cadence: st.cadence,
+        cadenceRemainingSec: st.cadence?.active ? Math.max(0, Math.ceil((st.cadence.dueAt - now) / 1000)) : 0,
+        windowMode: win,
+      }
+    }
+
+    if (action === 'flaw_draw') {
+      const ch = v6BuildFlawChallenge(st.pool, now)
+      st.pendingFlaw = {
+        id: ch.id,
+        flawIndex: ch.flawIndex,
+        explanation: ch.explanation,
+        topic: ch.topic,
+        at: now,
+      }
+      saveV6(st)
+      return {
+        v: 1,
+        ok: true,
+        challenge: {
+          id: ch.id,
+          topic: ch.topic,
+          stem: ch.stem,
+          steps: ch.steps,
+          source: ch.source,
+        },
+      }
+    }
+
+    if (action === 'flaw_verify') {
+      const pending = st.pendingFlaw
+      if (!pending || typeof pending.flawIndex !== 'number') {
+        return { v: 1, ok: false, error: '当前没有待挑刺题目，请先抽题' }
+      }
+      const ver = v6VerifyFlawAnswer(b.pickedIndex, pending.flawIndex, b.id || '', pending.id || '')
+      if (!ver.ok) {
+        return { v: 1, ok: false, error: ver.reason || '校验失败' }
+      }
+      if (ver.correct) {
+        let cadenceMsg = '识破漏洞！直觉防坑过关'
+        if (b.unlockCadence === true && st.cadence?.active) {
+          const res = v6SubmitCadenceDelivery(st.cadence, st.steles, st.framework, {
+            quizPassed: true,
+            submission: `残局挑刺官识破漏洞：${pending.topic}`,
+            continueNext: b.continueNext !== false,
+            now,
+            day,
+          })
+          if (res.ok) {
+            st.cadence = res.cadence
+            st.steles = res.steles
+            cadenceMsg = res.message
+          }
+        }
+        st.pendingFlaw = null
+        saveV6(st)
+        presetWatchUntil = now + 2 * 60_000
+        record({ state: 'v6-flaw-spot-pass', at: now, topic: pending.topic })
+        return {
+          v: 1,
+          ok: true,
+          correct: true,
+          explanation: pending.explanation,
+          message: cadenceMsg,
+          cadence: st.cadence,
+        }
+      }
+      // 答错自动换新题继续挑刺
+      const nextCh = v6BuildFlawChallenge(st.pool, now + 13)
+      const prevExplain = pending.explanation
+      st.pendingFlaw = {
+        id: nextCh.id,
+        flawIndex: nextCh.flawIndex,
+        explanation: nextCh.explanation,
+        topic: nextCh.topic,
+        at: now,
+      }
+      saveV6(st)
+      record({ state: 'v6-flaw-spot-miss', at: now, picked: Number(b.pickedIndex) })
+      return {
+        v: 1,
+        ok: true,
+        correct: false,
+        explanation: prevExplain,
+        nextChallenge: {
+          id: nextCh.id,
+          topic: nextCh.topic,
+          stem: nextCh.stem,
+          steps: nextCh.steps,
+          source: nextCh.source,
+        },
       }
     }
 

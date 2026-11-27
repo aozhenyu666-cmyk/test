@@ -369,6 +369,66 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     }
   }
 
+  Future<void> _rollNineGridIntoCadence() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    var shouldOpenFlaw = false;
+    try {
+      final res = await _channel.v6Op({'action': 'nine_grid_roll', 'autoArm': true});
+      await _refresh();
+      if (!mounted) return;
+      final roll = _asMap(res?['roll']);
+      final tile = _asMap(roll['tile']);
+      final face = roll['diceFace'] ?? 1;
+      final dName = '${roll['diceName'] ?? ''}';
+      final rec = '${roll['recommendedAction'] ?? 'cadence_5m'}';
+      shouldOpenFlaw = res?['ok'] == true && rec == 'flaw_spot';
+      if (rec == 'live_dice') {
+        unawaited(_channel.triggerGeminiAutoLive(
+          topic: '${tile['title'] ?? '九宫格推进'}',
+          brief: '${roll['brief'] ?? ''}',
+          voiceLine: '九宫格抽中${tile['title'] ?? ''}，骰$face$dName直接开答',
+          autoClickLive: true,
+        ));
+      }
+      setState(() {
+        _banner = res?['ok'] == true
+            ? '🎲 九宫格×骰$face($dName) 抽中「${tile['title'] ?? ''}」${res?['cadenceArmed'] == true ? '并已开启 5m 严验收' : (shouldOpenFlaw ? '→ 请直接挑出残局漏洞' : '')}'
+            : '${res?['error'] ?? '九宫格抽签失败'}';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (shouldOpenFlaw && mounted) {
+      unawaited(_verifyFiveMinByFlawChallenge());
+    }
+  }
+
+  Future<void> _verifyFiveMinByFlawChallenge() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    Map<String, dynamic>? draw;
+    try {
+      draw = await _channel.v6Op({'action': 'flaw_draw'});
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    final ch = _asMap(draw?['challenge']);
+    final stepsRaw = ch['steps'];
+    if (stepsRaw is! List || stepsRaw.isEmpty) {
+      setState(() => _banner = '残局挑刺拉取失败，请使用连答 3 题或写结论');
+      return;
+    }
+    final passBanner = await showV6FlawSpotDialog(context, _channel, initialChallenge: ch);
+    if (passBanner != null && mounted) {
+      await _refresh();
+      if (mounted) {
+        setState(() => _banner = passBanner);
+      }
+    }
+  }
+
   Future<void> _verifyFiveMinByMicroQuiz() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -1034,7 +1094,8 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     final dualMicro = '${dualTrack['microTask'] ?? ''}'.trim();
     final liveSignals = _liveSignals.isNotEmpty ? _liveSignals : _asMap(_liveCore['liveSignals']);
     final sigOnline = liveSignals['liveOnline'] == true || '${_liveCore['phase'] ?? ''}' == 'live_active';
-    final sigComm = liveSignals['audioInComm'] == true && liveSignals['micRecording'] == true;
+    final sigComm = liveSignals['audioInComm'] == true &&
+        (liveSignals['micRecording'] == true || liveSignals['voicePlayback'] == true);
     final sigDisplay = liveSignals['virtualDisplayActive'] == true;
     final sigShareOrUi = liveSignals['screenShareText'] == true || liveSignals['uiLiveActive'] == true;
     final cadence = _asMap(_v6State['cadence']);
@@ -1424,12 +1485,32 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                 ),
                 const SizedBox(height: 10),
                 if (!cadActive)
-                  FilledButton.icon(
-                    key: const ValueKey('atlas-v6-cadence-start-btn'),
-                    style: FilledButton.styleFrom(shape: AppShape.card),
-                    onPressed: _busy ? null : () => unawaited(_startFiveMinCadence()),
-                    icon: const Icon(AppIcons.automation, size: 16),
-                    label: const Text('⚡ 开启 5 分钟严验收（防摸鱼）'),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        key: const ValueKey('atlas-v6-cadence-start-btn'),
+                        style: FilledButton.styleFrom(shape: AppShape.card),
+                        onPressed: _busy ? null : () => unawaited(_startFiveMinCadence()),
+                        icon: const Icon(AppIcons.automation, size: 16),
+                        label: const Text('⚡ 开启 5 分钟严验收（防摸鱼）'),
+                      ),
+                      FilledButton.tonalIcon(
+                        key: const ValueKey('atlas-v6-ninegrid-roll-btn'),
+                        style: FilledButton.styleFrom(shape: AppShape.card),
+                        onPressed: _busy ? null : () => unawaited(_rollNineGridIntoCadence()),
+                        icon: const Icon(AppIcons.overlayBall, size: 16),
+                        label: const Text('🎲 9宫格随机替我开局'),
+                      ),
+                      OutlinedButton.icon(
+                        key: const ValueKey('atlas-v6-flaw-spot-btn'),
+                        style: OutlinedButton.styleFrom(shape: AppShape.card),
+                        onPressed: _busy ? null : () => unawaited(_verifyFiveMinByFlawChallenge()),
+                        icon: const Icon(AppIcons.skill, size: 16),
+                        label: const Text('🔍 残局挑刺验证'),
+                      ),
+                    ],
                   )
                 else
                   Wrap(
@@ -1437,6 +1518,13 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                     runSpacing: 8,
                     children: [
                       FilledButton.icon(
+                        key: const ValueKey('atlas-v6-flaw-spot-btn'),
+                        style: FilledButton.styleFrom(shape: AppShape.card),
+                        onPressed: _busy ? null : () => unawaited(_verifyFiveMinByFlawChallenge()),
+                        icon: const Icon(AppIcons.skill, size: 16),
+                        label: const Text('🔍 残局挑刺验证'),
+                      ),
+                      FilledButton.tonalIcon(
                         key: const ValueKey('atlas-v6-cadence-verify-btn'),
                         style: FilledButton.styleFrom(shape: AppShape.card),
                         onPressed: _busy ? null : () => unawaited(_verifyFiveMinCadence()),

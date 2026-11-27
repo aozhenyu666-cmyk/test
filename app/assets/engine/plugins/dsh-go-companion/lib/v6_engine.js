@@ -447,6 +447,15 @@ export function harvestKnowledgeSources(pool = [], sources = {}, now = Date.now(
     }
   }
 
+  const memFacts = Array.isArray(sources?.memoryFacts) ? sources.memoryFacts : []
+  for (const f of memFacts) {
+    const raw = typeof f === 'string' ? f : (f?.text || f?.fact || '')
+    const text = cleanStr(raw, 125)
+    if (text.length >= 10 && text.length <= 160 && isPromptSafeText(text)) {
+      candidates.push({ text, source: 'obsidian', weight: 1.35 })
+    }
+  }
+
   const added = []
   for (let i = 0; i < candidates.length && added.length < 6; i += 1) {
     const cand = candidates[i]
@@ -513,17 +522,23 @@ export function ingestClipboardOrText(pool = [], rawText = '', { source = 'gemin
   }
 }
 
-export function sampleKnowledgeItems(pool = [], frameworkRaw = {}, { count = 1, now = Date.now(), markShown = false } = {}) {
+export function sampleKnowledgeItems(pool = [], frameworkRaw = {}, { count = 1, now = Date.now(), markShown = false, seed = null } = {}) {
   const fw = normalizeFramework(frameworkRaw)
   const cooldownMs = fw.poolCooldownHours * HOUR_MS
   const active = (Array.isArray(pool) ? pool : []).filter((c) => c && c.status !== 'archived' && c.status !== 'graduated')
   let eligible = active.filter((c) => !c.lastShownAt || (now - Number(c.lastShownAt)) >= cooldownMs)
   if (!eligible.length) eligible = active
 
-  // Weighted stochastic pick (avoids strict linear replay while respecting weights & freshness)
+  // Weighted stochastic pick (supports deterministic seed for prompt caching / tests)
   const remaining = [...eligible]
   const picked = []
   const want = Math.max(1, Math.min(20, Number(count) || 1))
+  let seedState = typeof seed === 'number' && Number.isFinite(seed) ? ((seed >>> 0) || 1) : null
+  const nextUnit = () => {
+    if (seedState === null) return Math.random()
+    seedState = (Math.imul(seedState, 1664525) + 1013904223) >>> 0
+    return seedState / 4294967296
+  }
 
   while (picked.length < want && remaining.length > 0) {
     let totalW = 0
@@ -533,7 +548,7 @@ export function sampleKnowledgeItems(pool = [], frameworkRaw = {}, { count = 1, 
       totalW += w
       return w
     })
-    let roll = Math.random() * totalW
+    let roll = nextUnit() * totalW
     let hitIdx = 0
     for (let i = 0; i < weights.length; i += 1) {
       roll -= weights[i]
@@ -681,33 +696,323 @@ export function buildInterrogationPrompt({ horizons = null, pool = [], now = Dat
   ].filter(Boolean).join('\n')
 }
 
+const SIX_DICE_MINI = Object.freeze({
+  1: { name: '事实提取', ask: '不看原话，用一句说清刚才这条内容到底交待了哪一个硬事实？' },
+  2: { name: '预判推演', ask: '顺着当前这一步往下走，接下来最可能发生什么结果或坑？' },
+  3: { name: '联想比较', ask: '这跟你做过的哪一类旧题/旧案例最像？关键差别在哪？' },
+  4: { name: '关键提问', ask: '整段里哪一个还没弄清的未知条件，一旦变了结论就会翻盘？' },
+  5: { name: '依据与结论', ask: '你刚才下的判断依据了哪条硬事实？如果只靠它，能稳推出什么？' },
+  6: { name: '替代解释', ask: '别急着认第一个结论：如果最顺嘴那个解释错了，还能怎么解释？' },
+})
+
+const FLAW_TEMPLATES = Object.freeze([
+  {
+    topic: '偷换概念 · 忽略总基数',
+    stem: '某市 A 区今年交通事故同比上升 12%，B 区只上升 3%，结论据此判定 A 区今年交通治理比 B 区差得多。',
+    steps: [
+      'A 区同比增幅 12% 高于 B 区 3%，相对增量确实更显著。',
+      '增幅统计口径采用去年的绝对事故数作分母。',
+      '因此 A 区今年的实际安全风险与事故绝对总量必定高于 B 区。',
+      '若 B 区去年基数极高而 A 区基数极小，增速高不代表总量大。',
+    ],
+    flawIndex: 2,
+    flawLabel: '忽略总基数偷换大小',
+    explanation: '第 3 步把“同比增幅高”直接等价为“绝对总量与实际风险高”，漏掉了两区去年基数可能完全不在同一量级。',
+  },
+  {
+    topic: '强加因果 · 相关误当因果',
+    stem: '调查显示每天喝黑咖啡的人行测做题正确率高 9%，于是断定喝黑咖啡能直接提升逻辑推理能力。',
+    steps: [
+      '样本统计确实观察到饮用黑咖啡与高正确率存在正相关。',
+      '黑咖啡中的咖啡因可短暂提升部分人群的觉醒度。',
+      '所以只要明天考前大量灌黑咖啡，任何人的推理能力都会同步提高 9%。',
+      '规律作息与备考基础好的人群本就更常靠咖啡维持早起节律。',
+    ],
+    flawIndex: 2,
+    flawLabel: '相关关系强行外推为因果律',
+    explanation: '第 3 步犯了强加因果与忽略混杂变量错误：高正确率可能源自备考人群本身作息与基础差异，且个体剂量存在边际递减。',
+  },
+  {
+    topic: '条件推理 · 肯后误当肯前',
+    stem: '规定“只有完成 15 分钟错题复盘，才能解锁当晚游戏权限”。小李今晚解锁了游戏权限（或没完成复盘但开了备用机）。',
+    steps: [
+      '逻辑等价改写为：解锁权限 → 必须已完成 15 分钟错题复盘。',
+      '若小李完成了 15 分钟错题复盘，说明他必然已经解锁游戏权限。',
+      '若小李没有完成错题复盘，按规则一定不能解锁游戏权限。',
+      '“只有 P 才 Q”中 P 是必要条件，Q 成立必推 P，P 成立未必推 Q。',
+    ],
+    flawIndex: 1,
+    flawLabel: '充分必要条件倒置（肯后/肯必误推）',
+    explanation: '第 2 步把“必要条件成立”错当成“充分条件必然成立”：完成了复盘还可能受时段锁或电量限制，未必必然解锁。',
+  },
+  {
+    topic: '样本偏误 · 幸存者偏差',
+    stem: '采访 20 位上岸考生都说每天刷题到凌晨 1 点，于是推断熬夜到凌晨 1 点是上岸高胜率策略。',
+    steps: [
+      '20 位成功上岸者的样本确实普遍存在凌晨睡前刷题习惯。',
+      '因此“熬夜到凌晨 1 点”是决定能否上岸的最高收益分界动作。',
+      '调查未统计同样熬夜到凌晨 1 点却因疲劳失分落榜的人数。',
+      '仅凭成功者共同特征反推因果，遗漏了分母中的未上岸人群。',
+    ],
+    flawIndex: 1,
+    flawLabel: '幸存者偏差（缺失未成功对照样本）',
+    explanation: '第 2 步只看成功者交集就下因果结论，没算同样熬夜却效率坍塌的落榜分母。',
+  },
+  {
+    topic: '资料分析 · 部分与整体增速混淆',
+    stem: '2025 年全国软件营收增长 11%，其中成都软件营收增长 8%，因此判断成都软件产值今年反而萎缩了。',
+    steps: [
+      '成都 8% 的增速低于全国平均 11%，全国占比确实微降。',
+      '只要当年名义增速大于 0%，绝对产值本身依然是同比扩大的。',
+      '增速跑输全国大盘，等价于成都今年软件营收绝对值出现负增长萎缩。',
+      '比较两期占比看部分增速 vs 整体增速，比较规模只看自身增速正负。',
+    ],
+    flawIndex: 2,
+    flawLabel: '混淆“占比下降”与“绝对量萎缩”',
+    explanation: '第 3 步把“增速低于整体导致占比下降”错当成“绝对量负增长”，成都今年规模仍增长了 8%。',
+  },
+  {
+    topic: '认知护栏 · 低电量硬加锁假动作',
+    stem: '昨晚低电量时面对复杂计划瘫痪没动，今天决定把全天可玩时长直接归零、逼自己一口气写完两千字。',
+    steps: [
+      '高耗起步时大脑会自动寻找最小阻力逃逸或复制粘贴糊弄。',
+      '把起步门槛从 10 秒点选拔高到 2000 字无锚点输出，更能彻底治好拖延。',
+      '压低第一动作为“0.5 秒挑错/左右盲点”，反而更容易带转思维齿轮。',
+      '软件能托举 20%~60% 电量空转者，彻底呆滞期仍须配生理停战与作息底座。',
+    ],
+    flawIndex: 1,
+    flawLabel: '逆反加压假动作（拔高起步瓦数逼出死皮）',
+    explanation: '第 2 步违反认知努力折现规律：低工作记忆+低电量下强拔启动峰值，只会加速滑向彻底死皮躺平。',
+  },
+])
+
+export function buildFlawChallenge(pool = [], now = Date.now()) {
+  const active = (Array.isArray(pool) ? pool : []).filter((c) => c && c.status !== 'archived' && c.claim)
+  const usePool = active.length > 0 && (Math.abs(Math.floor(now / 1000)) % 2 === 0 || Math.random() < 0.45)
+
+  if (usePool) {
+    const picked = sampleKnowledgeItems(active, DEFAULT_FRAMEWORK, { count: 1, now, markShown: false })[0]
+    if (picked) {
+      const claim = cleanStr(picked.claim, 110)
+      const flawIdx = 1 + (Math.abs(Math.floor(now / 137)) % 2) // index 1 or 2
+      const baseSteps = [
+        `先锁定眼下材料真命题边界：「${cleanStr(claim, 64)}」。`,
+        picked.isTrue
+          ? '只要照着字面经验顺推，无需核对题目约束和否定词也能稳对。'
+          : '顺着第一直觉直接套用“看起来最像常识”的那句绝对表述即可过关。',
+        `关键反例拆解：${cleanStr(picked.correction || '需重点核对主体范围、否定限词与对比基数是否偷换。', 72)}`,
+        '下一次同屏遇到相似设问，先用 1 秒标出限定词与基数再落手。',
+      ]
+      if (flawIdx === 2) {
+        const tmp = baseSteps[1]
+        baseSteps[1] = baseSteps[2]
+        baseSteps[2] = tmp
+      }
+      return {
+        id: `flaw-${now}-${Math.random().toString(36).slice(2, 6)}`,
+        topic: `知识海实卡挑刺 · ${picked.source || 'quiz'}`,
+        stem: `围绕刚沉淀的核心切片「${cleanStr(claim, 72)}」，下列哪一步推理是偷换前提/假动作？`,
+        steps: baseSteps,
+        flawIndex: flawIdx,
+        flawLabel: '知识海实卡反直觉陷阱',
+        explanation: picked.correction || '第 ' + (flawIdx + 1) + ' 步跳过边界核验直接顺直觉偷懒，正是常见掉坑点。',
+        source: picked.source || 'quiz',
+      }
+    }
+  }
+
+  const tpl = FLAW_TEMPLATES[Math.abs(Math.floor(now / 97) + Math.floor(Math.random() * FLAW_TEMPLATES.length)) % FLAW_TEMPLATES.length]
+  return {
+    id: `flaw-${now}-${Math.random().toString(36).slice(2, 6)}`,
+    topic: tpl.topic,
+    stem: tpl.stem,
+    steps: [...tpl.steps],
+    flawIndex: tpl.flawIndex,
+    flawLabel: tpl.flawLabel,
+    explanation: tpl.explanation,
+    source: 'template',
+  }
+}
+
+export function verifyFlawAnswer(pickedIndex, expectedIndex, challengeId = '', expectedId = '') {
+  if (expectedId && challengeId && String(challengeId) !== String(expectedId)) {
+    return { ok: false, correct: false, reason: '题目已刷新，请按最新展示的残局作答' }
+  }
+  const p = Number(pickedIndex)
+  const e = Number(expectedIndex)
+  if (!Number.isInteger(p) || p < 0 || p > 3) {
+    return { ok: false, correct: false, reason: '无效选项索引' }
+  }
+  return { ok: true, correct: p === e, pickedIndex: p, expectedIndex: e }
+}
+
 export function buildNineGrid({ pool = [], stelesCount = 0, now = Date.now() } = {}) {
   const topKnowledge = sampleKnowledgeItems(pool, DEFAULT_FRAMEWORK, { count: 3, now, markShown: false })
+  const activeCount = (Array.isArray(pool) ? pool : []).filter((x) => x && x.status === 'active').length
   const row1 = [0, 1, 2].map((i) => {
     const k = topKnowledge[i]
+    const target = k ? cleanStr(k.claim, 72) : '从 Gemini 或剪贴板补入 1 条核心切片并完成 5m 推进'
     return {
       id: `grid-k-${i}`,
       kind: 'knowledge',
+      actionKind: 'cadence_5m',
+      diceFace: (i * 2) + 1,
       title: k ? cleanStr(k.claim, 18) : '知识海补充新卡',
       subtitle: k ? `${k.source} · 5m攻克` : '复制Gemini回流',
-      badge: `弹药 ${pool.filter((x) => x.status === 'active').length}`,
+      badge: `弹药 ${activeCount}`,
       itemId: k?.id || '',
+      recommendedTarget: target,
     }
   })
 
   const row2 = [
-    { id: 'grid-logic', kind: 'bout', title: '判断推理速杀', subtitle: '5m 高压一局', badge: '行测' },
-    { id: 'grid-data', kind: 'bout', title: '资料错题重榨', subtitle: '抓速算防坑点', badge: '提分' },
-    { id: 'grid-essay', kind: 'bout', title: '申论一句破题', subtitle: '先喷1句再接AI', badge: '输出' },
+    {
+      id: 'grid-logic',
+      kind: 'bout',
+      actionKind: 'cadence_5m',
+      diceFace: 6,
+      title: '判断推理速杀',
+      subtitle: '5m 高压一局',
+      badge: '行测',
+      recommendedTarget: '行测判断推理：连做 5 题并写出每题排除理由',
+    },
+    {
+      id: 'grid-data',
+      kind: 'bout',
+      actionKind: 'flaw_spot',
+      diceFace: 4,
+      title: '资料错题重榨',
+      subtitle: '抓速算防坑点',
+      badge: '提分',
+      recommendedTarget: '资料分析错题重榨：找基数偷换/截位误差并改错',
+    },
+    {
+      id: 'grid-essay',
+      kind: 'bout',
+      actionKind: 'live_dice',
+      diceFace: 5,
+      title: '申论一句破题',
+      subtitle: '先喷1句再接AI',
+      badge: '输出',
+      recommendedTarget: '申论提炼：先口述 1 句核心对策因果再开 Live 追问',
+    },
   ]
 
   const row3 = [
-    { id: 'grid-grocery', kind: 'grocery', title: '买菜 9 宫格', subtitle: '看图防折返8趟', badge: '生活' },
-    { id: 'grid-walk', kind: 'interrogate', title: '3刀追问立约', subtitle: '免坐桌前失神', badge: '契约' },
-    { id: 'grid-wanshiming', kind: 'wanshiming', title: '观《万世铭》', subtitle: `已铭 ${stelesCount} 通石碑`, badge: '长卷' },
+    {
+      id: 'grid-grocery',
+      kind: 'grocery',
+      actionKind: 'grocery',
+      diceFace: 2,
+      title: '买菜 9 宫格',
+      subtitle: '看图防折返8趟',
+      badge: '生活',
+      recommendedTarget: '出门看图点选采购单（顺路一次拿齐）',
+    },
+    {
+      id: 'grid-walk',
+      kind: 'interrogate',
+      actionKind: 'interrogate',
+      diceFace: 4,
+      title: '3刀追问立约',
+      subtitle: '免坐桌前失神',
+      badge: '契约',
+      recommendedTarget: '3刀追问收口并锁定下一段 25m 任务',
+    },
+    {
+      id: 'grid-wanshiming',
+      kind: 'wanshiming',
+      actionKind: 'wanshiming',
+      diceFace: 3,
+      title: '观《万世铭》',
+      subtitle: `已铭 ${stelesCount} 通石碑`,
+      badge: '长卷',
+      recommendedTarget: '校准长期主航道并刻石 1 条进展',
+    },
   ]
 
   return [...row1, ...row2, ...row3]
+}
+
+export function rollNineGridTrigger({
+  pool = [],
+  stelesCount = 0,
+  windowMode = null,
+  cadence = null,
+  excludeTileId = '',
+  excludeDiceFace = 0,
+  now = Date.now(),
+} = {}) {
+  const tiles = buildNineGrid({ pool, stelesCount, now })
+  const mode = String(windowMode?.mode || 'general')
+
+  const candidates = tiles
+    .filter((t) => {
+      if (t.id === excludeTileId) return false
+      if (mode === 'desk_moat') {
+        return t.kind === 'knowledge' || t.kind === 'bout'
+      }
+      return t.kind !== 'wanshiming'
+    })
+    .map((t) => {
+      let w = 1.0
+      if (mode === 'desk_moat') {
+        w = t.kind === 'bout' ? 1.8 : 1.4
+      } else if (mode === 'fragmented_digest') {
+        if (t.id === 'grid-essay' || t.kind === 'grocery') w = 1.7
+        else if (t.kind === 'knowledge') w = 1.3
+        else w = 0.7
+      }
+      return { tile: t, weight: w }
+    })
+
+  const poolList = candidates.length ? candidates : tiles.slice(0, 6).map((tile) => ({ tile, weight: 1 }))
+  let sum = poolList.reduce((acc, x) => acc + x.weight, 0)
+  let roll = Math.random() * sum
+  let chosen = poolList[0].tile
+  for (const entry of poolList) {
+    roll -= entry.weight
+    if (roll <= 0) {
+      chosen = entry.tile
+      break
+    }
+  }
+
+  let diceFace = Number(chosen.diceFace) || 1
+  if (diceFace === Number(excludeDiceFace)) {
+    diceFace = (diceFace % 6) + 1
+  }
+  const diceMeta = SIX_DICE_MINI[diceFace] || SIX_DICE_MINI[1]
+
+  let recommendedAction = 'cadence_5m'
+  if (mode === 'desk_moat') {
+    recommendedAction = chosen.actionKind === 'flaw_spot' || (now % 4 === 0) ? 'flaw_spot' : 'cadence_5m'
+  } else if (mode === 'fragmented_digest') {
+    recommendedAction = chosen.actionKind === 'live_dice' || chosen.kind === 'knowledge' ? 'live_dice' : 'cadence_5m'
+  } else if (chosen.actionKind === 'flaw_spot' || chosen.actionKind === 'live_dice') {
+    recommendedAction = chosen.actionKind
+  }
+
+  const target = cleanStr(
+    chosen.recommendedTarget || cadence?.target || chosen.title || '完成当前 5 分钟核心切片',
+    120,
+  )
+  const brief = [
+    `【九宫格×六骰随机落子 · ${mode === 'desk_moat' ? '桌前护城河' : (mode === 'fragmented_digest' ? '零碎清口窗' : '随时破冰')}】`,
+    `靶子格：${chosen.title}（${chosen.badge}）`,
+    `思维手术刀：骰${diceFace}·${diceMeta.name} — ${diceMeta.ask}`,
+    `执行动作：${target}`,
+  ].join('\n')
+
+  return {
+    tile: chosen,
+    diceFace,
+    diceName: diceMeta.name,
+    diceAsk: diceMeta.ask,
+    recommendedAction,
+    target,
+    brief,
+  }
 }
 
 export function applyAppeal(usageDayRaw = {}, frameworkRaw = {}, { kind = '', now = Date.now(), day = '' } = {}) {
@@ -1060,6 +1365,7 @@ export function defaultV6State(now = Date.now()) {
     steles: seedSteles(),
     lastContract: null,
     cadence: defaultCadence(now),
+    pendingFlaw: null,
   }
 }
 
@@ -1076,5 +1382,6 @@ export function loadV6State(readState, filePath, now = Date.now()) {
     steles: Array.isArray(raw.steles) && raw.steles.length ? raw.steles : seedSteles(),
     lastContract: raw.lastContract || null,
     cadence: normalizeCadence(raw.cadence),
+    pendingFlaw: raw.pendingFlaw && typeof raw.pendingFlaw === 'object' ? raw.pendingFlaw : null,
   }
 }

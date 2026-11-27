@@ -2,6 +2,7 @@ package io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.proactive
 
 import android.content.Context
 import android.hardware.display.DisplayManager
+import android.media.AudioAttributes
 import android.media.AudioManager
 import android.os.Build
 import android.view.Display
@@ -13,21 +14,23 @@ data class LiveSignalSnapshot(
     val virtualDisplayActive: Boolean = false,
     val screenShareText: Boolean = false,
     val uiLiveActive: Boolean = false,
+    val voicePlayback: Boolean = false,
     val summary: String = "未检测到 Live 活动",
 ) {
     /**
      * 严防误报：
-     * - 仅 AudioManager 通话/语音态 + 真实麦克风采集，或明确的投影副屏 / Live 屏幕文本 / Gemini Live 前台文案
+     * - 仅 AudioManager 通话/语音态 + (真实麦克风采集 或 VoIP/助手语音播放流)，或明确的投影副屏 / Live 屏幕文本 / Gemini Live 前台文案
      *   才判定 Live 在线；
-     * - 绝不把后台零星麦克风采集或系统厂商悬浮窗(FLAG_PRIVATE)误判为 Live 在线而放开全局锁。
+     * - 绝不把后台零星麦克风采集、普通媒体视频声音或系统厂商悬浮窗(FLAG_PRIVATE)误判为 Live 在线而放开全局锁。
      */
     val liveOnline: Boolean
-        get() = (audioInComm && micRecording) || virtualDisplayActive || screenShareText || uiLiveActive
+        get() = (audioInComm && (micRecording || voicePlayback)) || virtualDisplayActive || screenShareText || uiLiveActive
 
     fun toMap(): Map<String, Any?> = linkedMapOf(
         "liveOnline" to liveOnline,
         "audioInComm" to audioInComm,
         "micRecording" to micRecording,
+        "voicePlayback" to voicePlayback,
         "virtualDisplayActive" to virtualDisplayActive,
         "screenShareText" to screenShareText,
         "uiLiveActive" to uiLiveActive,
@@ -53,10 +56,12 @@ object LiveSignalMonitor {
         virtualDisplayActive: Boolean,
         screenShareText: Boolean,
         uiLiveActive: Boolean,
+        voicePlayback: Boolean = false,
     ): LiveSignalSnapshot {
-        val parts = ArrayList<String>(4)
+        val parts = ArrayList<String>(5)
         if (audioInComm) parts.add("音频通话态占用")
         if (micRecording) parts.add("麦克风采集激活")
+        if (voicePlayback) parts.add("VoIP/助手语音流在线")
         if (virtualDisplayActive) parts.add("虚拟共享副屏在线")
         if (screenShareText) parts.add("屏幕共享文案在线")
         if (uiLiveActive) parts.add("Gemini Live 界面活跃")
@@ -67,6 +72,7 @@ object LiveSignalMonitor {
             virtualDisplayActive = virtualDisplayActive,
             screenShareText = screenShareText,
             uiLiveActive = uiLiveActive,
+            voicePlayback = voicePlayback,
             summary = summary,
         )
     }
@@ -80,6 +86,18 @@ object LiveSignalMonitor {
         val micRecording = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && am != null) {
                 am.activeRecordingConfigurations.isNotEmpty()
+            } else {
+                false
+            }
+        }.getOrDefault(false)
+
+        val voicePlayback = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && am != null) {
+                am.activePlaybackConfigurations.any { cfg ->
+                    val usage = cfg.audioAttributes.usage
+                    usage == AudioAttributes.USAGE_VOICE_COMMUNICATION ||
+                        usage == AudioAttributes.USAGE_ASSISTANT
+                }
             } else {
                 false
             }
@@ -108,6 +126,7 @@ object LiveSignalMonitor {
             virtualDisplayActive = virtualDisplayActive,
             screenShareText = shareText,
             uiLiveActive = uiLive,
+            voicePlayback = voicePlayback,
         )
     }
 }

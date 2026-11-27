@@ -164,7 +164,10 @@ void main() {
     expect(find.text('此刻焦距 · 进行中'), findsOneWidget);
     expect(find.text('推进 v4.1 收尾'), findsOneWidget);
     expect(find.text('严格锁'), findsOneWidget);
-    expect(find.text('摇一骰'), findsOneWidget);
+    expect(find.byKey(const ValueKey('today-capsule-dice')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('today-toggle-more-capsules')));
+    await tester.tap(find.byKey(const ValueKey('today-toggle-more-capsules')));
+    await settlePhone(tester);
     expect(find.text('执行记录'), findsOneWidget);
 
     // 调整运行中白名单并点确认按钮，确认命令可靠发出
