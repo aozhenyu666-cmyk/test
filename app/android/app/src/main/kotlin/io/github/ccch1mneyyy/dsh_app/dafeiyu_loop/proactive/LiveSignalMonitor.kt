@@ -15,8 +15,14 @@ data class LiveSignalSnapshot(
     val uiLiveActive: Boolean = false,
     val summary: String = "未检测到 Live 活动",
 ) {
+    /**
+     * 严防误报：
+     * - 仅 AudioManager 通话/语音态 + 真实麦克风采集，或明确的投影副屏 / Live 屏幕文本 / Gemini Live 前台文案
+     *   才判定 Live 在线；
+     * - 绝不把后台零星麦克风采集或系统厂商悬浮窗(FLAG_PRIVATE)误判为 Live 在线而放开全局锁。
+     */
     val liveOnline: Boolean
-        get() = audioInComm || micRecording || virtualDisplayActive || screenShareText || uiLiveActive
+        get() = (audioInComm && micRecording) || virtualDisplayActive || screenShareText || uiLiveActive
 
     fun toMap(): Map<String, Any?> = linkedMapOf(
         "liveOnline" to liveOnline,
@@ -86,8 +92,8 @@ object LiveSignalMonitor {
                 if (d.state == Display.STATE_OFF) return@any false
                 val n = d.name.orEmpty().lowercase()
                 n.contains("screen") || n.contains("projection") || n.contains("cast") ||
-                    n.contains("gemini") || (d.flags and Display.FLAG_PRESENTATION) != 0 ||
-                    (d.flags and Display.FLAG_PRIVATE) != 0
+                    n.contains("gemini") || n.contains("media_projection") ||
+                    (d.flags and Display.FLAG_PRESENTATION) != 0
             }
         }.getOrDefault(false)
 

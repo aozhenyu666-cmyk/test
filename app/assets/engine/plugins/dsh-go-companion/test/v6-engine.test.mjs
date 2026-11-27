@@ -13,7 +13,11 @@ import {
   parseContractBlock,
   recordMicroQuizAnswer,
   sampleKnowledgeItems,
+  startCadence,
+  stopCadence,
+  submitCadenceDelivery,
   sweepForgetting,
+  tickCadence,
   upsertStele,
 } from '../lib/v6_engine.js'
 
@@ -152,4 +156,68 @@ test('《万世铭》碑铭写入与删除', () => {
   const removed = deleteStele(added.steles, added.item.id)
   assert.equal(removed.ok, true)
   assert.equal(removed.steles.length, state.steles.length)
+})
+
+test('5分钟高频严验收节奏：到点逾期转严锁、防敷衍拒收、连续3次自动铭刻万世铭', () => {
+  const t0 = 1_700_000_000_000
+  const day = '2026-11-27'
+  const state = defaultV6State(t0)
+
+  let cad = startCadence(state.cadence, state.framework, {
+    target: '咬定行测资料分析2组速算',
+    intervalSec: 300,
+    goalId: 'long-1',
+    goalScope: 'long',
+    now: t0,
+    day,
+  })
+  assert.equal(cad.active, true)
+  assert.equal(cad.phase, 'running')
+  assert.equal(cad.dueAt, t0 + 300_000)
+
+  // 未到点保持 running
+  const midTick = tickCadence(cad, t0 + 120_000, day)
+  assert.equal(midTick.phase, 'running')
+  assert.equal(midTick.remainingSec, 180)
+  assert.equal(midTick.dueAlert, false)
+
+  // 到点转 awaiting_verify，需触发严锁及强提醒
+  const dueTick = tickCadence(midTick.cadence, t0 + 300_000, day)
+  assert.equal(dueTick.phase, 'awaiting_verify')
+  assert.equal(dueTick.justEnteredOverdue, true)
+  assert.equal(dueTick.dueAlert, true)
+
+  // 防敷衍拦截
+  let steles = state.steles
+  const badSub = submitCadenceDelivery(dueTick.cadence, steles, state.framework, {
+    submission: '111',
+    now: t0 + 310_000,
+    day,
+  })
+  assert.equal(badSub.ok, false)
+
+  // 连交 3 轮真实结论，第 3 轮自动铭刻万世铭
+  let curCad = dueTick.cadence
+  let r3 = null
+  for (let i = 1; i <= 3; i += 1) {
+    const res = submitCadenceDelivery(curCad, steles, state.framework, {
+      submission: `第${i}轮完成：核对基期量截位除法错题并归纳反直觉规律`,
+      now: t0 + i * 320_000,
+      day,
+    })
+    assert.equal(res.ok, true)
+    curCad = res.cadence
+    steles = res.steles
+    r3 = res
+  }
+  assert.equal(curCad.streak, 3)
+  assert.equal(curCad.verifiedToday, 3)
+  assert.ok(r3.autoStele)
+  assert.match(r3.autoStele.title, /5m严验收·3连胜/)
+  assert.equal(steles.length, state.steles.length + 1)
+
+  const stopped = stopCadence(curCad)
+  assert.equal(stopped.active, false)
+  assert.equal(stopped.phase, 'idle')
+  assert.equal(stopped.verifiedToday, 3)
 })

@@ -21,6 +21,8 @@ import 'gemini_bridge_page.dart';
 import 'locks_balance_page.dart';
 import 'plan_modality_page.dart';
 import 'records_page.dart';
+import 'v6_command_page.dart';
+import 'wanshiming_page.dart';
 
 enum LiveCoreAtlasTab { action, atlas, records }
 
@@ -77,6 +79,9 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
   List<Map<String, dynamic>> _history = const [];
   ProactiveStatus? _proactiveStatus;
   Map<String, dynamic> _bridgeStatus = const {};
+  Map<String, dynamic> _v6State = const {};
+  Map<String, dynamic> _liveSignals = const {};
+  Timer? _cadenceTimer;
 
   static const _fallbackPipeline = <Map<String, dynamic>>[
     {'step': 1, 'key': 'sense', 'label': '感知现场', 'status': 'ready'},
@@ -147,6 +152,25 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     unawaited(_refresh());
   }
 
+  @override
+  void dispose() {
+    _cadenceTimer?.cancel();
+    super.dispose();
+  }
+
+  void _syncCadenceTimer() {
+    final cad = _asMap(_v6State['cadence']);
+    final shouldTick = cad['active'] == true && '${cad['phase'] ?? ''}' == 'running';
+    if (shouldTick && _cadenceTimer == null) {
+      _cadenceTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else if (!shouldTick && _cadenceTimer != null) {
+      _cadenceTimer?.cancel();
+      _cadenceTimer = null;
+    }
+  }
+
   Map<String, dynamic> _asMap(Object? raw) {
     if (raw is Map<String, dynamic>) return raw;
     if (raw is Map) {
@@ -177,8 +201,31 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     }
   }
 
+  Future<void> _refreshV6() async {
+    final results = await Future.wait<Object?>([
+      _channel.v6Op(const {'action': 'status'}).catchError((_) => null),
+      _channel.v6LiveSignals().catchError((_) => null),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      final v6 = results[0];
+      if (v6 is Map && v6['ok'] == true) {
+        _v6State = _asMap(v6);
+      }
+      final sig = results[1];
+      if (sig is Map) {
+        _liveSignals = _asMap(sig);
+      } else {
+        final nestedSig = _asMap(_v6State['liveSignals']);
+        if (nestedSig.isNotEmpty) _liveSignals = nestedSig;
+      }
+      _syncCadenceTimer();
+    });
+  }
+
   Future<void> _refresh() async {
-    final results = await Future.wait([
+    unawaited(_refreshV6());
+    final results = await Future.wait<Object?>([
       _channel.liveCoreOp(const {'action': 'atlas'}).catchError((_) => null),
       _channel.status().catchError((_) => null),
       _channel.bridgeOp(const {'action': 'status'}).catchError((_) => null),
@@ -199,6 +246,158 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
         _bridgeStatus = br;
       }
     });
+  }
+
+  Future<void> _startFiveMinCadence({String? presetTarget}) async {
+    if (_busy) return;
+    var target = (presetTarget ?? '').trim();
+    if (target.isEmpty) {
+      final ctrl = TextEditingController(text: '${_asMap(_v6State['cadence'])['target'] ?? ''}');
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('⚡ 开启 5 分钟严验收局'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              labelText: '这 5 分钟只死磕哪 1 个具体动作？',
+              hintText: '例：做完 5 道资料分析速算并写 1 句错因',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('开锁冲刺')),
+          ],
+        ),
+      );
+      target = ctrl.text.trim();
+      ctrl.dispose();
+      if (ok != true || !mounted) return;
+    }
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.v6Op({
+        'action': 'cadence_start',
+        if (target.isNotEmpty) 'target': target,
+        'intervalSec': 300,
+      });
+      await _refresh();
+      if (!mounted) return;
+      setState(() {
+        _banner = res?['ok'] == true
+            ? '⏱️ 5 分钟严验收已开启：到点自动闹铃 + P3 真硬锁（不可敷衍跳过）'
+            : '${res?['error'] ?? '启动 5 分钟严验收失败'}';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _verifyFiveMinCadence() async {
+    if (_busy) return;
+    final ctrl = TextEditingController();
+    bool continueNext = true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('✅ 5 分钟严验收 · 交出真实产出'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: ctrl,
+                maxLines: 3,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: '具体推进结果/结论（>=6字，拒绝敷衍词）',
+                  hintText: '例：做完第4组基期比较，发现忘减增长量分母陷阱',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: continueNext,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('过关后自动续下一轮 5 分钟（满 3 轮自动刻入万世铭）', style: TextStyle(fontSize: 12.5)),
+                onChanged: (v) => setDlg(() => continueNext = v == true),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('提交过关')),
+          ],
+        ),
+      ),
+    );
+    final sub = ctrl.text.trim();
+    ctrl.dispose();
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.v6Op({
+        'action': 'cadence_verify',
+        'submission': sub,
+        'continueNext': continueNext,
+      });
+      await _refresh();
+      if (!mounted) return;
+      setState(() {
+        _banner = res?['ok'] == true
+            ? '${res?['message'] ?? '验收通过'}'
+            : '⚠️ ${res?['error'] ?? '提交被退回，请填写更具体的结论'}';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _stopFiveMinCadence() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await _channel.v6Op({'action': 'cadence_stop'});
+      await _refresh();
+      if (mounted) setState(() => _banner = '已结束当前 5 分钟严验收节奏');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _ingestClipboardIntoV6() async {
+    if (_busy) return;
+    final clip = await Clipboard.getData(Clipboard.kTextPlain);
+    final raw = (clip?.text ?? '').trim();
+    if (!mounted) return;
+    if (raw.isEmpty) {
+      setState(() => _banner = '剪贴板为空：先在 Gemini 复制话术或【今日契约】再点此吞吐');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.v6Op({'action': 'pool_ingest', 'text': raw, 'source': 'gemini'});
+      await _refresh();
+      if (!mounted) return;
+      final kind = '${res?['kind'] ?? ''}';
+      setState(() {
+        if (kind == 'contract') {
+          final ct = _asMap(res?['contract']);
+          _banner = '📜 已直接签收【今日契约】并挂入锁调度：${ct['target'] ?? ''}';
+        } else {
+          final added = (res?['addedCount'] as num?)?.round() ?? 0;
+          _banner = added > 0
+              ? '🌊 已切片吸收 $added 条知识入鱼池（72h 自动去重防腻）'
+              : '🐟 剪贴板内容已入池或已在 72h 冷却期内去重跳过';
+        }
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   static const _atlasWhitelistPresets = <LoopApp>[
@@ -747,6 +946,28 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     final dualTrack = _asMap(_liveCore['dualTrackNext']);
     final dualLong = '${dualTrack['longTitle'] ?? ''}'.trim();
     final dualMicro = '${dualTrack['microTask'] ?? ''}'.trim();
+    final liveSignals = _liveSignals.isNotEmpty ? _liveSignals : _asMap(_liveCore['liveSignals']);
+    final sigOnline = liveSignals['liveOnline'] == true || '${_liveCore['phase'] ?? ''}' == 'live_active';
+    final sigComm = liveSignals['audioInComm'] == true && liveSignals['micRecording'] == true;
+    final sigDisplay = liveSignals['virtualDisplayActive'] == true;
+    final sigShareOrUi = liveSignals['screenShareText'] == true || liveSignals['uiLiveActive'] == true;
+    final cadence = _asMap(_v6State['cadence']);
+    final cadActive = cadence['active'] == true;
+    final cadPhase = '${cadence['phase'] ?? 'idle'}';
+    final cadOverdue = cadActive && cadPhase == 'awaiting_verify';
+    final cadDueMs = (cadence['dueAt'] as num?)?.toInt() ?? 0;
+    final cadRemainSec = cadActive && cadPhase == 'running' && cadDueMs > 0
+        ? ((cadDueMs - DateTime.now().millisecondsSinceEpoch) / 1000).ceil().clamp(0, 3600)
+        : ((_v6State['cadenceRemainingSec'] as num?)?.round() ?? 0);
+    final cadRound = (cadence['round'] as num?)?.round() ?? 0;
+    final cadStreak = (cadence['streak'] as num?)?.round() ?? 0;
+    final cadVerifiedToday = (cadence['verifiedToday'] as num?)?.round() ?? 0;
+    final cadTarget = '${cadence['target'] ?? ''}'.trim();
+    final v6Tel = _asMap(_v6State['telemetry']);
+    final v6PoolActive = (v6Tel['active'] as num?)?.round() ?? 0;
+    final v6Dedupe = (v6Tel['dedupeRate72h'] as num?)?.round() ?? 100;
+    final v6Win = _asMap(_v6State['windowMode']);
+    final v6WinLabel = '${v6Win['label'] ?? '动态调度窗就绪'}';
 
     return [
       ListPageCard(
@@ -810,6 +1031,21 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
+                const SizedBox(height: 8),
+                Wrap(
+                  key: const ValueKey('atlas-live-lamps-row'),
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    StatusChip(
+                      tone: sigOnline ? StatusTone.ok : (alwaysOnLive ? StatusTone.warn : StatusTone.idle),
+                      label: sigOnline ? 'Live 在线免锁' : (alwaysOnLive ? '断线触发 P2 锁' : 'Live 离线'),
+                    ),
+                    StatusChip(tone: sigComm ? StatusTone.ok : StatusTone.idle, label: sigComm ? '语音+麦通' : '语音+麦灭'),
+                    StatusChip(tone: sigDisplay ? StatusTone.ok : StatusTone.idle, label: sigDisplay ? '虚拟屏在线' : '虚拟屏灭'),
+                    StatusChip(tone: sigShareOrUi ? StatusTone.ok : StatusTone.idle, label: sigShareOrUi ? '共享/UI活跃' : 'UI未在前台'),
+                  ],
+                ),
               ],
             ),
           ),
@@ -1055,6 +1291,125 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                       avatar: const Icon(AppIcons.close, size: 14),
                       label: const Text('暂停 15m'),
                       onPressed: _busy ? null : () => unawaited(_mute15m()),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      ListPageCard(
+        key: const ValueKey('atlas-v6-cadence-card'),
+        title: '⏱️ 5 分钟高频严验收（P3/P4 真锁 · 响铃震动语音）',
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    StatusChip(
+                      key: const ValueKey('atlas-cadence-status-chip'),
+                      tone: cadOverdue
+                          ? StatusTone.error
+                          : (cadActive ? StatusTone.ok : StatusTone.idle),
+                      label: cadOverdue
+                          ? '⚠️ 到点待验收 · P3 严格锁定中'
+                          : (cadActive
+                              ? '第 $cadRound 轮倒计时 ${cadRemainSec ~/ 60}:${(cadRemainSec % 60).toString().padLeft(2, '0')}'
+                              : '未启动（单局 5 分钟）'),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '连胜 $cadStreak · 今日 $cadVerifiedToday 轮',
+                      style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  cadActive && cadTarget.isNotEmpty
+                      ? '当前切片：$cadTarget（满 3 轮连胜自动刻入《万世铭》）'
+                      : '触发器失灵或启动瘫痪时点此开局：5 分钟倒计时全程 P4 专心锁，到点不交≥6字真实结论立即闹铃+语音+转 P3 硬锁。',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+                const SizedBox(height: 10),
+                if (!cadActive)
+                  FilledButton.icon(
+                    key: const ValueKey('atlas-v6-cadence-start-btn'),
+                    style: FilledButton.styleFrom(shape: AppShape.card),
+                    onPressed: _busy ? null : () => unawaited(_startFiveMinCadence()),
+                    icon: const Icon(AppIcons.automation, size: 16),
+                    label: const Text('⚡ 开启 5 分钟严验收（防摸鱼）'),
+                  )
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        key: const ValueKey('atlas-v6-cadence-verify-btn'),
+                        style: FilledButton.styleFrom(shape: AppShape.card),
+                        onPressed: _busy ? null : () => unawaited(_verifyFiveMinCadence()),
+                        icon: const Icon(AppIcons.completed, size: 16),
+                        label: const Text('✅ 交结论过关并续下一轮'),
+                      ),
+                      OutlinedButton.icon(
+                        key: const ValueKey('atlas-v6-cadence-stop-btn'),
+                        style: OutlinedButton.styleFrom(shape: AppShape.card),
+                        onPressed: _busy ? null : () => unawaited(_stopFiveMinCadence()),
+                        icon: const Icon(AppIcons.stopped, size: 16),
+                        label: const Text('收局'),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      ListPageCard(
+        key: const ValueKey('atlas-v6-hub-card'),
+        title: '🌊 V6 知识海 · 剪贴板吞吐与《万世铭》',
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '$v6WinLabel · 活水 $v6PoolActive 条 · 72h去重率 $v6Dedupe%',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.tonalIcon(
+                      key: const ValueKey('atlas-v6-clip-ingest-btn'),
+                      style: FilledButton.styleFrom(shape: AppShape.card),
+                      onPressed: _busy ? null : () => unawaited(_ingestClipboardIntoV6()),
+                      icon: const Icon(AppIcons.copy, size: 15),
+                      label: const Text('吞剪贴板入池/签契约'),
+                    ),
+                    OutlinedButton.icon(
+                      key: const ValueKey('atlas-v6-console-btn'),
+                      style: OutlinedButton.styleFrom(shape: AppShape.card),
+                      onPressed: () => unawaited(V6CommandPage.open(context, channel: _channel)),
+                      icon: const Icon(AppIcons.cordis, size: 15),
+                      label: const Text('9宫格 / 3刀追问 / 申诉'),
+                    ),
+                    OutlinedButton.icon(
+                      key: const ValueKey('atlas-v6-wanshiming-btn'),
+                      style: OutlinedButton.styleFrom(shape: AppShape.card),
+                      onPressed: () => unawaited(WanshimingPage.open(context, channel: _channel)),
+                      icon: const Icon(AppIcons.document, size: 15),
+                      label: const Text('📜 万世铭碑林'),
                     ),
                   ],
                 ),

@@ -285,7 +285,11 @@ import {
   normalizeFramework as v6NormalizeFramework,
   recordMicroQuizAnswer as v6RecordMicroQuizAnswer,
   sampleKnowledgeItems as v6SampleKnowledgeItems,
+  startCadence as v6StartCadence,
+  stopCadence as v6StopCadence,
+  submitCadenceDelivery as v6SubmitCadenceDelivery,
   sweepForgetting as v6SweepForgetting,
+  tickCadence as v6TickCadence,
   upsertStele as v6UpsertStele,
 } from './v6_engine.js'
 
@@ -10677,6 +10681,11 @@ export function apply(ctx) {
 
     if (action === 'status') {
       const telemetry = v6ComputePoolTelemetry(st.pool, now)
+      const cadTick = v6TickCadence(st.cadence, now, day)
+      if (cadTick.cadence.phase !== st.cadence.phase || cadTick.cadence.day !== st.cadence.day) {
+        st.cadence = cadTick.cadence
+        saveV6(st)
+      }
       return {
         v: 1,
         ok: true,
@@ -10688,7 +10697,78 @@ export function apply(ctx) {
         stelesCount: st.steles.length,
         lastContract: st.lastContract,
         liveVoiceActive: Boolean(lastPhone?.geminiVoiceActive),
+        liveSignals: lastPhone?.liveSignals || null,
+        cadence: cadTick.cadence,
+        cadenceRemainingSec: cadTick.remainingSec,
+        cadenceOverdueSec: cadTick.overdueSec,
       }
+    }
+
+    if (action === 'cadence_start') {
+      st.cadence = v6StartCadence(st.cadence, st.framework, {
+        target: b.target,
+        goalId: b.goalId,
+        goalScope: b.goalScope,
+        intervalSec: b.intervalSec,
+        allowApps: b.allowApps,
+        now,
+        day,
+      })
+      saveV6(st)
+      presetWatchUntil = now + 2 * 60_000
+      record({
+        state: 'v6-cadence-start',
+        at: now,
+        round: st.cadence.round,
+        target: st.cadence.target,
+        intervalSec: st.cadence.intervalSec,
+      })
+      return {
+        v: 1,
+        ok: true,
+        cadence: st.cadence,
+        cadenceRemainingSec: st.cadence.intervalSec,
+        cadenceOverdueSec: 0,
+      }
+    }
+
+    if (action === 'cadence_verify') {
+      const res = v6SubmitCadenceDelivery(st.cadence, st.steles, st.framework, {
+        submission: String(b.submission || ''),
+        quizPassed: b.quizPassed === true,
+        nextTarget: b.nextTarget ? String(b.nextTarget) : '',
+        continueNext: b.continueNext !== false,
+        now,
+        day,
+      })
+      if (res.ok) {
+        st.cadence = res.cadence
+        st.steles = res.steles
+        saveV6(st)
+        presetWatchUntil = now + 2 * 60_000
+        record({
+          state: 'v6-cadence-verify',
+          at: now,
+          streak: res.cadence.streak,
+          verifiedToday: res.cadence.verifiedToday,
+          autoSteleId: res.autoStele?.id || null,
+        })
+      }
+      return {
+        v: 1,
+        ...res,
+        stelesCount: st.steles.length,
+        cadenceRemainingSec: res.cadence?.active ? res.cadence.intervalSec : 0,
+        cadenceOverdueSec: 0,
+      }
+    }
+
+    if (action === 'cadence_stop') {
+      st.cadence = v6StopCadence(st.cadence)
+      saveV6(st)
+      presetWatchUntil = now + 2 * 60_000
+      record({ state: 'v6-cadence-stop', at: now, verifiedToday: st.cadence.verifiedToday })
+      return { v: 1, ok: true, cadence: st.cadence }
     }
 
     if (action === 'framework_save' || action === 'framework_import') {
@@ -10835,7 +10915,16 @@ export function apply(ctx) {
     }
 
     if (action === 'wanshiming_list') {
-      return { v: 1, ok: true, steles: st.steles, horizons: horizons || { long: [], medium: [] } }
+      const cad = st.cadence || {}
+      return {
+        v: 1,
+        ok: true,
+        steles: st.steles,
+        horizons: horizons || { long: [], medium: [] },
+        cadence: cad,
+        cadenceStreak: cad.day === day ? (Number(cad.streak) || 0) : 0,
+        verifiedToday: cad.day === day ? (Number(cad.verifiedToday) || 0) : 0,
+      }
     }
 
     if (action === 'wanshiming_save') {
@@ -12729,21 +12818,71 @@ export function apply(ctx) {
       ? { ...wdRaw, locked: false, kind: null, openUntil: Math.max(Number(wdRaw.openUntil) || 0, Number(config.spendPass?.until) || 0, breakActive ? (Number(config.breakUntil) || 0) : 0) }
       : wdRaw
     const reverseSess = reverseCapsuleSessionView(now)
+    const dayKeyV6 = dayString(now, tz)
+    const modNowV6 = localMinute(phone, zoneMinuteOfDay(now, tz))
+    let v6StateNow = null
+    let v6CadenceTick = null
+    try {
+      v6StateNow = loadV6(now)
+      v6CadenceTick = v6TickCadence(v6StateNow.cadence, now, dayKeyV6)
+      const cadMoved = v6CadenceTick.cadence.phase !== v6StateNow.cadence.phase
+        || v6CadenceTick.cadence.lastPromptAt !== v6StateNow.cadence.lastPromptAt
+        || v6CadenceTick.cadence.day !== v6StateNow.cadence.day
+      if (cadMoved) {
+        v6StateNow.cadence = v6CadenceTick.cadence
+        saveV6(v6StateNow)
+      }
+    } catch {}
+    const v6Cadence = v6CadenceTick?.cadence || null
+    const v6CadenceActive = Boolean(v6Cadence?.active)
+    const v6CadenceOverdue = Boolean(v6CadenceActive && v6Cadence.phase === 'awaiting_verify')
+    const v6CadenceRunning = Boolean(v6CadenceActive && v6Cadence.phase === 'running')
+
+    const liveCorePre = loadLiveCoreState()
+    const liveKeeperOn = Boolean(liveCorePre?.enabled !== false && liveCorePre?.alwaysOnLive && liveCorePre?.keeperStrict !== false)
+    const liveOnlineNow = Boolean(phone?.geminiVoiceActive || phone?.liveSignals?.liveOnline)
+    const liveDropGraceMs = Math.max(15, Number(v6StateNow?.framework?.liveDropGraceSec) || 90) * 1000
+    const lastVoiceAt = Math.max(0, Number(liveCorePre?.lastVoiceActiveAt) || 0)
+    const liveInGraceWindow = !liveOnlineNow && lastVoiceAt > 0 && (now - lastVoiceAt) < liveDropGraceMs
+    const inGeminiNowPre = inGemini(phone, geminiPackages()) || Boolean(geminiSessionView(now))
+    const tzMealPre = Boolean(mealNow(wallConfig(config).meals, modNowV6))
+    const tzQuietPre = inQuiet(now, config.quietStart, config.quietEnd, tz)
+    const liveTextGraceActive = Number(liveCorePre?.textGraceUntil) > now
+    const liveKeeperDropLock = Boolean(
+      liveKeeperOn
+      && !emergencyActive && !breakActive && !nightLocked && !tzMealPre && !tzQuietPre
+      && !liveOnlineNow && !liveInGraceWindow && !inGeminiNowPre && !liveTextGraceActive
+      && !isRunningQuizNow(now, phone, ledger)
+      && String(liveCorePre?.energyTier || 'L2').toUpperCase() !== 'L0',
+    )
+    if (v6CadenceRunning && v6Cadence.dueAt > now) {
+      out.nextCheckAt = Math.min(Number(out.nextCheckAt) || Infinity, v6Cadence.dueAt)
+    } else if (v6CadenceOverdue) {
+      out.nextCheckAt = Math.min(Number(out.nextCheckAt) || Infinity, now + 30_000)
+    } else if (liveKeeperOn && !liveOnlineNow && liveInGraceWindow) {
+      out.nextCheckAt = Math.min(Number(out.nextCheckAt) || Infinity, lastVoiceAt + liveDropGraceMs)
+    }
+
     const verifyLockActive = Boolean(
       contractOverdue
+      || v6CadenceOverdue
       || v4Hub?.dayBlockOverdueSessionView?.(now)
       || v4Hub?.contractSessionView?.(now, { escalatedOnly: true }),
     )
-    const hardCapDowngrade = hardCapped && !nightLocked && !contractOverdue && !verifyLockActive && !reverseSess
+    const hardCapDowngrade = hardCapped && !nightLocked && !contractOverdue && !verifyLockActive && !reverseSess && !v6CadenceRunning && !liveKeeperDropLock
 
     const effectiveForceLevel = (emergencyActive || breakActive || hardCapDowngrade)
       ? 0
-      : Math.max(force.level, radar.triggered ? radar.forceLevel : 0, contractOverdue ? 4 : 0)
-    const effectiveForceWhy = contractOverdue
-      ? '计划模态检查点已超 1 分钟缓冲未验收，自动转为严格锁定'
-      : (hardCapDowngrade
-          ? '今天硬干预已经用满，改为温和提醒'
-          : (radar.triggered ? (radar.forceWhy || force.why) : force.why))
+      : Math.max(force.level, radar.triggered ? radar.forceLevel : 0, (contractOverdue || v6CadenceOverdue || liveKeeperDropLock) ? 4 : 0)
+    const effectiveForceWhy = v6CadenceOverdue
+      ? `5分钟高频严验收已到点（第 ${v6Cadence.round} 轮：${v6Cadence.target}），请交出有效结论或连答 3 题解锁`
+      : (liveKeeperDropLock
+          ? '常驻 Gemini Live 护航已断线超缓冲期，锁定其余应用直至重新进入 Live'
+          : (contractOverdue
+              ? '计划模态检查点已超 1 分钟缓冲未验收，自动转为严格锁定'
+              : (hardCapDowngrade
+                  ? '今天硬干预已经用满，改为温和提醒'
+                  : (radar.triggered ? (radar.forceWhy || force.why) : force.why))))
     const mediaAction = !emergencyActive && !breakActive && !hardCapDowngrade && effectiveForceLevel >= 3 && phone?.fun && phone?.mediaPlaying ? 'pause' : undefined
     const speakerOut = nextSpeaker?.role === 'strategist' ? 'strategist' : 'companion'
     const takeoverActiveSession = !hardCapDowngrade && driveRes?.takeover?.active
@@ -12764,7 +12903,60 @@ export function apply(ctx) {
       takeoverSession: takeoverActiveSession,
       ...(hardCapDowngrade ? { takeoverSession: null, ...(config.aiWorkSession?.by === 'takeover' ? { aiWorkSession: null } : {}) } : {}),
     })
-    if (reverseSess && (!lockArbiter || !['P0', 'P1', 'P2', 'P3'].includes(lockArbiter.priority))) {
+    if (v6CadenceOverdue && !emergencyActive && !breakActive && !nightLocked && !['P0', 'P1'].includes(lockArbiter?.priority)) {
+      lockArbiter = {
+        active: true,
+        priority: 'P3',
+        source: 'CONTRACT_OVERDUE_STRICT',
+        by: 'v6_cadence_overdue',
+        label: `5分钟严验收第 ${v6Cadence.round} 轮待交付`,
+        why: `已到点未验收：${v6Cadence.target}（逾期 ${v6CadenceTick?.overdueSec || 0} 秒）`,
+        allow: Array.isArray(v6Cadence.allowApps) ? v6Cadence.allowApps : [],
+        unlockHow: '在大肥鱼交出至少 6 字具体结论，或连续答对 3 题解锁并开启下一轮',
+      }
+    } else if (liveKeeperDropLock && !['P0', 'P1', 'P2', 'P3'].includes(lockArbiter?.priority)) {
+      lockArbiter = {
+        active: true,
+        priority: 'P2',
+        source: 'GEMINI_LIVE_CELL',
+        by: 'live_keeper_drop',
+        label: '常驻 Live 断线强制回连锁',
+        why: '常驻 Gemini Live 护航已开启，但检测到语音/投影共享均已掉线，已锁定非相关应用',
+        allow: [],
+        unlockHow: '重新开启 Gemini Live 通话或共享屏幕，或在图谱页切至 L0 闭关/文字缓冲',
+      }
+    } else if (v6CadenceRunning && !emergencyActive && !breakActive && !['P0', 'P1', 'P2', 'P3', 'P3.5', 'P4'].includes(lockArbiter?.priority)) {
+      lockArbiter = {
+        active: true,
+        priority: 'P4',
+        source: 'BOUT_STRICT',
+        subSource: 'BOUT_STRICT',
+        by: 'v6_cadence_running',
+        label: `5分钟高频严局第 ${v6Cadence.round} 轮`,
+        why: `专注推进：${v6Cadence.target}（距本轮验收还剩 ${Math.max(1, Math.ceil((v6Cadence.dueAt - now) / 60_000))} 分钟）`,
+        allow: Array.isArray(v6Cadence.allowApps) ? v6Cadence.allowApps : [],
+        unlockHow: '到点交付真实推进成果，或手动收局解锁',
+      }
+    }
+    const liveKeepAliveUnlockNow = Boolean(
+      v6StateNow?.framework?.liveKeepAliveUnlock
+      && liveOnlineNow
+      && !nightLocked
+      && !emergencyActive
+      && !v6CadenceOverdue,
+    )
+    if (liveKeepAliveUnlockNow && lockArbiter && !['P0', 'P1'].includes(lockArbiter.priority)) {
+      lockArbiter = {
+        active: false,
+        priority: 'P2',
+        source: 'GEMINI_LIVE_KEEPALIVE_UNLOCK',
+        label: 'Gemini Live 在线常驻免锁中',
+        why: 'Live 硬件状态在线（通话/投影共享活跃），保持自由低阻执行',
+        allow: ['*'],
+        unlockHow: 'Live 断线超过缓冲期后自动切回严格回连锁',
+      }
+    }
+    if (reverseSess && (!lockArbiter || !['P0', 'P1', 'P2', 'P3'].includes(lockArbiter.priority)) && !liveKeepAliveUnlockNow) {
       lockArbiter = {
         ...(lockArbiter || {}),
         active: true,
@@ -12781,7 +12973,10 @@ export function apply(ctx) {
     const keepOnHardCap = lockArbiter?.source !== 'TAKEOVER_STRICT'
       || lockArbiter?.source === 'REVERSE_CAPSULE'
       || lockArbiter?.priority === 'P3'
-    if (hardCapDowngrade && !keepOnHardCap) {
+      || v6CadenceOverdue
+      || v6CadenceRunning
+      || liveKeeperDropLock
+    if (hardCapDowngrade && !keepOnHardCap && !liveKeepAliveUnlockNow) {
       lockArbiter = {
         active: false,
         priority: 'P6',
@@ -12793,9 +12988,9 @@ export function apply(ctx) {
       }
     }
     lastLockActive = Boolean(lockArbiter?.active)
-    const wantReleaseNow = emergencyActive || breakActive || hardCapDowngrade || (!contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && Number(mind.brain.graceUntil) > now)))
-    const forceLockedNow = !emergencyActive && !breakActive && !hardCapDowngrade && effectiveForceLevel >= 3
-    const arbiterLockedNow = !emergencyActive && !breakActive && Boolean(lockArbiter?.active)
+    const wantReleaseNow = emergencyActive || breakActive || hardCapDowngrade || liveKeepAliveUnlockNow || (!v6CadenceOverdue && !liveKeeperDropLock && !contractOverdue && !radar.triggered && (onBreak(now) || (!force.refuse && Number(mind.brain.graceUntil) > now)))
+    const forceLockedNow = !emergencyActive && !breakActive && !hardCapDowngrade && !liveKeepAliveUnlockNow && effectiveForceLevel >= 3
+    const arbiterLockedNow = !emergencyActive && !breakActive && !liveKeepAliveUnlockNow && Boolean(lockArbiter?.active)
     const forceJustReleased = prevForceLocked && !forceLockedNow
     const arbiterJustReleased = prevArbiterLocked && !arbiterLockedNow
     const effectiveForceRelease = wantReleaseNow && (forceJustReleased || arbiterJustReleased)
@@ -12808,9 +13003,22 @@ export function apply(ctx) {
     try {
       const effectiveLockInput = emergencyActive
         ? { priority: 'P0', source: 'EMERGENCY_SUSPEND', label: '紧急放行中', why: activeEmergency.reason || '紧急放行中', unlockHow: '倒计时结束后恢复' }
-        : lockArbiter
+        : (liveKeepAliveUnlockNow ? { ...lockArbiter, priority: 'P6' } : lockArbiter)
       lockDecision = lockDecisionNow(now, tz, phone, effectiveLockInput, extState)
-      if (hardCapDowngrade && !keepOnHardCap && lockDecision) {
+      if (liveKeepAliveUnlockNow && lockDecision) {
+        lockDecision = {
+          ...lockDecision,
+          priority: 'P2',
+          source: 'GEMINI_LIVE_KEEPALIVE_UNLOCK',
+          label: 'Gemini Live 在线常驻免锁中',
+          mode: 'free',
+          allow: [],
+          deny: [],
+          needPass: [],
+          why: lockArbiter.why,
+          unlockHow: lockArbiter.unlockHow,
+        }
+      } else if (hardCapDowngrade && !keepOnHardCap && lockDecision) {
         lockDecision = { ...lockDecision, mode: 'free', deny: [], needPass: [], why: '今天硬干预已经用满（仅提醒）', unlockHow: '明日零点自动重置' }
       }
     } catch (error) {
@@ -13080,29 +13288,37 @@ export function apply(ctx) {
     }
     const v6Snap = (() => {
       try {
-        const s = loadV6(now)
+        const s = v6StateNow || loadV6(now)
         const tel = v6ComputePoolTelemetry(s.pool, now)
         const win = v6EvaluateWindowMode(s.framework, modNowTop)
-        const livePassActive = Boolean(s.framework.liveKeepAliveUnlock && phone?.geminiVoiceActive && !nightLocked && !emergencyActive)
-        return { framework: s.framework, windowMode: win, poolActive: tel.active, liveUnlockedNow: livePassActive }
+        const cadTick = v6CadenceTick || v6TickCadence(s.cadence, now, dayKeyV6)
+        const dueAlert = Boolean(cadTick.dueAlert && !emergencyActive && !nightLocked)
+        const alertVoiceLine = dueAlert
+          ? `五分钟严格验收时间到！第${cadTick.cadence.round}轮目标：${cadTick.cadence.target}。请立即交付具体结论，或者连答三题解锁。`
+          : ''
+        return {
+          framework: s.framework,
+          windowMode: win,
+          poolActive: tel.active,
+          liveUnlockedNow: liveKeepAliveUnlockNow,
+          liveKeeperDropLock,
+          cadence: cadTick.cadence,
+          cadenceRemainingSec: cadTick.remainingSec,
+          cadenceOverdueSec: cadTick.overdueSec,
+          cadenceAlert: dueAlert
+            ? {
+                triggered: true,
+                round: cadTick.cadence.round,
+                target: cadTick.cadence.target,
+                overdueSec: cadTick.overdueSec,
+                voiceLine: alertVoiceLine,
+              }
+            : null,
+        }
       } catch {
         return null
       }
     })()
-    if (v6Snap?.liveUnlockedNow && lockArbiter && !['P0', 'P1'].includes(lockArbiter.priority)) {
-      lockArbiter = {
-        active: false,
-        priority: 'P2',
-        source: 'GEMINI_LIVE_KEEPALIVE_UNLOCK',
-        label: 'Gemini Live 在线常驻免锁中',
-        why: 'Live 硬件状态已在线（麦/虚拟屏持续感知中），保持自由交互免锁',
-        allow: ['*'],
-        unlockHow: 'Live 断线后自动恢复原调度锁',
-      }
-      if (lockDecision) {
-        lockDecision = { ...lockDecision, mode: 'free', deny: [], needPass: [], why: lockArbiter.why, unlockHow: lockArbiter.unlockHow }
-      }
-    }
     return {
       v: 1, ...out, silence, sessionId, speaker: speakerOut,
       planModal,

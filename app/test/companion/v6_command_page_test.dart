@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dsh_app/dafeiyu/channels/proactive_state.dart';
+import 'package:dsh_app/dafeiyu/ui/live_core_atlas_page.dart';
 import 'package:dsh_app/dafeiyu/ui/v6_command_page.dart';
 import 'package:dsh_app/dafeiyu/ui/wanshiming_page.dart';
 import 'package:dsh_app/ui/theme/theme.dart';
@@ -110,5 +111,89 @@ void main() {
 
     expect(find.text('万世铭'), findsOneWidget);
     expect(find.text('立《万世铭》与 V6 调度框架'), findsOneWidget);
+    expect(find.text('5m连胜'), findsOneWidget);
+  });
+
+  testWidgets('WanshimingPage nests horizons goals with 5m strict cadence launch', (tester) async {
+    String? lastV6Action;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      messenger,
+      (call) async {
+        if (call.method == 'v6Op') {
+          final args = call.arguments as Map?;
+          lastV6Action = args?['action'] as String?;
+          if (lastV6Action == 'cadence_start') {
+            return <String, Object?>{'v': 1, 'ok': true, 'cadence': {'active': true, 'phase': 'running'}};
+          }
+          return <String, Object?>{
+            'v': 1,
+            'ok': true,
+            'cadenceStreak': 2,
+            'verifiedToday': 2,
+            'horizons': {
+              'long': [
+                {'id': 'goal-1', 'title': '行测80+上岸战役', 'progress': 0.4},
+              ],
+              'medium': [],
+            },
+            'steles': [
+              {
+                'id': 's1',
+                'title': '立《万世铭》与 V6 调度框架',
+                'date': '2026-11-26',
+                'epoch': '丙午',
+                'category': '纪元',
+                'body': '双路并进。',
+                'starred': true,
+              },
+            ],
+          };
+        }
+        return null;
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildDarkTheme(),
+        home: WanshimingPage(channel: ProactiveChannel()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.byKey(const ValueKey('wsm-horizons-deck')), findsOneWidget);
+    expect(find.text('行测80+上岸战役'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('wsm-launch-goal-goal-1')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(lastV6Action, 'cadence_start');
+  });
+
+  testWidgets('LiveCoreAtlasPage merges V6 cadence and 3-signal Live monitor lamps', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildDarkTheme(),
+        home: LiveCoreAtlasPage(channel: ProactiveChannel()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.byKey(const ValueKey('atlas-live-lamps-row')), findsOneWidget);
+    expect(find.text('Live 在线免锁'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('atlas-v6-cadence-card')),
+      220,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.byKey(const ValueKey('atlas-v6-cadence-start-btn')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('atlas-v6-hub-card')),
+      220,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.byKey(const ValueKey('atlas-v6-hub-card')), findsOneWidget);
   });
 }

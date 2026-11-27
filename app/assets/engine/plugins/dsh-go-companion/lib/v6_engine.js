@@ -732,6 +732,255 @@ export function deleteStele(steles = [], id = '') {
   return { ok: next.length < list.length, steles: next }
 }
 
+const PERFUNCTORY_SUBMISSION_RE = /^(?:ok|good|done|pass|test|yes|no|好的?|已完成|完成了?|打卡|已做|弄完了?|搞定了?|随便|敷衍|测试|过了?|行|嗯+|哈+|嘿+|[0-9a-zA-Z.\-_!\s]{1,10})$/i
+
+export function defaultCadence(now = 0) {
+  return {
+    active: false,
+    phase: 'idle',
+    intervalSec: DEFAULT_FRAMEWORK.fiveMinBoutSec,
+    round: 0,
+    streak: 0,
+    verifiedToday: 0,
+    day: now ? new Date(now).toISOString().slice(0, 10) : '',
+    target: '',
+    goalId: '',
+    goalScope: '',
+    startedAt: 0,
+    dueAt: 0,
+    overdueSince: 0,
+    lastVerifiedAt: 0,
+    lastSubmission: '',
+    lastPromptAt: 0,
+    allowApps: [],
+  }
+}
+
+export function normalizeCadence(raw = {}) {
+  const base = defaultCadence()
+  if (!raw || typeof raw !== 'object') return base
+  const phase = ['idle', 'running', 'awaiting_verify'].includes(raw.phase) ? raw.phase : 'idle'
+  const active = Boolean(raw.active) && phase !== 'idle'
+  return {
+    active,
+    phase: active ? phase : 'idle',
+    intervalSec: clampInt(raw.intervalSec, 60, 1800, base.intervalSec),
+    round: Math.max(0, Math.round(Number(raw.round) || 0)),
+    streak: Math.max(0, Math.round(Number(raw.streak) || 0)),
+    verifiedToday: Math.max(0, Math.round(Number(raw.verifiedToday) || 0)),
+    day: cleanStr(raw.day, 16),
+    target: cleanStr(raw.target, 140),
+    goalId: cleanStr(raw.goalId, 64),
+    goalScope: cleanStr(raw.goalScope, 16),
+    startedAt: Math.max(0, Number(raw.startedAt) || 0),
+    dueAt: Math.max(0, Number(raw.dueAt) || 0),
+    overdueSince: Math.max(0, Number(raw.overdueSince) || 0),
+    lastVerifiedAt: Math.max(0, Number(raw.lastVerifiedAt) || 0),
+    lastSubmission: cleanStr(raw.lastSubmission, 500),
+    lastPromptAt: Math.max(0, Number(raw.lastPromptAt) || 0),
+    allowApps: Array.isArray(raw.allowApps)
+      ? raw.allowApps.map((x) => cleanStr(x, 80)).filter(Boolean).slice(0, 12)
+      : [],
+  }
+}
+
+export function startCadence(cadenceRaw = {}, frameworkRaw = {}, opts = {}) {
+  const now = Number(opts.now) || Date.now()
+  const day = cleanStr(opts.day, 16) || new Date(now).toISOString().slice(0, 10)
+  const fw = normalizeFramework(frameworkRaw)
+  const cur = normalizeCadence(cadenceRaw)
+  const intervalSec = clampInt(opts.intervalSec ?? fw.fiveMinBoutSec, 60, 1800, fw.fiveMinBoutSec)
+  const sameDay = cur.day === day
+  const target = cleanStr(opts.target, 140) || cur.target || '5分钟严格切片：咬住眼前这一题或这一句话产出'
+  const allowApps = Array.isArray(opts.allowApps)
+    ? opts.allowApps.map((x) => cleanStr(x, 80)).filter(Boolean).slice(0, 12)
+    : cur.allowApps
+  return {
+    active: true,
+    phase: 'running',
+    intervalSec,
+    round: (sameDay ? cur.round : 0) + 1,
+    streak: sameDay ? cur.streak : 0,
+    verifiedToday: sameDay ? cur.verifiedToday : 0,
+    day,
+    target,
+    goalId: cleanStr(opts.goalId ?? cur.goalId, 64),
+    goalScope: cleanStr(opts.goalScope ?? cur.goalScope, 16),
+    startedAt: now,
+    dueAt: now + intervalSec * 1000,
+    overdueSince: 0,
+    lastVerifiedAt: cur.lastVerifiedAt,
+    lastSubmission: cur.lastSubmission,
+    lastPromptAt: 0,
+    allowApps,
+  }
+}
+
+export function tickCadence(cadenceRaw = {}, now = Date.now(), day = '') {
+  const dayKey = cleanStr(day, 16) || new Date(now).toISOString().slice(0, 10)
+  let cur = normalizeCadence(cadenceRaw)
+  if (!cur.active) {
+    if (cur.day && cur.day !== dayKey) {
+      cur = { ...cur, day: dayKey, round: 0, streak: 0, verifiedToday: 0 }
+    }
+    return {
+      cadence: cur,
+      phase: 'idle',
+      justEnteredOverdue: false,
+      dueAlert: false,
+      remainingSec: 0,
+      overdueSec: 0,
+    }
+  }
+  if (cur.phase === 'running' && cur.dueAt > 0 && now >= cur.dueAt) {
+    const next = {
+      ...cur,
+      phase: 'awaiting_verify',
+      overdueSince: cur.dueAt,
+      lastPromptAt: now,
+    }
+    return {
+      cadence: next,
+      phase: 'awaiting_verify',
+      justEnteredOverdue: true,
+      dueAlert: true,
+      remainingSec: 0,
+      overdueSec: Math.max(0, Math.floor((now - cur.dueAt) / 1000)),
+    }
+  }
+  if (cur.phase === 'awaiting_verify') {
+    const since = cur.overdueSince || cur.dueAt || now
+    const dueAlert = !cur.lastPromptAt || (now - cur.lastPromptAt) >= 45_000
+    const next = dueAlert ? { ...cur, lastPromptAt: now } : cur
+    return {
+      cadence: next,
+      phase: 'awaiting_verify',
+      justEnteredOverdue: false,
+      dueAlert,
+      remainingSec: 0,
+      overdueSec: Math.max(0, Math.floor((now - since) / 1000)),
+    }
+  }
+  return {
+    cadence: cur,
+    phase: 'running',
+    justEnteredOverdue: false,
+    dueAlert: false,
+    remainingSec: Math.max(0, Math.ceil((cur.dueAt - now) / 1000)),
+    overdueSec: 0,
+  }
+}
+
+function isPerfunctoryDelivery(text) {
+  if (!text || text.length < 6) return true
+  if (PERFUNCTORY_SUBMISSION_RE.test(text)) return true
+  const uniqueChars = new Set(text.replace(/\s+/g, '').split(''))
+  return uniqueChars.size < 4
+}
+
+export function submitCadenceDelivery(cadenceRaw = {}, steles = [], frameworkRaw = {}, opts = {}) {
+  const now = Number(opts.now) || Date.now()
+  const dayKey = cleanStr(opts.day, 16) || new Date(now).toISOString().slice(0, 10)
+  const fw = normalizeFramework(frameworkRaw)
+  const cur = normalizeCadence(cadenceRaw)
+  const quizPassed = Boolean(opts.quizPassed)
+  const text = cleanStr(opts.submission, 500)
+
+  if (!quizPassed && isPerfunctoryDelivery(text)) {
+    return {
+      ok: false,
+      error: '交付过短或疑似敷衍：请写清你具体推进了哪一题/得出哪条真实结论（至少 6 字且有效信息 >= 4 字符），或连续答对 3 题解锁。',
+      cadence: cur,
+      steles: Array.isArray(steles) ? steles : [],
+      autoStele: null,
+    }
+  }
+
+  const sameDay = cur.day === dayKey
+  const nextStreak = (sameDay ? cur.streak : 0) + 1
+  const nextVerifiedToday = (sameDay ? cur.verifiedToday : 0) + 1
+  const summaryBody = quizPassed && !text
+    ? '连续答对 3 题硬验收过关（高强度唤醒确认）'
+    : text
+
+  let nextSteles = Array.isArray(steles) ? steles : []
+  let autoStele = null
+  if (nextStreak > 0 && nextStreak % 3 === 0) {
+    const steleRes = upsertStele(nextSteles, {
+      title: `5m严验收·${nextStreak}连胜：${(cur.target || '高强度切片').slice(0, 22)}`,
+      date: dayKey,
+      category: cur.goalScope ? '战役' : '抉择',
+      epoch: '高频闭环自动铭刻',
+      body: `目标：${cur.target || '当前核心切片'}\n最新交付：${summaryBody}`,
+      echo: `单日完成 ${nextVerifiedToday} 轮 · 连胜 ${nextStreak} 轮自动刻入《万世铭》`,
+      starred: nextStreak % 6 === 0,
+    }, now)
+    if (steleRes.ok) {
+      nextSteles = steleRes.steles
+      autoStele = steleRes.item
+    }
+  }
+
+  const continueNext = opts.continueNext !== false
+  const intervalSec = clampInt(cur.intervalSec || fw.fiveMinBoutSec, 60, 1800, fw.fiveMinBoutSec)
+  const nextTarget = cleanStr(opts.nextTarget, 140) || cur.target || '继续下一个 5 分钟核心切片'
+  const nextCadence = continueNext
+    ? {
+        ...cur,
+        active: true,
+        phase: 'running',
+        intervalSec,
+        round: (sameDay ? cur.round : 0) + 1,
+        streak: nextStreak,
+        verifiedToday: nextVerifiedToday,
+        day: dayKey,
+        target: nextTarget,
+        startedAt: now,
+        dueAt: now + intervalSec * 1000,
+        overdueSince: 0,
+        lastVerifiedAt: now,
+        lastSubmission: summaryBody,
+        lastPromptAt: 0,
+      }
+    : {
+        ...cur,
+        active: false,
+        phase: 'idle',
+        streak: nextStreak,
+        verifiedToday: nextVerifiedToday,
+        day: dayKey,
+        dueAt: 0,
+        overdueSince: 0,
+        lastVerifiedAt: now,
+        lastSubmission: summaryBody,
+        lastPromptAt: 0,
+      }
+
+  return {
+    ok: true,
+    cadence: nextCadence,
+    steles: nextSteles,
+    autoStele,
+    message: autoStele
+      ? `验收通过（连胜 ${nextStreak} 轮）！已自动铭刻碑石「${autoStele.title}」，下一轮 ${Math.round(intervalSec / 60)} 分钟已开启。`
+      : (continueNext
+          ? `验收通过（今日第 ${nextVerifiedToday} 轮 · 连胜 ${nextStreak}），下一轮 ${Math.round(intervalSec / 60)} 分钟倒计时启动。`
+          : `本轮验收通过并已收局（今日累计 ${nextVerifiedToday} 轮）。`),
+  }
+}
+
+export function stopCadence(cadenceRaw = {}) {
+  const cur = normalizeCadence(cadenceRaw)
+  return {
+    ...cur,
+    active: false,
+    phase: 'idle',
+    dueAt: 0,
+    overdueSince: 0,
+    lastPromptAt: 0,
+  }
+}
+
 export function defaultV6State(now = Date.now()) {
   return {
     v: 1,
@@ -740,6 +989,7 @@ export function defaultV6State(now = Date.now()) {
     appeals: { day: new Date(now).toISOString().slice(0, 10), total: 0, physio: 0 },
     steles: seedSteles(),
     lastContract: null,
+    cadence: defaultCadence(now),
   }
 }
 
@@ -755,5 +1005,6 @@ export function loadV6State(readState, filePath, now = Date.now()) {
     appeals: raw.appeals && typeof raw.appeals === 'object' ? raw.appeals : { day: '', total: 0, physio: 0 },
     steles: Array.isArray(raw.steles) && raw.steles.length ? raw.steles : seedSteles(),
     lastContract: raw.lastContract || null,
+    cadence: normalizeCadence(raw.cadence),
   }
 }

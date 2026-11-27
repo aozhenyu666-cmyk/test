@@ -1749,6 +1749,7 @@ object ProactiveRuntime {
     /** 下一场预约连麦的时刻（插件给的绝对毫秒）；0 = 没有预约。 */
     @Volatile private var geminiDueAt: Long = 0L
     @Volatile private var lastAutoPullAt: Long = 0L
+    @Volatile private var lastCadenceAlertAt: Long = 0L
     @Volatile private var lastPlanModalShownAt: Long = 0L
     @Volatile private var lastGeminiVoiceActive: Boolean = false
     @Volatile private var lastGeminiVoiceStartedAt: Long = 0L
@@ -2332,6 +2333,7 @@ object ProactiveRuntime {
             liveCoreTextGraceUntil = (lcMap["textGraceUntil"] as? Number)?.toLong() ?: 0L
         }
         val v6Map = map["v6"] as? Map<*, *>
+        var cadenceWakeAt = 0L
         if (v6Map != null) {
             val fw = v6Map["framework"] as? Map<*, *>
             if (fw != null) {
@@ -2341,6 +2343,22 @@ object ProactiveRuntime {
             }
             if (v6Map["liveUnlockedNow"] == true) {
                 releaseCompanionLock()
+            }
+            val cadMap = v6Map["cadence"] as? Map<*, *>
+            if (cadMap != null && cadMap["active"] == true && cadMap["phase"] == "running") {
+                val dueAt = (cadMap["dueAt"] as? Number)?.toLong() ?: 0L
+                if (dueAt > stamp) cadenceWakeAt = dueAt
+            }
+            val cadAlert = v6Map["cadenceAlert"] as? Map<*, *>
+            if (cadAlert != null && cadAlert["triggered"] == true && stamp - lastCadenceAlertAt >= 30_000L) {
+                lastCadenceAlertAt = stamp
+                ProactiveHaptics.playHeartbeatChime(app, urgent = true)
+                val cadVoice = (cadAlert["voiceLine"] as? String)?.trim()?.take(VoicePlan.MAX_CHARS).orEmpty()
+                if (cadVoice.isNotEmpty()) {
+                    runCatching {
+                        VoiceOut.speak(VoicePlan(cadVoice, VoicePlan.DEFAULT_RATE, VoicePlan.DEFAULT_PITCH)) {}
+                    }
+                }
             }
         }
         val autoPull = map["geminiAutoPull"] as? Map<*, *>
@@ -2464,7 +2482,7 @@ object ProactiveRuntime {
             clockEngine?.syncFromPlugin(remoteClock, clocks())
         }
         val epWake = if (emergencyUntilAt > stamp) emergencyUntilAt else 0L
-        val wakeAt = listOf(at, change, followupUntilAt, geminiDueAt, epWake).filter { it > 0 }.minOrNull() ?: 0L
+        val wakeAt = listOf(at, change, followupUntilAt, geminiDueAt, epWake, cadenceWakeAt).filter { it > 0 }.minOrNull() ?: 0L
         val speak = map["speak"] == true
         val reason = map["reason"] as? String ?: ""
         syncGuardianMirror()

@@ -19,6 +19,18 @@ class LiveSignalMonitorTest {
     }
 
     @Test
+    fun ignoresStrayBackgroundMicWithoutAudioInCommOrDisplayOrUi() {
+        val snap = LiveSignalMonitor.evaluateSignals(
+            audioInComm = false,
+            micRecording = true,
+            virtualDisplayActive = false,
+            screenShareText = false,
+            uiLiveActive = false,
+        )
+        assertFalse(snap.liveOnline)
+    }
+
+    @Test
     fun detectsLiveInBackgroundWhileWatchingFullscreenVideoViaVirtualDisplayAndMic() {
         val snap = LiveSignalMonitor.evaluateSignals(
             audioInComm = true,

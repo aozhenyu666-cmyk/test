@@ -136,6 +136,8 @@ flutter:
     # Image generation placeholder (lib/ui/fx/image_gen), two passes.
     - shaders/fx/img_fx_field.frag
     - shaders/fx/img_fx_mosaic.frag
+    # Wanshiming obsidian gold-leaf shader (lib/dafeiyu/ui/wanshiming_page.dart).
+    - shaders/fx/wanshiming_gold.frag
 
   fonts:
     # App icons: a Phosphor subset made by tool/make_icon_font.py; use AppIcons.

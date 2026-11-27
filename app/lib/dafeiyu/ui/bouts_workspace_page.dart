@@ -31,7 +31,6 @@ import 'plan_modality_page.dart';
 import 'records_page.dart';
 import 'strategy_horizons_page.dart';
 import 'usage_analytics_page.dart';
-import 'v6_command_page.dart';
 import 'wanshiming_page.dart';
 import 'task_card.dart';
 import 'today_cards.dart';
@@ -866,14 +865,8 @@ class _BoutsWorkspacePageState extends State<BoutsWorkspacePage> {
               ActionChip(
                 key: const ValueKey('today-capsule-atlas'),
                 avatar: const Icon(AppIcons.diagram, size: 15),
-                label: const Text('图谱与Live'),
+                label: const Text('图谱 · Live · 5m严锁'),
                 onPressed: () => unawaited(LiveCoreAtlasPage.open(context, channel: _channel, loopChannel: _loop)),
-              ),
-              ActionChip(
-                key: const ValueKey('today-capsule-v6'),
-                avatar: const Icon(Icons.auto_awesome, size: 15),
-                label: const Text('V6 知识海'),
-                onPressed: () => unawaited(V6CommandPage.open(context, channel: _channel)),
               ),
             ],
           ),
