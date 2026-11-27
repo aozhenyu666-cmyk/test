@@ -280,6 +280,7 @@ import {
   computePoolTelemetry as v6ComputePoolTelemetry,
   deleteStele as v6DeleteStele,
   evaluateWindowMode as v6EvaluateWindowMode,
+  harvestKnowledgeSources as v6HarvestKnowledgeSources,
   ingestClipboardOrText as v6IngestClipboardOrText,
   loadV6State,
   normalizeFramework as v6NormalizeFramework,
@@ -682,16 +683,21 @@ export function apply(ctx) {
         const candidates = loadCandidates(db, { sessionId, now })
         const vault = vaultContext(now)
         const stratFacts = backgroundFacts(candidates, BACKGROUND_LIMIT)
-        const stratV6Samples = (() => {
+        const stratV6Data = (() => {
           try {
             const v6s = loadV6State(readState, stateFile('v6-state.json'), now)
-            return v6SampleKnowledgeItems(v6s.pool, v6s.framework, { count: 2, now, markShown: false }).map((x) => ({ stem: x.claim }))
-          } catch { return [] }
+            const samples = v6SampleKnowledgeItems(v6s.pool, v6s.framework, { count: 2, now, markShown: false }).map((x) => ({ stem: x.claim }))
+            const cad = v6s.cadence
+            const cadFact = cad?.active
+              ? `[5m严验收进行中] 第${cad.round}轮·连胜${cad.streak}：正在咬死「${cad.target}」`
+              : (cad?.verifiedToday > 0 ? `[5m严验收] 今日已完成 ${cad.verifiedToday} 轮切片（连胜 ${cad.streak || 0}）` : '')
+            return { samples, cadFact }
+          } catch { return { samples: [], cadFact: '' } }
         })()
         const stratDigest = distillPartnerMemory({
-          facts: stratFacts,
+          facts: stratV6Data.cadFact ? [...stratFacts, stratV6Data.cadFact] : stratFacts,
           horizons: readState(stateFile('horizons.json'), null),
-          wrongQuestions: stratV6Samples,
+          wrongQuestions: stratV6Data.samples,
           vaultRecent: vault?.recent,
         }).digestLines
         const prompt = buildPrompt({
@@ -848,16 +854,21 @@ export function apply(ctx) {
       const feedAllBank = loadAllBankQuestions()
       const feedReviewCards = dueCards(loadReviewCards(), now, { limit: 6 })
       const compHorizons = readState(stateFile('horizons.json'), null)
-      const compV6Samples = (() => {
+      const compV6Data = (() => {
         try {
           const v6s = loadV6State(readState, stateFile('v6-state.json'), now)
-          return v6SampleKnowledgeItems(v6s.pool, v6s.framework, { count: 2, now, markShown: false }).map((x) => ({ stem: x.claim }))
-        } catch { return [] }
+          const samples = v6SampleKnowledgeItems(v6s.pool, v6s.framework, { count: 2, now, markShown: false }).map((x) => ({ stem: x.claim }))
+          const cad = v6s.cadence
+          const cadFact = cad?.active
+            ? `[5m严验收进行中] 第${cad.round}轮·连胜${cad.streak}：正在咬死「${cad.target}」`
+            : (cad?.verifiedToday > 0 ? `[5m严验收] 今日已完成 ${cad.verifiedToday} 轮切片（连胜 ${cad.streak || 0}）` : '')
+          return { samples, cadFact }
+        } catch { return { samples: [], cadFact: '' } }
       })()
       const partnerDigest = distillPartnerMemory({
-        facts,
+        facts: compV6Data.cadFact ? [...facts, compV6Data.cadFact] : facts,
         horizons: compHorizons,
-        wrongQuestions: [...compV6Samples, ...feedAllBank.slice(0, 2)],
+        wrongQuestions: [...compV6Data.samples, ...feedAllBank.slice(0, 2)],
         reviewCards: feedReviewCards,
         vaultRecent: vault?.recent,
       }).digestLines
@@ -10644,6 +10655,30 @@ export function apply(ctx) {
     writeJson(stateFile('v6-state.json'), { ...next, v: 1 })
   }
 
+  let lastV6HarvestAt = 0
+  function maybeHarvestV6Pool(st, now = Date.now(), horizons = null) {
+    if (!st || now - lastV6HarvestAt < 10 * 60_000) return false
+    lastV6HarvestAt = now
+    try {
+      const bankQuestions = loadAllBankQuestions()
+      const reviewCards = dueCards(loadReviewCards(), now, { limit: 6 })
+      const vault = vaultContext(now)
+      const harvested = v6HarvestKnowledgeSources(st.pool, {
+        questionBank: bankQuestions,
+        reviewCards,
+        vaultSnippets: Array.isArray(vault?.recent) ? vault.recent : [],
+        horizons,
+      }, now)
+      if (harvested.addedCount > 0) {
+        st.pool = harvested.pool
+        saveV6(st)
+        record({ state: 'v6-pool-harvest', at: now, added: harvested.addedCount })
+        return true
+      }
+    } catch {}
+    return false
+  }
+
   function armContractFromV6(contract, now = Date.now()) {
     try {
       const tz = zoneOr(config.timeZone)
@@ -10680,6 +10715,7 @@ export function apply(ctx) {
     const horizons = readState(stateFile('horizons.json'), null)
 
     if (action === 'status') {
+      maybeHarvestV6Pool(st, now, horizons)
       const telemetry = v6ComputePoolTelemetry(st.pool, now)
       const cadTick = v6TickCadence(st.cadence, now, day)
       if (cadTick.cadence.phase !== st.cadence.phase || cadTick.cadence.day !== st.cadence.day) {
@@ -10813,6 +10849,7 @@ export function apply(ctx) {
     }
 
     if (action === 'pool_sample') {
+      maybeHarvestV6Pool(st, now, horizons)
       const count = Math.max(1, Math.min(8, Number(b.count) || 1))
       const items = v6SampleKnowledgeItems(st.pool, st.framework, { count, now, markShown: b.markShown === true })
       if (b.markShown === true) saveV6(st)
@@ -10894,8 +10931,7 @@ export function apply(ctx) {
       })
       if (res.ok) {
         st.appeals = res.usage
-        saveV6(st)
-        if (res.grantMinutes > 0) {
+        if (res.kind === 'physio_rest' && res.grantMinutes > 0) {
           const curExt = loadExternal()
           saveExternal({
             ...curExt,
@@ -10908,10 +10944,47 @@ export function apply(ctx) {
               countToday: Number(curExt?.emergencyPass?.countToday) || 0,
             },
           })
+        } else if (res.kind === 'swap_item') {
+          const swapped = v6SampleKnowledgeItems(st.pool, st.framework, { count: 1, now, markShown: true })[0]
+          const baseCad = st.cadence || {}
+          const sec = Math.max(60, Math.min(1800, Number(baseCad.intervalSec) || st.framework.fiveMinBoutSec || 300))
+          st.cadence = {
+            ...baseCad,
+            active: true,
+            phase: 'running',
+            day,
+            target: swapped ? `重抽切片：${swapped.claim.slice(0, 80)}` : (baseCad.target || '5分钟核心切片重抽'),
+            startedAt: now,
+            dueAt: now + sec * 1000,
+            overdueSince: 0,
+            lastPromptAt: 0,
+          }
+          presetWatchUntil = now + 2 * 60_000
+        } else if (res.kind === 'handoff_gemini_live') {
+          const baseCad = st.cadence || {}
+          const existingAllow = Array.isArray(baseCad.allowApps) ? baseCad.allowApps : []
+          st.cadence = {
+            ...baseCad,
+            active: true,
+            phase: 'running',
+            day,
+            startedAt: now,
+            dueAt: now + 10 * 60_000,
+            overdueSince: 0,
+            lastPromptAt: 0,
+            allowApps: [...new Set([...existingAllow, ...GEMINI_PACKAGES])],
+          }
+          presetWatchUntil = now + 2 * 60_000
         }
+        saveV6(st)
         record({ state: 'v6-appeal', at: now, kind: res.kind, grantMinutes: res.grantMinutes })
       }
-      return { v: 1, ...res }
+      return {
+        v: 1,
+        ...res,
+        requireMicroQuizCount: res.ok && res.kind === 'downgrade_micro_quiz' ? 3 : 0,
+        cadence: st.cadence,
+      }
     }
 
     if (action === 'wanshiming_list') {

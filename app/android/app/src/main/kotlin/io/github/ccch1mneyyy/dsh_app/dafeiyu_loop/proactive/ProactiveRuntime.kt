@@ -3675,6 +3675,36 @@ object ProactiveRuntime {
         )
     }
 
+    /** 锁屏页等原生界面直连 POST /v6，并在需要时立即刷新裁决树。 */
+    fun callV6Op(
+        body: Map<String, Any?>,
+        refreshPlanAfter: Boolean = false,
+        done: (Map<*, *>?) -> Unit,
+    ) {
+        if (!::app.isInitialized) {
+            done(null)
+            return
+        }
+        val req = LinkedHashMap<String, Any?>(body.size + 1)
+        req.putAll(body)
+        if (!req.containsKey("timeZone")) {
+            req["timeZone"] = BeijingClock.ZONE.id
+        }
+        main.post {
+            fetchPluginRoute(
+                routeCallback { res ->
+                    if (refreshPlanAfter && res["ok"] == true) {
+                        consultPlanSoon(minGapMs = 0L)
+                    }
+                    done(res)
+                },
+                "POST",
+                "/v6",
+                req,
+            )
+        }
+    }
+
     /** 在 Live 语音看屏 与 Gemini 文本（MCP 沉淀）之间一键切换，支持注入剪贴板素材与认知手术刀。 */
     fun switchLiveMode(
         mode: String,

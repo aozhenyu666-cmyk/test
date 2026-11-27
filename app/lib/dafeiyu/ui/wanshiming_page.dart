@@ -46,6 +46,7 @@ class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProvid
   List<Map<String, dynamic>> _mediumGoals = const [];
   int _cadenceStreak = 0;
   int _verifiedToday = 0;
+  Offset _lightPos = const Offset(0.5, 0.35);
   String? _statusMsg;
 
   static const _fallbackSteles = <Map<String, dynamic>>[
@@ -420,26 +421,34 @@ class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProvid
             const SizedBox(width: 6),
           ],
         ),
-        body: Stack(
-          children: [
-            Positioned.fill(
-              child: IgnorePointer(
-                child: AnimatedBuilder(
-                  animation: _ambientCtrl,
-                  builder: (_, _) => CustomPaint(
-                    painter: _ObsidianGoldCanvasPainter(
-                      program: _goldProgram,
-                      phase: _ambientCtrl.value * 24.0,
-                      pulse: _cadenceStreak > 0 ? 1.0 : 0.35,
+        body: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerHover: (e) => _updateLight(context, e.position),
+          onPointerMove: (e) => _updateLight(context, e.position),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: AnimatedBuilder(
+                    animation: _ambientCtrl,
+                    builder: (_, _) => CustomPaint(
+                      painter: _ObsidianGoldCanvasPainter(
+                        program: _goldProgram,
+                        phase: _ambientCtrl.value * 24.0,
+                        pulse: _cadenceStreak > 0 ? 1.0 : 0.35,
+                        light: _lightPos,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            ListView(
-              padding: const EdgeInsets.fromLTRB(18, 12, 18, 56),
-              children: [
-                _buildHeroPlaque(starredCount, goals.length),
+              ListView(
+                padding: const EdgeInsets.fromLTRB(18, 12, 18, 56),
+                children: [
+                  _TactileGoldCard(
+                    accentGlow: true,
+                    child: _buildHeroPlaque(starredCount, goals.length),
+                  ),
                 if (_statusMsg != null) ...[
                   const SizedBox(height: 10),
                   Container(
@@ -491,12 +500,25 @@ class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProvid
                 else
                   for (var i = 0; i < items.length; i++)
                     _buildTimelineStele(items[i], isLast: i == items.length - 1),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  void _updateLight(BuildContext ctx, Offset globalPos) {
+    final sz = MediaQuery.sizeOf(ctx);
+    if (sz.isEmpty) return;
+    final next = Offset(
+      (globalPos.dx / sz.width).clamp(0.05, 0.95),
+      (globalPos.dy / sz.height).clamp(0.05, 0.95),
+    );
+    if ((next - _lightPos).distanceSquared > 0.0004 && mounted) {
+      setState(() => _lightPos = next);
+    }
   }
 
   Widget _buildHeroPlaque(int starredCount, int goalsCount) {
@@ -675,10 +697,12 @@ class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProvid
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(bottom: 16),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: () => unawaited(_openRubbing(s)),
-                child: Container(
+              child: _TactileGoldCard(
+                accentGlow: starred,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => unawaited(_openRubbing(s)),
+                  child: Container(
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
                     color: _surface,
@@ -743,6 +767,7 @@ class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProvid
                 ),
               ),
             ),
+            ),
           ),
         ],
       ),
@@ -782,11 +807,13 @@ class _ObsidianGoldCanvasPainter extends CustomPainter {
     required this.program,
     required this.phase,
     required this.pulse,
+    required this.light,
   });
 
   final ui.FragmentProgram? program;
   final double phase;
   final double pulse;
+  final Offset light;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -798,6 +825,8 @@ class _ObsidianGoldCanvasPainter extends CustomPainter {
       shader.setFloat(1, size.height);
       shader.setFloat(2, phase);
       shader.setFloat(3, pulse);
+      shader.setFloat(4, light.dx);
+      shader.setFloat(5, light.dy);
       canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
       return;
     }
@@ -823,7 +852,68 @@ class _ObsidianGoldCanvasPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ObsidianGoldCanvasPainter oldDelegate) =>
-      oldDelegate.program != program || oldDelegate.phase != phase || oldDelegate.pulse != pulse;
+      oldDelegate.program != program ||
+      oldDelegate.phase != phase ||
+      oldDelegate.pulse != pulse ||
+      oldDelegate.light != light;
+}
+
+/// 轻量 3D 视差金箔交互容器（手势滑动实时微倾 + 金箔镜面流光，松手回正）。
+class _TactileGoldCard extends StatefulWidget {
+  const _TactileGoldCard({required this.child, this.accentGlow = false});
+
+  final Widget child;
+  final bool accentGlow;
+
+  @override
+  State<_TactileGoldCard> createState() => _TactileGoldCardState();
+}
+
+class _TactileGoldCardState extends State<_TactileGoldCard> {
+  Offset _tilt = Offset.zero;
+
+  void _onHoverOrDrag(Offset localPos, Size sz) {
+    if (sz.isEmpty) return;
+    final nx = ((localPos.dx / sz.width) - 0.5).clamp(-0.5, 0.5);
+    final ny = ((localPos.dy / sz.height) - 0.5).clamp(-0.5, 0.5);
+    setState(() => _tilt = Offset(nx, ny));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rotY = _tilt.dx * 0.07;
+    final rotX = -_tilt.dy * 0.06;
+    return Listener(
+      onPointerMove: (e) {
+        final boxSize = context.size;
+        _onHoverOrDrag(e.localPosition, boxSize == null || boxSize.isEmpty ? const Size(320, 160) : boxSize);
+      },
+      onPointerUp: (_) => setState(() => _tilt = Offset.zero),
+      onPointerCancel: (_) => setState(() => _tilt = Offset.zero),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        transformAlignment: Alignment.center,
+        transform: Matrix4.identity()
+          ..setEntry(3, 2, 0.0011)
+          ..rotateX(rotX)
+          ..rotateY(rotY),
+        foregroundDecoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: LinearGradient(
+            begin: Alignment(-0.8 + _tilt.dx, -0.8 + _tilt.dy),
+            end: Alignment(0.8 + _tilt.dx, 0.8 + _tilt.dy),
+            colors: [
+              Colors.transparent,
+              Color(widget.accentGlow ? 0x1EE8CF82 : 0x0FE8CF82),
+              Colors.transparent,
+            ],
+          ),
+        ),
+        child: widget.child,
+      ),
+    );
+  }
 }
 
 /// 精雕双线朱砂篆印。

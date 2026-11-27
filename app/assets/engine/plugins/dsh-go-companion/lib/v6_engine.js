@@ -393,6 +393,76 @@ function deriveBinaryCardFromText(sentence, idx, now, source) {
   }
 }
 
+const INJECTION_GUARD_RE = /ignore\s+(?:all\s+)?previous\s+instructions|system\s+prompt|<\|im_start\|>|<\|endoftext\|>|you\s+are\s+now\s+in\s+developer\s+mode|bypass\s+safety/i
+
+function isPromptSafeText(text) {
+  const s = String(text || '')
+  return s.length > 0 && !INJECTION_GUARD_RE.test(s)
+}
+
+export function harvestKnowledgeSources(pool = [], sources = {}, now = Date.now()) {
+  const existing = Array.isArray(pool) ? pool : []
+  const seen = new Set(existing.map((x) => cleanStr(x?.claim, 90).toLowerCase()).filter(Boolean))
+  const candidates = []
+
+  const qBank = Array.isArray(sources?.questionBank) ? sources.questionBank : []
+  for (const q of qBank) {
+    if (!q || typeof q !== 'object') continue
+    const tip = cleanStr(q.explanation || q.note || q.answer || '', 80)
+    const stem = cleanStr(q.stem || q.prompt || q.q || q.title || '', 72)
+    const text = tip && stem ? `${stem} → 关键点：${tip}` : (tip || stem)
+    if (text.length >= 12 && isPromptSafeText(text)) {
+      candidates.push({ text, source: 'quiz', weight: q.wrongCount > 0 ? 1.5 : 1.25 })
+    }
+  }
+
+  const cards = Array.isArray(sources?.reviewCards) ? sources.reviewCards : []
+  for (const c of cards) {
+    if (!c || typeof c !== 'object') continue
+    const front = cleanStr(c.front || c.prompt || c.title || '', 64)
+    const back = cleanStr(c.back || c.answer || c.summary || '', 64)
+    const text = front && back ? `${front}：${back}` : (front || back)
+    if (text.length >= 12 && isPromptSafeText(text)) {
+      candidates.push({ text, source: 'quiz', weight: 1.4 })
+    }
+  }
+
+  const vaultSnippets = Array.isArray(sources?.vaultSnippets) ? sources.vaultSnippets : []
+  for (const v of vaultSnippets) {
+    const raw = typeof v === 'string' ? v : (v?.summary || v?.text || v?.title || '')
+    const text = cleanStr(raw, 125)
+    if (text.length >= 12 && isPromptSafeText(text)) {
+      candidates.push({ text, source: 'obsidian', weight: 1.3 })
+    }
+  }
+
+  const h = sources?.horizons && typeof sources.horizons === 'object' ? sources.horizons : null
+  if (h) {
+    for (const g of [...(h.long || []), ...(h.medium || [])]) {
+      const title = cleanStr(g?.title || g?.name || '', 48)
+      const step = cleanStr(g?.nextAction || g?.microTask || g?.criterion || '', 70)
+      if (title && step && isPromptSafeText(`${title}${step}`)) {
+        candidates.push({ text: `主线「${title}」当下聚焦：${step}`, source: 'obsidian', weight: 1.35 })
+      }
+    }
+  }
+
+  const added = []
+  for (let i = 0; i < candidates.length && added.length < 6; i += 1) {
+    const cand = candidates[i]
+    const norm = cleanStr(cand.text, 90).toLowerCase()
+    if (!norm || seen.has(norm)) continue
+    const card = deriveBinaryCardFromText(cand.text, i, now, cand.source)
+    if (!card) continue
+    card.weight = cand.weight
+    seen.add(norm)
+    added.push(card)
+  }
+
+  const nextPool = added.length ? [...added, ...existing].slice(0, 400) : existing
+  return { addedCount: added.length, added, pool: nextPool }
+}
+
 /**
  * 智能吞吐剪贴板或文本：
  * - 若识别到 【今日契约】 区块，返回 `{ kind: 'contract', contract }`

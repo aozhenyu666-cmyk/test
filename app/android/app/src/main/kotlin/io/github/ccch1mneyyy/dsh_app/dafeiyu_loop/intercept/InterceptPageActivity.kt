@@ -466,6 +466,159 @@ class InterceptPageActivity : Activity() {
         openDshConsole()
     }
 
+    private fun releaseAfterV6Pass(reasonTag: String, openLiveRoll: Boolean = false) {
+        val id = eventId
+        if (id != null && !reported) {
+            reported = true
+            main.removeCallbacks(proof)
+            InterceptRuntime.onDismissed(id, reasonTag)
+        }
+        if (!isFinishing) finish()
+        if (openLiveRoll) {
+            ProactiveRuntime.triggerLiveCoreRoll()
+        }
+    }
+
+    private fun showCadenceSubmitDialog() {
+        val ctx = this
+        val input = EditText(ctx).apply {
+            hint = "交出至少 6 字真实推进结论（拒绝 111/ok/打卡）"
+            minLines = 2
+            maxLines = 4
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        android.app.AlertDialog.Builder(ctx)
+            .setTitle("✅ 5 分钟严验收 · 交结论解锁")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("提交过关") { _, _ ->
+                val text = input.text?.toString()?.trim().orEmpty()
+                ProactiveRuntime.callV6Op(
+                    mapOf("action" to "cadence_verify", "submission" to text, "continueNext" to true),
+                    refreshPlanAfter = true,
+                ) { res ->
+                    if (res?.get("ok") == true) {
+                        android.widget.Toast.makeText(
+                            ctx,
+                            (res["message"] as? String) ?: "验收通过，已放行并续开下一轮",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        releaseAfterV6Pass("v6_cadence_verified")
+                    } else {
+                        val err = (res?.get("error") as? String) ?: "提交过短或敷衍，请重写具体推进内容"
+                        android.widget.Toast.makeText(ctx, err, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun startMicroQuizStreakUnlock() {
+        val ctx = this
+        ProactiveRuntime.callV6Op(mapOf("action" to "pool_sample", "count" to 8, "markShown" to true)) { res ->
+            val items = (res?.get("items") as? List<*>)?.mapNotNull { it as? Map<*, *> }.orEmpty()
+            if (items.isEmpty()) {
+                android.widget.Toast.makeText(ctx, "知识海暂无可抽判断题，请改交具体结论", android.widget.Toast.LENGTH_SHORT).show()
+                return@callV6Op
+            }
+            fun askNext(index: Int, streak: Int) {
+                if (isFinishing || isDestroyed) return
+                val item = items[index % items.size]
+                val claim = (item["claim"] as? String).orEmpty()
+                val isTrueAns = item["isTrue"] == true
+                val correction = (item["correction"] as? String).orEmpty()
+                val itemId = (item["id"] as? String).orEmpty()
+                val startedAt = System.currentTimeMillis()
+                android.app.AlertDialog.Builder(ctx)
+                    .setTitle("⚡ 亮屏硬核 3 连对解锁（当前 $streak / 3）")
+                    .setMessage(claim)
+                    .setCancelable(true)
+                    .setPositiveButton("正确 (对)") { _, _ ->
+                        val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(100L)
+                        ProactiveRuntime.callV6Op(mapOf("action" to "pool_answer", "itemId" to itemId, "userTrue" to true, "elapsedMs" to elapsed)) {}
+                        if (isTrueAns) {
+                            val nextStreak = streak + 1
+                            if (nextStreak >= 3) {
+                                ProactiveRuntime.callV6Op(
+                                    mapOf("action" to "cadence_verify", "quizPassed" to true, "continueNext" to true),
+                                    refreshPlanAfter = true,
+                                ) { v ->
+                                    if (v?.get("ok") == true) {
+                                        releaseAfterV6Pass("v6_quiz_3streak")
+                                    } else {
+                                        android.widget.Toast.makeText(ctx, "销锁回执失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            } else {
+                                askNext(index + 1, nextStreak)
+                            }
+                        } else {
+                            android.widget.Toast.makeText(ctx, "判错，连胜归零！$correction", android.widget.Toast.LENGTH_LONG).show()
+                            askNext(index + 1, 0)
+                        }
+                    }
+                    .setNegativeButton("陷阱/错误 (错)") { _, _ ->
+                        val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(100L)
+                        ProactiveRuntime.callV6Op(mapOf("action" to "pool_answer", "itemId" to itemId, "userTrue" to false, "elapsedMs" to elapsed)) {}
+                        if (!isTrueAns) {
+                            val nextStreak = streak + 1
+                            if (nextStreak >= 3) {
+                                ProactiveRuntime.callV6Op(
+                                    mapOf("action" to "cadence_verify", "quizPassed" to true, "continueNext" to true),
+                                    refreshPlanAfter = true,
+                                ) { v ->
+                                    if (v?.get("ok") == true) {
+                                        releaseAfterV6Pass("v6_quiz_3streak")
+                                    } else {
+                                        android.widget.Toast.makeText(ctx, "销锁回执失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            } else {
+                                askNext(index + 1, nextStreak)
+                            }
+                        } else {
+                            android.widget.Toast.makeText(ctx, "判错，连胜归零！$correction", android.widget.Toast.LENGTH_LONG).show()
+                            askNext(index + 1, 0)
+                        }
+                    }
+                    .show()
+            }
+            askNext(0, 0)
+        }
+    }
+
+    private fun showV6AppealDialog() {
+        val ctx = this
+        val labels = arrayOf(
+            "降档：连答 3 道知识海微题解锁",
+            "重抽：换 1 条切片继续本轮 5 分钟",
+            "转接：切去 Gemini Live 对话后销锁",
+            "停战：彻底呆滞·15分钟生理休息（每日限1次）",
+        )
+        val kinds = arrayOf("downgrade_micro_quiz", "swap_item", "handoff_gemini_live", "physio_rest")
+        android.app.AlertDialog.Builder(ctx)
+            .setTitle("🆘 V6 严锁 4 类申诉（每日总限 3 次）")
+            .setItems(labels) { _, which ->
+                val kind = kinds[which]
+                ProactiveRuntime.callV6Op(mapOf("action" to "appeal", "kind" to kind), refreshPlanAfter = true) { res ->
+                    if (res?.get("ok") != true) {
+                        val err = (res?.get("error") as? String) ?: "今日申诉额度不足或连接异常"
+                        android.widget.Toast.makeText(ctx, err, android.widget.Toast.LENGTH_LONG).show()
+                        return@callV6Op
+                    }
+                    val msg = (res["message"] as? String) ?: "申诉已受理"
+                    android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+                    when (kind) {
+                        "downgrade_micro_quiz" -> startMicroQuizStreakUnlock()
+                        "handoff_gemini_live" -> releaseAfterV6Pass("v6_appeal_live", openLiveRoll = true)
+                        else -> releaseAfterV6Pass("v6_appeal_$kind")
+                    }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     /** 急事 3 分钟通行：DSH Go 雾蓝玻璃选择卡 -> POST /emergency-pass -> 顶部悬浮倒计时胶囊。 */
     private fun showEmergencyPassDialog() {
         val ctx = this
@@ -1389,6 +1542,33 @@ class InterceptPageActivity : Activity() {
                         setColor(palette.tonal)
                     }
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(10)
+                })
+            }
+
+            // V6.6 锁屏直达正向出口：P2 断线锁一键秒回 Gemini Live；P3 逾期锁一键交 5m 结论 / 连答 3 题 / 4 类申诉
+            val freshArbiter = ArbiterShadow.currentFresh()
+            if (freshArbiter?.priority == "P2" || freshArbiter?.source == "GEMINI_LIVE_CELL") {
+                addView(pillButton("🎙️ 立刻回到 Gemini Live（语音/看屏）", primary = true) {
+                    releaseAfterV6Pass("p2_return_live", openLiveRoll = true)
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)).apply {
+                    bottomMargin = dp(10)
+                })
+            } else if (freshArbiter?.priority == "P3") {
+                addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(pillButton("✅ 交 5m 结论", primary = true, weight = 1f) {
+                        showCadenceSubmitDialog()
+                    }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(6) })
+                    addView(pillButton("⚡ 连答 3 题", secondary = true, weight = 1f) {
+                        startMicroQuizStreakUnlock()
+                    }, LinearLayout.LayoutParams(0, dp(46), 1f))
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(6)
+                })
+                addView(pillButton("🆘 4 类严锁申诉（降档/重抽/转Live/休15m）", secondary = true) {
+                    showV6AppealDialog()
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)).apply {
                     bottomMargin = dp(10)
                 })
             }

@@ -369,6 +369,92 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     }
   }
 
+  Future<void> _verifyFiveMinByMicroQuiz() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.v6Op({'action': 'pool_sample', 'count': 8, 'markShown': true});
+      final items = _asList(res?['items']);
+      if (!mounted) return;
+      if (items.isEmpty) {
+        setState(() => _banner = '知识海暂无可用考题，请先吞剪贴板或直接提交文字结论');
+        return;
+      }
+      int streak = 0;
+      int idx = 0;
+      bool passed = false;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) {
+            final item = items[idx % items.length];
+            final claim = '${item['claim'] ?? ''}';
+            final isTrueAns = item['isTrue'] == true;
+            final correction = '${item['correction'] ?? ''}';
+            final itemId = '${item['id'] ?? ''}';
+            final startedAt = DateTime.now().millisecondsSinceEpoch;
+            Future<void> pick(bool userTrue) async {
+              final elapsed = (DateTime.now().millisecondsSinceEpoch - startedAt).clamp(100, 120000);
+              unawaited(_channel.v6Op({
+                'action': 'pool_answer',
+                'itemId': itemId,
+                'userTrue': userTrue,
+                'elapsedMs': elapsed,
+              }));
+              if (userTrue == isTrueAns) {
+                final nextStreak = streak + 1;
+                if (nextStreak >= 3) {
+                  passed = true;
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                  return;
+                }
+                setDlg(() {
+                  streak = nextStreak;
+                  idx += 1;
+                });
+              } else {
+                setDlg(() {
+                  streak = 0;
+                  idx += 1;
+                });
+                if (mounted) {
+                  setState(() => _banner = '判错连胜归零：$correction');
+                }
+              }
+            }
+
+            return AlertDialog(
+              title: Text('⚡ 连答 3 题硬核过关（$streak / 3）'),
+              content: Text(claim, style: const TextStyle(height: 1.5)),
+              actions: [
+                TextButton(onPressed: () => unawaited(pick(false)), child: const Text('陷阱 / 错误')),
+                FilledButton(onPressed: () => unawaited(pick(true)), child: const Text('判断正确')),
+              ],
+            );
+          },
+        ),
+      );
+      if (passed && mounted) {
+        final ver = await _channel.v6Op({
+          'action': 'cadence_verify',
+          'quizPassed': true,
+          'continueNext': true,
+        });
+        await _refresh();
+        if (mounted) {
+          setState(() {
+            _banner = ver?['ok'] == true
+                ? '${ver?['message'] ?? '连对 3 题验收通过'}'
+                : '${ver?['error'] ?? '过关写入失败'}';
+          });
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _ingestClipboardIntoV6() async {
     if (_busy) return;
     final clip = await Clipboard.getData(Clipboard.kTextPlain);
@@ -1356,6 +1442,13 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                         onPressed: _busy ? null : () => unawaited(_verifyFiveMinCadence()),
                         icon: const Icon(AppIcons.completed, size: 16),
                         label: const Text('✅ 交结论过关并续下一轮'),
+                      ),
+                      FilledButton.tonalIcon(
+                        key: const ValueKey('atlas-v6-cadence-quiz-btn'),
+                        style: FilledButton.styleFrom(shape: AppShape.card),
+                        onPressed: _busy ? null : () => unawaited(_verifyFiveMinByMicroQuiz()),
+                        icon: const Icon(AppIcons.skill, size: 16),
+                        label: const Text('⚡ 连答 3 题过关'),
                       ),
                       OutlinedButton.icon(
                         key: const ValueKey('atlas-v6-cadence-stop-btn'),
