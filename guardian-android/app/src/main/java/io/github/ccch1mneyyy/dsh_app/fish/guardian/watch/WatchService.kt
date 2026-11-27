@@ -240,7 +240,7 @@ class WatchService : Service() {
         }
 
         val verdict = snap.verdict(nowMono, passActive, healthConfig)
-        if (verdict.state.isCritical) {
+        if (verdict.isCritical) {
             if (activeIncidentState != verdict.state || activeIncidentId.isBlank()) {
                 activeIncidentState = verdict.state
                 activeIncidentId = "${verdict.state.name}-$nowWall"
@@ -283,7 +283,7 @@ class WatchService : Service() {
 
         snap = snap.copy(pendingOfflineCount = stores.loadIncidents().size)
         stores.saveSnapshot(snap)
-        val notifBody = if (suppressedByMainSafety && verdict.state.isCritical) {
+        val notifBody = if (suppressedByMainSafety && verdict.isCritical) {
             "主包处于测试模式或紧急解除中，暂不锁屏/弹阻断（${verdict.reason}）"
         } else {
             verdict.reason
@@ -468,7 +468,9 @@ class WatchService : Service() {
 
     private fun notificationTitle(st: EngineState, passActive: Boolean, suppressedByMainSafety: Boolean = false): String {
         if (passActive) return "大肥鱼哨兵 · 独立急事通行中（3分钟）"
-        if (suppressedByMainSafety && st.isCritical) return "大肥鱼哨兵 · 主包测试/解除保护中"
+        if (suppressedByMainSafety && st in setOf(EngineState.ENGINE_DOWN, EngineState.UNRESPONSIVE, EngineState.A11Y_DISABLED)) {
+            return "大肥鱼哨兵 · 主包测试/解除保护中"
+        }
         return when (st) {
             EngineState.HEALTHY -> "大肥鱼运行中 · 引擎与无障碍均健康"
             EngineState.STARTING_GRACE -> "大肥鱼正在冷启动（保护宽限中）"
