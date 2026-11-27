@@ -174,6 +174,32 @@ object ArbiterShadow {
         receivedAt = if (current != null) System.currentTimeMillis() else 0L
     }
 
+    /** 吊销「Live 在线免锁」瞬态缓存，防止切出后沿用旧免锁态滑进娱乐 App。 */
+    fun invalidateIfLiveKeepAliveUnlock() {
+        val cur = current ?: return
+        if (cur.source == "GEMINI_LIVE_KEEPALIVE_UNLOCK" ||
+            (cur.mode == ArbiterDecision.MODE_FREE && cur.priority == "P2")
+        ) {
+            current = null
+            receivedAt = 0L
+        }
+    }
+
+    /** 常驻 Live 掉线超缓冲时在端侧立即武装 P2 GEMINI_LIVE_CELL 白名单，不等 60s 周期 /plan。 */
+    fun armLocalLiveDropLock(allowPackages: Set<String>, why: String, unlockHow: String) {
+        val cur = current
+        if (cur != null && cur.priority in setOf("P0", "P1", "P3")) return
+        current = ArbiterDecision(
+            mode = ArbiterDecision.MODE_ALLOWLIST,
+            allow = allowPackages,
+            why = why,
+            unlockHow = unlockHow,
+            priority = "P2",
+            source = "GEMINI_LIVE_CELL",
+        )
+        receivedAt = System.currentTimeMillis()
+    }
+
     fun current(): ArbiterDecision? = current
 
     fun currentFresh(now: Long = System.currentTimeMillis()): ArbiterDecision? =

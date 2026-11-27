@@ -411,4 +411,39 @@ class GeminiUiAutomatorPolicyTest {
         assertEquals(GeminiAutoState.DONE, step.nextState)
         assertEquals(GeminiAutoAction.Finish("live_active_no_share_btn"), step.action)
     }
+
+    @Test
+    fun missingInputAfterRound5AndSlowReplyStillEnterLiveInsteadOfAborting() {
+        val fallbackLive = GeminiAutoStepPolicy.decide(
+            GeminiStepInput(
+                state = GeminiAutoState.PASTE_AND_SEND_BRIEF,
+                round = 5,
+                elapsedMs = 3_000L,
+                frontPackage = geminiPkg,
+                emergencyActive = false,
+                brief = "brief",
+                briefWritten = false,
+                sawGeminiWindow = true,
+                nodes = listOf(liveNode()),
+            ),
+        )
+        assertEquals(GeminiAutoState.CLICK_LIVE_BUTTON, fallbackLive.nextState)
+
+        val slowReplyLive = GeminiAutoStepPolicy.decide(
+            GeminiStepInput(
+                state = GeminiAutoState.WAIT_REPLY_START,
+                round = 7,
+                elapsedMs = 4_200L,
+                frontPackage = geminiPkg,
+                emergencyActive = false,
+                brief = "brief",
+                briefWritten = true,
+                sendClicked = true,
+                replyWaitRounds = 3,
+                sawGeminiWindow = true,
+                nodes = listOf(inputNode(text = "still typing"), liveNode()),
+            ),
+        )
+        assertEquals(GeminiAutoState.CLICK_LIVE_BUTTON, slowReplyLive.nextState)
+    }
 }

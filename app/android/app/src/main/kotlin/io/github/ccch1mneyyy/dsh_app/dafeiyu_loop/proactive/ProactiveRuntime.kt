@@ -65,6 +65,7 @@ import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionFactsOf
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionPolicy
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.SessionVerdict
+import io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianOfflineIncident
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianPolicyMirror
 import io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.GuardianPolicySnapshot
@@ -1765,6 +1766,7 @@ object ProactiveRuntime {
     @Volatile private var v6WakeQuizEnabled: Boolean = true
     @Volatile private var v6WakeQuizCooldownMin: Int = 10
     @Volatile private var v6LiveKeepAliveUnlock: Boolean = true
+    @Volatile private var v6LiveDropGraceSec: Int = 15
     @Volatile private var lastWakeQuizAt: Long = 0L
     @Volatile private var latestLiveSignals: LiveSignalSnapshot = LiveSignalSnapshot()
     private val shownSparkIds = LinkedHashSet<String>()
@@ -1870,6 +1872,36 @@ object ProactiveRuntime {
         if (hasUnifiedRelease(now)) {
             consultPlanSoon(minGapMs = 15_000L)
             return
+        }
+        // 常驻 Gemini Live 断线即锁：切出非学习 App 瞬间实时重探硬件三合一信号，掉线超时立刻吊销旧免锁缓存并端侧武装 P2 回连锁。
+        if (liveCoreAlwaysOn && liveCoreStrict && !inEmergencyPass(now) && !LockSafety.disarmed(app, now)) {
+            val isExemptPkg = packageName in GEMINI_PACKAGES ||
+                SystemSafeAllowlist.isSelfPackage(packageName, app.packageName) ||
+                packageName in SystemSafeAllowlist.PROXY_PACKAGES ||
+                LockSafety.neverLock(app, packageName) ||
+                SessionFactsOf.isSystem(app, packageName) ||
+                allowedAppsForFocus().any { it.first == packageName }
+            val modNow = minuteOfDay(now)
+            val nightNow = modNow < 7 * 60 || modNow >= 23 * 60
+            val inTextGrace = liveCoreTextGraceUntil > now
+            if (!isExemptPkg && !nightNow && !inTextGrace) {
+                val liveSnap = runCatching { LiveSignalMonitor.probe(app, packageName, null) }.getOrNull()
+                if (liveSnap != null) latestLiveSignals = liveSnap
+                if (liveSnap?.liveOnline != true) {
+                    ArbiterShadow.invalidateIfLiveKeepAliveUnlock()
+                    val droppedAgoMs = if (lastGeminiVoiceActiveAt > 0L) {
+                        (now - lastGeminiVoiceActiveAt).coerceAtLeast(0L)
+                    } else Long.MAX_VALUE
+                    if (droppedAgoMs >= v6LiveDropGraceSec.coerceIn(5, 600) * 1000L) {
+                        ArbiterShadow.armLocalLiveDropLock(
+                            allowPackages = GEMINI_PACKAGES + SystemSafeAllowlist.PROXY_PACKAGES,
+                            why = "常驻 Gemini Live 已断线，请先回到 Live 语音/共享屏",
+                            unlockHow = "重新开启 Gemini Live 通话或共享屏幕，或在图谱页切至文本沉淀窗/L0 休息",
+                        )
+                        consultPlanSoon(minGapMs = 0L)
+                    }
+                }
+            }
         }
         // H5: 当 arbiterEnforce 开启且已有新鲜裁决器输出时，直接按 ArbiterDecision.decide 执法（永不锁/测试模式/紧急解除仍优先于一切）。
         val arbiterOutcome = ArbiterShadow.evaluateForEnforce(app, packageName)
@@ -2340,6 +2372,7 @@ object ProactiveRuntime {
                 v6WakeQuizEnabled = fw["wakeQuizEnabled"] != false
                 v6WakeQuizCooldownMin = ((fw["wakeQuizCooldownMin"] as? Number)?.toInt() ?: 10).coerceIn(1, 180)
                 v6LiveKeepAliveUnlock = fw["liveKeepAliveUnlock"] != false
+                v6LiveDropGraceSec = ((fw["liveDropGraceSec"] as? Number)?.toInt() ?: 15).coerceIn(5, 600)
             }
             if (v6Map["liveUnlockedNow"] == true) {
                 releaseCompanionLock()
@@ -2403,6 +2436,9 @@ object ProactiveRuntime {
                     }
                     Log.i(TAG, "geminiAutoPull(voiceOnly): topic=$pullTopic")
                 } else if (autoClickLive) {
+                    if (autoPull["force"] == true && VisibleSurface.isHeldBy(VisibleSurface.OWNER_INTERCEPT)) {
+                        releaseCompanionLock()
+                    }
                     GeminiAutoLauncher.launchAndAutomateLive(
                         app = app,
                         topic = pullTopic,
@@ -3149,6 +3185,8 @@ object ProactiveRuntime {
             lastGeminiVoiceDroppedAt = 0L
         } else if (lastGeminiVoiceActive) {
             lastGeminiVoiceDroppedAt = wall
+            ArbiterShadow.invalidateIfLiveKeepAliveUnlock()
+            consultPlanSoon(minGapMs = 0L)
             if (lastGeminiVoiceStartedAt > 0L) {
                 lastLiveDurationSec = ((wall - lastGeminiVoiceStartedAt) / 1000L).coerceAtLeast(0L)
             }
@@ -3275,6 +3313,7 @@ object ProactiveRuntime {
             "mediaPlaying" to mediaPlaying,
             "headsetConnected" to headsetConnected,
             "geminiVoiceActive" to geminiVoiceActive,
+            "liveSignals" to latestLiveSignals.toMap(),
             "screenShareLikely" to screenShareLikelyNow,
             "liveDroppedAgoMs" to liveDroppedAgoMs,
             "lastVoiceActiveAt" to lastGeminiVoiceActiveAt,

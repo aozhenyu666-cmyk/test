@@ -131,6 +131,27 @@ export function cleanPhone(raw) {
     charging: raw.charging === true,
     mediaPlaying: raw.mediaPlaying === true,
     geminiVoiceActive: raw.geminiVoiceActive === true,
+    headsetConnected: raw.headsetConnected === true,
+    screenShareLikely: raw.screenShareLikely === true,
+    liveDroppedAgoMs: Math.max(0, Math.round(Number(raw.liveDroppedAgoMs) || 0)),
+    lastVoiceActiveAt: Math.max(0, Math.round(Number(raw.lastVoiceActiveAt) || 0)),
+    lastLiveDurationSec: Math.max(0, Math.round(Number(raw.lastLiveDurationSec) || 0)),
+    a11yConnected: raw.a11yConnected === true,
+    shizukuReady: raw.shizukuReady === true,
+    geminiMinutesToday: Math.max(0, Math.round(Number(raw.geminiMinutesToday) || 0)),
+    ...(raw.liveSignals && typeof raw.liveSignals === 'object'
+      ? {
+          liveSignals: {
+            liveOnline: raw.liveSignals.liveOnline === true,
+            audioInComm: raw.liveSignals.audioInComm === true,
+            micRecording: raw.liveSignals.micRecording === true,
+            virtualDisplayActive: raw.liveSignals.virtualDisplayActive === true,
+            screenShareText: raw.liveSignals.screenShareText === true,
+            uiLiveActive: raw.liveSignals.uiLiveActive === true,
+            summary: typeof raw.liveSignals.summary === 'string' ? raw.liveSignals.summary.slice(0, 160) : '',
+          },
+        }
+      : {}),
     screenText: typeof raw.screenText === 'string' && raw.screenText.trim() ? raw.screenText.trim().slice(0, 1500) : '',
     local,
     today,

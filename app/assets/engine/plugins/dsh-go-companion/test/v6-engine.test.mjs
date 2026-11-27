@@ -5,6 +5,7 @@ import {
   buildInterrogationPrompt,
   buildNineGrid,
   computePoolTelemetry,
+  DEFAULT_FRAMEWORK,
   defaultV6State,
   deleteStele,
   evaluateWindowMode,
@@ -20,6 +21,7 @@ import {
   tickCadence,
   upsertStele,
 } from '../lib/v6_engine.js'
+import { cleanPhone } from '../lib/phone.js'
 
 test('动态时间与严格度框架：标准化及双时段窗口判定', () => {
   const fw = normalizeFramework({
@@ -220,4 +222,32 @@ test('5分钟高频严验收节奏：到点逾期转严锁、防敷衍拒收、�
   assert.equal(stopped.active, false)
   assert.equal(stopped.phase, 'idle')
   assert.equal(stopped.verifiedToday, 3)
+})
+
+test('Live 掉线宽限默认 15s 且 cleanPhone 透传 liveSignals / droppedAgoMs 遥测', () => {
+  assert.equal(DEFAULT_FRAMEWORK.liveDropGraceSec, 15)
+  const phone = cleanPhone({
+    app: 'tv.danmaku.bili',
+    fun: true,
+    geminiVoiceActive: false,
+    headsetConnected: true,
+    liveDroppedAgoMs: 18500,
+    lastVoiceActiveAt: 1_700_000_000_000,
+    lastLiveDurationSec: 12,
+    liveSignals: {
+      liveOnline: false,
+      audioInComm: false,
+      micRecording: false,
+      virtualDisplayActive: false,
+      screenShareText: false,
+      uiLiveActive: false,
+      summary: '未检测到 Live 活动',
+    },
+  })
+  assert.ok(phone)
+  assert.equal(phone.headsetConnected, true)
+  assert.equal(phone.liveDroppedAgoMs, 18500)
+  assert.equal(phone.lastLiveDurationSec, 12)
+  assert.equal(phone.liveSignals.liveOnline, false)
+  assert.equal(phone.liveSignals.summary, '未检测到 Live 活动')
 })

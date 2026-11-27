@@ -17,7 +17,7 @@ export const DEFAULT_FRAMEWORK = Object.freeze({
   wakeQuizCooldownMin: 10,
   wakeQuizAntiMashMs: 320,
   liveKeepAliveUnlock: true,
-  liveDropGraceSec: 90,
+  liveDropGraceSec: 15,
   fiveMinBoutSec: 300,
   strictLockGraceSec: 45,
   dailyAppealLimit: 3,

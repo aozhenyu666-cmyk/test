@@ -14,6 +14,7 @@ data class ArbiterDecision(
     val why: String = "",
     val unlockHow: String = "",
     val priority: String = "",
+    val source: String = "",
 ) {
     data class Verdict(val lock: Boolean, val why: String, val needPass: Boolean = false)
 
@@ -62,6 +63,7 @@ data class ArbiterDecision(
                 why = (m["why"] as? String).orEmpty(),
                 unlockHow = (m["unlockHow"] as? String).orEmpty(),
                 priority = (m["priority"] as? String).orEmpty(),
+                source = (m["source"] as? String).orEmpty(),
             )
         }
     }

@@ -13256,6 +13256,7 @@ export function apply(ctx) {
           preferVoice: true,
           autoClickLive: liveCoreRes.autoClickLive !== false,
           requestScreenShare: Boolean(liveCoreRes.requestScreenShare),
+          force: Boolean(liveCoreRes.urgent || liveCoreRes.nextState?.alwaysOnLive),
           voiceLine: liveCoreRes.voiceLine,
           brief: liveCoreRes.brief,
           dice: liveCoreRes.dice,

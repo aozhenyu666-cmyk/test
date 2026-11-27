@@ -546,12 +546,21 @@ object GeminiAutoStepPolicy {
                 }
                 if (!input.briefWritten) {
                     val inputNode = GeminiNodeMatcher.findInputNode(input.nodes)
-                        ?: return GeminiStepOutput(
-                            nextState = GeminiAutoState.PASTE_AND_SEND_BRIEF,
-                            action = GeminiAutoAction.Wait,
-                            briefWritten = false,
-                            sawGeminiWindow = true,
-                        )
+                        ?: return if (input.round >= 5 && GeminiNodeMatcher.findLiveButton(input.nodes) != null) {
+                            GeminiStepOutput(
+                                nextState = GeminiAutoState.CLICK_LIVE_BUTTON,
+                                action = GeminiAutoAction.Wait,
+                                briefWritten = false,
+                                sawGeminiWindow = true,
+                            )
+                        } else {
+                            GeminiStepOutput(
+                                nextState = GeminiAutoState.PASTE_AND_SEND_BRIEF,
+                                action = GeminiAutoAction.Wait,
+                                briefWritten = false,
+                                sawGeminiWindow = true,
+                            )
+                        }
                     val head = input.brief.trim().take(24)
                     val alreadyHasText = head.isNotEmpty() && inputNode.text.contains(head)
                     if (!alreadyHasText) {
@@ -630,7 +639,7 @@ object GeminiAutoStepPolicy {
                 val replyStarted = GeminiNodeMatcher.hasReplyStarted(input.nodes, input.brief)
                 val liveBtn = GeminiNodeMatcher.findLiveButton(input.nodes)
                 val inputEmpty = GeminiNodeMatcher.findInputNode(input.nodes)?.text.isNullOrBlank()
-                if (replyStarted || (liveBtn != null && inputEmpty && nextWait >= 2)) {
+                if (replyStarted || (liveBtn != null && ((inputEmpty && nextWait >= 2) || nextWait >= 4))) {
                     GeminiStepOutput(
                         nextState = GeminiAutoState.CLICK_LIVE_BUTTON,
                         action = GeminiAutoAction.Wait,
