@@ -186,8 +186,18 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
   int _dailyAppealLimit = 3;
   int _dailyPhysioRestLimit = 1;
   int _poolCooldownHours = 18;
+  bool _stubbornGateEnabled = true;
+  int _stubbornCooldownMin = 20;
   final _fragWindowsCtrl = TextEditingController(text: '11:30-13:30, 17:30-19:30');
   final _deskWindowsCtrl = TextEditingController(text: '09:00-11:30, 14:30-17:30, 20:00-22:00');
+
+  // Stubborn scheduler declaration state
+  String _declareCat = '刷题';
+  bool _declareBindCadence = true;
+  final _declareTaskCtrl = TextEditingController();
+  final _declareBlockerCtrl = TextEditingController();
+
+  static const _declareCategories = <String>['刷题', '错题复盘', '看课笔记', '申论输出', '现实杂事', '休息回血'];
 
   // Grocery 9-grid quick checklist state
   final Set<String> _pickedGrocery = <String>{};
@@ -215,6 +225,8 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
     _waveCtrl.dispose();
     _fragWindowsCtrl.dispose();
     _deskWindowsCtrl.dispose();
+    _declareTaskCtrl.dispose();
+    _declareBlockerCtrl.dispose();
     super.dispose();
   }
 
@@ -254,6 +266,8 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
         _dailyAppealLimit = _asInt(fw['dailyAppealLimit'], 3);
         _dailyPhysioRestLimit = _asInt(fw['dailyPhysioRestLimit'], 1);
         _poolCooldownHours = _asInt(fw['poolCooldownHours'], 18);
+        _stubbornGateEnabled = fw['stubbornGateEnabled'] != false;
+        _stubbornCooldownMin = _asInt(fw['stubbornCooldownMin'], 20);
         if (fw['fragmentedWindows'] is List) {
           _fragWindowsCtrl.text = (fw['fragmentedWindows'] as List).join(', ');
         }
@@ -572,6 +586,8 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
         'dailyAppealLimit': _dailyAppealLimit,
         'dailyPhysioRestLimit': _dailyPhysioRestLimit,
         'poolCooldownHours': _poolCooldownHours,
+        'stubbornGateEnabled': _stubbornGateEnabled,
+        'stubbornCooldownMin': _stubbornCooldownMin,
         'fragmentedWindows': splitWins(_fragWindowsCtrl.text),
         'deskMoatWindows': splitWins(_deskWindowsCtrl.text),
       },
@@ -582,6 +598,38 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
       _busy = false;
       _banner = res?['ok'] == true ? '✓ 动态时间与严格度框架已实时生效（无需重新发包）' : '保存失败';
     });
+  }
+
+  Future<void> _submitDeclaration() async {
+    if (_busy) return;
+    final task = _declareTaskCtrl.text.trim();
+    if (_declareCat != '休息回血' && task.length < 4) {
+      setState(() => _banner = '调度器要求：非休息时段请写清具体动作（至少 4 字，不能只写“刷题/学习”）');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final res = await _channel.v6Op({
+        'action': 'declare_activity',
+        'category': _declareCat,
+        'task': task,
+        'blocker': _declareBlockerCtrl.text.trim(),
+        'bindCadence': _declareBindCadence,
+      });
+      await _refresh();
+      if (!mounted) return;
+      if (res?['ok'] == true) {
+        _declareTaskCtrl.clear();
+        _declareBlockerCtrl.clear();
+      }
+      setState(() {
+        _banner = res?['ok'] == true
+            ? '✓ ${res?['message'] ?? '已纳入体系并写入临时库'}'
+            : '⚠️ ${res?['error'] ?? '申报未通过'}';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -670,10 +718,149 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
     final liveOnline = _liveSignals['liveOnline'] == true || _v6['liveVoiceActive'] == true;
     final sigAudio = _liveSignals['audioInComm'] == true;
     final sigMic = _liveSignals['micRecording'] == true;
+    final sigVoiceMic = _liveSignals['voiceCommMic'] == true;
     final sigVoice = _liveSignals['voicePlayback'] == true;
+    final sigCamera = _liveSignals['cameraInUse'] == true;
     final sigVDisplay = _liveSignals['virtualDisplayActive'] == true;
+    final cadence = _asMap(_v6['cadence']);
+    final cadAnchor = _asMap(cadence['knowledgeAnchor']);
+    final activeDec = _asMap(_v6['activeDeclaration']);
+    final stubbornGate = _asMap(_v6['stubbornGate']);
+    final needDeclare = stubbornGate['required'] == true && activeDec.isEmpty;
+    final anchorsRaw = stubbornGate['suggestedAnchors'];
+    final suggestedAnchors = anchorsRaw is List
+        ? [for (final a in anchorsRaw) if (a is Map) _asMap(a)]
+        : const <Map<String, dynamic>>[];
 
     return [
+      _v6Card(
+        child: Column(
+          key: const ValueKey('v6-stubborn-checkin-card'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                StatusChip(
+                  label: needDeclare
+                      ? '🧭 调度器固执拦问：请说明此刻在做什么'
+                      : (activeDec.isNotEmpty
+                          ? '✓ 已纳入体系：${activeDec['category'] ?? ''}'
+                          : '🧭 调度器申报舱（不报不入体系）'),
+                  tone: needDeclare ? StatusTone.warn : StatusTone.ok,
+                ),
+                const Spacer(),
+                Text('临时库 ${(_v6['stagingCount'] as num?)?.round() ?? 0} 条', style: TextStyle(color: colors.textTertiary, fontSize: 11)),
+              ],
+            ),
+            if (activeDec.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  color: const Color(0x184CA87A),
+                  border: Border.all(color: const Color(0x554CA87A)),
+                ),
+                child: Text(
+                  '当下动作：【${activeDec['category']}】${activeDec['task']}${'${activeDec['blocker'] ?? ''}'.isNotEmpty ? '（卡点：${activeDec['blocker']}）' : ''}',
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, height: 1.4),
+                ),
+              ),
+            ],
+            if (cadence['active'] == true && cadAnchor.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  color: const Color(0x1EC5A059),
+                  border: Border.all(color: const Color(0x66E8CF82)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '⏱️ 5m 知识节拍第 ${cadence['round'] ?? 1} 轮 · 知识锚点：${cadAnchor['claim'] ?? ''}',
+                      style: const TextStyle(color: Color(0xFFE8CF82), fontSize: 12, fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 3),
+                    Text('${cadAnchor['question'] ?? ''}', style: const TextStyle(fontSize: 12, height: 1.35)),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: _declareCategories.map((c) {
+                final picked = _declareCat == c;
+                return ChoiceChip(
+                  label: Text(c, style: const TextStyle(fontSize: 11.5)),
+                  selected: picked,
+                  onSelected: (_) => setState(() => _declareCat = c),
+                );
+              }).toList(),
+            ),
+            if (suggestedAnchors.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: suggestedAnchors.take(3).map((a) {
+                  final claim = '${a['claim'] ?? ''}';
+                  return ActionChip(
+                    avatar: const Icon(Icons.bolt, size: 14),
+                    label: Text('1键填入：${claim.length > 18 ? '${claim.substring(0, 18)}…' : claim}', style: const TextStyle(fontSize: 11)),
+                    onPressed: () => setState(() {
+                      _declareTaskCtrl.text = claim;
+                    }),
+                  );
+                }).toList(),
+              ),
+            ],
+            const SizedBox(height: 8),
+            TextField(
+              key: const ValueKey('v6-declare-task-input'),
+              controller: _declareTaskCtrl,
+              decoration: InputDecoration(
+                isDense: true,
+                labelText: _declareCat == '休息回血' ? '休息说明（选填）' : '必须说明具体在做什么（至少4字，拒收空词）*',
+                hintText: '例：做粉笔判断推理削弱论证15题，卡在另有他因辨析',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _declareBlockerCtrl,
+              decoration: const InputDecoration(
+                isDense: true,
+                labelText: '当下卡点/想跟两条鱼交代的事（选填，直入临时数据库）',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: CheckboxListTile(
+                    value: _declareBindCadence,
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('同步开启知识绑定 5m 节拍', style: TextStyle(fontSize: 12)),
+                    onChanged: (v) => setState(() => _declareBindCadence = v == true),
+                  ),
+                ),
+                FilledButton.icon(
+                  key: const ValueKey('v6-declare-submit-btn'),
+                  onPressed: _busy ? null : () => unawaited(_submitDeclaration()),
+                  icon: const Icon(Icons.lock_clock, size: 16),
+                  label: const Text('纳入体系'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
       _v6Card(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -701,8 +888,10 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
               children: [
                 _hwLamp('音频通话态', sigAudio),
                 _hwLamp('麦克风采集', sigMic),
-                _hwLamp('VoIP/助手语音流', sigVoice),
-                _hwLamp('虚拟共享副屏', sigVDisplay),
+                _hwLamp('语音通话麦', sigVoiceMic),
+                _hwLamp('VoIP语音流', sigVoice),
+                _hwLamp('摄像头占用', sigCamera),
+                _hwLamp('共享副屏', sigVDisplay),
               ],
             ),
           ],
@@ -1044,11 +1233,19 @@ class _V6CommandPageState extends State<V6CommandPage> with SingleTickerProvider
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Gemini Live 在线免锁常驻（Road B）'),
-              subtitle: Text('硬件麦/虚拟屏感知在线即放行免锁，断线 $_liveDropGraceSec 秒再接管'),
+              subtitle: Text('硬件麦/摄像头/虚拟屏感知在线即放行免锁，断线 $_liveDropGraceSec 秒再接管'),
               value: _liveKeepAliveUnlock,
               onChanged: (v) => setState(() => _liveKeepAliveUnlock = v),
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('调度器固执申报门（未申报必先交代）'),
+              subtitle: Text('未说明正在做什么且超过 $_stubbornCooldownMin 分钟时拦截要求填具体动作'),
+              value: _stubbornGateEnabled,
+              onChanged: (v) => setState(() => _stubbornGateEnabled = v),
+            ),
             const Divider(),
+            _numSlider('未申报拦问冷却（分钟）', _stubbornCooldownMin, 5, 120, (v) => setState(() => _stubbornCooldownMin = v)),
             _numSlider('亮屏微题冷却（分钟）', _wakeQuizCooldownMin, 1, 60, (v) => setState(() => _wakeQuizCooldownMin = v)),
             _numSlider('5分钟点火单局秒数', _fiveMinBoutSec, 120, 900, (v) => setState(() => _fiveMinBoutSec = v)),
             _numSlider('严锁宽限缓冲（秒）', _strictLockGraceSec, 15, 180, (v) => setState(() => _strictLockGraceSec = v)),

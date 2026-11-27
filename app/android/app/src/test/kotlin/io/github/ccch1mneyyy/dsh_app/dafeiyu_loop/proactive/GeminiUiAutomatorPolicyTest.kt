@@ -446,4 +446,22 @@ class GeminiUiAutomatorPolicyTest {
         )
         assertEquals(GeminiAutoState.CLICK_LIVE_BUTTON, slowReplyLive.nextState)
     }
+
+    @Test
+    fun directLiveSkipsPasteAndSendEvenWhenBriefIsPresent() {
+        val step = GeminiAutoStepPolicy.decide(
+            GeminiStepInput(
+                state = GeminiAutoState.WAIT_GEMINI_WINDOW,
+                round = 1,
+                elapsedMs = 450L,
+                frontPackage = geminiPkg,
+                emergencyActive = false,
+                brief = "【禁聊体系死命令】长简报走剪贴板兜底，不卡文字框",
+                directLive = true,
+                nodes = listOf(inputNode(), liveNode()),
+            ),
+        )
+        assertEquals(GeminiAutoState.CLICK_LIVE_BUTTON, step.nextState)
+        assertTrue(step.sawGeminiWindow)
+    }
 }

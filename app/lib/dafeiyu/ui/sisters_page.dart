@@ -46,6 +46,9 @@ class _SistersPageState extends State<SistersPage> {
   DepositView? _deposit;
   bool _loading = true;
   int _index = 0;
+  Map<String, dynamic>? _memoryXray;
+  List<Map<String, dynamic>> _stagingInbox = const [];
+  bool _xrayBusy = false;
 
   @override
   void initState() {
@@ -53,8 +56,99 @@ class _SistersPageState extends State<SistersPage> {
     unawaited(_refresh());
   }
 
+  Future<void> _loadMemoryXray({bool reroll = false}) async {
+    if (_xrayBusy && reroll) return;
+    if (reroll && mounted) setState(() => _xrayBusy = true);
+    try {
+      final res = await _channel
+          .v6Op({'action': 'memory_xray', if (reroll) 'reroll': true})
+          .catchError((_) => null);
+      if (!mounted || res == null || res['ok'] != true) return;
+      final explainRaw = res['explain'];
+      final stagingRaw = res['stagingInbox'];
+      setState(() {
+        if (explainRaw is Map) {
+          _memoryXray = {
+            for (final e in explainRaw.entries)
+              if (e.key is String) e.key as String: e.value,
+          };
+        }
+        if (stagingRaw is List) {
+          _stagingInbox = [
+            for (final x in stagingRaw)
+              if (x is Map)
+                {
+                  for (final e in x.entries)
+                    if (e.key is String) e.key as String: e.value,
+                },
+          ];
+        }
+      });
+    } finally {
+      if (reroll && mounted) setState(() => _xrayBusy = false);
+    }
+  }
+
+  Future<void> _openAddStagingDialog() async {
+    final ctrl = TextEditingController();
+    String cat = '随手记';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('写入临时数据库（不直接污染长期记忆）'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: cat,
+                decoration: const InputDecoration(labelText: '分类'),
+                items: const ['随手记', '刷题卡点', '申论素材', '人物/现实观察', '必须回答']
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                    .toList(),
+                onChanged: (v) => setDlg(() => cat = v ?? '随手记'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: ctrl,
+                maxLines: 3,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: '一句话事实/结论（>=4字）',
+                  hintText: '例：资料分析基期比重比较忘了先判 a-b 符号',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('存入临时库')),
+          ],
+        ),
+      ),
+    );
+    final txt = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok == true && txt.length >= 4) {
+      await _channel.v6Op({'action': 'staging_add', 'category': cat, 'text': txt});
+      await _loadMemoryXray();
+    }
+  }
+
+  Future<void> _promoteStagingItem(String id) async {
+    await _channel.v6Op({'action': 'staging_promote', 'id': id});
+    await _loadMemoryXray();
+  }
+
+  Future<void> _deleteStagingItem(String id) async {
+    await _channel.v6Op({'action': 'staging_delete', 'id': id});
+    await _loadMemoryXray();
+  }
+
   Future<void> _refresh() async {
     if (mounted) setState(() => _loading = true);
+    unawaited(_loadMemoryXray());
     try {
       final view = await _channel.sisters();
       final deposit = await _channel.deposit();
@@ -164,6 +258,12 @@ class _SistersPageState extends State<SistersPage> {
           const SizedBox(height: 12),
           _memoryCard(view),
           const SizedBox(height: 12),
+          if (_memoryXray != null) ...[
+            _memoryXrayCard(),
+            const SizedBox(height: 12),
+            _stagingDbCard(),
+            const SizedBox(height: 12),
+          ],
           _timelineCard(view),
           const SizedBox(height: 24),
           _auditCard(view.audit),
@@ -241,6 +341,94 @@ class _SistersPageState extends State<SistersPage> {
                   subtitle: note.subtitle.isEmpty ? null : note.subtitle,
                 ),
             ],
+    );
+  }
+
+  Widget _memoryXrayCard() {
+    final x = _memoryXray!;
+    final injected = (x['injectedTokens'] as num?)?.round() ?? 0;
+    final budget = (x['budgetTokens'] as num?)?.round() ?? 900;
+    final savedPct = (x['savedPct'] as num?)?.round() ?? 0;
+    final totalPool = (x['totalPoolCount'] as num?)?.round() ?? 0;
+    final precise = x['preciseHits'] is List ? (x['preciseHits'] as List) : const [];
+    final sparks = x['randomSparks'] is List ? (x['randomSparks'] as List) : const [];
+
+    return ListPageCard(
+      key: const ValueKey('sisters-memory-xray-card'),
+      title: '双鱼记忆 X 光 · 省 Token × 精准 + 随机',
+      children: [
+        ListPageRow(
+          icon: AppIcons.info,
+          iconColor: DshColors.of(context).info,
+          title: '本轮注入 $injected / $budget tokens（比全量省 $savedPct%）',
+          subtitle: '总记忆原料 $totalPool 条 · 层0稳定底稿 + 层1精准Top3 + 层2确定性15m随机抽卡',
+          subtitleMaxLines: 2,
+          value: _xrayBusy ? '重抽中' : '试抽下一轮',
+          onTap: _xrayBusy ? null : () => unawaited(_loadMemoryXray(reroll: true)),
+        ),
+        for (final p in precise)
+          if (p is Map)
+            ListPageRow(
+              icon: AppIcons.allowed,
+              iconColor: DshColors.of(context).success,
+              title: '🎯 精准命中：${p['text'] ?? ''}',
+              titleMaxLines: 2,
+              subtitle: p['reasons'] is List ? (p['reasons'] as List).join(' · ') : null,
+            ),
+        for (final r in sparks)
+          if (r is Map)
+            ListPageRow(
+              icon: AppIcons.automation,
+              iconColor: DshColors.of(context).warning,
+              title: '🎲 随机涌现：${r['text'] ?? ''}',
+              titleMaxLines: 2,
+              subtitle: '${r['reason'] ?? ''}',
+            ),
+      ],
+    );
+  }
+
+  Widget _stagingDbCard() {
+    final colors = DshColors.of(context);
+    return ListPageCard(
+      key: const ValueKey('sisters-staging-db-card'),
+      title: '临时信息投喂箱（临时数据库 · 先沉淀再转正）',
+      children: [
+        ListPageRow(
+          icon: AppIcons.edit,
+          iconColor: colors.info,
+          title: '+ 随手丢 1 条进临时数据库',
+          subtitle: '固执申报与 5m 验收产出会自动留痕于此；重要内容点右侧转入永久/Obsidian',
+          subtitleMaxLines: 2,
+          onTap: () => unawaited(_openAddStagingDialog()),
+        ),
+        if (_stagingInbox.isEmpty)
+          const ListPageRow(
+            icon: AppIcons.info,
+            title: '临时数据库暂无条目',
+            subtitle: '去 V6 调度器申报当下动作或跑一轮 5m 节拍就会自动沉淀到这里',
+            subtitleMaxLines: 2,
+          )
+        else
+          for (final item in _stagingInbox.take(5))
+            ListPageRow(
+              icon: item['promoted'] == true ? AppIcons.allowed : AppIcons.history,
+              iconColor: item['promoted'] == true ? colors.success : null,
+              title: '${item['text'] ?? ''}',
+              titleMaxLines: 2,
+              subtitle: '${item['category'] ?? '临时'} · ${item['promoted'] == true ? '已转正永久记忆' : '点击可转正进永久记忆 / 导出 Obsidian'}',
+              value: item['promoted'] == true ? '删除' : '转正',
+              onTap: () {
+                final id = '${item['id'] ?? ''}';
+                if (id.isEmpty) return;
+                if (item['promoted'] == true) {
+                  unawaited(_deleteStagingItem(id));
+                } else {
+                  unawaited(_promoteStagingItem(id));
+                }
+              },
+            ),
+      ],
     );
   }
 

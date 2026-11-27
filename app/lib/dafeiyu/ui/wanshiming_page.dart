@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../channels/proactive_state.dart';
 
-/// 低调内嵌于大肥鱼角落的《万世铭》博物馆级玄墨金箔长卷（GPU GLSL 着色 + 主线战役双向嵌套）。
+/// 低调内嵌于大肥鱼角落的《万世铭 · 长期核心路径星图》
+/// 极简 Claude 编辑风粗体排版 × 交互式星辰发光聚焦图谱，专为长期大节点设计，绝不混入日常流水账。
 class WanshimingPage extends StatefulWidget {
   const WanshimingPage({super.key, this.channel});
 
@@ -23,41 +23,65 @@ class WanshimingPage extends StatefulWidget {
 }
 
 class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProviderStateMixin {
-  static const _bg = Color(0xFF070709);
-  static const _surface = Color(0xCC111116);
-  static const _ink = Color(0xFFECE7DC);
-  static const _inkMuted = Color(0xFF969082);
-  static const _gold = Color(0xFFC5A059);
-  static const _goldBright = Color(0xFFE8CF82);
-  static const _sealRed = Color(0xFFA63429);
+  // Claude 极简暖墨羊皮纸深色编辑风
+  static const _bg = Color(0xFF141311);
+  static const _surface = Color(0xFF1E1C19);
+  static const _surfaceRaised = Color(0xFF26231F);
+  static const _ink = Color(0xFFF6F2EA);
+  static const _inkBody = Color(0xFFE4DDD1);
+  static const _inkMuted = Color(0xFFB3AA9B);
+  static const _accent = Color(0xFFE5A962);
+  static const _accentBright = Color(0xFFFFF2D6);
+  static const _border = Color(0x2AF6F2EA);
 
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
-  late final AnimationController _ambientCtrl = AnimationController(
+  late final AnimationController _pulseCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(seconds: 24),
+    duration: const Duration(seconds: 8),
   )..repeat();
 
-  ui.FragmentProgram? _goldProgram;
   bool _loading = true;
   bool _busy = false;
-  String _filter = '全部';
   List<Map<String, dynamic>> _steles = const [];
-  List<Map<String, dynamic>> _longGoals = const [];
-  List<Map<String, dynamic>> _mediumGoals = const [];
-  int _cadenceStreak = 0;
-  int _verifiedToday = 0;
-  Offset _lightPos = const Offset(0.5, 0.35);
+  String? _selectedId;
+  Offset? _hoverNorm;
   String? _statusMsg;
 
   static const _fallbackSteles = <Map<String, dynamic>>[
     {
-      'id': 'stele-seed-v6',
-      'title': '立《万世铭》与 V6 双模态主动调度总框架',
-      'date': '2026-11-26',
+      'id': 'stele-foundation-obsidian',
+      'title': '立实证底律：先查基准率，不作伪闭环',
+      'date': '2026-11-19',
+      'stage': '筑基 · 底律',
+      'epoch': '丙午 · 筑基',
+      'category': '悟道',
+      'body': '一切重大判断先查同类大样本基准率与个人真实行为分布，用反事实剃刀只抓唯一卡脖子变量；缺数据时先跑最小采数实验。',
+      'echo': '区分廉价口头表态与高成本真实投入，不靠堆砌道理自欺。',
+      'links': ['stele-v6-scheduler', 'stele-live-keeper'],
+      'starred': true,
+    },
+    {
+      'id': 'stele-live-keeper',
+      'title': 'Gemini Live 真通话与硬件感知常驻',
+      'date': '2026-11-24',
+      'stage': '破壁 · 外脑',
       'epoch': '丙午 · 破壁',
+      'category': '战役',
+      'body': '用音频通话态、语音麦、摄像头占用与投影副屏锁住 Live 在线状态；掉回文字页或秒退时自动语音破冰拉回。',
+      'echo': '高强度交互靠硬件真实态护航，而非脆弱文字提示。',
+      'links': ['stele-foundation-obsidian', 'stele-v6-scheduler'],
+      'starred': true,
+    },
+    {
+      'id': 'stele-v6-scheduler',
+      'title': '固执调度器与 5m 知识节拍大融合',
+      'date': '2026-11-27',
+      'stage': '锻刃 · 体系',
+      'epoch': '丙午 · 锻刃',
       'category': '纪元',
-      'body': '确立大肥鱼主动触发与 Gemini Live 硬件监测并行架构，告别改时间重编译，告别知识贫血重复念叨。',
-      'echo': '把高耗启动交给机器铺路，把清脆能量留给正事本身。',
+      'body': '日常刷题与行动必须先申报具体内容方纳入体系；长卷只留决定航向的长期星辰坐标，日常交由临时库消化。',
+      'echo': '日常归日常，长卷只留核心轨迹。',
+      'links': ['stele-foundation-obsidian', 'stele-live-keeper'],
       'starred': true,
     },
   ];
@@ -65,24 +89,19 @@ class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProvid
   @override
   void initState() {
     super.initState();
-    unawaited(_loadShader());
     unawaited(_refresh());
   }
 
   @override
   void dispose() {
-    _ambientCtrl.dispose();
+    _pulseCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _loadShader() async {
-    try {
-      final prog = await ui.FragmentProgram.fromAsset('shaders/fx/wanshiming_gold.frag');
-      if (mounted) setState(() => _goldProgram = prog);
-    } catch (_) {
-      // 无头测试或不支持运行时 Shader 的平台自动退回纯 Flutter 金箔粒子绘板
-    }
-  }
+  static Map<String, dynamic> _asMap(Map raw) => {
+        for (final e in raw.entries)
+          if (e.key is String) e.key as String: e.value,
+      };
 
   Future<void> _refresh() async {
     final res = await _channel.v6Op({'action': 'wanshiming_list'}).catchError((_) => null);
@@ -91,153 +110,218 @@ class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProvid
     final parsed = rawList is List
         ? [for (final x in rawList) if (x is Map) _asMap(x)]
         : _fallbackSteles;
-    final horizons = res?['horizons'] is Map ? _asMap(res!['horizons'] as Map) : const <String, dynamic>{};
-    final longRaw = horizons['long'];
-    final medRaw = horizons['medium'];
-    final cad = res?['cadence'] is Map ? _asMap(res!['cadence'] as Map) : const <String, dynamic>{};
+    final list = parsed.isEmpty ? _fallbackSteles : parsed;
     setState(() {
       _loading = false;
-      _steles = parsed.isEmpty ? _fallbackSteles : parsed;
-      _longGoals = longRaw is List ? [for (final g in longRaw) if (g is Map) _asMap(g)] : const [];
-      _mediumGoals = medRaw is List ? [for (final g in medRaw) if (g is Map) _asMap(g)] : const [];
-      _cadenceStreak = (res?['cadenceStreak'] as num?)?.round() ?? (cad['streak'] as num?)?.round() ?? 0;
-      _verifiedToday = (res?['verifiedToday'] as num?)?.round() ?? (cad['verifiedToday'] as num?)?.round() ?? 0;
+      _steles = list;
+      if (_selectedId == null || !list.any((s) => '${s['id'] ?? ''}' == _selectedId)) {
+        _selectedId = '${list.first['id'] ?? ''}';
+      }
     });
   }
 
-  static Map<String, dynamic> _asMap(Map raw) => {
-        for (final e in raw.entries)
-          if (e.key is String) e.key as String: e.value,
-      };
-
-  List<Map<String, dynamic>> get _allGoals => [
-        for (final g in _longGoals) {...g, '_scope': 'long', '_scopeLabel': '远期大势'},
-        for (final g in _mediumGoals) {...g, '_scope': 'medium', '_scopeLabel': '中期战役'},
-      ];
-
-  List<Map<String, dynamic>> get _filtered {
-    return _steles.where((s) {
-      if (_filter == '典藏') return s['starred'] == true;
-      if (_filter == '主线战役') return '${s['category'] ?? ''}' == '战役';
-      if (_filter != '全部') return '${s['category'] ?? ''}' == _filter;
-      return true;
-    }).toList();
+  int get _focusedIndex {
+    if (_steles.isEmpty) return -1;
+    final idx = _steles.indexWhere((s) => '${s['id'] ?? ''}' == _selectedId);
+    return idx >= 0 ? idx : 0;
   }
 
-  Future<void> _launchCadenceFromGoal(Map<String, dynamic> goal) async {
-    final title = '${goal['title'] ?? goal['name'] ?? '主线战役切片'}'.trim();
-    if (title.isEmpty) return;
-    setState(() => _busy = true);
-    try {
-      final res = await _channel.v6Op({
-        'action': 'cadence_start',
-        'target': title,
-        'goalId': '${goal['id'] ?? ''}',
-        'goalScope': '${goal['_scope'] ?? 'long'}',
-        'intervalSec': 300,
-      });
-      if (!mounted) return;
-      setState(() {
-        _statusMsg = res?['ok'] == true
-            ? '已用主线目标「$title」开启 5 分钟严验收局（到点锁+响铃）'
-            : '${res?['error'] ?? '启动 5 分钟严验收失败'}';
-      });
-    } finally {
-      if (mounted) setState(() => _busy = false);
+  Set<int> _neighborIndicesOf(int centerIdx) {
+    final result = <int>{};
+    if (centerIdx < 0 || centerIdx >= _steles.length) return result;
+    final center = _steles[centerIdx];
+    final centerId = '${center['id'] ?? ''}';
+    final explicitLinks = center['links'] is List
+        ? {for (final l in (center['links'] as List)) '$l'}
+        : const <String>{};
+
+    for (var i = 0; i < _steles.length; i++) {
+      if (i == centerIdx) continue;
+      final item = _steles[i];
+      final id = '${item['id'] ?? ''}';
+      final reverseLinks = item['links'] is List
+          ? {for (final l in (item['links'] as List)) '$l'}
+          : const <String>{};
+      if (explicitLinks.contains(id) ||
+          reverseLinks.contains(centerId) ||
+          (i - centerIdx).abs() == 1) {
+        result.add(i);
+      }
+    }
+    return result;
+  }
+
+  List<Offset> _computeStarPositions(Size size) {
+    final n = _steles.length;
+    if (n == 0) return const [];
+    if (n == 1) return [Offset(size.width * 0.5, size.height * 0.5)];
+
+    final padX = math.min(58.0, size.width * 0.16);
+    final padY = 44.0;
+    final usableW = math.max(80.0, size.width - padX * 2);
+    final usableH = math.max(80.0, size.height - padY * 2);
+
+    // 柔和 S 形星座路径分布，确保节点舒展且视觉聚焦流畅
+    return List<Offset>.generate(n, (i) {
+      final t = i / (n - 1);
+      final waveX = 0.5 + 0.34 * math.sin(t * math.pi * 1.45 + 0.45);
+      final x = padX + usableW * waveX.clamp(0.08, 0.92);
+      final y = padY + usableH * t;
+      return Offset(x, y);
+    });
+  }
+
+  void _selectIndex(int idx) {
+    if (idx < 0 || idx >= _steles.length) return;
+    final nextId = '${_steles[idx]['id'] ?? ''}';
+    if (nextId.isNotEmpty && nextId != _selectedId) {
+      setState(() => _selectedId = nextId);
     }
   }
 
   Future<void> _openEditor([Map<String, dynamic>? existing]) async {
     final titleCtrl = TextEditingController(text: '${existing?['title'] ?? ''}');
-    final epochCtrl = TextEditingController(text: '${existing?['epoch'] ?? ''}');
+    final stageCtrl = TextEditingController(text: '${existing?['stage'] ?? existing?['epoch'] ?? '破局 · 主干'}');
     final bodyCtrl = TextEditingController(text: '${existing?['body'] ?? ''}');
     final echoCtrl = TextEditingController(text: '${existing?['echo'] ?? ''}');
-    String cat = '${existing?['category'] ?? '抉择'}';
-    bool starred = existing?['starred'] == true;
+    String cat = '${existing?['category'] ?? '战役'}';
+    bool starred = existing?['starred'] != false;
+    final existingId = '${existing?['id'] ?? ''}';
+    final selectedLinks = <String>{
+      if (existing?['links'] is List)
+        for (final l in (existing!['links'] as List))
+          if ('$l'.isNotEmpty && '$l' != existingId) '$l',
+    };
+
+    final otherSteles = _steles.where((s) => '${s['id'] ?? ''}' != existingId).toList();
 
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF101015),
+      backgroundColor: _surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-        side: BorderSide(color: Color(0x55C5A059)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        side: BorderSide(color: _border),
       ),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) => Padding(
-          padding: EdgeInsets.fromLTRB(20, 18, 20, MediaQuery.viewInsetsOf(ctx).bottom + 22),
+          padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.viewInsetsOf(ctx).bottom + 24),
           child: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  existing == null ? '刻下一铭' : '修订碑铭',
-                  style: const TextStyle(color: _goldBright, fontSize: 18, fontWeight: FontWeight.w600, letterSpacing: 3),
+                  existing == null ? '刻录长期路径节点' : '修订星图节点',
+                  style: const TextStyle(color: _accentBright, fontSize: 19, fontWeight: FontWeight.w800),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 6),
+                const Text(
+                  '仅存决定长期航向的重要节点与心法，日常刷题记录请留在姐妹临时库中。',
+                  style: TextStyle(color: _inkMuted, fontSize: 12.5, height: 1.45),
+                ),
+                const SizedBox(height: 16),
                 TextField(
                   controller: titleCtrl,
-                  style: const TextStyle(color: _ink),
-                  decoration: _inputDeco('铭题 *'),
+                  style: const TextStyle(color: _ink, fontWeight: FontWeight.w700, fontSize: 15),
+                  decoration: _inputDeco('节点标题 *'),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
                       child: DropdownButtonFormField<String>(
-                        initialValue: const ['抉择', '战役', '悟道', '纪元'].contains(cat) ? cat : '抉择',
-                        dropdownColor: const Color(0xFF14141A),
-                        style: const TextStyle(color: _ink),
-                        decoration: _inputDeco('类别'),
-                        items: const ['抉择', '战役', '悟道', '纪元']
+                        initialValue: const ['抉择', '战役', '悟道', '纪元'].contains(cat) ? cat : '战役',
+                        dropdownColor: _surfaceRaised,
+                        style: const TextStyle(color: _ink, fontWeight: FontWeight.w600),
+                        decoration: _inputDeco('节点性质'),
+                        items: const ['战役', '抉择', '悟道', '纪元']
                             .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                             .toList(),
-                        onChanged: (v) => setSheetState(() => cat = v ?? '抉择'),
+                        onChanged: (v) => setSheetState(() => cat = v ?? '战役'),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: TextField(
-                        controller: epochCtrl,
-                        style: const TextStyle(color: _ink),
-                        decoration: _inputDeco('纪元署号（如 丙午·破局）'),
+                        controller: stageCtrl,
+                        style: const TextStyle(color: _ink, fontWeight: FontWeight.w600),
+                        decoration: _inputDeco('所属星域/阶段'),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 TextField(
                   controller: bodyCtrl,
                   maxLines: 4,
-                  style: const TextStyle(color: _ink),
-                  decoration: _inputDeco('举措与铭文 *'),
+                  style: const TextStyle(color: _inkBody, height: 1.5),
+                  decoration: _inputDeco('核心路径与判断准则 *'),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 TextField(
                   controller: echoCtrl,
                   maxLines: 2,
-                  style: const TextStyle(color: _ink),
-                  decoration: _inputDeco('代价与回响（选填）'),
+                  style: const TextStyle(color: _inkBody),
+                  decoration: _inputDeco('代价与航向回响（选填）'),
                 ),
+                if (otherSteles.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  const Text(
+                    '关联周围星点（点击主星后将一并点亮）',
+                    style: TextStyle(color: _inkMuted, fontSize: 12.5, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: otherSteles.map((other) {
+                      final oid = '${other['id'] ?? ''}';
+                      final active = selectedLinks.contains(oid);
+                      return FilterChip(
+                        label: Text(
+                          '${other['title'] ?? ''}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: active ? _accentBright : _inkMuted,
+                            fontSize: 12,
+                            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                          ),
+                        ),
+                        selected: active,
+                        selectedColor: const Color(0x38E5A962),
+                        backgroundColor: _bg,
+                        side: BorderSide(color: active ? _accent : _border),
+                        onSelected: (v) => setSheetState(() {
+                          if (v) {
+                            selectedLinks.add(oid);
+                          } else {
+                            selectedLinks.remove(oid);
+                          }
+                        }),
+                      );
+                    }).toList(),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 CheckboxListTile(
                   value: starred,
-                  activeColor: _sealRed,
+                  activeColor: _accent,
+                  checkColor: _bg,
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('加盖朱砂印 · 列为典藏', style: TextStyle(color: _inkMuted, fontSize: 13)),
+                  title: const Text('列为一等明星（星图中更亮）', style: TextStyle(color: _inkMuted, fontSize: 13)),
                   onChanged: (v) => setSheetState(() => starred = v == true),
                 ),
                 const SizedBox(height: 8),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0x33C5A059),
-                    foregroundColor: _goldBright,
-                    side: const BorderSide(color: _gold),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _accent,
+                    foregroundColor: _bg,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                   onPressed: () => Navigator.of(ctx).pop(true),
-                  child: const Text('落铭刻石', style: TextStyle(letterSpacing: 3, fontWeight: FontWeight.w600)),
+                  child: const Text('点亮并保存节点', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
                 ),
               ],
             ),
@@ -250,673 +334,520 @@ class _WanshimingPageState extends State<WanshimingPage> with SingleTickerProvid
       setState(() => _busy = true);
       final res = await _channel.v6Op({
         'action': 'wanshiming_save',
-        if (existing?['id'] != null) 'id': existing!['id'],
+        if (existingId.isNotEmpty) 'id': existingId,
         'title': titleCtrl.text.trim(),
         'category': cat,
-        'epoch': epochCtrl.text.trim(),
+        'stage': stageCtrl.text.trim(),
+        'epoch': stageCtrl.text.trim(),
         'body': bodyCtrl.text.trim(),
         'echo': echoCtrl.text.trim(),
+        'links': selectedLinks.toList(),
         'starred': starred,
       });
       await _refresh();
       if (mounted) {
+        final savedItem = res?['item'];
         setState(() {
           _busy = false;
-          _statusMsg = res?['ok'] == true ? '已落铭刻石' : '已仅暂存视图（引擎未连）';
+          if (savedItem is Map && savedItem['id'] != null) {
+            _selectedId = '${savedItem['id']}';
+          }
+          _statusMsg = res?['ok'] == true ? '✓ 已点亮长期路径星点' : '已暂存（大肥鱼引擎未连）';
         });
       }
     }
     titleCtrl.dispose();
-    epochCtrl.dispose();
+    stageCtrl.dispose();
     bodyCtrl.dispose();
     echoCtrl.dispose();
   }
 
-  Future<void> _openRubbing(Map<String, dynamic> stele) async {
-    bool confirmDelete = false;
-    await showDialog<void>(
+  Future<void> _deleteNode(Map<String, dynamic> node) async {
+    final confirm = await showDialog<bool>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => Dialog(
-          backgroundColor: const Color(0xFF0E0E13),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: const BorderSide(color: Color(0x66C5A059)),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _surface,
+        title: const Text('移除此星图节点？', style: TextStyle(color: _ink, fontWeight: FontWeight.w800)),
+        content: Text('将移出「${node['title'] ?? ''}」，不会影响临时数据库记录。', style: const TextStyle(color: _inkMuted)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('保留')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFA63429)),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('移除'),
           ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        '${stele['date'] ?? ''} · ${stele['category'] ?? '抉择'}',
-                        style: const TextStyle(color: _gold, fontSize: 12, fontFamily: 'monospace', letterSpacing: 1.1),
-                      ),
-                      const Spacer(),
-                      if (stele['starred'] == true) _SealChop(size: 24),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    '${stele['title'] ?? ''}',
-                    style: const TextStyle(color: _ink, fontSize: 19, fontWeight: FontWeight.w600, height: 1.4),
-                  ),
-                  if ('${stele['epoch'] ?? ''}'.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text('署号：${stele['epoch']}', style: const TextStyle(color: _goldBright, fontSize: 12)),
-                  ],
-                  const SizedBox(height: 14),
-                  Text(
-                    '${stele['body'] ?? ''}',
-                    style: const TextStyle(color: Color(0xFFD6CFC2), fontSize: 14.5, height: 1.85),
-                  ),
-                  if ('${stele['echo'] ?? ''}'.isNotEmpty) ...[
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: const BoxDecoration(
-                        color: Color(0x14C5A059),
-                        border: Border(left: BorderSide(color: _gold, width: 2)),
-                      ),
-                      child: Text(
-                        '代价与回响：${stele['echo']}',
-                        style: const TextStyle(color: _inkMuted, fontSize: 13, height: 1.65),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 18),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      OutlinedButton(
-                        style: OutlinedButton.styleFrom(foregroundColor: _goldBright, side: const BorderSide(color: Color(0x55C5A059))),
-                        onPressed: () {
-                          Navigator.of(ctx).pop();
-                          unawaited(_openEditor(stele));
-                        },
-                        child: const Text('修订'),
-                      ),
-                      OutlinedButton(
-                        style: OutlinedButton.styleFrom(foregroundColor: _gold, side: const BorderSide(color: Color(0x44C5A059))),
-                        onPressed: () {
-                          final md = '## ${stele['title']}\n\n- 日期：`${stele['date']}`\n\n${stele['body']}\n';
-                          unawaited(Clipboard.setData(ClipboardData(text: md)));
-                          setState(() => _statusMsg = '已复制 Markdown 拓文');
-                          Navigator.of(ctx).pop();
-                        },
-                        child: const Text('复制拓文'),
-                      ),
-                      TextButton(
-                        style: TextButton.styleFrom(
-                          foregroundColor: confirmDelete ? const Color(0xFFFFB4AB) : const Color(0xFFD06B5E),
-                          backgroundColor: confirmDelete ? _sealRed : Colors.transparent,
-                        ),
-                        onPressed: () async {
-                          if (!confirmDelete) {
-                            setDlg(() => confirmDelete = true);
-                            return;
-                          }
-                          await _channel.v6Op({'action': 'wanshiming_delete', 'id': stele['id']});
-                          if (ctx.mounted) Navigator.of(ctx).pop();
-                          await _refresh();
-                        },
-                        child: Text(confirmDelete ? '再点确认凿毁' : '凿毁'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
+        ],
       ),
     );
+    if (confirm == true) {
+      await _channel.v6Op({'action': 'wanshiming_delete', 'id': node['id']});
+      await _refresh();
+      if (mounted) setState(() => _statusMsg = '已移除节点');
+    }
   }
 
   static InputDecoration _inputDeco(String label) => InputDecoration(
         labelText: label,
         labelStyle: const TextStyle(color: _inkMuted, fontSize: 13),
+        filled: true,
+        fillColor: _bg,
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0x38C5A059)),
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: _border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: _goldBright),
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: _accent, width: 1.5),
         ),
       );
 
   @override
   Widget build(BuildContext context) {
-    final items = _filtered;
-    final goals = _allGoals;
-    final starredCount = _steles.where((s) => s['starred'] == true).length;
+    final focusIdx = _focusedIndex;
+    final focused = focusIdx >= 0 && focusIdx < _steles.length ? _steles[focusIdx] : null;
+    final neighbors = focusIdx >= 0 ? _neighborIndicesOf(focusIdx) : const <int>{};
 
     return Theme(
       data: ThemeData.dark().copyWith(scaffoldBackgroundColor: _bg),
       child: Scaffold(
         backgroundColor: _bg,
         appBar: AppBar(
-          backgroundColor: const Color(0xCC070709),
-          foregroundColor: _goldBright,
+          backgroundColor: _bg,
+          foregroundColor: _ink,
           elevation: 0,
+          titleSpacing: 4,
           title: const Row(
             children: [
               _SealChop(size: 24),
               SizedBox(width: 10),
-              Text('万世铭', style: TextStyle(color: _ink, letterSpacing: 4, fontSize: 18, fontWeight: FontWeight.w600)),
+              Text(
+                '万世铭',
+                style: TextStyle(color: _ink, letterSpacing: 2.5, fontSize: 20, fontWeight: FontWeight.w800),
+              ),
             ],
           ),
           actions: [
-            TextButton.icon(
-              onPressed: _busy ? null : () => unawaited(_openEditor()),
-              icon: const Icon(Icons.edit_note, color: _goldBright, size: 18),
-              label: const Text('刻下一铭', style: TextStyle(color: _goldBright, letterSpacing: 1.5)),
+            Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: FilledButton.icon(
+                key: const ValueKey('wsm-add-node-btn'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: _surfaceRaised,
+                  foregroundColor: _accentBright,
+                  side: const BorderSide(color: _border),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                ),
+                onPressed: _busy ? null : () => unawaited(_openEditor()),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('刻录节点', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+              ),
             ),
-            const SizedBox(width: 6),
           ],
         ),
-        body: Listener(
-          behavior: HitTestBehavior.translucent,
-          onPointerHover: (e) => _updateLight(context, e.position),
-          onPointerMove: (e) => _updateLight(context, e.position),
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: AnimatedBuilder(
-                    animation: _ambientCtrl,
-                    builder: (_, _) => CustomPaint(
-                      painter: _ObsidianGoldCanvasPainter(
-                        program: _goldProgram,
-                        phase: _ambientCtrl.value * 24.0,
-                        pulse: _cadenceStreak > 0 ? 1.0 : 0.35,
-                        light: _lightPos,
+        body: _loading
+            ? const Center(child: CircularProgressIndicator(color: _accent))
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(18, 6, 18, 48),
+                children: [
+                  const Text(
+                    '长期核心路径星图',
+                    style: TextStyle(color: _ink, fontSize: 24, fontWeight: FontWeight.w800, height: 1.25),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '不记日常流水账 · 靠近每颗星点即可点亮微光，点中主星即可聚焦周围关联轨迹',
+                    style: TextStyle(color: _inkMuted, fontSize: 13.5, fontWeight: FontWeight.w500, height: 1.5),
+                  ),
+                  if (_statusMsg != null) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _surface,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0x55E5A962)),
+                      ),
+                      child: Text(_statusMsg!, style: const TextStyle(color: _accentBright, fontSize: 13, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  _buildConstellationCanvas(focusIdx, neighbors),
+                  const SizedBox(height: 18),
+                  if (focused != null) _buildFocusEditorialCard(focused, neighbors),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildConstellationCanvas(int focusIdx, Set<int> neighbors) {
+    return Container(
+      key: const ValueKey('wsm-star-map'),
+      height: 290,
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: LayoutBuilder(
+        builder: (ctx, constraints) {
+          final size = Size(constraints.maxWidth, constraints.maxHeight);
+          final positions = _computeStarPositions(size);
+
+          return MouseRegion(
+            onHover: (e) => setState(() => _hoverNorm = Offset(
+              (e.localPosition.dx / size.width).clamp(0.0, 1.0),
+              (e.localPosition.dy / size.height).clamp(0.0, 1.0),
+            )),
+            onExit: (_) => setState(() => _hoverNorm = null),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanUpdate: (d) => setState(() => _hoverNorm = Offset(
+                (d.localPosition.dx / size.width).clamp(0.0, 1.0),
+                (d.localPosition.dy / size.height).clamp(0.0, 1.0),
+              )),
+              onPanEnd: (_) => setState(() => _hoverNorm = null),
+              onTapUp: (d) {
+                if (positions.isEmpty) return;
+                int? hit;
+                double bestD2 = 52 * 52;
+                for (var i = 0; i < positions.length; i++) {
+                  final d2 = (positions[i] - d.localPosition).distanceSquared;
+                  if (d2 < bestD2) {
+                    bestD2 = d2;
+                    hit = i;
+                  }
+                }
+                if (hit != null) _selectIndex(hit);
+              },
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: AnimatedBuilder(
+                      animation: _pulseCtrl,
+                      builder: (_, _) => CustomPaint(
+                        painter: _LuminousStarMapPainter(
+                          steles: _steles,
+                          positions: positions,
+                          focusIdx: focusIdx,
+                          neighbors: neighbors,
+                          hoverNorm: _hoverNorm,
+                          phase: _pulseCtrl.value * math.pi * 2,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
-              ListView(
-                padding: const EdgeInsets.fromLTRB(18, 12, 18, 56),
-                children: [
-                  _TactileGoldCard(
-                    accentGlow: true,
-                    child: _buildHeroPlaque(starredCount, goals.length),
-                  ),
-                if (_statusMsg != null) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0x22C5A059),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0x55C5A059)),
-                    ),
-                    child: Text(_statusMsg!, style: const TextStyle(color: _goldBright, fontSize: 12)),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: ['全部', '主线战役', '抉择', '战役', '悟道', '纪元', '典藏'].map((cat) {
-                    final active = _filter == cat;
-                    return ChoiceChip(
-                      key: ValueKey('wsm-filter-$cat'),
-                      label: Text(cat),
-                      selected: active,
-                      selectedColor: const Color(0x38C5A059),
-                      backgroundColor: _surface,
-                      side: BorderSide(color: active ? _goldBright : const Color(0x2EC5A059)),
-                      labelStyle: TextStyle(color: active ? _goldBright : _inkMuted, fontSize: 12),
-                      onSelected: (_) => setState(() => _filter = cat),
-                    );
-                  }).toList(),
-                ),
-                if ((_filter == '全部' || _filter == '主线战役') && goals.isNotEmpty) ...[
-                  const SizedBox(height: 18),
-                  _buildHorizonsNestingDeck(goals),
-                ],
-                const SizedBox(height: 20),
-                if (_loading)
-                  const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator(color: _gold)))
-                else if (items.isEmpty)
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: _surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0x2CC5A059)),
-                    ),
-                    child: const Text('此分类暂无碑刻，可点右上角「刻下一铭」，或连续通过 3 轮 5 分钟严验收自动铭刻。',
-                        style: TextStyle(color: _inkMuted, fontSize: 13, height: 1.6)),
-                  )
-                else
-                  for (var i = 0; i < items.length; i++)
-                    _buildTimelineStele(items[i], isLast: i == items.length - 1),
+                  // 清晰可读的粗体星标锚点（点击任意标牌同样聚焦该星与周边节点）
+                  for (var i = 0; i < positions.length; i++)
+                    _buildStarLabelChip(i, positions[i], size, i == focusIdx, neighbors.contains(i)),
                 ],
               ),
-            ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildStarLabelChip(int idx, Offset pos, Size size, bool isFocus, bool isNeighbor) {
+    final s = _steles[idx];
+    final rightSide = pos.dx < size.width * 0.56;
+    final left = rightSide ? pos.dx + 16 : math.max(8.0, pos.dx - 164);
+    final top = (pos.dy - 14).clamp(8.0, size.height - 34);
+    final dimmed = !isFocus && !isNeighbor;
+
+    return Positioned(
+      left: left,
+      top: top,
+      child: GestureDetector(
+        key: ValueKey('wsm-star-node-${s['id'] ?? idx}'),
+        onTap: () => _selectIndex(idx),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 156),
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: isFocus
+                ? const Color(0xE82A251D)
+                : (isNeighbor ? const Color(0xCC221F1A) : const Color(0x99181613)),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isFocus
+                  ? _accentBright
+                  : (isNeighbor ? const Color(0x88E5A962) : const Color(0x22F6F2EA)),
+              width: isFocus ? 1.3 : 1.0,
+            ),
+          ),
+          child: Text(
+            '${s['title'] ?? ''}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: isFocus ? _accentBright : (dimmed ? const Color(0x70B3AA9B) : _ink),
+              fontSize: isFocus ? 12.5 : 11.5,
+              fontWeight: isFocus ? FontWeight.w800 : (isNeighbor ? FontWeight.w700 : FontWeight.w500),
+            ),
           ),
         ),
       ),
     );
   }
 
-  void _updateLight(BuildContext ctx, Offset globalPos) {
-    final sz = MediaQuery.sizeOf(ctx);
-    if (sz.isEmpty) return;
-    final next = Offset(
-      (globalPos.dx / sz.width).clamp(0.05, 0.95),
-      (globalPos.dy / sz.height).clamp(0.05, 0.95),
-    );
-    if ((next - _lightPos).distanceSquared > 0.0004 && mounted) {
-      setState(() => _lightPos = next);
-    }
-  }
+  Widget _buildFocusEditorialCard(Map<String, dynamic> s, Set<int> neighbors) {
+    final stage = '${s['stage'] ?? s['epoch'] ?? s['category'] ?? '长期路径'}';
+    final date = '${s['date'] ?? ''}'.trim();
+    final echo = '${s['echo'] ?? ''}'.trim();
 
-  Widget _buildHeroPlaque(int starredCount, int goalsCount) {
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xD9151319), Color(0xE609090C)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0x55C5A059)),
-        boxShadow: const [BoxShadow(color: Color(0x44000000), blurRadius: 18, offset: Offset(0, 8))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Text(
-                'CHRONICLE OF TEN THOUSAND EPOCHS',
-                style: TextStyle(color: _gold, fontSize: 10, letterSpacing: 2.6, fontWeight: FontWeight.w600),
-              ),
-              Spacer(),
-              _SealChop(size: 20),
-            ],
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            '记长路所行之真举，每逢 3 轮 5 分钟严验收自动刻石，直挂远期主线。',
-            style: TextStyle(color: _ink, fontSize: 13.5, letterSpacing: 0.6, height: 1.55),
-          ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              _statBox('已铭石碑', '${_steles.length}'),
-              _statBox('5m连胜', '$_cadenceStreak 轮', note: '今日 $_verifiedToday 轮'),
-              _statBox('主线目标', '$goalsCount'),
-              _statBox('朱印典藏', '$starredCount'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHorizonsNestingDeck(List<Map<String, dynamic>> goals) {
-    return Container(
-      key: const ValueKey('wsm-horizons-deck'),
-      padding: const EdgeInsets.all(16),
+      key: const ValueKey('wsm-focus-card'),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: _surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0x44C5A059)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0x55E5A962)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.flag_outlined, color: _goldBright, size: 16),
-              SizedBox(width: 8),
               Text(
-                '主线战役双向嵌套 · 一键压入 5 分钟严验收',
-                style: TextStyle(color: _goldBright, fontSize: 12.5, fontWeight: FontWeight.w600, letterSpacing: 0.8),
+                date.isNotEmpty ? '$stage  ·  $date' : stage,
+                style: const TextStyle(
+                  color: _accent,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
               ),
+              const Spacer(),
+              if (s['starred'] == true) const Icon(Icons.auto_awesome, color: _accentBright, size: 17),
             ],
           ),
           const SizedBox(height: 12),
-          for (final g in goals.take(4)) ...[
+          Text(
+            '${s['title'] ?? ''}',
+            style: const TextStyle(
+              color: _ink,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              height: 1.34,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            '${s['body'] ?? ''}',
+            style: const TextStyle(
+              color: _inkBody,
+              fontSize: 15.5,
+              fontWeight: FontWeight.w500,
+              height: 1.78,
+            ),
+          ),
+          if (echo.isNotEmpty) ...[
+            const SizedBox(height: 16),
             Container(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              margin: const EdgeInsets.only(bottom: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0A0A0E),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0x33C5A059)),
+              padding: const EdgeInsets.fromLTRB(14, 10, 12, 10),
+              decoration: const BoxDecoration(
+                color: _bg,
+                border: Border(left: BorderSide(color: _accent, width: 3)),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0x22C5A059),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          '${g['_scopeLabel'] ?? '战役'}',
-                          style: const TextStyle(color: _goldBright, fontSize: 10),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '${g['title'] ?? g['name'] ?? '未命名目标'}',
-                          style: const TextStyle(color: _ink, fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: ((g['progress'] as num?)?.toDouble() ?? 0.25).clamp(0.05, 1.0),
-                      minHeight: 4,
-                      backgroundColor: const Color(0xFF1D1B18),
-                      valueColor: const AlwaysStoppedAnimation<Color>(_goldBright),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: OutlinedButton.icon(
-                      key: ValueKey('wsm-launch-goal-${g['id'] ?? g['title'] ?? ''}'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: _goldBright,
-                        side: const BorderSide(color: Color(0x66C5A059)),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        minimumSize: const Size(0, 32),
-                      ),
-                      onPressed: _busy ? null : () => unawaited(_launchCadenceFromGoal(g)),
-                      icon: const Icon(Icons.bolt, size: 15),
-                      label: const Text('以此开启 5m 严验收', style: TextStyle(fontSize: 11.5)),
-                    ),
-                  ),
-                ],
+              child: Text(
+                echo,
+                style: const TextStyle(color: _inkMuted, fontSize: 14, fontWeight: FontWeight.w600, height: 1.6),
               ),
             ),
           ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTimelineStele(Map<String, dynamic> s, {required bool isLast}) {
-    final starred = s['starred'] == true;
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            width: 24,
-            child: Column(
+          if (neighbors.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            const Divider(color: _border, height: 1),
+            const SizedBox(height: 14),
+            const Text(
+              '周围关联星点（点击切换聚焦）',
+              style: TextStyle(color: _inkMuted, fontSize: 12.5, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              key: const ValueKey('wsm-neighbors-strip'),
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                const SizedBox(height: 18),
-                Transform.rotate(
-                  angle: math.pi / 4,
-                  child: Container(
-                    width: starred ? 11 : 8,
-                    height: starred ? 11 : 8,
-                    decoration: BoxDecoration(
-                      color: starred ? _sealRed : _gold,
-                      border: Border.all(color: _goldBright, width: 1.2),
+                for (final ni in neighbors)
+                  ActionChip(
+                    key: ValueKey('wsm-neighbor-$ni'),
+                    avatar: const Icon(Icons.star_rounded, size: 16, color: _accentBright),
+                    backgroundColor: _surfaceRaised,
+                    side: const BorderSide(color: Color(0x66E5A962)),
+                    label: Text(
+                      '${_steles[ni]['title'] ?? ''}',
+                      style: const TextStyle(color: _ink, fontSize: 12.5, fontWeight: FontWeight.w700),
                     ),
-                  ),
-                ),
-                if (!isLast)
-                  Expanded(
-                    child: Container(
-                      width: 1.2,
-                      margin: const EdgeInsets.only(top: 6),
-                      color: const Color(0x38C5A059),
-                    ),
+                    onPressed: () => _selectIndex(ni),
                   ),
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: _TactileGoldCard(
-                accentGlow: starred,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: () => unawaited(_openRubbing(s)),
-                  child: Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: _surface,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: starred ? const Color(0x77C5A059) : const Color(0x2CC5A059),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            '${s['date'] ?? ''}',
-                            style: const TextStyle(color: _gold, fontSize: 11.5, fontFamily: 'monospace'),
-                          ),
-                          if ('${s['epoch'] ?? ''}'.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: Text(
-                                '· ${s['epoch']}',
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _inkMuted, fontSize: 11.5),
-                              ),
-                            ),
-                          ],
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: const Color(0x1AC5A059),
-                              borderRadius: BorderRadius.circular(3),
-                              border: Border.all(color: const Color(0x33C5A059)),
-                            ),
-                            child: Text('${s['category'] ?? '抉择'}', style: const TextStyle(color: _gold, fontSize: 10.5)),
-                          ),
-                          if (starred) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                              decoration: BoxDecoration(color: _sealRed, borderRadius: BorderRadius.circular(2)),
-                              child: const Text('典藏', style: TextStyle(color: _ink, fontSize: 10)),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        '${s['title'] ?? ''}',
-                        style: const TextStyle(color: _ink, fontSize: 16.5, fontWeight: FontWeight.w600, height: 1.4),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${s['body'] ?? ''}',
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _inkMuted, fontSize: 13.5, height: 1.7),
-                      ),
-                    ],
-                  ),
+          ],
+          const SizedBox(height: 18),
+          const Divider(color: _border, height: 1),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _accentBright,
+                  side: const BorderSide(color: _border),
                 ),
+                onPressed: _busy ? null : () => unawaited(_openEditor(s)),
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('修订节点', style: TextStyle(fontWeight: FontWeight.w700)),
               ),
-            ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statBox(String label, String val, {String? note}) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xAA0C0C10),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0x38C5A059)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(val, style: const TextStyle(color: _goldBright, fontSize: 16, fontWeight: FontWeight.w700)),
-                const SizedBox(width: 6),
-                Text(label, style: const TextStyle(color: _inkMuted, fontSize: 11)),
-              ],
-            ),
-            if (note != null) ...[
-              const SizedBox(height: 2),
-              Text(note, style: const TextStyle(color: _gold, fontSize: 10)),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _inkMuted,
+                  side: const BorderSide(color: _border),
+                ),
+                onPressed: () {
+                  final md = '## ${s['title']}\n\n- 阶段：`$stage`\n\n${s['body']}\n';
+                  unawaited(Clipboard.setData(ClipboardData(text: md)));
+                  setState(() => _statusMsg = '✓ 已复制节点 Markdown');
+                },
+                icon: const Icon(Icons.copy_all_outlined, size: 16),
+                label: const Text('复制原文', style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(foregroundColor: const Color(0xFFE07A6B)),
+                onPressed: _busy ? null : () => unawaited(_deleteNode(s)),
+                child: const Text('移除', style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
             ],
-          ],
-        ),
-      );
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _ObsidianGoldCanvasPainter extends CustomPainter {
-  _ObsidianGoldCanvasPainter({
-    required this.program,
+class _LuminousStarMapPainter extends CustomPainter {
+  _LuminousStarMapPainter({
+    required this.steles,
+    required this.positions,
+    required this.focusIdx,
+    required this.neighbors,
+    required this.hoverNorm,
     required this.phase,
-    required this.pulse,
-    required this.light,
   });
 
-  final ui.FragmentProgram? program;
+  final List<Map<String, dynamic>> steles;
+  final List<Offset> positions;
+  final int focusIdx;
+  final Set<int> neighbors;
+  final Offset? hoverNorm;
   final double phase;
-  final double pulse;
-  final Offset light;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.isEmpty) return;
-    final prog = program;
-    if (prog != null) {
-      final shader = prog.fragmentShader();
-      shader.setFloat(0, size.width);
-      shader.setFloat(1, size.height);
-      shader.setFloat(2, phase);
-      shader.setFloat(3, pulse);
-      shader.setFloat(4, light.dx);
-      shader.setFloat(5, light.dy);
-      canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
-      return;
-    }
-
-    // 纯 Flutter 细腻玄墨金箔降级渲染
+    // 1. Subtle deep warm radial starfield backdrop
     final bgPaint = Paint()
-      ..shader = const LinearGradient(
-        colors: [Color(0xFF0A090C), Color(0xFF060608), Color(0xFF0D0B09)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
+      ..shader = const RadialGradient(
+        center: Alignment(0.0, -0.15),
+        radius: 1.05,
+        colors: [Color(0xFF231F19), Color(0xFF151412)],
       ).createShader(Offset.zero & size);
     canvas.drawRect(Offset.zero & size, bgPaint);
 
-    final veinPaint = Paint()
-      ..color = const Color(0x1AC5A059)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
-    final path = Path()
-      ..moveTo(0, size.height * 0.22)
-      ..quadraticBezierTo(size.width * 0.5, size.height * (0.14 + 0.04 * math.sin(phase)), size.width, size.height * 0.28);
-    canvas.drawPath(path, veinPaint);
+    // Subtle decorative distant micro-stars
+    final dustPaint = Paint()..color = const Color(0x28FFF2D6);
+    for (var i = 0; i < 22; i++) {
+      final dx = ((i * 73 + 19) % 100) / 100.0 * size.width;
+      final dy = ((i * 41 + 11) % 100) / 100.0 * size.height;
+      canvas.drawCircle(Offset(dx, dy), (i % 3 == 0) ? 1.2 : 0.7, dustPaint);
+    }
+
+    if (positions.isEmpty) return;
+
+    // 2. Draw spine connections + focus-neighbor radiant arcs
+    final spinePaint = Paint()
+      ..color = const Color(0x22E5A962)
+      ..strokeWidth = 1.1
+      ..style = PaintingStyle.stroke;
+    for (var i = 0; i < positions.length - 1; i++) {
+      canvas.drawLine(positions[i], positions[i + 1], spinePaint);
+    }
+
+    if (focusIdx >= 0 && focusIdx < positions.length) {
+      final center = positions[focusIdx];
+      for (final ni in neighbors) {
+        if (ni < 0 || ni >= positions.length) continue;
+        final np = positions[ni];
+        final glowLine = Paint()
+          ..shader = LinearGradient(
+            colors: const [Color(0xEEFFF2D6), Color(0x99E5A962)],
+          ).createShader(Rect.fromPoints(center, np))
+          ..strokeWidth = 2.0
+          ..style = PaintingStyle.stroke;
+        canvas.drawLine(center, np, glowLine);
+      }
+    }
+
+    // 3. Draw luminous stars with proximity & focus brightness
+    final hoverPx = hoverNorm != null
+        ? Offset(hoverNorm!.dx * size.width, hoverNorm!.dy * size.height)
+        : null;
+
+    for (var i = 0; i < positions.length; i++) {
+      final pos = positions[i];
+      final isFocus = i == focusIdx;
+      final isNeighbor = neighbors.contains(i);
+      final isStarred = steles[i]['starred'] == true;
+
+      double proximity = 0.0;
+      if (hoverPx != null) {
+        final dist = (hoverPx - pos).distance;
+        proximity = (1.0 - (dist / 120.0)).clamp(0.0, 1.0);
+      }
+
+      final breath = 0.5 + 0.5 * math.sin(phase + i * 1.1);
+      final baseBright = isFocus
+          ? 1.0
+          : (isNeighbor ? 0.72 : math.max(0.24, proximity * 0.92));
+
+      final haloRadius = isFocus
+          ? 34.0 + breath * 5.0
+          : (isNeighbor ? 20.0 + breath * 2.5 : (13.0 + proximity * 18.0));
+
+      final haloPaint = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            const Color(0xFFFFF2D6).withValues(alpha: (0.72 * baseBright).clamp(0.0, 1.0)),
+            const Color(0xFFE5A962).withValues(alpha: (0.34 * baseBright).clamp(0.0, 1.0)),
+            Colors.transparent,
+          ],
+          stops: const [0.0, 0.35, 1.0],
+        ).createShader(Rect.fromCircle(center: pos, radius: haloRadius));
+      canvas.drawCircle(pos, haloRadius, haloPaint);
+
+      final coreRadius = isFocus ? 6.2 : (isNeighbor ? 4.4 : (isStarred ? 3.4 : 2.8));
+      canvas.drawCircle(
+        pos,
+        coreRadius,
+        Paint()
+          ..color = (isFocus || isNeighbor)
+              ? const Color(0xFFFFF6E4)
+              : const Color(0xFFE5A962).withValues(alpha: math.max(0.45, proximity)),
+      );
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _ObsidianGoldCanvasPainter oldDelegate) =>
-      oldDelegate.program != program ||
-      oldDelegate.phase != phase ||
-      oldDelegate.pulse != pulse ||
-      oldDelegate.light != light;
+  bool shouldRepaint(covariant _LuminousStarMapPainter oldDelegate) =>
+      oldDelegate.steles != steles ||
+      oldDelegate.focusIdx != focusIdx ||
+      oldDelegate.hoverNorm != hoverNorm ||
+      oldDelegate.phase != phase;
 }
 
-/// 轻量 3D 视差金箔交互容器（手势滑动实时微倾 + 金箔镜面流光，松手回正）。
-class _TactileGoldCard extends StatefulWidget {
-  const _TactileGoldCard({required this.child, this.accentGlow = false});
-
-  final Widget child;
-  final bool accentGlow;
-
-  @override
-  State<_TactileGoldCard> createState() => _TactileGoldCardState();
-}
-
-class _TactileGoldCardState extends State<_TactileGoldCard> {
-  Offset _tilt = Offset.zero;
-
-  void _onHoverOrDrag(Offset localPos, Size sz) {
-    if (sz.isEmpty) return;
-    final nx = ((localPos.dx / sz.width) - 0.5).clamp(-0.5, 0.5);
-    final ny = ((localPos.dy / sz.height) - 0.5).clamp(-0.5, 0.5);
-    setState(() => _tilt = Offset(nx, ny));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final rotY = _tilt.dx * 0.07;
-    final rotX = -_tilt.dy * 0.06;
-    return Listener(
-      onPointerMove: (e) {
-        final boxSize = context.size;
-        _onHoverOrDrag(e.localPosition, boxSize == null || boxSize.isEmpty ? const Size(320, 160) : boxSize);
-      },
-      onPointerUp: (_) => setState(() => _tilt = Offset.zero),
-      onPointerCancel: (_) => setState(() => _tilt = Offset.zero),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
-        transformAlignment: Alignment.center,
-        transform: Matrix4.identity()
-          ..setEntry(3, 2, 0.0011)
-          ..rotateX(rotX)
-          ..rotateY(rotY),
-        foregroundDecoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          gradient: LinearGradient(
-            begin: Alignment(-0.8 + _tilt.dx, -0.8 + _tilt.dy),
-            end: Alignment(0.8 + _tilt.dx, 0.8 + _tilt.dy),
-            colors: [
-              Colors.transparent,
-              Color(widget.accentGlow ? 0x1EE8CF82 : 0x0FE8CF82),
-              Colors.transparent,
-            ],
-          ),
-        ),
-        child: widget.child,
-      ),
-    );
-  }
-}
-
-/// 精雕双线朱砂篆印。
 class _SealChop extends StatelessWidget {
   const _SealChop({this.size = 24});
 
@@ -924,47 +855,29 @@ class _SealChop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      size: Size.square(size),
-      painter: _SealChopPainter(),
-      child: SizedBox.square(
-        dimension: size,
-        child: Center(
-          child: Text(
-            '铭',
-            style: TextStyle(
-              color: const Color(0xFFFAF4EA),
-              fontSize: size * 0.5,
-              fontWeight: FontWeight.w800,
-              height: 1.0,
-            ),
-          ),
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: const Color(0xFFA63429),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0x99FAF4EA), width: 0.9),
+      ),
+      child: Text(
+        '铭',
+        style: TextStyle(
+          color: const Color(0xFFFAF4EA),
+          fontSize: size * 0.52,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
         ),
       ),
     );
   }
 }
 
-class _SealChopPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(3.5));
-    canvas.drawRRect(rrect, Paint()..color = const Color(0xFFA63429));
-    canvas.drawRRect(
-      rrect.deflate(1.5),
-      Paint()
-        ..color = const Color(0x99FAF4EA)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.8,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-/// 放在主工作台 / 长期战略角落的低调玄墨朱砂「铭」字小方印入口。
+/// 放在主工作台 / 长期战略角落的低调「铭」字星图入口按钮。
 class WanshimingCornerSealButton extends StatelessWidget {
   const WanshimingCornerSealButton({super.key, this.channel});
 
@@ -973,7 +886,7 @@ class WanshimingCornerSealButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: '万世铭 · 长周期举措碑林',
+      message: '万世铭 · 长期核心路径星图',
       child: InkWell(
         key: const ValueKey('wanshiming-corner-seal'),
         borderRadius: BorderRadius.circular(6),
@@ -984,10 +897,9 @@ class WanshimingCornerSealButton extends StatelessWidget {
           alignment: Alignment.center,
           margin: const EdgeInsets.symmetric(horizontal: 4),
           decoration: BoxDecoration(
-            color: const Color(0xFF141114),
+            color: const Color(0xFF1E1C19),
             borderRadius: BorderRadius.circular(5),
-            border: Border.all(color: const Color(0x99C5A059), width: 1),
-            boxShadow: const [BoxShadow(color: Color(0x33A63429), blurRadius: 6)],
+            border: Border.all(color: const Color(0x99E5A962), width: 1),
           ),
           child: const _SealChop(size: 22),
         ),

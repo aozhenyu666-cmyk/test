@@ -73,6 +73,7 @@ data class GeminiStepInput(
     val requestScreenShare: Boolean = false,
     val liveClicked: Boolean = false,
     val shareWaitRounds: Int = 0,
+    val directLive: Boolean = false,
 )
 
 data class GeminiStepOutput(
@@ -524,7 +525,7 @@ object GeminiAutoStepPolicy {
                         )
                     }
                 }
-                val next = if (input.brief.isBlank()) {
+                val next = if (input.directLive || input.brief.isBlank()) {
                     GeminiAutoState.CLICK_LIVE_BUTTON
                 } else {
                     GeminiAutoState.PASTE_AND_SEND_BRIEF
@@ -793,11 +794,12 @@ object GeminiUiAutomator {
         app: Context,
         brief: String,
         requestScreenShare: Boolean = false,
+        directLive: Boolean = false,
         onResult: ((ok: Boolean, reason: String) -> Unit)? = null,
     ) {
         val appCtx = app.applicationContext ?: app
         val startTask = Runnable {
-            startOnMain(appCtx, brief, requestScreenShare, onResult)
+            startOnMain(appCtx, brief, requestScreenShare, directLive, onResult)
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
             startTask.run()
@@ -810,6 +812,7 @@ object GeminiUiAutomator {
         app: Context,
         brief: String,
         requestScreenShare: Boolean,
+        directLive: Boolean,
         onResult: ((ok: Boolean, reason: String) -> Unit)?,
     ) {
         cancel()
@@ -868,6 +871,7 @@ object GeminiUiAutomator {
                             requestScreenShare = requestScreenShare,
                             liveClicked = liveClicked,
                             shareWaitRounds = shareWaitRounds,
+                            directLive = directLive,
                         ),
                     )
                     round++

@@ -273,18 +273,24 @@ import { evalBehaviorRadar } from './behavior_radar.js'
 import { cleanBankUnlockState } from './bank_unlock.js'
 import { SUPER_SPARK_DEFAULTS, generateSuperSpark } from './super_spark.js'
 import { LIVE_CORE_DEFAULTS, buildLiveCoreAtlas, buildLiveCoreBrief, buildSisterFeed, evaluateLiveCore, formatLiveCoreHistory } from './live_core.js'
+import { routeHybridMemory } from './memory_router.js'
 import {
+  addStagingEntry as v6AddStagingEntry,
   applyAppeal as v6ApplyAppeal,
   buildFlawChallenge as v6BuildFlawChallenge,
   buildInterrogationPrompt as v6BuildInterrogationPrompt,
   buildNineGrid as v6BuildNineGrid,
   computePoolTelemetry as v6ComputePoolTelemetry,
+  declareCurrentActivity as v6DeclareCurrentActivity,
   deleteStele as v6DeleteStele,
+  deleteStagingEntry as v6DeleteStagingEntry,
+  evaluateStubbornGate as v6EvaluateStubbornGate,
   evaluateWindowMode as v6EvaluateWindowMode,
   harvestKnowledgeSources as v6HarvestKnowledgeSources,
   ingestClipboardOrText as v6IngestClipboardOrText,
   loadV6State,
   normalizeFramework as v6NormalizeFramework,
+  promoteStagingEntry as v6PromoteStagingEntry,
   recordMicroQuizAnswer as v6RecordMicroQuizAnswer,
   rollNineGridTrigger as v6RollNineGridTrigger,
   sampleKnowledgeItems as v6SampleKnowledgeItems,
@@ -5689,6 +5695,8 @@ export function apply(ctx) {
           keyMap.set(rKey, [{ id, norm }])
         }
         const src = String(it.source || 'obsidian').slice(0, 60)
+        const tagArr = Array.isArray(it.tags) && it.tags.length ? it.tags : [src]
+        const sceneArr = Array.isArray(it.sceneTags) ? it.sceneTags : []
         const rowMap = {
           id,
           scope: 'global',
@@ -5697,9 +5705,9 @@ export function apply(ctx) {
           importance: Number(it.importance) || 2,
           pinned: it.pinned ? 1 : 0,
           key: rKey,
-          tags: JSON.stringify([src]),
+          tags: JSON.stringify(tagArr),
           triggers: '[]',
-          scene_tags: '[]',
+          scene_tags: JSON.stringify(sceneArr),
           created_at: now,
           updated_at: now,
           last_hit_at: 0,
@@ -7567,18 +7575,33 @@ export function apply(ctx) {
         const v6St = loadV6(nowMs)
         const win = v6EvaluateWindowMode(v6St.framework, zoneMinuteOfDay(nowMs, tzActive))
         const cadTick = v6TickCadence(v6St.cadence, nowMs, dayString(nowMs, tzActive))
-        const samples = v6SampleKnowledgeItems(v6St.pool, v6St.framework, { count: 2, now: nowMs, markShown: false, seed: livingSlot })
+        const routed = runMemoryRouterNow(v6St, {
+          now: nowMs,
+          role,
+          queryText: [
+            v6St.activeDeclaration?.task,
+            cadTick.cadence?.target,
+            live?.protocol?.name,
+            lastPhone?.label,
+          ].filter(Boolean).join(' '),
+          sceneTags: [
+            lastPhone?.fun ? 'scene:fun' : (lastPhone?.work ? 'scene:work' : ''),
+            v6St.activeDeclaration?.category ? `cat:${v6St.activeDeclaration.category}` : '',
+          ].filter(Boolean),
+        })
         const lines = []
         if (win?.mode === 'desk_moat') {
           lines.push('【桌前清脆护城河激活】严禁和用户讨论修改系统架构/参数/方法论，立刻拉回眼前真题或 5m 切片！')
         }
+        if (v6St.activeDeclaration && Number(v6St.activeDeclaration.expiresAt) > nowMs) {
+          lines.push(`当前已申报动作：【${v6St.activeDeclaration.category}】${v6St.activeDeclaration.task}`)
+        }
         if (cadTick.cadence?.active) {
-          lines.push(`当前 5m 严验收靶子（第${cadTick.cadence.round}轮 · 连胜${cadTick.cadence.streak}）：${cadTick.cadence.target}`)
+          const kClaim = cadTick.cadence.knowledgeAnchor?.claim ? `｜知识锚点：${cadTick.cadence.knowledgeAnchor.claim}` : ''
+          lines.push(`当前 5m 严验收靶子（第${cadTick.cadence.round}轮 · 连胜${cadTick.cadence.streak}）：${cadTick.cadence.target}${kClaim}`)
         }
-        for (const s of samples) {
-          lines.push(`- 知识海弹药[${s.source}]：${String(s.claim || '').slice(0, 72)}`)
-        }
-        return lines.join('\n').slice(0, 240)
+        if (routed?.promptBlock) lines.push(routed.promptBlock)
+        return lines.join('\n').slice(0, 900)
       } catch {
         return ''
       }
@@ -10788,6 +10811,65 @@ export function apply(ctx) {
     writeJson(stateFile('v6-state.json'), { ...next, v: 1 })
   }
 
+  function runMemoryRouterNow(v6St, { now = Date.now(), role = 'companion', queryText = '', sceneTags = [], reroll = false } = {}) {
+    const db = openMemoryDb(memoryPath())
+    let sqliteFacts = []
+    let episodes = []
+    let lorebookHits = []
+    if (db) {
+      try {
+        const rows = db.prepare(
+          "SELECT id, text, kind, importance, pinned, updated_at, tags FROM facts WHERE status = 'active' ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT 80",
+        ).all()
+        sqliteFacts = rows.map((r) => ({
+          id: r.id,
+          text: r.text,
+          kind: r.kind || 'fact',
+          importance: Number(r.importance) || 2,
+          pinned: Number(r.pinned) === 1,
+          at: Number(r.updated_at) || 0,
+          tags: (() => { try { return JSON.parse(String(r.tags || '[]')) } catch { return [] } })(),
+        }))
+        const eps = db.prepare('SELECT id, text, at FROM episodes WHERE at >= ? ORDER BY at DESC LIMIT 10').all(now - 7 * 86_400_000)
+        episodes = eps.map((e) => ({ id: e.id || `ep-${e.at}`, text: e.text, at: Number(e.at) || 0, kind: 'episode' }))
+      } catch {
+      } finally {
+        try { db.close() } catch {}
+      }
+    }
+    const seed = reroll ? ((now % 1_000_000) + Math.floor(Math.random() * 9973)) : undefined
+    const res = routeHybridMemory({
+      personaSummary: role === 'strategist'
+        ? '鲸澜：冷静站在半步外抓结构漏洞、反敷衍与长线方向，严禁空话。'
+        : '鱼丸：贴身在场不端架子，先看人精力与卡点再给 1 个具体出口，严禁当老妈子催办。',
+      stagingItems: Array.isArray(v6St?.stagingInbox) ? v6St.stagingInbox : [],
+      sqliteFacts,
+      lorebookHits,
+      episodes,
+      knowledgePool: Array.isArray(v6St?.pool) ? v6St.pool : [],
+      queryText,
+      sceneTags,
+      recentDrawnIds: Array.isArray(v6St?.recentMemoryDrawIds) ? v6St.recentMemoryDrawIds : [],
+      seed,
+    }, now)
+    return res
+  }
+
+  function exportStagingToKb(item, now = Date.now()) {
+    try {
+      const targetKb = kbDir(notesDir(), home())
+      if (!targetKb) return false
+      mkdirSync(targetKb, { recursive: true })
+      const day = new Date(now).toISOString().slice(0, 10)
+      const file = join(targetKb, '临时记录.md')
+      const prefix = existsSync(file) ? '' : '# 大肥鱼临时数据库导出（供 Obsidian 审阅）\n\n'
+      appendFileSync(file, `${prefix}- \`${day}\` [${item.category || '临时'}] ${item.text}\n`, 'utf8')
+      return true
+    } catch {
+      return false
+    }
+  }
+
   let lastV6HarvestAt = 0
   function maybeHarvestV6Pool(st, now = Date.now(), horizons = null) {
     if (!st || now - lastV6HarvestAt < 10 * 60_000) return false
@@ -10882,6 +10964,12 @@ export function apply(ctx) {
         st.cadence = cadTick.cadence
         saveV6(st)
       }
+      const stubbornGate = v6EvaluateStubbornGate(st, {
+        now,
+        runningBout: Boolean(runningBoutNow()),
+        energyTier: loadLiveCoreState()?.energyTier || 'L2',
+      })
+      const activeDec = stubbornGate.activeDeclaration || null
       return {
         v: 1,
         ok: true,
@@ -10897,14 +10985,24 @@ export function apply(ctx) {
         cadence: cadTick.cadence,
         cadenceRemainingSec: cadTick.remainingSec,
         cadenceOverdueSec: cadTick.overdueSec,
+        activeDeclaration: activeDec,
+        stubbornGate,
+        stagingCount: Array.isArray(st.stagingInbox) ? st.stagingInbox.length : 0,
+        memorySummary: st.lastMemoryExplain || null,
       }
     }
 
     if (action === 'cadence_start') {
+      const liveNow = Boolean(lastPhone?.geminiVoiceActive || lastPhone?.liveSignals?.liveOnline)
       st.cadence = v6StartCadence(st.cadence, st.framework, {
         target: b.target,
         goalId: b.goalId,
         goalScope: b.goalScope,
+        category: b.category,
+        declarationId: b.declarationId,
+        knowledgeAnchor: b.knowledgeAnchor,
+        liveLinked: liveNow,
+        pool: st.pool,
         intervalSec: b.intervalSec,
         allowApps: b.allowApps,
         now,
@@ -10918,6 +11016,7 @@ export function apply(ctx) {
         round: st.cadence.round,
         target: st.cadence.target,
         intervalSec: st.cadence.intervalSec,
+        anchorId: st.cadence.knowledgeAnchor?.id || '',
       })
       return {
         v: 1,
@@ -10929,17 +11028,37 @@ export function apply(ctx) {
     }
 
     if (action === 'cadence_verify') {
+      const subText = String(b.submission || '')
       const res = v6SubmitCadenceDelivery(st.cadence, st.steles, st.framework, {
-        submission: String(b.submission || ''),
+        submission: subText,
         quizPassed: b.quizPassed === true,
         nextTarget: b.nextTarget ? String(b.nextTarget) : '',
         continueNext: b.continueNext !== false,
+        pool: st.pool,
         now,
         day,
       })
       if (res.ok) {
         st.cadence = res.cadence
         st.steles = res.steles
+        if (res.stagingEntry) {
+          st.stagingInbox = [res.stagingEntry, ...(Array.isArray(st.stagingInbox) ? st.stagingInbox : [])].slice(0, 120)
+        }
+        if (subText.trim().length >= 10) {
+          const ing = v6IngestClipboardOrText(st.pool, subText, { source: 'bout', now })
+          if (ing.added.length > 0) st.pool = ing.pool
+          try {
+            insertFactsIntoMemoryDb([{
+              text: `[5m实操交付] ${subText.trim()}`,
+              source: 'v6-cadence',
+              kind: 'fact',
+              importance: 3,
+              pinned: 0,
+              tags: ['5m交付'],
+              sceneTags: ['cadence'],
+            }], now)
+          } catch {}
+        }
         saveV6(st)
         presetWatchUntil = now + 2 * 60_000
         record({
@@ -10954,8 +11073,156 @@ export function apply(ctx) {
         v: 1,
         ...res,
         stelesCount: st.steles.length,
+        stagingCount: Array.isArray(st.stagingInbox) ? st.stagingInbox.length : 0,
         cadenceRemainingSec: res.cadence?.active ? res.cadence.intervalSec : 0,
         cadenceOverdueSec: 0,
+      }
+    }
+
+    if (action === 'declare_activity') {
+      const dec = v6DeclareCurrentActivity(st, b, now, day)
+      if (!dec.ok) {
+        return { v: 1, ok: false, error: dec.error || '申报校验未通过' }
+      }
+      st.activeDeclaration = dec.declaration
+      st.stagingInbox = dec.stagingInbox
+      st.lastStubbornPromptAt = now
+      if (dec.cadenceOpts) {
+        const liveNow = Boolean(lastPhone?.geminiVoiceActive || lastPhone?.liveSignals?.liveOnline)
+        st.cadence = v6StartCadence(st.cadence, st.framework, {
+          ...dec.cadenceOpts,
+          liveLinked: liveNow,
+        })
+        presetWatchUntil = now + 2 * 60_000
+      }
+      try {
+        insertFactsIntoMemoryDb([{
+          text: dec.stagingEntry.text,
+          source: 'stubborn-declare',
+          kind: 'fact',
+          importance: 3,
+          pinned: 0,
+          tags: dec.stagingEntry.tags,
+          sceneTags: ['staging', 'declaration'],
+        }], now)
+      } catch {}
+      saveV6(st)
+      record({
+        state: 'v6-declare-activity',
+        at: now,
+        category: dec.declaration.category,
+        task: dec.declaration.task,
+        cadenceArmed: Boolean(dec.cadenceOpts),
+      })
+      return {
+        v: 1,
+        ok: true,
+        activeDeclaration: dec.declaration,
+        stagingEntry: dec.stagingEntry,
+        stagingInbox: st.stagingInbox.slice(0, 15),
+        cadence: st.cadence,
+        cadenceArmed: Boolean(dec.cadenceOpts),
+        message: dec.cadenceOpts
+          ? `已纳入体系并写入临时库：${dec.declaration.task}（同步启动知识绑定 5m 节拍）`
+          : `已纳入体系并写入临时库：${dec.declaration.task}`,
+      }
+    }
+
+    if (action === 'staging_list') {
+      return {
+        v: 1,
+        ok: true,
+        stagingInbox: (Array.isArray(st.stagingInbox) ? st.stagingInbox : []).slice(0, 40),
+        totalCount: Array.isArray(st.stagingInbox) ? st.stagingInbox.length : 0,
+      }
+    }
+
+    if (action === 'staging_add') {
+      const added = v6AddStagingEntry(st.stagingInbox, b, now)
+      if (!added.ok) return { v: 1, ok: false, error: added.error }
+      st.stagingInbox = added.stagingInbox
+      saveV6(st)
+      try {
+        insertFactsIntoMemoryDb([{
+          text: added.item.text,
+          source: 'staging-inbox',
+          kind: 'fact',
+          importance: 3,
+          pinned: 0,
+          tags: added.item.tags,
+          sceneTags: ['staging'],
+        }], now)
+      } catch {}
+      record({ state: 'v6-staging-add', at: now, category: added.item.category })
+      return { v: 1, ok: true, item: added.item, stagingInbox: st.stagingInbox.slice(0, 20) }
+    }
+
+    if (action === 'staging_promote') {
+      const prom = v6PromoteStagingEntry(st.stagingInbox, String(b.id || ''))
+      if (!prom.ok || !prom.item) return { v: 1, ok: false, error: '未找到对应临时记录' }
+      st.stagingInbox = prom.stagingInbox
+      saveV6(st)
+      let dbImported = 0
+      try {
+        const resDb = insertFactsIntoMemoryDb([{
+          text: prom.item.text,
+          source: 'staging-promoted',
+          kind: 'fact',
+          importance: 4,
+          pinned: 1,
+          tags: ['重要记忆', prom.item.category],
+          sceneTags: ['promoted'],
+        }], now)
+        dbImported = resDb.imported || 0
+      } catch {}
+      const kbWritten = exportStagingToKb(prom.item, now)
+      return {
+        v: 1,
+        ok: true,
+        item: prom.item,
+        stagingInbox: st.stagingInbox.slice(0, 20),
+        dbImported,
+        kbWritten,
+      }
+    }
+
+    if (action === 'staging_delete') {
+      const del = v6DeleteStagingEntry(st.stagingInbox, String(b.id || ''))
+      if (del.ok) {
+        st.stagingInbox = del.stagingInbox
+        saveV6(st)
+      }
+      return {
+        v: 1,
+        ok: del.ok,
+        stagingInbox: (st.stagingInbox || []).slice(0, 20),
+      }
+    }
+
+    if (action === 'memory_xray') {
+      const reroll = b.reroll === true
+      const routed = runMemoryRouterNow(st, {
+        now,
+        role: String(b.role || 'companion'),
+        queryText: String(b.queryText || st.activeDeclaration?.task || st.cadence?.target || ''),
+        sceneTags: [
+          st.activeDeclaration?.category ? `cat:${st.activeDeclaration.category}` : '',
+        ].filter(Boolean),
+        reroll,
+      })
+      st.lastMemoryExplain = routed.explain
+      if (reroll && Array.isArray(routed.drawnIds) && routed.drawnIds.length) {
+        st.recentMemoryDrawIds = [...new Set([...(st.recentMemoryDrawIds || []), ...routed.drawnIds])].slice(-24)
+      }
+      saveV6(st)
+      return {
+        v: 1,
+        ok: true,
+        explain: routed.explain,
+        promptPreview: routed.promptBlock,
+        stagingInbox: (Array.isArray(st.stagingInbox) ? st.stagingInbox : []).slice(0, 15),
+        activeDeclaration: st.activeDeclaration || null,
+        framework: st.framework,
       }
     }
 
@@ -13618,6 +13885,7 @@ export function apply(ctx) {
           earlyBailout: liveCoreRes.reason === 'live_early_bailout',
           preferVoice: true,
           autoClickLive: liveCoreRes.autoClickLive !== false,
+          directLive: Boolean(liveCoreRes.directLive),
           requestScreenShare: Boolean(liveCoreRes.requestScreenShare),
           force: Boolean(liveCoreRes.urgent || liveCoreRes.nextState?.alwaysOnLive),
           voiceLine: liveCoreRes.voiceLine,
@@ -13657,15 +13925,28 @@ export function apply(ctx) {
         const win = v6EvaluateWindowMode(s.framework, modNowTop)
         const cadTick = v6CadenceTick || v6TickCadence(s.cadence, now, dayKeyV6)
         const dueAlert = Boolean(cadTick.dueAlert && !emergencyActive && !nightLocked)
-        const alertVoiceLine = dueAlert
-          ? `五分钟严格验收时间到！第${cadTick.cadence.round}轮目标：${cadTick.cadence.target}。请立即交付具体结论，或者连答三题解锁。`
+        const anchorAsk = cadTick.cadence?.knowledgeAnchor?.question
+          ? `顺带答一嘴：${cadTick.cadence.knowledgeAnchor.question}`
           : ''
+        const alertVoiceLine = dueAlert
+          ? `五分钟知识节拍时间到！第${cadTick.cadence.round}轮目标：${cadTick.cadence.target}。${anchorAsk}请交出具体结论，或连答三题解锁。`
+          : ''
+        const stubbornGate = v6EvaluateStubbornGate(s, {
+          now,
+          runningBout: Boolean(runningBoutNow()),
+          emergencyActive,
+          nightLocked: Boolean(nightLocked),
+          energyTier: liveCoreOut?.energyTier || 'L2',
+        })
         return {
           framework: s.framework,
           windowMode: win,
           poolActive: tel.active,
           liveUnlockedNow: liveKeepAliveUnlockNow,
           liveKeeperDropLock,
+          activeDeclaration: stubbornGate.activeDeclaration || null,
+          stubbornGate,
+          stagingCount: Array.isArray(s.stagingInbox) ? s.stagingInbox.length : 0,
           cadence: cadTick.cadence,
           cadenceRemainingSec: cadTick.remainingSec,
           cadenceOverdueSec: cadTick.overdueSec,
@@ -13674,6 +13955,7 @@ export function apply(ctx) {
                 triggered: true,
                 round: cadTick.cadence.round,
                 target: cadTick.cadence.target,
+                knowledgeAnchor: cadTick.cadence.knowledgeAnchor || null,
                 overdueSec: cadTick.overdueSec,
                 voiceLine: alertVoiceLine,
               }

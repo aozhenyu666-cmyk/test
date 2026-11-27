@@ -524,3 +524,32 @@ test('LiveCore-9: 四部门自动路由 + 红旗防骗预警 + 1 键全自动托
     tc.mock.timers.reset()
   }
 })
+
+test('LiveCore-10: alwaysOnLive 严守下在 Gemini 文字页掉出语音超 15s 自动直拉 Live (directLive=true)', () => {
+  const t0 = Date.UTC(2026, 10, 27, 7, 20, 0)
+  const droppedInText = evaluateLiveCore({
+    now: t0,
+    state: {
+      enabled: true,
+      alwaysOnLive: true,
+      keeperStrict: true,
+      lastVoiceActiveAt: t0 - 18_000,
+      lastVoiceDropHandledAt: 0,
+      lastIgniteAt: t0 - 25_000,
+      receiptSinceLastLive: false,
+    },
+    inGemini: true,
+    phone: {
+      app: 'com.google.android.apps.bard',
+      label: 'Gemini',
+      minutes: 2,
+      screenOn: true,
+      geminiVoiceActive: false,
+      lastLiveDurationSec: 22,
+    },
+  })
+  assert.equal(droppedInText.triggered, true)
+  assert.equal(droppedInText.reason, 'live_early_bailout')
+  assert.equal(droppedInText.directLive, true)
+  assert.equal(droppedInText.payload.directLive, true)
+})

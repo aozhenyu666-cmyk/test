@@ -55,9 +55,19 @@ void main() {
               'dailyAppealLimit': 3,
               'dailyPhysioRestLimit': 1,
               'poolCooldownHours': 18,
+              'stubbornGateEnabled': true,
+              'stubbornCooldownMin': 20,
               'fragmentedWindows': ['11:30-13:30'],
               'deskMoatWindows': ['09:00-11:30'],
             },
+            'stubbornGate': {
+              'required': true,
+              'reason': 'missing_declaration',
+              'suggestedAnchors': [
+                {'id': 'k1', 'claim': '判断推理削弱论证之另有他因 15 题', 'source': 'quiz'},
+              ],
+            },
+            'stagingCount': 2,
           };
         }
         if (call.method == 'v6LiveSignals') {
@@ -89,61 +99,57 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('V6 双模态调度中枢'), findsWidgets);
+    expect(find.byKey(const ValueKey('v6-stubborn-checkin-card')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Live 在线免锁常驻中'),
+      180,
+      scrollable: find.byType(Scrollable).last,
+    );
     expect(find.text('Live 在线免锁常驻中'), findsOneWidget);
+    expect(find.text('摄像头占用'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('读剪贴板喂鱼 / 吸契约'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
     expect(find.text('15'), findsOneWidget);
     expect(find.text('读剪贴板喂鱼 / 吸契约'), findsOneWidget);
 
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, 700));
+    await tester.pump();
     await tester.tap(find.text('免发版框架'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('免发版 · 长久可调参动态规则框架'), findsOneWidget);
   });
 
-  testWidgets('WanshimingPage renders museum stele chronicle in dark obsidian gold', (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: buildDarkTheme(),
-        home: WanshimingPage(channel: ProactiveChannel()),
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-
-    expect(find.text('万世铭'), findsOneWidget);
-    expect(find.text('立《万世铭》与 V6 调度框架'), findsOneWidget);
-    expect(find.text('5m连胜'), findsOneWidget);
-  });
-
-  testWidgets('WanshimingPage nests horizons goals with 5m strict cadence launch', (tester) async {
-    String? lastV6Action;
+  testWidgets('WanshimingPage renders Claude bold constellation map and focuses neighbor stars cleanly', (tester) async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
       messenger,
       (call) async {
         if (call.method == 'v6Op') {
-          final args = call.arguments as Map?;
-          lastV6Action = args?['action'] as String?;
-          if (lastV6Action == 'cadence_start') {
-            return <String, Object?>{'v': 1, 'ok': true, 'cadence': {'active': true, 'phase': 'running'}};
-          }
           return <String, Object?>{
             'v': 1,
             'ok': true,
-            'cadenceStreak': 2,
-            'verifiedToday': 2,
-            'horizons': {
-              'long': [
-                {'id': 'goal-1', 'title': '行测80+上岸战役', 'progress': 0.4},
-              ],
-              'medium': [],
-            },
             'steles': [
               {
                 'id': 's1',
-                'title': '立《万世铭》与 V6 调度框架',
-                'date': '2026-11-26',
-                'epoch': '丙午',
-                'category': '纪元',
-                'body': '双路并进。',
+                'title': '立实证底律星点',
+                'date': '2026-11-19',
+                'stage': '筑基 · 底律',
+                'category': '悟道',
+                'body': '先查基准率再推演。',
+                'links': ['s2'],
+                'starred': true,
+              },
+              {
+                'id': 's2',
+                'title': 'Gemini Live 真通话护航',
+                'date': '2026-11-27',
+                'stage': '破壁 · 外脑',
+                'category': '战役',
+                'body': '用硬件语音麦与摄像头占用稳住高压交互。',
+                'links': ['s1'],
                 'starred': true,
               },
             ],
@@ -162,13 +168,69 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
-    expect(find.byKey(const ValueKey('wsm-horizons-deck')), findsOneWidget);
-    expect(find.text('行测80+上岸战役'), findsOneWidget);
+    expect(find.text('万世铭'), findsOneWidget);
+    expect(find.text('长期核心路径星图'), findsOneWidget);
+    expect(find.byKey(const ValueKey('wsm-star-map')), findsOneWidget);
+    expect(find.byKey(const ValueKey('wsm-focus-card')), findsOneWidget);
+    expect(find.text('先查基准率再推演。'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('wsm-launch-goal-goal-1')));
+    // Click neighbor star to switch focus cleanly
+    await tester.tap(find.byKey(const ValueKey('wsm-star-node-s2')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-    expect(lastV6Action, 'cadence_start');
+    expect(find.text('用硬件语音麦与摄像头占用稳住高压交互。'), findsOneWidget);
+  });
+
+  testWidgets('V6CommandPage submits stubborn activity declaration into v6Op', (tester) async {
+    final actions = <String?>[];
+    String? declaredTask;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      messenger,
+      (call) async {
+        if (call.method == 'v6Op') {
+          final args = call.arguments as Map?;
+          final act = args?['action'] as String?;
+          actions.add(act);
+          if (act == 'declare_activity') {
+            declaredTask = args?['task'] as String?;
+            return <String, Object?>{
+              'v': 1,
+              'ok': true,
+              'message': '已纳入体系并写入临时库：$declaredTask',
+              'cadence': {'active': true, 'phase': 'running', 'round': 1},
+            };
+          }
+          return <String, Object?>{
+            'v': 1,
+            'ok': true,
+            'windowMode': {'label': '常规自由调配窗'},
+            'telemetry': {'total': 16, 'active': 15, 'dedupeRate72h': 98, 'bySource': {'quiz': 15}},
+            'appeals': {'day': '2026-11-27', 'total': 0, 'physio': 0},
+            'stubbornGate': {'required': true, 'suggestedAnchors': const []},
+            'stagingCount': 0,
+            'framework': {'wakeQuizEnabled': true, 'stubbornGateEnabled': true, 'stubbornCooldownMin': 20},
+          };
+        }
+        return null;
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildDarkTheme(),
+        home: V6CommandPage(channel: ProactiveChannel()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    await tester.enterText(find.byKey(const ValueKey('v6-declare-task-input')), '粉笔资料分析基期速算 15 题');
+    await tester.tap(find.byKey(const ValueKey('v6-declare-submit-btn')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(actions, contains('declare_activity'));
+    expect(declaredTask, '粉笔资料分析基期速算 15 题');
   });
 
   testWidgets('LiveCoreAtlasPage merges V6 cadence and 3-signal Live monitor lamps', (tester) async {

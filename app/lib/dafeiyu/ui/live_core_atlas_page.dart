@@ -1096,9 +1096,13 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
     final sigOnline = liveSignals['liveOnline'] == true || '${_liveCore['phase'] ?? ''}' == 'live_active';
     final sigComm = liveSignals['audioInComm'] == true &&
         (liveSignals['micRecording'] == true || liveSignals['voicePlayback'] == true);
+    final sigVoiceMic = liveSignals['voiceCommMic'] == true;
+    final sigCamera = liveSignals['cameraInUse'] == true;
     final sigDisplay = liveSignals['virtualDisplayActive'] == true;
     final sigShareOrUi = liveSignals['screenShareText'] == true || liveSignals['uiLiveActive'] == true;
     final cadence = _asMap(_v6State['cadence']);
+    final cadAnchor = _asMap(cadence['knowledgeAnchor']);
+    final activeDec = _asMap(_v6State['activeDeclaration']);
     final cadActive = cadence['active'] == true;
     final cadPhase = '${cadence['phase'] ?? 'idle'}';
     final cadOverdue = cadActive && cadPhase == 'awaiting_verify';
@@ -1189,8 +1193,10 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                       label: sigOnline ? 'Live 在线免锁' : (alwaysOnLive ? '断线触发 P2 锁' : 'Live 离线'),
                     ),
                     StatusChip(tone: sigComm ? StatusTone.ok : StatusTone.idle, label: sigComm ? '语音+麦通' : '语音+麦灭'),
+                    StatusChip(tone: sigVoiceMic ? StatusTone.ok : StatusTone.idle, label: sigVoiceMic ? '通话麦活跃' : '通话麦待机'),
+                    StatusChip(tone: sigCamera ? StatusTone.ok : StatusTone.idle, label: sigCamera ? '摄像头占用' : '未开视频'),
                     StatusChip(tone: sigDisplay ? StatusTone.ok : StatusTone.idle, label: sigDisplay ? '虚拟屏在线' : '虚拟屏灭'),
-                    StatusChip(tone: sigShareOrUi ? StatusTone.ok : StatusTone.idle, label: sigShareOrUi ? '共享/UI活跃' : 'UI未在前台'),
+                    StatusChip(tone: sigShareOrUi ? StatusTone.ok : StatusTone.idle, label: sigShareOrUi ? '真Live界面' : '非Live界面'),
                   ],
                 ),
               ],
@@ -1479,10 +1485,20 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                 const SizedBox(height: 8),
                 Text(
                   cadActive && cadTarget.isNotEmpty
-                      ? '当前切片：$cadTarget（满 3 轮连胜自动刻入《万世铭》）'
-                      : '触发器失灵或启动瘫痪时点此开局：5 分钟倒计时全程 P4 专心锁，到点不交≥6字真实结论立即闹铃+语音+转 P3 硬锁。',
+                      ? '当前切片：$cadTarget（交付自动记入临时数据库，不再污染《万世铭》长卷）'
+                      : '每棒 5 分钟自动绑定知识海真题锚点：全程 P4 专心锁，到点不交≥6字真实结论或挑刺立即转 P3 硬锁。',
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
+                if (activeDec.isNotEmpty || (cadActive && cadAnchor.isNotEmpty)) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    [
+                      if (activeDec.isNotEmpty) '🧭 当前申报：【${activeDec['category']}】${activeDec['task']}',
+                      if (cadActive && cadAnchor.isNotEmpty) '🧠 绑定知识：${cadAnchor['claim']} — ${cadAnchor['question']}',
+                    ].join('\n'),
+                    style: theme.textTheme.labelSmall?.copyWith(color: colors.info, height: 1.4),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 if (!cadActive)
                   Wrap(
@@ -1590,7 +1606,7 @@ class _LiveCoreAtlasPageState extends State<LiveCoreAtlasPage> {
                       style: OutlinedButton.styleFrom(shape: AppShape.card),
                       onPressed: () => unawaited(WanshimingPage.open(context, channel: _channel)),
                       icon: const Icon(AppIcons.document, size: 15),
-                      label: const Text('📜 万世铭碑林'),
+                      label: const Text('✨ 万世铭 · 星图'),
                     ),
                   ],
                 ),

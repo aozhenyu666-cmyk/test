@@ -631,58 +631,63 @@ export function evaluateLiveCore({
 } = {}) {
   const ts = Math.max(0, Number(now) || Date.now())
   const st = normalizeLiveState(state)
-  const voiceActiveNow = Boolean(phone?.geminiVoiceActive)
-  const explicitDropAgoMs = Math.max(0, Number(phone?.liveDroppedAgoMs) || 0)
-  const inferredDropAgoMs = (!voiceActiveNow && st.lastVoiceActiveAt > 0) ? Math.max(0, ts - st.lastVoiceActiveAt) : 0
-  const dropAgoMs = explicitDropAgoMs > 0 ? explicitDropAgoMs : inferredDropAgoMs
-  const resolvedTargetMode = targetMode === 'text' ? 'text' : (targetMode === 'live' ? 'live' : 'live')
+    const voiceActiveNow = Boolean(phone?.geminiVoiceActive || phone?.liveSignals?.liveOnline)
+    const explicitDropAgoMs = Math.max(0, Number(phone?.liveDroppedAgoMs) || 0)
+    const inferredDropAgoMs = (!voiceActiveNow && st.lastVoiceActiveAt > 0) ? Math.max(0, ts - st.lastVoiceActiveAt) : 0
+    const dropAgoMs = explicitDropAgoMs > 0 ? explicitDropAgoMs : inferredDropAgoMs
+    const resolvedTargetMode = targetMode === 'text' ? 'text' : (targetMode === 'live' ? 'live' : 'live')
 
-  const nextBase = {
-    ...st,
-    lastVoiceActiveAt: voiceActiveNow ? ts : st.lastVoiceActiveAt,
-    receiptSinceLastLive: voiceActiveNow ? false : st.receiptSinceLastLive,
-  }
+    const nextBase = {
+      ...st,
+      lastVoiceActiveAt: voiceActiveNow ? ts : st.lastVoiceActiveAt,
+      receiptSinceLastLive: voiceActiveNow ? false : st.receiptSinceLastLive,
+    }
 
-  const yieldWith = (reason, phase, patchState = null) => ({
-    triggered: false,
-    action: 'yield',
-    reason,
-    phase,
-    urgent: false,
-    voiceOnly: false,
-    playChime: false,
-    targetMode: st.textGraceUntil > ts ? 'text' : 'live',
-    energyTier: st.energyTier,
-    feedPreview: st.lastFeedPreview || null,
-    dice: null,
-    anchor: null,
-    voiceLine: '',
-    topic: '',
-    brief: '',
-    autoClickLive: false,
-    requestScreenShare: false,
-    pullMode: 'instant',
-    nextState: {
-      ...nextBase,
-      ...(patchState && typeof patchState === 'object' ? patchState : {}),
-      lastPhase: phase,
-      lastReason: reason,
-    },
-  })
+    const yieldWith = (reason, phase, patchState = null) => ({
+      triggered: false,
+      action: 'yield',
+      reason,
+      phase,
+      urgent: false,
+      voiceOnly: false,
+      playChime: false,
+      directLive: false,
+      targetMode: st.textGraceUntil > ts ? 'text' : 'live',
+      energyTier: st.energyTier,
+      feedPreview: st.lastFeedPreview || null,
+      dice: null,
+      anchor: null,
+      voiceLine: '',
+      topic: '',
+      brief: '',
+      autoClickLive: false,
+      requestScreenShare: false,
+      pullMode: 'instant',
+      nextState: {
+        ...nextBase,
+        ...(patchState && typeof patchState === 'object' ? patchState : {}),
+        lastPhase: phase,
+        lastReason: reason,
+      },
+    })
 
-  if (!force) {
-    if (!st.enabled || config?.control === false) return yieldWith('disabled', 'disabled')
-    if (arbiter?.priority === 'P0' || config?.emergencyActive) return yieldWith('emergency', 'yielded_emergency')
-    if (arbiter?.priority === 'P1') return yieldWith('sleeping', 'yielded_night')
-    if (arbiter?.priority === 'P1.2') return yieldWith('break', 'yielded_break')
-    const modalShownAt = Math.max(0, Number(planModal?.shownAt) || 0)
-    const modalStale = modalShownAt > 0 && ts - modalShownAt >= 10 * 60_000
-    if (planModal?.active && !modalStale) return yieldWith('plan_modal_priority', 'yielded_plan_modal')
-    if (mealOrQuiet) return yieldWith('meal_or_quiet', 'standby')
-    const inTextGrace = st.textGraceUntil > ts && (st.preferredMode === 'text' || (inGemini && !voiceActiveNow))
-    if (voiceActiveNow) return yieldWith('live_running', 'live_active')
-    if (inTextGrace) return yieldWith('text_mode_grace', 'text_mode')
-    if (inGemini && !st.alwaysOnLive) return yieldWith('live_running', 'live_active')
+    if (!force) {
+      if (!st.enabled || config?.control === false) return yieldWith('disabled', 'disabled')
+      if (arbiter?.priority === 'P0' || config?.emergencyActive) return yieldWith('emergency', 'yielded_emergency')
+      if (arbiter?.priority === 'P1') return yieldWith('sleeping', 'yielded_night')
+      if (arbiter?.priority === 'P1.2') return yieldWith('break', 'yielded_break')
+      const modalShownAt = Math.max(0, Number(planModal?.shownAt) || 0)
+      const modalStale = modalShownAt > 0 && ts - modalShownAt >= 10 * 60_000
+      if (planModal?.active && !modalStale) return yieldWith('plan_modal_priority', 'yielded_plan_modal')
+      if (mealOrQuiet) return yieldWith('meal_or_quiet', 'standby')
+      const inTextGrace = st.textGraceUntil > ts && (st.preferredMode === 'text' || (inGemini && !voiceActiveNow))
+      if (voiceActiveNow) return yieldWith('live_running', 'live_active')
+      if (inTextGrace) return yieldWith('text_mode_grace', 'text_mode')
+      if (inGemini && !st.alwaysOnLive) return yieldWith('live_running', 'live_active')
+      if (inGemini && st.alwaysOnLive && !st.keeperStrict) return yieldWith('live_running', 'live_active')
+      if (inGemini && st.alwaysOnLive && st.keeperStrict && st.lastIgniteAt > 0 && ts - st.lastIgniteAt < 20_000) {
+        return yieldWith('live_running', 'live_active')
+      }
     if (phone?.screenOn === false) {
       const canHeadsetKeepalive = Boolean(
         st.alwaysOnLive &&
@@ -1037,6 +1042,7 @@ function buildTriggeredResult({
             ? '息屏耳机 Live 掉线唤醒'
             : `骰${dice.face}·${dice.name}：${cleanLine(anchor?.topic || '高密度拆题', 40)}`))
   const autoClickLive = !voiceOnly && targetMode !== 'text'
+  const directLive = autoClickLive && ['always_on_keeper', 'live_early_bailout', 'headset_live_dropped', 'live_reengage'].includes(reason)
   const requestScreenShare = !voiceOnly && targetMode !== 'text' && Boolean(nextBase.wantScreenShare)
   const payload = {
     id: `live-${ts.toString(36)}-${dice.face}`,
@@ -1046,6 +1052,7 @@ function buildTriggeredResult({
     urgent: Boolean(urgent),
     voiceOnly: Boolean(voiceOnly),
     playChime: Boolean(playChime),
+    directLive,
     targetMode,
     energyTier: nextBase.energyTier,
     department,
@@ -1086,6 +1093,7 @@ function buildTriggeredResult({
     urgent: Boolean(urgent),
     voiceOnly: Boolean(voiceOnly),
     playChime: Boolean(playChime),
+    directLive,
     targetMode,
     energyTier: nextBase.energyTier,
     department,

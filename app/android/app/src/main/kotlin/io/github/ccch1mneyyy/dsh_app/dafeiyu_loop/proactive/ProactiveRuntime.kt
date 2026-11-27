@@ -1768,6 +1768,7 @@ object ProactiveRuntime {
     @Volatile private var v6LiveKeepAliveUnlock: Boolean = true
     @Volatile private var v6LiveDropGraceSec: Int = 15
     @Volatile private var lastWakeQuizAt: Long = 0L
+    @Volatile private var lastLiveDropVoiceAt: Long = 0L
     @Volatile private var latestLiveSignals: LiveSignalSnapshot = LiveSignalSnapshot()
     private val shownSparkIds = LinkedHashSet<String>()
     private const val AUTO_PULL_COOLDOWN_MS = 5 * 60_000L
@@ -1898,6 +1899,19 @@ object ProactiveRuntime {
                             why = "常驻 Gemini Live 已断线，请先回到 Live 语音/共享屏",
                             unlockHow = "重新开启 Gemini Live 通话或共享屏幕，或在图谱页切至文本沉淀窗/L0 休息",
                         )
+                        if (now - lastLiveDropVoiceAt >= 25_000L) {
+                            lastLiveDropVoiceAt = now
+                            runCatching {
+                                VoiceOut.install(app)
+                                VoiceOut.speak(
+                                    VoicePlan(
+                                        "Live 语音通话断了，别停在文字页，点一下立刻回 Live。",
+                                        VoicePlan.DEFAULT_RATE,
+                                        VoicePlan.DEFAULT_PITCH,
+                                    ),
+                                ) {}
+                            }
+                        }
                         consultPlanSoon(minGapMs = 0L)
                     }
                 }
@@ -2412,6 +2426,7 @@ object ProactiveRuntime {
             val autoClickLive = autoPull["autoClickLive"] == true
             val requestScreenShare = autoPull["requestScreenShare"] == true
             val pullUrgent = autoPull["urgent"] == true || autoPull["earlyBailout"] == true
+            val pullDirectLive = autoPull["directLive"] == true || pullUrgent || autoPull["earlyBailout"] == true
             val pullCooldownMs = LiveKeeperPolicy.effectivePullCooldownMs(pullUrgent)
             val voiceLine = (autoPull["voiceLine"] as? String).orEmpty()
             val pullStamp = (autoPull["at"] as? Number)?.toLong() ?: stamp
@@ -2447,6 +2462,7 @@ object ProactiveRuntime {
                         mode = pullMode,
                         autoClickLive = true,
                         requestScreenShare = requestScreenShare,
+                        directLive = pullDirectLive,
                     ) { opened ->
                         Log.i(TAG, "geminiAutoPull(live): topic=$pullTopic mode=$pullMode share=$requestScreenShare opened=$opened")
                     }

@@ -139,6 +139,7 @@ object GeminiAutoLauncher {
         mode: String = "instant",
         autoClickLive: Boolean = true,
         requestScreenShare: Boolean = false,
+        directLive: Boolean = false,
         onResult: ((Boolean) -> Unit)? = null,
     ) {
         val appCtx = app.applicationContext ?: app
@@ -151,6 +152,7 @@ object GeminiAutoLauncher {
                 mode = mode,
                 autoClickLive = autoClickLive,
                 requestScreenShare = requestScreenShare,
+                directLive = directLive,
                 onResult = onResult,
             )
         }
@@ -169,6 +171,7 @@ object GeminiAutoLauncher {
         mode: String,
         autoClickLive: Boolean,
         requestScreenShare: Boolean,
+        directLive: Boolean,
         onResult: ((Boolean) -> Unit)?,
     ) {
         val frontPkg = runCatching { NowFeed.snapshot(SystemClock.elapsedRealtime()).app }.getOrNull()
@@ -195,8 +198,11 @@ object GeminiAutoLauncher {
         }
 
         ProactiveHaptics.vibrateSuperSpark(app)
-        if (voiceLine.isNotBlank()) {
-            val spoken = VoicePlan.brief(voiceLine) ?: voiceLine.trim().take(VoicePlan.MAX_CHARS)
+        val effectiveVoice = voiceLine.ifBlank {
+            if (directLive) "已切回语音 Live，直接开口说出你眼前这一步" else ""
+        }
+        if (effectiveVoice.isNotBlank()) {
+            val spoken = VoicePlan.brief(effectiveVoice) ?: effectiveVoice.trim().take(VoicePlan.MAX_CHARS)
             if (spoken.isNotEmpty()) {
                 runCatching {
                     VoiceOut.install(app)
@@ -209,7 +215,12 @@ object GeminiAutoLauncher {
         fun startDirectAndMaybeAutomate() {
             val opened = startGeminiDirect(app, topic, preferVoice = false)
             if (opened && autoClickLive && PhoneA11yService.isConnected()) {
-                GeminiUiAutomator.run(app, brief, requestScreenShare = requestScreenShare) { autoOk, _ ->
+                GeminiUiAutomator.run(
+                    app,
+                    brief,
+                    requestScreenShare = requestScreenShare,
+                    directLive = directLive,
+                ) { autoOk, _ ->
                     onResult?.invoke(autoOk)
                 }
             } else {

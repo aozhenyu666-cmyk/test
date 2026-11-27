@@ -26,9 +26,23 @@ export const DEFAULT_FRAMEWORK = Object.freeze({
   poolCooldownHours: 18,
   poolGraduateStreak: 2,
   poolDecayDays: 14,
+  stubbornGateEnabled: true,
+  stubbornCooldownMin: 20,
+  autoInscribeWanshiming: false,
   fragmentedWindows: Object.freeze(['11:30-13:30', '17:30-19:30']),
   deskMoatWindows: Object.freeze(['09:00-11:30', '14:30-17:30', '20:00-22:00']),
 })
+
+export const STUBBORN_CATEGORIES = Object.freeze([
+  '刷题',
+  '错题复盘',
+  '看课笔记',
+  '申论输出',
+  '现实杂事',
+  '休息回血',
+])
+
+const VAGUE_DECLARATION_RE = /^(?:刷题|学习|复习|看书|写题|做题|干活|休息|摸鱼|玩|ok|done|test|随便|不知道|待定|看看|搞一下)$/i
 
 const STARTER_KNOWLEDGE_CARDS = [
   {
@@ -179,59 +193,56 @@ const STARTER_KNOWLEDGE_CARDS = [
 
 const SEED_STELES = [
   {
-    id: 'stele-20261126-v6',
-    title: '立《万世铭》与 V6 双模态主动调度总框架',
-    date: '2026-11-26',
-    epoch: '丙午 · 破壁',
-    category: '纪元',
-    body: '确立双路并行战略：一边把大肥鱼改造成主动触发与知识海调度中枢（#1 亮屏盲点、#7 强关联九宫格、5m严锁4申诉阀）；一边以麦克风+虚拟屏监测灯保活 Gemini Live，并让剪贴板双向总线打通两翼。',
-    echo: '告别改时间重编译 APK，也告别因知识贫血重复念叨惹人厌烦。',
-    starred: true,
-    createdAt: '2026-11-26T22:00:00+08:00',
-  },
-  {
-    id: 'stele-20261125-dshgo',
-    title: '重构 DSH Go 触发与调度：五分钟心跳与防糊弄验收',
-    date: '2026-11-25',
-    epoch: '丙午 · 破局',
-    category: '战役',
-    body: '识破“仅靠单一验收锁终会滑向降频敷衍”之困局，补齐 5 分钟声学心跳、planModal 防死锁与伙伴脑核反敷衍校验。',
-    echo: '先封逃避退路，再谈精进。',
-    starred: false,
-    createdAt: '2026-11-25T22:10:00+08:00',
-  },
-  {
-    id: 'stele-20261119-empirical',
-    title: '弃道理堆砌，立实证基准率与反事实推理底律',
+    id: 'stele-foundation-obsidian',
+    title: '立实证底律：先查基准率，不作伪闭环',
     date: '2026-11-19',
+    stage: '筑基 · 底律',
     epoch: '丙午 · 筑基',
     category: '悟道',
-    body: '一切复杂判断先查同类大样本基准率与个人历史真实行为分布，用反事实剃刀抓唯一卡脖子变量；缺数据时做最小采数实验。',
-    echo: '真判断区分廉价表态与高成本信号，宁认缺数据，不作伪闭环。',
+    body: '一切重大判断先查同类大样本基准率与个人真实行为分布，用反事实剃刀只抓唯一卡脖子变量；缺数据时先跑最小采数实验。',
+    echo: '区分廉价口头表态与高成本真实投入，不靠堆砌道理自欺。',
+    links: ['stele-v6-scheduler', 'stele-live-keeper'],
     starred: true,
     createdAt: '2026-11-19T20:00:00+08:00',
   },
   {
-    id: 'stele-20261118-v4capsule',
-    title: 'V4 防死锁专注舱与认知 OS 体系拍板',
-    date: '2026-11-18',
-    epoch: '丙午 · 筑基',
-    category: '抉择',
-    body: '完成 Wave1 至 Wave3 全量验收，确立 Obsidian Overseer 三层防污染工作流与今日作战账本。',
-    echo: '凡未入账本之构想皆属飘萍；唯经过待审与拍板者，方能沉淀为铁律。',
-    starred: false,
-    createdAt: '2026-11-18T11:20:00+08:00',
+    id: 'stele-live-keeper',
+    title: 'Gemini Live 真通话与硬件感知常驻',
+    date: '2026-11-24',
+    stage: '破壁 · 外脑',
+    epoch: '丙午 · 破壁',
+    category: '战役',
+    body: '用音频通话态、语音麦、摄像头占用与投影副屏直接锁住 Live 在线状态；掉回文字页或秒退时自动语音破冰拉回。',
+    echo: '高强度交互靠硬件真实态护航，而非脆弱文字提示。',
+    links: ['stele-foundation-obsidian', 'stele-v6-scheduler', 'stele-final-sprint'],
+    starred: true,
+    createdAt: '2026-11-24T22:00:00+08:00',
   },
   {
-    id: 'stele-20261117-today',
-    title: 'Today 工作台收编与默认严格锁拍板',
-    date: '2026-11-17',
-    epoch: '丙午 · 启程',
-    category: '抉择',
-    body: '拍板走路径二收编 Today 工作台并启用默认严格锁机制，把“先看状态再开闸”变成日常第一道硬件级门槛。',
-    echo: '以轻微摩擦换取主权清醒。',
-    starred: false,
-    createdAt: '2026-11-17T16:00:00+08:00',
+    id: 'stele-v6-scheduler',
+    title: '固执调度器与 5m 知识节拍大融合',
+    date: '2026-11-27',
+    stage: '锻刃 · 体系',
+    epoch: '丙午 · 锻刃',
+    category: '纪元',
+    body: '日常刷题/动作必须申报具体内容方纳入体系；每一棒 5 分钟节拍直接挂接知识海真实切口，产出回流临时数据库而非污染长卷。',
+    echo: '日常归日常，长卷只留决定航向的星辰坐标。',
+    links: ['stele-foundation-obsidian', 'stele-live-keeper', 'stele-final-sprint'],
+    starred: true,
+    createdAt: '2026-11-27T16:00:00+08:00',
+  },
+  {
+    id: 'stele-final-sprint',
+    title: '行测 80+ 决胜主航道',
+    date: '2026-11-27',
+    stage: '决胜 · 主线',
+    epoch: '丙午 · 决胜',
+    category: '战役',
+    body: '把所有碎片时间与桌前护城河窗聚拢到资料速算、判断推理逻辑链和申论材料对策主干上。',
+    echo: '少而精，咬死每日真题交付。',
+    links: ['stele-v6-scheduler', 'stele-live-keeper'],
+    starred: true,
+    createdAt: '2026-11-27T16:10:00+08:00',
   },
 ]
 
@@ -269,6 +280,9 @@ export function normalizeFramework(raw = {}) {
     poolCooldownHours: clampInt(s.poolCooldownHours, 1, 168, DEFAULT_FRAMEWORK.poolCooldownHours),
     poolGraduateStreak: clampInt(s.poolGraduateStreak, 1, 5, DEFAULT_FRAMEWORK.poolGraduateStreak),
     poolDecayDays: clampInt(s.poolDecayDays, 3, 90, DEFAULT_FRAMEWORK.poolDecayDays),
+    stubbornGateEnabled: s.stubbornGateEnabled !== undefined ? Boolean(s.stubbornGateEnabled) : DEFAULT_FRAMEWORK.stubbornGateEnabled,
+    stubbornCooldownMin: clampInt(s.stubbornCooldownMin, 5, 180, DEFAULT_FRAMEWORK.stubbornCooldownMin),
+    autoInscribeWanshiming: s.autoInscribeWanshiming !== undefined ? Boolean(s.autoInscribeWanshiming) : DEFAULT_FRAMEWORK.autoInscribeWanshiming,
     fragmentedWindows: cleanWindows(s.fragmentedWindows, DEFAULT_FRAMEWORK.fragmentedWindows),
     deskMoatWindows: cleanWindows(s.deskMoatWindows, DEFAULT_FRAMEWORK.deskMoatWindows),
   }
@@ -1076,14 +1090,31 @@ export function upsertStele(steles = [], payload = {}, now = Date.now()) {
     ? String(payload.date)
     : new Date(now).toISOString().slice(0, 10)
   const category = ['抉择', '战役', '悟道', '纪元'].includes(payload.category) ? payload.category : '抉择'
-  const epoch = cleanStr(payload.epoch, 32)
+  const stage = cleanStr(payload.stage || payload.epoch || category, 32)
+  const epoch = cleanStr(payload.epoch || stage, 32)
   const echo = cleanStr(payload.echo, 240)
   const starred = Boolean(payload.starred)
+  const links = Array.isArray(payload.links)
+    ? [...new Set(payload.links.map((x) => cleanStr(x, 64)).filter(Boolean))].slice(0, 8)
+    : null
 
   const id = cleanStr(payload.id, 64)
   const idx = id ? list.findIndex((x) => x.id === id) : -1
   if (idx >= 0) {
-    list[idx] = { ...list[idx], title, date, category, epoch, body, echo, starred, updatedAt: new Date(now).toISOString() }
+    const prevLinks = Array.isArray(list[idx].links) ? list[idx].links : []
+    list[idx] = {
+      ...list[idx],
+      title,
+      date,
+      category,
+      stage,
+      epoch,
+      body,
+      echo,
+      starred,
+      links: (links ?? prevLinks).filter((lid) => lid !== list[idx].id),
+      updatedAt: new Date(now).toISOString(),
+    }
     return { ok: true, item: list[idx], steles: list }
   }
   const created = {
@@ -1091,10 +1122,12 @@ export function upsertStele(steles = [], payload = {}, now = Date.now()) {
     title,
     date,
     category,
+    stage,
     epoch,
     body,
     echo,
     starred,
+    links: links ?? [],
     createdAt: new Date(now).toISOString(),
   }
   list.unshift(created)
@@ -1103,11 +1136,25 @@ export function upsertStele(steles = [], payload = {}, now = Date.now()) {
 
 export function deleteStele(steles = [], id = '') {
   const list = Array.isArray(steles) ? steles : []
-  const next = list.filter((x) => x && x.id !== id)
+  const next = list
+    .filter((x) => x && x.id !== id)
+    .map((x) => (Array.isArray(x.links) ? { ...x, links: x.links.filter((l) => l !== id) } : x))
   return { ok: next.length < list.length, steles: next }
 }
 
 const PERFUNCTORY_SUBMISSION_RE = /^(?:ok|good|done|pass|test|yes|no|好的?|已完成|完成了?|打卡|已做|弄完了?|搞定了?|随便|敷衍|测试|过了?|行|嗯+|哈+|嘿+|[0-9a-zA-Z.\-_!\s]{1,10})$/i
+
+function normalizeKnowledgeAnchor(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const claim = cleanStr(raw.claim || raw.title || '', 120)
+  if (!claim) return null
+  return {
+    id: cleanStr(raw.id || '', 64),
+    claim,
+    question: cleanStr(raw.question || '用 1 句话说明其成立前提或关键反例。', 120),
+    source: cleanStr(raw.source || 'quiz', 24),
+  }
+}
 
 export function defaultCadence(now = 0) {
   return {
@@ -1121,6 +1168,10 @@ export function defaultCadence(now = 0) {
     target: '',
     goalId: '',
     goalScope: '',
+    category: '',
+    declarationId: '',
+    knowledgeAnchor: null,
+    liveLinked: false,
     startedAt: 0,
     dueAt: 0,
     overdueSince: 0,
@@ -1147,6 +1198,10 @@ export function normalizeCadence(raw = {}) {
     target: cleanStr(raw.target, 140),
     goalId: cleanStr(raw.goalId, 64),
     goalScope: cleanStr(raw.goalScope, 16),
+    category: cleanStr(raw.category, 24),
+    declarationId: cleanStr(raw.declarationId, 64),
+    knowledgeAnchor: normalizeKnowledgeAnchor(raw.knowledgeAnchor),
+    liveLinked: Boolean(raw.liveLinked),
     startedAt: Math.max(0, Number(raw.startedAt) || 0),
     dueAt: Math.max(0, Number(raw.dueAt) || 0),
     overdueSince: Math.max(0, Number(raw.overdueSince) || 0),
@@ -1159,6 +1214,19 @@ export function normalizeCadence(raw = {}) {
   }
 }
 
+function buildKnowledgeAnchorFromPool(pool = [], frameworkRaw = {}, now = Date.now()) {
+  const picked = sampleKnowledgeItems(pool, frameworkRaw, { count: 1, now, markShown: false })[0]
+  if (!picked) return null
+  const diceFaces = Object.values(SIX_DICE_MINI)
+  const qPick = diceFaces[Math.abs(Math.floor(now / 1000)) % diceFaces.length]
+  return {
+    id: cleanStr(picked.id, 64),
+    claim: cleanStr(picked.claim, 120),
+    question: `${qPick.name}：${cleanStr(qPick.ask, 90)}`,
+    source: cleanStr(picked.source || 'quiz', 24),
+  }
+}
+
 export function startCadence(cadenceRaw = {}, frameworkRaw = {}, opts = {}) {
   const now = Number(opts.now) || Date.now()
   const day = cleanStr(opts.day, 16) || new Date(now).toISOString().slice(0, 10)
@@ -1166,7 +1234,9 @@ export function startCadence(cadenceRaw = {}, frameworkRaw = {}, opts = {}) {
   const cur = normalizeCadence(cadenceRaw)
   const intervalSec = clampInt(opts.intervalSec ?? fw.fiveMinBoutSec, 60, 1800, fw.fiveMinBoutSec)
   const sameDay = cur.day === day
-  const target = cleanStr(opts.target, 140) || cur.target || '5分钟严格切片：咬住眼前这一题或这一句话产出'
+  const knowledgeAnchor = normalizeKnowledgeAnchor(opts.knowledgeAnchor) ||
+    (Array.isArray(opts.pool) && opts.pool.length ? buildKnowledgeAnchorFromPool(opts.pool, fw, now) : cur.knowledgeAnchor)
+  const target = cleanStr(opts.target, 140) || cur.target || (knowledgeAnchor ? `咬定切片：${knowledgeAnchor.claim.slice(0, 60)}` : '5分钟严格切片：咬住眼前这一题或这一句话产出')
   const allowApps = Array.isArray(opts.allowApps)
     ? opts.allowApps.map((x) => cleanStr(x, 80)).filter(Boolean).slice(0, 12)
     : cur.allowApps
@@ -1181,6 +1251,10 @@ export function startCadence(cadenceRaw = {}, frameworkRaw = {}, opts = {}) {
     target,
     goalId: cleanStr(opts.goalId ?? cur.goalId, 64),
     goalScope: cleanStr(opts.goalScope ?? cur.goalScope, 16),
+    category: cleanStr(opts.category ?? cur.category, 24),
+    declarationId: cleanStr(opts.declarationId ?? cur.declarationId, 64),
+    knowledgeAnchor,
+    liveLinked: Boolean(opts.liveLinked),
     startedAt: now,
     dueAt: now + intervalSec * 1000,
     overdueSince: 0,
@@ -1280,11 +1354,12 @@ export function submitCadenceDelivery(cadenceRaw = {}, steles = [], frameworkRaw
 
   let nextSteles = Array.isArray(steles) ? steles : []
   let autoStele = null
-  if (nextStreak > 0 && nextStreak % 3 === 0) {
+  if ((fw.autoInscribeWanshiming === true || opts.forceAutoStele === true) && nextStreak > 0 && nextStreak % 3 === 0) {
     const steleRes = upsertStele(nextSteles, {
       title: `5m严验收·${nextStreak}连胜：${(cur.target || '高强度切片').slice(0, 22)}`,
       date: dayKey,
       category: cur.goalScope ? '战役' : '抉择',
+      stage: '高频闭环自动铭刻',
       epoch: '高频闭环自动铭刻',
       body: `目标：${cur.target || '当前核心切片'}\n最新交付：${summaryBody}`,
       echo: `单日完成 ${nextVerifiedToday} 轮 · 连胜 ${nextStreak} 轮自动刻入《万世铭》`,
@@ -1296,9 +1371,23 @@ export function submitCadenceDelivery(cadenceRaw = {}, steles = [], frameworkRaw
     }
   }
 
+  const stagingEntry = {
+    id: `stg-cad-${now.toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+    at: now,
+    kind: 'cadence_verify',
+    category: cur.category || '5m验收',
+    text: `【5m产出】${cur.target ? `${cur.target} -> ` : ''}${summaryBody}`.slice(0, 180),
+    blocker: '',
+    promoted: false,
+    tags: ['5m交付', cur.category || '日常推进'].filter(Boolean),
+  }
+
   const continueNext = opts.continueNext !== false
   const intervalSec = clampInt(cur.intervalSec || fw.fiveMinBoutSec, 60, 1800, fw.fiveMinBoutSec)
   const nextTarget = cleanStr(opts.nextTarget, 140) || cur.target || '继续下一个 5 分钟核心切片'
+  const nextAnchor = continueNext && Array.isArray(opts.pool) && opts.pool.length
+    ? buildKnowledgeAnchorFromPool(opts.pool, fw, now + 1000)
+    : cur.knowledgeAnchor
   const nextCadence = continueNext
     ? {
         ...cur,
@@ -1310,6 +1399,7 @@ export function submitCadenceDelivery(cadenceRaw = {}, steles = [], frameworkRaw
         verifiedToday: nextVerifiedToday,
         day: dayKey,
         target: nextTarget,
+        knowledgeAnchor: nextAnchor,
         startedAt: now,
         dueAt: now + intervalSec * 1000,
         overdueSince: 0,
@@ -1336,11 +1426,12 @@ export function submitCadenceDelivery(cadenceRaw = {}, steles = [], frameworkRaw
     cadence: nextCadence,
     steles: nextSteles,
     autoStele,
+    stagingEntry,
     message: autoStele
       ? `验收通过（连胜 ${nextStreak} 轮）！已自动铭刻碑石「${autoStele.title}」，下一轮 ${Math.round(intervalSec / 60)} 分钟已开启。`
       : (continueNext
-          ? `验收通过（今日第 ${nextVerifiedToday} 轮 · 连胜 ${nextStreak}），下一轮 ${Math.round(intervalSec / 60)} 分钟倒计时启动。`
-          : `本轮验收通过并已收局（今日累计 ${nextVerifiedToday} 轮）。`),
+          ? `验收通过（今日第 ${nextVerifiedToday} 轮 · 连胜 ${nextStreak}），产出已记入临时库，下一轮 ${Math.round(intervalSec / 60)} 分钟已换新知识锚点开启。`
+          : `本轮验收通过（今日累计 ${nextVerifiedToday} 轮），结论已记入临时数据库。`),
   }
 }
 
@@ -1356,6 +1447,176 @@ export function stopCadence(cadenceRaw = {}) {
   }
 }
 
+function normalizeStagingEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const text = cleanStr(raw.text || '', 220)
+  if (!text) return null
+  return {
+    id: cleanStr(raw.id || `stg-${Date.now().toString(36)}`, 64),
+    at: Math.max(0, Number(raw.at) || 0),
+    kind: cleanStr(raw.kind || 'note', 24),
+    category: cleanStr(raw.category || '随手记', 24),
+    text,
+    blocker: cleanStr(raw.blocker || '', 120),
+    promoted: Boolean(raw.promoted),
+    tags: Array.isArray(raw.tags) ? raw.tags.map((t) => cleanStr(t, 24)).filter(Boolean).slice(0, 6) : [],
+  }
+}
+
+export function addStagingEntry(inbox = [], payload = {}, now = Date.now()) {
+  const list = (Array.isArray(inbox) ? inbox : []).map(normalizeStagingEntry).filter(Boolean)
+  const text = cleanStr(payload.text || '', 220)
+  if (!text || text.length < 4) {
+    return { ok: false, error: '内容太短（至少 4 个字），写清具体事或结论再存入临时库', stagingInbox: list }
+  }
+  const norm = text.toLowerCase()
+  const filtered = list.filter((x) => x.text.toLowerCase() !== norm)
+  const entry = {
+    id: `stg-${now.toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+    at: now,
+    kind: cleanStr(payload.kind || 'note', 24),
+    category: cleanStr(payload.category || '随手记', 24),
+    text,
+    blocker: cleanStr(payload.blocker || '', 120),
+    promoted: false,
+    tags: Array.isArray(payload.tags) ? payload.tags.map((t) => cleanStr(t, 24)).filter(Boolean).slice(0, 6) : ['临时库'],
+  }
+  return {
+    ok: true,
+    item: entry,
+    stagingInbox: [entry, ...filtered].slice(0, 120),
+  }
+}
+
+export function promoteStagingEntry(inbox = [], id = '') {
+  const list = (Array.isArray(inbox) ? inbox : []).map(normalizeStagingEntry).filter(Boolean)
+  let hit = null
+  const next = list.map((x) => {
+    if (x.id === id) {
+      hit = { ...x, promoted: true }
+      return hit
+    }
+    return x
+  })
+  return { ok: Boolean(hit), item: hit, stagingInbox: next }
+}
+
+export function deleteStagingEntry(inbox = [], id = '') {
+  const list = (Array.isArray(inbox) ? inbox : []).map(normalizeStagingEntry).filter(Boolean)
+  const next = list.filter((x) => x.id !== id)
+  return { ok: next.length < list.length, stagingInbox: next }
+}
+
+/**
+ * 固执强制申报：刷题/学习/做正事/休息必须写明具体内容才能纳入大肥鱼体系与双鱼记忆。
+ */
+export function declareCurrentActivity(state = {}, payload = {}, now = Date.now(), day = '') {
+  const dayKey = cleanStr(day, 16) || new Date(now).toISOString().slice(0, 10)
+  const category = STUBBORN_CATEGORIES.includes(payload.category) ? payload.category : '刷题'
+  const task = cleanStr(payload.task || payload.text || '', 140)
+  const blocker = cleanStr(payload.blocker || '', 100)
+  const isRest = category === '休息回血'
+  const expectedMin = clampInt(payload.expectedMin ?? (isRest ? 20 : 25), 5, 180, 25)
+
+  if (!isRest) {
+    if (!task || task.length < 4 || VAGUE_DECLARATION_RE.test(task)) {
+      return {
+        ok: false,
+        error: '调度器拒绝糊弄收编：请写清具体动作/科目/题型（至少 4 字，不能只填“刷题/学习/随便”）。',
+      }
+    }
+  }
+
+  const finalTask = isRest && !task ? '刷题后 L0 零压回血休息（暂不派新题）' : task
+  const decId = `dec-${now.toString(36)}-${Math.random().toString(36).slice(2, 5)}`
+  const declaration = {
+    id: decId,
+    category,
+    task: finalTask,
+    blocker,
+    expectedMin,
+    declaredAt: now,
+    expiresAt: now + expectedMin * 60_000,
+    day: dayKey,
+  }
+  const stgText = `【正在${category}】${finalTask}${blocker ? `（卡点：${blocker}）` : ''}`
+  const added = addStagingEntry(state.stagingInbox, {
+    kind: 'declaration',
+    category,
+    text: stgText,
+    blocker,
+    tags: ['固执申报', category],
+  }, now)
+
+  const bindCadence = payload.bindCadence !== false && !isRest
+  const cadenceOpts = bindCadence
+    ? {
+        target: `[${category}] ${finalTask}`.slice(0, 120),
+        category,
+        declarationId: decId,
+        intervalSec: state.framework?.fiveMinBoutSec || DEFAULT_FRAMEWORK.fiveMinBoutSec,
+        pool: state.pool || [],
+        now,
+        day: dayKey,
+      }
+    : null
+
+  return {
+    ok: true,
+    declaration,
+    stagingEntry: added.item,
+    stagingInbox: added.stagingInbox,
+    cadenceOpts,
+  }
+}
+
+export function evaluateStubbornGate(state = {}, {
+  now = Date.now(),
+  runningBout = false,
+  emergencyActive = false,
+  nightLocked = false,
+  energyTier = 'L2',
+} = {}) {
+  const fw = normalizeFramework(state.framework || {})
+  const pool = Array.isArray(state.pool) ? state.pool : []
+  const suggestedAnchors = sampleKnowledgeItems(pool, fw, { count: 3, now, markShown: false }).map((k) => ({
+    id: k.id,
+    claim: cleanStr(k.claim, 64),
+    source: k.source || 'quiz',
+  }))
+
+  const activeDec = state.activeDeclaration && Number(state.activeDeclaration.expiresAt) > now
+    ? state.activeDeclaration
+    : null
+
+  if (!fw.stubbornGateEnabled) {
+    return { required: false, reason: 'disabled', activeDeclaration: activeDec, suggestedAnchors }
+  }
+  if (emergencyActive || nightLocked || String(energyTier || '').toUpperCase() === 'L0') {
+    return { required: false, reason: 'safe_yield', activeDeclaration: activeDec, suggestedAnchors }
+  }
+  if (activeDec || state.cadence?.active || runningBout) {
+    return { required: false, reason: 'already_declared', activeDeclaration: activeDec, suggestedAnchors }
+  }
+  const lastPrompt = Math.max(0, Number(state.lastStubbornPromptAt) || 0)
+  const cooldownMs = fw.stubbornCooldownMin * 60_000
+  if (lastPrompt > 0 && now - lastPrompt < cooldownMs) {
+    return {
+      required: false,
+      reason: 'cooldown',
+      activeDeclaration: null,
+      nextAskAt: lastPrompt + cooldownMs,
+      suggestedAnchors,
+    }
+  }
+  return {
+    required: true,
+    reason: 'missing_declaration',
+    activeDeclaration: null,
+    suggestedAnchors,
+  }
+}
+
 export function defaultV6State(now = Date.now()) {
   return {
     v: 1,
@@ -1366,6 +1627,11 @@ export function defaultV6State(now = Date.now()) {
     lastContract: null,
     cadence: defaultCadence(now),
     pendingFlaw: null,
+    stagingInbox: [],
+    activeDeclaration: null,
+    lastStubbornPromptAt: 0,
+    lastMemoryExplain: null,
+    recentMemoryDrawIds: [],
   }
 }
 
@@ -1383,5 +1649,10 @@ export function loadV6State(readState, filePath, now = Date.now()) {
     lastContract: raw.lastContract || null,
     cadence: normalizeCadence(raw.cadence),
     pendingFlaw: raw.pendingFlaw && typeof raw.pendingFlaw === 'object' ? raw.pendingFlaw : null,
+    stagingInbox: Array.isArray(raw.stagingInbox) ? raw.stagingInbox.map(normalizeStagingEntry).filter(Boolean).slice(0, 120) : [],
+    activeDeclaration: raw.activeDeclaration && typeof raw.activeDeclaration === 'object' ? raw.activeDeclaration : null,
+    lastStubbornPromptAt: Math.max(0, Number(raw.lastStubbornPromptAt) || 0),
+    lastMemoryExplain: raw.lastMemoryExplain && typeof raw.lastMemoryExplain === 'object' ? raw.lastMemoryExplain : null,
+    recentMemoryDrawIds: Array.isArray(raw.recentMemoryDrawIds) ? raw.recentMemoryDrawIds.map((x) => cleanStr(x, 64)).filter(Boolean).slice(-24) : [],
   }
 }

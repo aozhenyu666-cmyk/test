@@ -1,19 +1,24 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  addStagingEntry,
   applyAppeal,
   buildFlawChallenge,
   buildInterrogationPrompt,
   buildNineGrid,
   computePoolTelemetry,
+  declareCurrentActivity,
   DEFAULT_FRAMEWORK,
   defaultV6State,
+  deleteStagingEntry,
   deleteStele,
+  evaluateStubbornGate,
   evaluateWindowMode,
   harvestKnowledgeSources,
   ingestClipboardOrText,
   normalizeFramework,
   parseContractBlock,
+  promoteStagingEntry,
   recordMicroQuizAnswer,
   rollNineGridTrigger,
   sampleKnowledgeItems,
@@ -202,12 +207,13 @@ test('5分钟高频严验收节奏：到点逾期转严锁、防敷衍拒收、�
   })
   assert.equal(badSub.ok, false)
 
-  // 连交 3 轮真实结论，第 3 轮自动铭刻万世铭
+  // 连交 3 轮真实结论：默认不污染《万世铭》，而是沉淀进临时数据库 stagingEntry
   let curCad = dueTick.cadence
   let r3 = null
   for (let i = 1; i <= 3; i += 1) {
     const res = submitCadenceDelivery(curCad, steles, state.framework, {
       submission: `第${i}轮完成：核对基期量截位除法错题并归纳反直觉规律`,
+      pool: state.pool,
       now: t0 + i * 320_000,
       day,
     })
@@ -218,9 +224,10 @@ test('5分钟高频严验收节奏：到点逾期转严锁、防敷衍拒收、�
   }
   assert.equal(curCad.streak, 3)
   assert.equal(curCad.verifiedToday, 3)
-  assert.ok(r3.autoStele)
-  assert.match(r3.autoStele.title, /5m严验收·3连胜/)
-  assert.equal(steles.length, state.steles.length + 1)
+  assert.equal(DEFAULT_FRAMEWORK.autoInscribeWanshiming, false)
+  assert.equal(r3.autoStele, null)
+  assert.ok(r3.stagingEntry?.text)
+  assert.equal(steles.length, state.steles.length)
 
   const stopped = stopCadence(curCad)
   assert.equal(stopped.active, false)
@@ -365,4 +372,59 @@ test('V6.7：残局挑刺官 + 记忆Facts灌入(含防注入) + 九宫格×六�
     },
   })
   assert.equal(cleaned?.liveSignals?.voicePlayback, true)
+})
+
+test('固执申报校验 + 5m 节拍绑定知识锚点 + 临时库流转 + 万世铭星图 links 保存', () => {
+  const now = 1_700_300_000_000
+  const day = '2026-11-27'
+  const st = defaultV6State(now)
+
+  // 未申报时 stubbornGate 要求申报且附带 3 个 1 键推荐切口
+  const gateOpen = evaluateStubbornGate(st, { now })
+  assert.equal(gateOpen.required, true)
+  assert.equal(gateOpen.suggestedAnchors.length, 3)
+
+  // 敷衍词被固执调度器拒收
+  const vague = declareCurrentActivity(st, { category: '刷题', task: '刷题' }, now, day)
+  assert.equal(vague.ok, false)
+
+  // 明确申报写入临时库 + 自动绑定知识锚点启动 5m 节拍
+  const dec = declareCurrentActivity(st, {
+    category: '刷题',
+    task: '粉笔判断推理削弱论证 15 题并写明他因',
+    blocker: '总把无关对比误看成他因',
+    bindCadence: true,
+  }, now, day)
+  assert.equal(dec.ok, true)
+  assert.ok(dec.stagingEntry.text.includes('粉笔判断推理'))
+  assert.ok(dec.cadenceOpts)
+  const cad = startCadence(st.cadence, st.framework, dec.cadenceOpts)
+  assert.ok(cad.knowledgeAnchor?.claim)
+  assert.ok(cad.knowledgeAnchor?.question)
+  assert.equal(cad.category, '刷题')
+
+  // 已申报期内 gate 自动退下
+  const gateAfter = evaluateStubbornGate({ ...st, activeDeclaration: dec.declaration, cadence: cad }, { now: now + 60_000 })
+  assert.equal(gateAfter.required, false)
+
+  // 临时数据库：写入 -> 转正 -> 删除
+  const added = addStagingEntry(dec.stagingInbox, { category: '申论输出', text: '材料3核心矛盾在监管滞后而非经费不足' }, now)
+  assert.equal(added.ok, true)
+  const promoted = promoteStagingEntry(added.stagingInbox, added.item.id)
+  assert.equal(promoted.ok, true)
+  assert.equal(promoted.item.promoted, true)
+  const deleted = deleteStagingEntry(promoted.stagingInbox, added.item.id)
+  assert.equal(deleted.ok, true)
+
+  // 《万世铭》节点 links 关联保存
+  const stele = upsertStele(st.steles, {
+    title: '攻克行测资料分析速度关',
+    stage: '决胜 · 主线',
+    category: '战役',
+    body: '稳定在 22 分钟 20 题且正确率 85% 以上。',
+    links: [st.steles[0].id],
+    starred: true,
+  }, now)
+  assert.equal(stele.ok, true)
+  assert.deepEqual(stele.item.links, [st.steles[0].id])
 })

@@ -146,6 +146,8 @@ export function cleanPhone(raw) {
             audioInComm: raw.liveSignals.audioInComm === true,
             micRecording: raw.liveSignals.micRecording === true,
             voicePlayback: raw.liveSignals.voicePlayback === true,
+            cameraInUse: raw.liveSignals.cameraInUse === true,
+            voiceCommMic: raw.liveSignals.voiceCommMic === true,
             virtualDisplayActive: raw.liveSignals.virtualDisplayActive === true,
             screenShareText: raw.liveSignals.screenShareText === true,
             uiLiveActive: raw.liveSignals.uiLiveActive === true,
