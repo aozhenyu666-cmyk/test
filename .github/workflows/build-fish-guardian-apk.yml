@@ -11,6 +11,9 @@ on:
 permissions:
   contents: write
 
+env:
+  DSH_MAVEN_MIRRORS: 0
+
 jobs:
   guardian-android:
     runs-on: ubuntu-24.04
@@ -44,6 +47,7 @@ jobs:
               addFirst(repo)
           }
           beforeSettings {
+              pluginManagement.repositories.google()
               pluginManagement.repositories.preferCiMirror()
               pluginManagement.repositories.gradlePluginPortal()
           }
@@ -68,9 +72,14 @@ jobs:
       - name: Run guardian unit tests & verify report
         run: |
           cd guardian-android
-          bash gradlew :app:testDebugUnitTest --console=plain \
-            -Dorg.gradle.internal.repository.max.retries=10 \
-            -Dorg.gradle.internal.repository.initial.backoff=2000
+          for i in 1 2; do
+            bash gradlew :app:testDebugUnitTest --console=plain --stacktrace \
+              -Dorg.gradle.internal.repository.max.retries=10 \
+              -Dorg.gradle.internal.repository.initial.backoff=2000 && break
+            [ "$i" = 2 ] && exit 1
+            echo "guardian 单元测试依赖解析/执行第 $i 次失败，15 秒后重试..."
+            sleep 15
+          done
           python3 - <<'PY'
           import glob, xml.etree.ElementTree as ET
           files = glob.glob("app/build/test-results/testDebugUnitTest/*.xml")
