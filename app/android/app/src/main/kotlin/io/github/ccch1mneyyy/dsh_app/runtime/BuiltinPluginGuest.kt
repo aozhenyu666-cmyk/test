@@ -229,6 +229,7 @@ object BuiltinPluginGuest {
                 "lib/ladder.js",
                 // Phase 1 Cognitive Autonomy v2.0 modules.
                 "lib/memory_blocks.js",
+                "lib/memory_router.js",
                 "lib/withdrawal.js",
                 "lib/strategist_audit.js",
                 "lib/six_dice.js",
