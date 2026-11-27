@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -49,6 +51,20 @@ class WatchService : Service() {
     private var lastModalAtMono = 0L
     private var lastAlertState: EngineState? = null
     private var lastProbeNowSignal = 0L
+    private var activeIncidentId: String = ""
+    private var activeIncidentState: EngineState? = null
+    private var screenReceiverRegistered = false
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                    lastProbeNowSignal = SystemClock.elapsedRealtime()
+                    loopThread?.interrupt()
+                }
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -64,6 +80,20 @@ class WatchService : Service() {
         WatchBus.stores = stores
         WatchBus.clock = clock
         WatchBus.lockExecutor = lockExec
+
+        runCatching {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_USER_PRESENT)
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(screenReceiver, filter)
+            }
+            screenReceiverRegistered = true
+        }
 
         running = true
         loopThread = Thread({ runLoop() }, "fish-guardian-watch").apply {
@@ -85,6 +115,10 @@ class WatchService : Service() {
     override fun onDestroy() {
         running = false
         WatchBus.service = null
+        if (screenReceiverRegistered) {
+            runCatching { unregisterReceiver(screenReceiver) }
+            screenReceiverRegistered = false
+        }
         loopThread?.interrupt()
         super.onDestroy()
     }
@@ -94,7 +128,7 @@ class WatchService : Service() {
             val tickStart = SystemClock.elapsedRealtime()
             runCatching { evaluateCycle(forceProbe = (tickStart - lastProbeNowSignal) < 12_000L) }
                 .onFailure { ArcLog.append(this, "看护循环异常：${it.message ?: it.javaClass.simpleName}") }
-            val sleepMs = if (isInteractive()) healthConfig.probePeriodMs else 25_000L
+            val sleepMs = if (isInteractive()) healthConfig.probePeriodMs else 60_000L
             val elapsed = SystemClock.elapsedRealtime() - tickStart
             val remaining = (sleepMs - elapsed).coerceAtLeast(1_500L)
             try {
@@ -111,7 +145,7 @@ class WatchService : Service() {
         var snap = stores.loadSnapshot()
         val settings = stores.loadSettings()
         val pass = stores.loadPass()
-        val passActive = EmergencyPassQuota.isActive(pass, nowMono)
+        val passActive = EmergencyPassQuota.isActive(pass, nowMono, nowWall)
 
         val targetPkg = FishClientBridge.resolveInstalledTarget(this)
         if (targetPkg == null) {
@@ -206,6 +240,19 @@ class WatchService : Service() {
         }
 
         val verdict = snap.verdict(nowMono, passActive, healthConfig)
+        if (verdict.state.isCritical) {
+            if (activeIncidentState != verdict.state || activeIncidentId.isBlank()) {
+                activeIncidentState = verdict.state
+                activeIncidentId = "${verdict.state.name}-$nowWall"
+            }
+        } else if (verdict.isHealthy) {
+            activeIncidentState = null
+            activeIncidentId = ""
+        }
+
+        val mirror = stores.loadMirror()
+        val suppressedByMainSafety = mirror.isSuppressedByMainSafety(nowWall)
+
         snap = snap.copy(
             stateName = verdict.state.name,
             statusReason = verdict.reason,
@@ -214,7 +261,7 @@ class WatchService : Service() {
         )
 
         if (!passActive) {
-            snap = executeAction(snap, verdict.state, verdict.action, verdict.reason, settings, nowMono, nowWall)
+            snap = executeAction(snap, verdict.state, verdict.action, verdict.reason, settings, suppressedByMainSafety, nowMono, nowWall)
         }
 
         if (verdict.isHealthy && lastAlertState != null && lastAlertState != EngineState.HEALTHY) {
@@ -236,7 +283,12 @@ class WatchService : Service() {
 
         snap = snap.copy(pendingOfflineCount = stores.loadIncidents().size)
         stores.saveSnapshot(snap)
-        updateNotification(notificationTitle(verdict.state, passActive), verdict.reason)
+        val notifBody = if (suppressedByMainSafety && verdict.state.isCritical) {
+            "主包处于测试模式或紧急解除中，暂不锁屏/弹阻断（${verdict.reason}）"
+        } else {
+            verdict.reason
+        }
+        updateNotification(notificationTitle(verdict.state, passActive, suppressedByMainSafety), notifBody)
         return snap
     }
 
@@ -246,6 +298,7 @@ class WatchService : Service() {
         action: EngineHealthAction,
         reason: String,
         settings: GuardianSettings,
+        suppressedByMainSafety: Boolean,
         nowMono: Long,
         nowWall: Long,
     ): GuardianSnapshot {
@@ -255,10 +308,10 @@ class WatchService : Service() {
                 if (settings.autoRebindA11y && FishClientBridge.canWriteSecureSettings(this)) {
                     val ok = FishClientBridge.rebindTargetA11y(this, snap.targetPkg)
                     ArcLog.append(this, "尝试写回大肥鱼无障碍：$ok")
-                    if (!ok && isInteractive() && settings.modalOnEngineDown) {
+                    if (!ok && !suppressedByMainSafety && isInteractive() && settings.modalOnEngineDown) {
                         raiseModal(state, reason, snap.targetPkg, snap.enginePhase, nowMono)
                     }
-                } else if (isInteractive() && settings.modalOnEngineDown && nowMono - lastModalAtMono >= 45_000L) {
+                } else if (!suppressedByMainSafety && isInteractive() && settings.modalOnEngineDown && nowMono - lastModalAtMono >= 45_000L) {
                     raiseModal(state, reason, snap.targetPkg, snap.enginePhase, nowMono)
                 }
             }
@@ -277,16 +330,16 @@ class WatchService : Service() {
                 )
                 val wake = FishClientBridge.wakeEngine(this, snap.targetPkg, allowActivityFallback = false)
                 ArcLog.append(this, "检测到引擎异常（${snap.enginePhase}），尝试拉起：${wake.detail}")
-                if (!wake.ok && isInteractive() && settings.modalOnEngineDown) {
+                if (!wake.ok && !suppressedByMainSafety && isInteractive() && settings.modalOnEngineDown) {
                     raiseModal(state, reason, snap.targetPkg, snap.enginePhase, nowMono)
                 }
             }
             EngineHealthAction.SHOW_MODAL_AND_LOCK -> {
-                if (isInteractive() && settings.modalOnEngineDown && nowMono - lastModalAtMono >= 30_000L) {
+                if (!suppressedByMainSafety && isInteractive() && settings.modalOnEngineDown && nowMono - lastModalAtMono >= 30_000L) {
                     raiseModal(state, reason, snap.targetPkg, snap.enginePhase, nowMono)
                 }
-                if (isInteractive() && settings.lockOnEngineDown && lockExec.adminActive()) {
-                    val incId = "${state.name}-${nowWall / 60_000}"
+                if (!suppressedByMainSafety && isInteractive() && settings.lockOnEngineDown && lockExec.adminActive()) {
+                    val incId = activeIncidentId.ifBlank { "${state.name}-$nowWall" }
                     val dec = lockArbiter.decide(incId, nowMono)
                     if (dec.fire) {
                         val out = lockExec.lockNow()
@@ -413,8 +466,9 @@ class WatchService : Service() {
         }
     }
 
-    private fun notificationTitle(st: EngineState, passActive: Boolean): String {
+    private fun notificationTitle(st: EngineState, passActive: Boolean, suppressedByMainSafety: Boolean = false): String {
         if (passActive) return "大肥鱼哨兵 · 独立急事通行中（3分钟）"
+        if (suppressedByMainSafety && st.isCritical) return "大肥鱼哨兵 · 主包测试/解除保护中"
         return when (st) {
             EngineState.HEALTHY -> "大肥鱼运行中 · 引擎与无障碍均健康"
             EngineState.STARTING_GRACE -> "大肥鱼正在冷启动（保护宽限中）"

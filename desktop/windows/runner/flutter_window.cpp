@@ -15,6 +15,7 @@
 namespace {
 
 constexpr UINT kTrayCallbackMessage = WM_APP + 101;
+constexpr UINT kShowMainFromSecondInstance = WM_APP + 102;
 constexpr UINT_PTR kCmdTrayShow = 41001;
 constexpr UINT_PTR kCmdTrayCapsule = 41002;
 constexpr UINT_PTR kCmdTrayExit = 41003;
@@ -124,6 +125,14 @@ bool IsProtectedProcessBasename(const std::string& lower_base) {
       "windsurf",
       "antigravity",
       "obsidian",
+      "anki",
+      "zotero",
+      "cajviewer",
+      "foxitpdfreader",
+      "wpspdf",
+      "feishu",
+      "lark",
+      "dingtalk",
       "node",
       "python",
       "pythonw",
@@ -168,6 +177,18 @@ int QueryIdleSeconds() {
   DWORD now_ms = ::GetTickCount();
   DWORD diff_ms = now_ms - lii.dwTime;
   return static_cast<int>(diff_ms / 1000UL);
+}
+
+bool QueryScreenLocked(HWND fg, const std::string& app_lower) {
+  if (fg == nullptr || app_lower == "lockapp" || app_lower == "logonui") {
+    return true;
+  }
+  HDESK desk = ::OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+  if (desk == nullptr) {
+    return true;
+  }
+  ::CloseDesktop(desk);
+  return false;
 }
 
 void SendMediaPlayPause() {
@@ -443,15 +464,19 @@ void FlutterWindow::SetupWin32Channel() {
           }
           DWORD pid = 0;
           if (fg) ::GetWindowThreadProcessId(fg, &pid);
+          std::string app_name = QueryProcessBasename(pid);
+          bool screen_locked = QueryScreenLocked(fg, AsciiLower(app_name));
           flutter::EncodableMap map;
           map[flutter::EncodableValue("app")] =
-              flutter::EncodableValue(QueryProcessBasename(pid));
+              flutter::EncodableValue(app_name);
           map[flutter::EncodableValue("title")] =
               flutter::EncodableValue(WideToUtf8(title_w));
           map[flutter::EncodableValue("idleSec")] =
               flutter::EncodableValue(QueryIdleSeconds());
           map[flutter::EncodableValue("selfActive")] =
               flutter::EncodableValue(fg == GetHandle());
+          map[flutter::EncodableValue("screenLocked")] =
+              flutter::EncodableValue(screen_locked);
           map[flutter::EncodableValue("pid")] =
               flutter::EncodableValue(static_cast<int64_t>(pid));
           map[flutter::EncodableValue("hwnd")] = flutter::EncodableValue(
@@ -664,6 +689,14 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     ::ShowWindow(hwnd, SW_HIDE);
     if (win32_channel_) {
       win32_channel_->InvokeMethod("onCloseIntercepted", nullptr);
+    }
+    return 0;
+  }
+
+  if (message == kShowMainFromSecondInstance) {
+    RestoreFromTray();
+    if (win32_channel_) {
+      win32_channel_->InvokeMethod("onTrayShowMain", nullptr);
     }
     return 0;
   }

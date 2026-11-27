@@ -33,8 +33,12 @@ object GuardianConstants {
         GUARDIAN_PKG,
         CLIENT_FISH_PKG,
         CLIENT_BASE_PKG,
+        "android",
         "com.android.dialer",
         "com.google.android.dialer",
+        "com.android.phone",
+        "com.android.incallui",
+        "com.android.contacts",
         "com.android.server.telecom",
         "com.android.mms",
         "com.google.android.apps.messaging",
@@ -49,6 +53,38 @@ object GuardianConstants {
         "com.eg.android.AlipayGphone",
         "com.autonavi.minimap",
         "com.baidu.BaiduMap",
+        // OriginOS / vivo & mainstream launchers / multiwindow / gallery / file managers
+        "com.bbk.launcher2",
+        "com.vivo.launcher",
+        "com.vivo.smartmultiwindow",
+        "com.vivo.floatingwindow",
+        "com.vivo.upslide",
+        "com.vivo.globalsearch",
+        "com.vivo.gallery",
+        "com.vivo.filemanager",
+        "com.bbk.filemanager",
+        "com.vivo.smartshot",
+        "com.vivo.assistant",
+        "com.android.filemanager",
+        "com.android.documentsui",
+        "com.google.android.documentsui",
+        "com.android.intentresolver",
+        "com.android.providers.media.module",
+        "com.google.android.providers.media.module",
+        "com.miui.home",
+        "com.oppo.launcher",
+        "com.android.launcher3",
+        "com.google.android.apps.nexuslauncher",
+        // Resident AI & VPN proxies required for Gemini Live
+        "com.google.android.apps.bard",
+        "com.google.android.googlequicksearchbox",
+        "moe.shizuku.privileged.api",
+        "moe.nb4a",
+        "io.nekohasekai.sfa",
+        "io.nekohasekai.sagernet",
+        "com.v2ray.ang",
+        "com.github.kr328.clash",
+        "com.github.metacubex.clash.meta",
     )
 
     val SETTINGS_PACKAGES = setOf(
@@ -62,7 +98,8 @@ object GuardianConstants {
         "com.iqoo.secure",
     )
 
-    val DANGER_KEYWORDS = listOf("强行停止", "强制停止", "卸载", "停用", "无障碍", "辅助功能", "设备管理")
+    val DANGER_KEYWORDS = listOf("强行停止", "强制停止", "卸载", "停用", "取消激活", "解除激活")
+    val REPAIR_CONTEXT_KEYWORDS = listOf("电池", "耗电", "自启动", "后台运行", "允许后台", "通知管理", "悬浮窗")
     val PROTECTED_NAMES = listOf("DSH Go", "DSH", "大肥鱼", "大肥鱼哨兵", "哨兵")
 }
 
@@ -308,6 +345,8 @@ data class EmergencyPassState(
     val dayKey: String = "",
     val usedToday: Int = 0,
     val activeUntilMono: Long = 0L,
+    val grantedAtMono: Long = 0L,
+    val activeUntilWall: Long = 0L,
     val reason: String = "",
 )
 
@@ -319,7 +358,8 @@ data class EmergencyGrantResult(
 
 /**
  * Independent 3-minute emergency pass in `大肥鱼哨兵` (max 2 times per Beijing day).
- * Uses monotonic [activeUntilMono] for duration so changing wall clock cannot extend a pass.
+ * Uses monotonic [activeUntilMono] plus [grantedAtMono]/[activeUntilWall] so neither
+ * clock rollbacks nor device reboots can extend a pass indefinitely.
  */
 object EmergencyPassQuota {
     const val MAX_PER_DAY = 2
@@ -337,8 +377,17 @@ object EmergencyPassQuota {
         return if (state.dayKey == key) state else state.copy(dayKey = key, usedToday = 0)
     }
 
-    fun isActive(state: EmergencyPassState, nowMonoMs: Long): Boolean =
-        state.activeUntilMono > 0L && nowMonoMs < state.activeUntilMono
+    fun isActive(state: EmergencyPassState, nowMonoMs: Long, nowWallMs: Long = 0L): Boolean {
+        if (state.activeUntilMono <= 0L) return false
+        if (state.grantedAtMono > 0L && nowMonoMs < state.grantedAtMono) {
+            return nowWallMs > 0L && state.activeUntilWall > 0L && nowWallMs < state.activeUntilWall
+        }
+        if (nowMonoMs >= state.activeUntilMono) return false
+        if (nowWallMs > 0L && state.activeUntilWall > 0L && nowWallMs >= state.activeUntilWall + 60_000L) {
+            return false
+        }
+        return true
+    }
 
     fun remainingCount(state: EmergencyPassState, nowWallMs: Long): Int {
         val norm = normalizeForDay(state, nowWallMs)
@@ -362,6 +411,8 @@ object EmergencyPassQuota {
         val next = norm.copy(
             usedToday = norm.usedToday + 1,
             activeUntilMono = nowMonoMs + PASS_DURATION_MS,
+            grantedAtMono = nowMonoMs,
+            activeUntilWall = nowWallMs + PASS_DURATION_MS,
             reason = clean.take(120),
         )
         return EmergencyGrantResult(true, next)
@@ -382,9 +433,15 @@ data class MirroredPolicy(
     val blocked: List<String> = emptyList(),
     val blockWhys: Map<String, String> = emptyMap(),
     val allow: List<String> = emptyList(),
+    val lockShadow: Boolean = false,
+    val disarmedUntil: Long = 0L,
+    val neverLock: List<String> = emptyList(),
 ) {
+    fun isSuppressedByMainSafety(nowWall: Long): Boolean =
+        lockShadow || disarmedUntil > nowWall || breakUntil > nowWall || emergencyUntil > nowWall
+
     fun hasActiveEnforcement(nowWall: Long): Boolean {
-        if (breakUntil > nowWall || emergencyUntil > nowWall) return false
+        if (isSuppressedByMainSafety(nowWall)) return false
         return planActive || refuseUntil > nowWall || lockUntil > nowWall || sessionUntil > nowWall
     }
 
@@ -406,6 +463,9 @@ data class MirroredPolicy(
                 blocked = GuardianJson.strList(m["blocked"]),
                 blockWhys = GuardianJson.strMap(m["blockWhys"]),
                 allow = GuardianJson.strList(m["allow"]),
+                lockShadow = GuardianJson.bool(m, "lockShadow", false),
+                disarmedUntil = GuardianJson.lng(m, "disarmedUntil", 0L),
+                neverLock = GuardianJson.strList(m["neverLock"]),
             )
         }
     }
@@ -423,6 +483,17 @@ sealed interface WindowDecision {
  * when DSH Go is killed or under settings attack.
  */
 object GuardianDecide {
+    private fun isSafeSuffixPkg(pkg: String): Boolean {
+        val low = pkg.lowercase()
+        return low.endsWith(".launcher") ||
+            low.endsWith(".launcher2") ||
+            low.contains("inputmethod") ||
+            low.contains("keyboard") ||
+            low.contains("documentsui") ||
+            low.contains("filemanager") ||
+            low.contains("fileexplorer")
+    }
+
     fun evaluateWindow(
         frontPkg: String,
         screenTexts: List<String>,
@@ -436,17 +507,23 @@ object GuardianDecide {
     ): WindowDecision {
         if (frontPkg.isBlank()) return WindowDecision.Allow
         if (frontPkg in GuardianConstants.TIER0_SAFE_PACKAGES ||
+            frontPkg in mirror.neverLock ||
             frontPkg in homePackages ||
-            frontPkg in imePackages
+            frontPkg in imePackages ||
+            isSafeSuffixPkg(frontPkg)
         ) {
             return WindowDecision.Allow
         }
-        if (passActive || mirror.breakUntil > nowWall || mirror.emergencyUntil > nowWall) {
+        if (passActive || mirror.isSuppressedByMainSafety(nowWall)) {
             return WindowDecision.Allow
         }
 
-        // Settings tamper self-defense: block attempts to disable DSH Go or Fish Guardian.
+        // Settings tamper self-defense: block attempts to force-stop/uninstall/disable DSH Go or Fish Guardian,
+        // while never locking out A11y self-repair, battery whitelist, or autostart repair screens.
         if (frontPkg in GuardianConstants.SETTINGS_PACKAGES) {
+            if (engineVerdict.state == EngineState.A11Y_DISABLED) {
+                return WindowDecision.Allow
+            }
             val mentionsProtected = screenTexts.any { line ->
                 GuardianConstants.PROTECTED_NAMES.any { name -> line.contains(name, ignoreCase = true) }
             }
@@ -454,7 +531,13 @@ object GuardianDecide {
                 val danger = GuardianConstants.DANGER_KEYWORDS.firstOrNull { kw ->
                     screenTexts.any { line -> line.contains(kw) }
                 }
-                if (danger != null) {
+                val inRepairContext = GuardianConstants.REPAIR_CONTEXT_KEYWORDS.any { kw ->
+                    screenTexts.any { line -> line.contains(kw) }
+                }
+                if (danger != null && !inRepairContext) {
+                    return WindowDecision.BlockTamper(danger, frontPkg)
+                }
+                if (danger != null && (danger == "卸载" || danger == "强行停止" || danger == "强制停止")) {
                     return WindowDecision.BlockTamper(danger, frontPkg)
                 }
             }

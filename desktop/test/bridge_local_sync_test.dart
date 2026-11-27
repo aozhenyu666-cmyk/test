@@ -244,4 +244,58 @@ void main() {
     }, fetchedAtUtcMs: now);
     expect(emergencyOverrides.directive, PhoneSyncDirective.relax);
   });
+
+  test('fromTodayJson parses V6 fields and pushPcActivity/triggerV6Op post cleanly with offline fallback', () async {
+    const now = 1763770120000;
+    final snap = PhoneBridgeSnapshot.fromTodayJson({
+      'ok': true,
+      'phoneOnline': true,
+      'syncedAt': now - 1000,
+      'v6': {
+        'windowId': 'desk_moat',
+        'windowLabel': '桌前护城河窗',
+        'deskMoat': true,
+        'cadenceActive': true,
+        'cadenceTarget': '完成5题资料分析',
+        'poolCount': 18,
+        'lastRoll': {'title': '资料5题', 'diceLabel': '骰2'},
+      },
+    }, fetchedAtUtcMs: now);
+    expect(snap.v6WindowId, 'desk_moat');
+    expect(snap.v6DeskMoat, isTrue);
+    expect(snap.v6CadenceActive, isTrue);
+    expect(snap.v6CadenceTarget, '完成5题资料分析');
+    expect(snap.v6PoolCount, 18);
+    expect(snap.v6LastRollTitle, '资料5题');
+
+    Uri? lastPostUri;
+    Map<String, String>? lastPostHeaders;
+    String? lastPostBody;
+    var throwPost = false;
+
+    final sync = BridgeLocalSync(
+      keyResolver: () async => 'dfyl_post_key',
+      httpPost: (uri, headers, body) async {
+        lastPostUri = uri;
+        lastPostHeaders = headers;
+        lastPostBody = body;
+        if (throwPost) throw const SocketException('offline');
+        return (statusCode: 202, body: jsonEncode({'ok': true, 'text': '已排队等待手机处理'}));
+      },
+    );
+
+    final okPush = await sync.pushPcActivity({'workMinutes': 30, 'screenLocked': false});
+    // statusCode 202 is not 200 for pushPcActivity; pc-activity returns 200 in production
+    expect(okPush, isFalse);
+
+    final v6Op = await sync.triggerV6Op('nine_grid_roll');
+    expect(v6Op.ok, isTrue);
+    expect(lastPostUri.toString(), 'http://127.0.0.1:8788/bridge/local/v6-op?async=1');
+    expect(lastPostHeaders?['Authorization'], 'Bearer dfyl_post_key');
+    expect(jsonDecode(lastPostBody!)['action'], 'nine_grid_roll');
+
+    throwPost = true;
+    final offlineOp = await sync.triggerV6Op('pool_ingest', {'text': 'hello'});
+    expect(offlineOp.ok, isFalse);
+  });
 }

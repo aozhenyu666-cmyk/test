@@ -17,6 +17,13 @@ class PhoneBridgeSnapshot {
     this.directive = PhoneSyncDirective.none,
     this.reason = '',
     this.error = '',
+    this.v6WindowId = '',
+    this.v6WindowLabel = '',
+    this.v6DeskMoat = false,
+    this.v6CadenceActive = false,
+    this.v6CadenceTarget = '',
+    this.v6PoolCount = 0,
+    this.v6LastRollTitle = '',
   });
 
   const PhoneBridgeSnapshot.offline({
@@ -39,6 +46,13 @@ class PhoneBridgeSnapshot {
   final PhoneSyncDirective directive;
   final String reason;
   final String error;
+  final String v6WindowId;
+  final String v6WindowLabel;
+  final bool v6DeskMoat;
+  final bool v6CadenceActive;
+  final String v6CadenceTarget;
+  final int v6PoolCount;
+  final String v6LastRollTitle;
 
   bool get isSyncedOnline => bridgeOnline && phoneOnline;
 
@@ -104,6 +118,9 @@ class PhoneBridgeSnapshot {
       custodyMap: custodyMap,
     );
 
+    final v6Map = _asMap(raw['v6'] ?? todayMap?['v6']);
+    final v6LastRoll = _asMap(v6Map?['lastRoll']);
+
     return PhoneBridgeSnapshot(
       bridgeOnline: true,
       phoneOnline: true,
@@ -111,6 +128,14 @@ class PhoneBridgeSnapshot {
       fetchedAtUtcMs: fetchedAtUtcMs,
       directive: parsed.directive,
       reason: parsed.reason,
+      v6WindowId: (v6Map?['windowId'] ?? '').toString().trim(),
+      v6WindowLabel: (v6Map?['windowLabel'] ?? '').toString().trim(),
+      v6DeskMoat: v6Map?['deskMoat'] == true ||
+          (v6Map?['windowId'] ?? '').toString() == 'desk_moat',
+      v6CadenceActive: v6Map?['cadenceActive'] == true,
+      v6CadenceTarget: (v6Map?['cadenceTarget'] ?? '').toString().trim(),
+      v6PoolCount: _asInt(v6Map?['poolCount']),
+      v6LastRollTitle: (v6LastRoll?['title'] ?? '').toString().trim(),
     );
   }
 
@@ -251,16 +276,24 @@ typedef BridgeHttpGet = Future<({int statusCode, String body})> Function(
   Map<String, String> headers,
 );
 
+typedef BridgeHttpPost = Future<({int statusCode, String body})> Function(
+  Uri uri,
+  Map<String, String> headers,
+  String body,
+);
+
 typedef BridgeKeyResolver = Future<String> Function();
 
 class BridgeLocalSync {
   BridgeLocalSync({
     String endpointUrl = defaultEndpointUrl,
     BridgeHttpGet? httpGet,
+    BridgeHttpPost? httpPost,
     BridgeKeyResolver? keyResolver,
     int Function()? nowUtcMs,
   })  : _endpointUri = Uri.parse(endpointUrl),
         _httpGet = httpGet ?? _defaultHttpGet,
+        _httpPost = httpPost ?? _defaultHttpPost,
         _keyResolver = keyResolver ?? discoverLocalKey,
         _nowUtcMs =
             nowUtcMs ?? (() => DateTime.now().toUtc().millisecondsSinceEpoch);
@@ -270,8 +303,18 @@ class BridgeLocalSync {
 
   final Uri _endpointUri;
   final BridgeHttpGet _httpGet;
+  final BridgeHttpPost _httpPost;
   final BridgeKeyResolver _keyResolver;
   final int Function() _nowUtcMs;
+
+  Uri _siblingUri(String path, [Map<String, String>? queryParameters]) {
+    return _endpointUri.replace(
+      path: path,
+      queryParameters: (queryParameters == null || queryParameters.isEmpty)
+          ? null
+          : queryParameters,
+    );
+  }
 
   static Future<String> discoverLocalKey({
     Map<String, String>? environment,
@@ -355,6 +398,71 @@ class BridgeLocalSync {
     }
   }
 
+  Future<bool> pushPcActivity(Map<String, Object?> payload) async {
+    String localKey = '';
+    try {
+      localKey = (await _keyResolver()).trim();
+    } catch (_) {
+      return false;
+    }
+    if (localKey.isEmpty) return false;
+
+    try {
+      final resp = await _httpPost(
+        _siblingUri('/bridge/local/pc-activity'),
+        {
+          'Authorization': 'Bearer $localKey',
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        jsonEncode(payload),
+      );
+      if (resp.statusCode != 200) return false;
+      final decoded = jsonDecode(resp.body);
+      return decoded is Map && decoded['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<({bool ok, String message})> triggerV6Op(
+    String action, [
+    Map<String, Object?> extra = const {},
+  ]) async {
+    String localKey = '';
+    try {
+      localKey = (await _keyResolver()).trim();
+    } catch (_) {
+      return (ok: false, message: '读取本机桥密钥失败');
+    }
+    if (localKey.isEmpty) {
+      return (ok: false, message: '未找到本机桥密钥（请先启动 gemini-bridge）');
+    }
+
+    try {
+      final body = <String, Object?>{
+        ...extra,
+        'action': action,
+      };
+      final resp = await _httpPost(
+        _siblingUri('/bridge/local/v6-op', const {'async': '1'}),
+        {
+          'Authorization': 'Bearer $localKey',
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        jsonEncode(body),
+      );
+      final decoded = jsonDecode(resp.body);
+      if (resp.statusCode >= 200 && resp.statusCode < 300 && decoded is Map) {
+        final msg = (decoded['text'] ?? '已下发到手机大肥鱼排队').toString().trim();
+        return (ok: decoded['ok'] == true, message: msg);
+      }
+      final err = decoded is Map ? (decoded['text'] ?? decoded['error'] ?? 'HTTP ${resp.statusCode}').toString() : 'HTTP ${resp.statusCode}';
+      return (ok: false, message: '手机桥返回失败：$err');
+    } catch (_) {
+      return (ok: false, message: '本机桥 127.0.0.1:8788 未运行或不可达');
+    }
+  }
+
   static Future<({int statusCode, String body})> _defaultHttpGet(
     Uri uri,
     Map<String, String> headers,
@@ -372,6 +480,30 @@ class BridgeLocalSync {
           .join()
           .timeout(const Duration(seconds: 4));
       return (statusCode: resp.statusCode, body: body);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Future<({int statusCode, String body})> _defaultHttpPost(
+    Uri uri,
+    Map<String, String> headers,
+    String body,
+  ) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 2)
+      ..findProxy = (_) => 'DIRECT';
+    try {
+      final req =
+          await client.postUrl(uri).timeout(const Duration(seconds: 3));
+      headers.forEach(req.headers.set);
+      req.add(utf8.encode(body));
+      final resp = await req.close().timeout(const Duration(seconds: 3));
+      final respBody = await resp
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 3));
+      return (statusCode: resp.statusCode, body: respBody);
     } finally {
       client.close(force: true);
     }

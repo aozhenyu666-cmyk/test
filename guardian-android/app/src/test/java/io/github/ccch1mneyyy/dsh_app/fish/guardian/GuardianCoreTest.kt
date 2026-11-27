@@ -270,11 +270,96 @@ class GuardianCoreTest {
                     "blocked" to listOf("a.b.c"),
                     "allow" to listOf("x.y.z"),
                     "blockWhys" to mapOf("a.b.c" to "专注\n锁定"),
+                    "lockShadow" to true,
+                    "disarmedUntil" to 99_000L,
+                    "neverLock" to listOf("moe.nb4a"),
                 ),
             ),
         )
         assertNotNull(parsed)
         assertEquals(listOf("a.b.c"), parsed?.blocked)
         assertEquals("专注\n锁定", parsed?.blockWhys?.get("a.b.c"))
+        assertTrue(parsed?.lockShadow == true)
+        assertEquals(99_000L, parsed?.disarmedUntil)
+        assertEquals(listOf("moe.nb4a"), parsed?.neverLock)
+    }
+
+    @Test
+    fun `lockShadow, disarmedUntil, OriginOS allowlist, a11y self-repair, and reboot pass expiry work safely`() {
+        val down = EngineHealthVerdict(EngineState.ENGINE_DOWN, EngineHealthAction.SHOW_MODAL_AND_LOCK, "引擎被关闭")
+        val a11yOff = EngineHealthVerdict(EngineState.A11Y_DISABLED, EngineHealthAction.ATTEMPT_A11Y_REBIND, "无障碍被关闭")
+        val healthy = EngineHealthVerdict(EngineState.HEALTHY, EngineHealthAction.NONE, "ok")
+
+        // 1. lockShadow=true or disarmedUntil > nowWall suppresses blocking/modals
+        val shadowMirror = MirroredPolicy(planActive = true, lockShadow = true, blocked = listOf("com.example.game"))
+        assertEquals(
+            WindowDecision.Allow,
+            GuardianDecide.evaluateWindow("com.example.game", emptyList(), emptySet(), emptySet(), shadowMirror, down, false, true, 20_000L),
+        )
+        val disarmedMirror = MirroredPolicy(planActive = true, disarmedUntil = 50_000L, blocked = listOf("com.example.game"))
+        assertEquals(
+            WindowDecision.Allow,
+            GuardianDecide.evaluateWindow("com.example.game", emptyList(), emptySet(), emptySet(), disarmedMirror, down, false, true, 20_000L),
+        )
+
+        // 2. Tier-0 allows Gemini, NekoBox, OriginOS launcher even when engine is down
+        val activeMirror = MirroredPolicy(planActive = true, lockShadow = false)
+        for (pkg in listOf("com.google.android.apps.bard", "moe.nb4a", "com.bbk.launcher2")) {
+            assertEquals(
+                WindowDecision.Allow,
+                GuardianDecide.evaluateWindow(pkg, emptyList(), emptySet(), emptySet(), activeMirror, down, false, true, 20_000L),
+            )
+        }
+
+        // 3. A11Y_DISABLED & battery/autostart repair context are not locked out, while force-stop/uninstall still block
+        assertEquals(
+            WindowDecision.Allow,
+            GuardianDecide.evaluateWindow(
+                "com.android.settings",
+                listOf("无障碍", "DSH Go 大肥鱼", "已开启"),
+                emptySet(),
+                emptySet(),
+                activeMirror,
+                a11yOff,
+                false,
+                true,
+                20_000L,
+            ),
+        )
+        assertEquals(
+            WindowDecision.Allow,
+            GuardianDecide.evaluateWindow(
+                "com.vivo.permissionmanager",
+                listOf("大肥鱼", "后台高耗电", "允许后台运行"),
+                emptySet(),
+                emptySet(),
+                activeMirror,
+                healthy,
+                false,
+                true,
+                20_000L,
+            ),
+        )
+        assertTrue(
+            GuardianDecide.evaluateWindow(
+                "com.android.settings",
+                listOf("应用信息", "DSH Go 大肥鱼", "强行停止"),
+                emptySet(),
+                emptySet(),
+                activeMirror,
+                healthy,
+                false,
+                true,
+                20_000L,
+            ) is WindowDecision.BlockTamper,
+        )
+
+        // 4. Emergency pass expires after device reboot when monotonic clock resets below grantedAtMono
+        val granted = EmergencyPassQuota.grant(EmergencyPassState(), "接快递", nowWallMs = 1_760_000_000_000L, nowMonoMs = 500_000L).state
+        assertTrue(EmergencyPassQuota.isActive(granted, nowMonoMs = 560_000L, nowWallMs = 1_760_000_060_000L))
+        // Simulated reboot: nowMonoMs reset to 10_000L (< grantedAtMono), wall jumped past activeUntilWall
+        assertFalse(EmergencyPassQuota.isActive(granted, nowMonoMs = 10_000L, nowWallMs = 1_760_000_300_000L))
+        // Simulated reboot within 3-minute window still valid until activeUntilWall
+        assertTrue(EmergencyPassQuota.isActive(granted, nowMonoMs = 10_000L, nowWallMs = 1_760_000_100_000L))
     }
 }

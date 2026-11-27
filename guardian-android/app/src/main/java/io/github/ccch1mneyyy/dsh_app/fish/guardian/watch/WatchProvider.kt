@@ -51,7 +51,7 @@ class WatchProvider : ContentProvider() {
                     putBoolean("modalOnEngineDown", settings.modalOnEngineDown)
                     putBoolean("lockOnEngineDown", settings.lockOnEngineDown)
                     putBoolean("autoRebindA11y", settings.autoRebindA11y)
-                    putBoolean("passActive", EmergencyPassQuota.isActive(pass, nowMono))
+                    putBoolean("passActive", EmergencyPassQuota.isActive(pass, nowMono, nowWall))
                     putLong("passRemainingMs", (pass.activeUntilMono - nowMono).coerceAtLeast(0L))
                     putInt("passRemainingToday", EmergencyPassQuota.remainingCount(pass, nowWall))
                     putInt("blockedCount", mirror.blocked.size)

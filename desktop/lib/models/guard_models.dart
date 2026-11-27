@@ -109,6 +109,13 @@ class GuardRulesConfig {
     'sumatrapdf',
     'zotero',
     'onenote',
+    'anki',
+    'cajviewer',
+    'foxitpdfreader',
+    'wpspdf',
+    'feishu',
+    'lark',
+    'dingtalk',
   ];
 
   static const List<String> defaultWorkTitleKeywords = [
@@ -157,6 +164,10 @@ class GuardRulesConfig {
     'chatgpt',
     'claude',
     'deepseek',
+    'anki',
+    '万世铭',
+    '公考雷达',
+    '粉笔职教',
   ];
 
   static const List<String> defaultDualApps = [

@@ -267,7 +267,7 @@ object FishClientBridge {
         }
         return runCatching {
             val wake = Intent().apply {
-                component = ComponentName(targetPkg, "io.github.ccch1mneyyy.dsh_app.loop.guardian.EngineWakeActivity")
+                component = ComponentName(targetPkg, "io.github.ccch1mneyyy.dsh_app.dafeiyu_loop.guardian.EngineWakeActivity")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
                 putExtra("pkg", c.packageName)
                 putExtra("pairToken", bond.pairToken)

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/guard_models.dart';
 import '../services/bridge_local_sync.dart';
@@ -235,6 +236,8 @@ class _OverviewPaneState extends State<OverviewPane> {
           ],
         ),
         const SizedBox(height: 12),
+        _buildIcebreakerCard(context, c),
+        const SizedBox(height: 12),
         _buildBridgeSyncCard(context, c, now),
         const SizedBox(height: 12),
         MistGlassSurface(
@@ -365,6 +368,91 @@ class _OverviewPaneState extends State<OverviewPane> {
     );
   }
 
+  Widget _buildIcebreakerCard(BuildContext context, PcGuardController c) {
+    final v6Online = c.phoneLockSyncEnabled && c.bridgeState.isSyncedOnline;
+    final winLabel = v6Online && c.bridgeState.v6WindowLabel.isNotEmpty
+        ? c.bridgeState.v6WindowLabel
+        : (c.bridgeState.v6DeskMoat ? '桌前护城河窗' : 'PC 本地破冰 Ready');
+
+    return MistGlassSurface(
+      borderColor: (c.bridgeState.v6DeskMoat ? MistColors.emerald : MistColors.cobalt)
+          .withValues(alpha: 0.35),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.bolt_rounded, color: MistColors.cobalt),
+              const SizedBox(width: 8),
+              Text('⚡ 零主动性破冰舱', style: Theme.of(context).textTheme.titleMedium),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (c.bridgeState.v6DeskMoat ? MistColors.emerald : MistColors.cobalt)
+                      .withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  winLabel,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: c.bridgeState.v6DeskMoat ? MistColors.emerald : MistColors.cobalt,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilledButton.icon(
+                key: const ValueKey('pc-icebreaker-roll-btn'),
+                onPressed: () => c.rollZeroDecisionIcebreaker(),
+                icon: const Icon(Icons.casino_rounded, size: 18),
+                label: const Text('🎲 零决策开一局（5m 破冰）'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('pc-feed-clipboard-btn'),
+                onPressed: () async {
+                  final data = await Clipboard.getData('text/plain');
+                  await c.feedKnowledgeSea(data?.text ?? '');
+                },
+                icon: const Icon(Icons.move_to_inbox_rounded, size: 18),
+                label: const Text('📥 剪贴板一键喂知识海'),
+              ),
+              if (v6Online && c.bridgeState.v6PoolCount > 0)
+                Chip(label: Text('手机知识海 ${c.bridgeState.v6PoolCount} 条')),
+              if (v6Online && c.bridgeState.v6CadenceActive && c.bridgeState.v6CadenceTarget.isNotEmpty)
+                Chip(label: Text('手机节拍：${c.bridgeState.v6CadenceTarget}')),
+              if (c.pendingFeedCount > 0)
+                Chip(label: Text('待同步知识 ${c.pendingFeedCount} 条')),
+            ],
+          ),
+          if (c.lastIcebreakerPrompt != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: MistColors.cobalt.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '[${c.lastIcebreakerSource ?? "破冰"}] ${c.lastIcebreakerPrompt}',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildBridgeSyncCard(
     BuildContext context,
     PcGuardController c,
@@ -385,6 +473,18 @@ class _OverviewPaneState extends State<OverviewPane> {
             PhoneSyncDirective.none => MistColors.cobalt,
           }
         : MistColors.inkMuted;
+
+    final diagText = !c.phoneLockSyncEnabled
+        ? ''
+        : syncedOnline
+            ? (c.lastPcActivityPushedAtUtcMs > 0
+                ? '双向回传已开启 · 最近上报 ${((now - c.lastPcActivityPushedAtUtcMs) / 1000).floor().clamp(0, 999)} 秒前'
+                : '双向回传已就绪 · 每 60 秒向手机汇报工作/娱乐与锁屏状态')
+            : c.bridgeState.bridgeOnline && !c.bridgeState.phoneOnline
+                ? '诊断：本机桥 127.0.0.1:8788 已启动，等待手机「Gemini 桥」同步快照'
+                : c.bridgeState.error == 'missing_local_key'
+                    ? '诊断：未发现 ~/.dafeiyu-bridge/bridge-state.json 密钥（请先启动本机桥）'
+                    : '诊断：127.0.0.1:8788 本机桥未启动或不可达，当前由 PC 独立规则兜底';
 
     return MistGlassSurface(
       child: Column(
@@ -429,20 +529,47 @@ class _OverviewPaneState extends State<OverviewPane> {
                 ),
             ],
           ),
+          if (diagText.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(diagText, style: const TextStyle(fontSize: 12)),
+          ],
           const SizedBox(height: 6),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: const Text(
-              '自愿跟锁手机（127.0.0.1:8788 本机桥联动）',
-              style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
-            ),
-            subtitle: const Text(
-              '开启后每 20 秒同步手机封印/默认验收/深夜锁/晚间封顶并同步放行花余额放风/紧急解除/恢复日；桥离线时自动退回 PC 独立规则',
-              style: TextStyle(fontSize: 12),
-            ),
-            value: c.phoneLockSyncEnabled,
-            onChanged: (v) => c.setPhoneLockSyncEnabled(v),
+          Row(
+            children: [
+              Expanded(
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text(
+                    '自愿跟锁手机（127.0.0.1:8788 本机桥联动）',
+                    style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: const Text(
+                    '开启后每 20 秒同步手机锁态/V6 并回传 PC 时长；桥离线时自动退回 PC 独立规则',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  value: c.phoneLockSyncEnabled,
+                  onChanged: (v) => c.setPhoneLockSyncEnabled(v),
+                ),
+              ),
+              if (c.phoneLockSyncEnabled) ...[
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => c.syncBridgeNow(),
+                  icon: const Icon(Icons.refresh_rounded, size: 16),
+                  label: const Text('立即重连'),
+                ),
+                const SizedBox(width: 6),
+                TextButton(
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      const ClipboardData(text: 'node tooling/gemini-bridge/server.mjs'),
+                    );
+                  },
+                  child: const Text('复制启动桥命令'),
+                ),
+              ],
+            ],
           ),
         ],
       ),

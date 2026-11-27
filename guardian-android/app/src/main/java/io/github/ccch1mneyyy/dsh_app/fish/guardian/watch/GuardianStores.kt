@@ -208,6 +208,9 @@ class GuardianStores(private val dir: File) {
                 "blocked" to parsed.blocked,
                 "blockWhys" to parsed.blockWhys,
                 "allow" to parsed.allow,
+                "lockShadow" to parsed.lockShadow,
+                "disarmedUntil" to parsed.disarmedUntil,
+                "neverLock" to parsed.neverLock,
             ),
         ))
     }
@@ -240,6 +243,8 @@ class GuardianStores(private val dir: File) {
             dayKey = GuardianJson.str(m, "dayKey"),
             usedToday = GuardianJson.int(m, "usedToday"),
             activeUntilMono = GuardianJson.lng(m, "activeUntilMono"),
+            grantedAtMono = GuardianJson.lng(m, "grantedAtMono"),
+            activeUntilWall = GuardianJson.lng(m, "activeUntilWall"),
             reason = GuardianJson.str(m, "reason"),
         )
     }
@@ -252,6 +257,8 @@ class GuardianStores(private val dir: File) {
                     "dayKey" to p.dayKey,
                     "usedToday" to p.usedToday,
                     "activeUntilMono" to p.activeUntilMono,
+                    "grantedAtMono" to p.grantedAtMono,
+                    "activeUntilWall" to p.activeUntilWall,
                     "reason" to p.reason,
                 ),
             ),

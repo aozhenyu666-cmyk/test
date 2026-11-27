@@ -46,6 +46,7 @@ class _HealthPageState extends State<HealthPage> with WidgetsBindingObserver {
   late final ProactiveChannel _channel = widget.channel ?? ProactiveChannel();
   ProactiveStatus? _status;
   Map<String, dynamic>? _health;
+  GuardianPairingStatus? _guardian;
   bool _loading = true;
 
   @override
@@ -68,6 +69,7 @@ class _HealthPageState extends State<HealthPage> with WidgetsBindingObserver {
   }
 
   Future<void> _load() async {
+    unawaited(_loadGuardian());
     final r = await Future.wait<Object?>([_channel.status(), _channel.healthStatus()]);
     if (!mounted) return;
     setState(() {
@@ -76,6 +78,14 @@ class _HealthPageState extends State<HealthPage> with WidgetsBindingObserver {
       final h = r[1];
       _health = h is Map<String, dynamic> && h['ok'] == true ? h : null;
     });
+  }
+
+  Future<void> _loadGuardian() async {
+    try {
+      final g = await _channel.guardianStatus();
+      if (!mounted || g == null) return;
+      setState(() => _guardian = g);
+    } catch (_) {}
   }
 
   List<Map<String, dynamic>> get _items =>
@@ -189,6 +199,35 @@ class _HealthPageState extends State<HealthPage> with WidgetsBindingObserver {
               chevron: true,
               onTap: () => unawaited((widget.bridge ?? RuntimeBridge()).openVendorSettings('autostart')),
             ),
+            if (_guardian != null)
+              ListPageRow(
+                key: const ValueKey('health-guardian'),
+                icon: !_guardian!.installed
+                    ? AppIcons.permissions
+                    : (_guardian!.paired ? AppIcons.success : AppIcons.warning),
+                iconColor: !_guardian!.installed
+                    ? colors.textTertiary
+                    : (_guardian!.paired ? colors.success : colors.warning),
+                title: '独立哨兵（防强停 / 防卸载）',
+                subtitle: !_guardian!.installed
+                    ? '未安装（可选加固，主包内置 EngineKeeper 已正常保活）'
+                    : _guardian!.paired
+                        ? (_guardian!.sameCert ? '同签名自动互信，跨进程看护就绪' : '已通过 6 位配对码完成互信')
+                        : '打开「大肥鱼哨兵」输入 6 位配对码（或安装同签名新版自动互信）',
+                subtitleMaxLines: 2,
+                badge: StatusChip(
+                  tone: !_guardian!.installed
+                      ? StatusTone.ok
+                      : (_guardian!.paired ? StatusTone.ok : StatusTone.warn),
+                  label: !_guardian!.installed
+                      ? '可选'
+                      : (_guardian!.paired ? (_guardian!.sameCert ? '同签互信' : '已配对') : '待配对'),
+                ),
+                chevron: _guardian!.installed && !_guardian!.paired,
+                onTap: _guardian!.installed && !_guardian!.paired
+                    ? () => unawaited(_go(const ProactivePage()))
+                    : null,
+              ),
           ],
         ),
         for (final g in groups.entries)

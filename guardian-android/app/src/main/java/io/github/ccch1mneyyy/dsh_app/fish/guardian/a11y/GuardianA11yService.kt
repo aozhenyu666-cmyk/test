@@ -61,7 +61,7 @@ class GuardianA11yService : AccessibilityService() {
         val mirror = stores.loadMirror()
         val settings = stores.loadSettings()
         val pass = stores.loadPass()
-        val passActive = EmergencyPassQuota.isActive(pass, nowMono)
+        val passActive = EmergencyPassQuota.isActive(pass, nowMono, nowWall)
         val verdict = snap.verdict(nowMono, passActive)
 
         val texts = if (pkg in GuardianConstants.SETTINGS_PACKAGES) collectVisibleTexts() else emptyList()

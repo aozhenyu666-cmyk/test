@@ -391,7 +391,7 @@ export function toolDefs({ vault = false } = {}) {
 
 const STATUS = { open: '进行中', floor: '过保底', stretch: '过拉伸', below: '没过保底', waived: '豁免' }
 
-export function todayText(snap, now) {
+export function todayText(snap, now, pcActivity = null) {
   if (!snap) return '手机还没跟桥同步过：在手机 DSH Go 的「Gemini 桥」页填好地址和密钥，等 20 秒再试。现在看不到他的今天。'
   const age = Math.max(0, now - Number(snap.receivedAt || snap.at || 0))
   const lines = []
@@ -434,6 +434,18 @@ export function todayText(snap, now) {
     const tm = lc.todayMetrics || {}
     const diceStr = lc.dice?.face ? '骰' + lc.dice.face + '·' + lc.dice.name : '未掷骰'
     lines.push('🎲 Live 窥视核心：' + (lc.phase || 'standby') + '（' + diceStr + ' · 今日点火 ' + (tm.ignites || 0) + ' 次 / 让路 ' + (tm.yields || 0) + ' 次 / 接力 ' + (tm.relays || 0) + ' 次）。')
+  }
+  if (snap.v6) {
+    const v6 = snap.v6
+    lines.push('🧭 V6 调度窗：' + (v6.windowLabel || v6.windowId || '常规窗') +
+      (v6.cadenceActive && v6.cadenceTarget ? ' · 进行中节拍「' + v6.cadenceTarget + '」' : '') +
+      (Number.isFinite(Number(v6.poolCount)) ? ' · 知识海 ' + v6.poolCount + ' 条' : ''))
+  }
+  if (pcActivity && Math.max(0, now - Number(pcActivity.receivedAt || pcActivity.at || 0)) < 60 * 60_000) {
+    const workM = Math.round(Number(pcActivity.workMinutes) || 0)
+    const entM = Math.round(Number(pcActivity.entertainmentMinutes) || 0)
+    const status = pcActivity.screenLocked ? '锁屏' : (pcActivity.isAfk ? 'AFK' : (pcActivity.activeApp || '未知窗口'))
+    lines.push('💻 电脑端实测：专注 ' + workM + 'm / 娱乐 ' + entM + 'm · 当前：' + status + (pcActivity.focusActive && pcActivity.focusTask ? '（专注锁：' + pcActivity.focusTask + '）' : ''))
   }
   const iron = snap.covenant?.iron || []
   if (iron.length) lines.push('公约铁律：' + iron.map((r) => r.id + ' ' + r.title).join('；') + '（全文用 dafeiyu_rules）。')
@@ -736,6 +748,9 @@ export function bossBriefSummary(store, vaultDir = '', { days = 7 } = {}) {
     }
   }
 
+  const pcActivity = store?.state?.pcActivity || null
+  const pcRecent = pcActivity && Math.max(0, now - Number(pcActivity.receivedAt || pcActivity.at || 0)) < 60 * 60_000 ? pcActivity : null
+
   return {
     ok: true,
     synced: true,
@@ -746,6 +761,7 @@ export function bossBriefSummary(store, vaultDir = '', { days = 7 } = {}) {
     vaultConfigured: Boolean(effectiveVault),
     recentNotes: recentVaultNotes,
     inboxTotal,
+    pcActivity: pcRecent,
     brief,
   }
 }
@@ -760,9 +776,11 @@ export function bossBriefText(summary) {
     return lines.join('\n')
   }
   const b = summary.brief
+  const pc = summary.pcActivity
   const lines = [
     `【老板全局审视账本 · ${b.day || '最近同步'}${summary.phoneOnline ? ' · 在线' : ' · 离线快照'}】`,
     b.headline ? `总览：${b.headline}` : '',
+    pc ? `电脑端：专注 ${Math.round(Number(pc.workMinutes) || 0)}m / 娱乐 ${Math.round(Number(pc.entertainmentMinutes) || 0)}m · 当前 ${pc.screenLocked ? '锁屏' : (pc.isAfk ? 'AFK' : (pc.activeApp || '运行中'))}` : '',
     ...(b.keyGaps?.length ? ['结构缺口：', ...b.keyGaps.map((g) => `- ${g}`)] : []),
     ...(b.bossPrompt ? ['', b.bossPrompt] : []),
   ].filter(Boolean)
@@ -807,7 +825,8 @@ export function phoneSync(store, body, events) {
   }
   st.commands = (st.commands || []).filter((c) => !acks.has(c.id))
   store.save()
-  return { ok: true, serverTime: now, commands: st.commands }
+  const pc = st.pcActivity && (now - Number(st.pcActivity.receivedAt || st.pcActivity.at || 0) < 15 * 60_000) ? st.pcActivity : null
+  return { ok: true, serverTime: now, commands: st.commands, ...(pc ? { pcActivity: pc } : {}) }
 }
 
 function waitResult(store, events, id, ms) {
@@ -848,7 +867,7 @@ export async function callTool(ctx, name, args = {}) {
   const snap = store.state.snapshot
   switch (name) {
     case 'dafeiyu_today':
-      return text(todayText(snap, store.now()), snap ? { structuredContent: { snapshot: { ...snap, covenant: undefined, weekText: undefined } } } : {})
+      return text(todayText(snap, store.now(), store.state.pcActivity || null), snap ? { structuredContent: { snapshot: { ...snap, covenant: undefined, weekText: undefined }, pcActivity: store.state.pcActivity || null } } : {})
     case 'dafeiyu_rules':
       return text(rulesText(snap))
     case 'dafeiyu_health':

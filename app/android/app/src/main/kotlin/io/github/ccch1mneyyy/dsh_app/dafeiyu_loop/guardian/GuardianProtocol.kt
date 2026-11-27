@@ -168,6 +168,9 @@ data class GuardianPolicySnapshot(
     val blockWhys: Map<String, String> = emptyMap(),
     val allow: List<String> = emptyList(),
     val todayMinutes: Map<String, Int> = emptyMap(),
+    val lockShadow: Boolean = false,
+    val disarmedUntil: Long = 0L,
+    val neverLock: List<String> = emptyList(),
 ) {
     fun toMap(): Map<String, Any?> = linkedMapOf(
         "v" to v,
@@ -189,6 +192,9 @@ data class GuardianPolicySnapshot(
         "blockWhys" to blockWhys,
         "allow" to allow,
         "todayMinutes" to todayMinutes,
+        "lockShadow" to lockShadow,
+        "disarmedUntil" to disarmedUntil,
+        "neverLock" to neverLock,
     )
 
     fun toJson(): String = GuardianJson.encode(toMap())
@@ -203,6 +209,7 @@ data class GuardianPolicySnapshot(
         fun fromMap(m: Map<*, *>): GuardianPolicySnapshot {
             val blockedList = (m["blocked"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
             val allowList = (m["allow"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+            val neverLockList = (m["neverLock"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
             val whys = LinkedHashMap<String, String>()
             (m["blockWhys"] as? Map<*, *>)?.forEach { (k, v) ->
                 if (k is String && v is String) whys[k] = v
@@ -231,6 +238,9 @@ data class GuardianPolicySnapshot(
                 blockWhys = whys,
                 allow = allowList,
                 todayMinutes = mins,
+                lockShadow = m["lockShadow"] == true,
+                disarmedUntil = (m["disarmedUntil"] as? Number)?.toLong() ?: 0L,
+                neverLock = neverLockList,
             )
         }
     }

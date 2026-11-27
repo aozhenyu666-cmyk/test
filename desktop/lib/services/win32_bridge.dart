@@ -6,6 +6,7 @@ class ForegroundWindowSnapshot {
     required this.title,
     required this.idleSec,
     required this.selfActive,
+    this.screenLocked = false,
     this.pid = 0,
     this.hwnd = 0,
   });
@@ -14,6 +15,7 @@ class ForegroundWindowSnapshot {
   final String title;
   final int idleSec;
   final bool selfActive;
+  final bool screenLocked;
   final int pid;
   final int hwnd;
 }
@@ -55,6 +57,7 @@ class Win32Bridge {
         title: (raw['title'] ?? '').toString(),
         idleSec: int.tryParse((raw['idleSec'] ?? 0).toString()) ?? 0,
         selfActive: raw['selfActive'] == true,
+        screenLocked: raw['screenLocked'] == true,
         pid: int.tryParse((raw['pid'] ?? 0).toString()) ?? 0,
         hwnd: int.tryParse((raw['hwnd'] ?? 0).toString()) ?? 0,
       );

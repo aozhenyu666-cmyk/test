@@ -2,7 +2,7 @@ name: Build 大肥鱼 PC Windows 客户端
 
 on:
   push:
-    branches: [feat/dafeiyu-v3-on-1016, feat/dafeiyu-v3-on-130]
+    branches: [feat/dafeiyu-v3-on-1016, feat/dafeiyu-v3-on-130, feat/super-dafeiyu-v4-exp]
     paths:
       - ".github/workflows/build-dafeiyu-pc.yml"
       - "desktop/**"
@@ -70,8 +70,9 @@ jobs:
           @(
             "## DSH Go 大肥鱼 · Windows 独立严防哨兵 #${{ github.run_number }}"
             ""
-            '- 完全独立运行于 Windows，不依赖手机连接；包含主程序 `dsh_go_fish_pc.exe` 与原生 C++ 互保守护进程 `dsh_fish_watchdog.exe`。'
-            '- 明确严格的本地规则与持久化账本：改严立即生效、改松进入 12 小时冷却队列、关闭隐藏至托盘、开机自启、高阻力随机码+理由+60s冷静期退出、铁锁专注倒计时禁止提前撤防。'
+            '- 完全独立运行于 Windows（可选本机桥 `127.0.0.1:8788` 双向联动手机 #240）：包含主程序 `dsh_go_fish_pc.exe` 与原生守护 `dsh_fish_watchdog.exe`。'
+            '- 新增「零主动性破冰舱」（5m 零决策开局 + 剪贴板一键投喂知识海）、锁屏桌面句柄级 AFK 防误计、60 秒双向时长回传与学习白名单扩展。'
+            '- 明确严格的本地规则与持久化账本：改严立即生效、改松进入 12 小时冷却队列、关闭隐藏至托盘、开机自启、高阻力随机码退出、铁锁倒计时禁止提前撤防。'
             '- OpenAI 兼容 AI 接口（DeepSeek / Gemini / OpenAI / Ollama / 自定义）：自动识别灰区站点学习/摸鱼、限时学习通行证审批与真实账本复盘参谋。'
           ) | Set-Content -Path PC_NOTES.md -Encoding utf8
           gh release create $tag `

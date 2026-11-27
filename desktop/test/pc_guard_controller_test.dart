@@ -397,4 +397,74 @@ void main() {
     await ctrl.tickSensor();
     expect(ctrl.activeBlock, isNull);
   });
+
+  test('PcGuardController treats screenLocked as AFK, pushes PC telemetry, and launches 5m icebreaker', () async {
+    final tmp = await Directory.systemTemp.createTemp('dsh_pc_v6_icebreaker_test_');
+    addTearDown(() => tmp.delete(recursive: true));
+
+    var fakeUtcMs = DateTime.utc(2026, 11, 27, 6, 0).millisecondsSinceEpoch;
+    final fakeWin32 = _FakeWin32Bridge();
+    final postedPaths = <String>[];
+    final postedBodies = <Map<String, dynamic>>[];
+
+    final bridge = BridgeLocalSync(
+      keyResolver: () async => 'dfyl_v6_key',
+      nowUtcMs: () => fakeUtcMs,
+      httpGet: (uri, headers) async => (
+        statusCode: 200,
+        body: jsonEncode({
+          'ok': true,
+          'phoneOnline': true,
+          'syncedAt': fakeUtcMs - 1000,
+          'v6': {'windowId': 'desk_moat', 'deskMoat': true, 'poolCount': 9},
+        }),
+      ),
+      httpPost: (uri, headers, body) async {
+        postedPaths.add(uri.path);
+        postedBodies.add(jsonDecode(body) as Map<String, dynamic>);
+        return (statusCode: 200, body: jsonEncode({'ok': true, 'text': '已同步手机V6'}));
+      },
+    );
+
+    final ctrl = PcGuardController(
+      store: FileSecretStore(tmp),
+      win32: fakeWin32,
+      bridgeSync: bridge,
+      nowUtcMs: () => fakeUtcMs,
+    );
+    addTearDown(ctrl.dispose);
+
+    await ctrl.init(autoStartLoop: false);
+    await ctrl.syncBridgeNow();
+    expect(ctrl.bridgeState.v6DeskMoat, isTrue);
+
+    // screenLocked=true must classify sample as AFK and NOT trigger block or work duration
+    fakeWin32.nextForeground = const ForegroundWindowSnapshot(
+      app: 'LockApp',
+      title: 'Windows 默认锁屏界面',
+      idleSec: 2,
+      selfActive: false,
+      screenLocked: true,
+      pid: 100,
+      hwnd: 200,
+    );
+    await ctrl.tickSensor();
+    fakeUtcMs += 10000;
+    await ctrl.tickSensor();
+    expect(ctrl.latestSample?.isAfk, isTrue);
+    expect(ctrl.ledger.workSeconds, 0);
+    expect(ctrl.ledger.afkSeconds, 10);
+    expect(ctrl.activeBlock, isNull);
+
+    // 60s pushPcActivity should have fired on tickSensor when bridge online
+    expect(postedPaths, contains('/bridge/local/pc-activity'));
+    expect(postedBodies.last['screenLocked'], isTrue);
+
+    // Zero-decision icebreaker opens 5m focus session and triggers v6-op on bridge
+    final roll = await ctrl.rollZeroDecisionIcebreaker(forcedIndex: 0);
+    expect(roll.ok, isTrue);
+    expect(ctrl.focusSession.active, isTrue);
+    expect(ctrl.focusSession.hardLocked, isFalse);
+    expect(postedPaths, contains('/bridge/local/v6-op'));
+  });
 }

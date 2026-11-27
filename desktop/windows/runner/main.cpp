@@ -12,6 +12,7 @@ namespace {
 
 constexpr wchar_t kWindowTitle[] = L"DSH Go 大肥鱼 · PC 严防哨兵";
 constexpr wchar_t kSingleInstanceMutex[] = L"Local\\DshGoFishPc_SingleInstance_v2";
+constexpr UINT kShowMainFromSecondInstance = WM_APP + 102;
 
 }  // namespace
 
@@ -36,6 +37,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     if (!start_minimized) {
       HWND existing = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", kWindowTitle);
       if (existing != nullptr) {
+        ::PostMessageW(existing, kShowMainFromSecondInstance, 0, 0);
         ::ShowWindow(existing, SW_SHOW);
         ::ShowWindow(existing, SW_RESTORE);
         ::SetForegroundWindow(existing);

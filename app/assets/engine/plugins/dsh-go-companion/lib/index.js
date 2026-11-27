@@ -6916,6 +6916,42 @@ export function apply(ctx) {
       })
       return { v: 1, ok: true, pc: saved }
     }
+    if (type === 'guardian-offline-batch') {
+      const incoming = (Array.isArray(body?.events) ? body.events : []).slice(0, 100)
+      const file = stateFile('guardian-incidents.json')
+      const existing = readState(file, [])
+      const list = Array.isArray(existing) ? existing.filter((x) => x && x.id) : []
+      const seen = new Set(list.map((x) => String(x.id)))
+      let accepted = 0
+      for (const raw of incoming) {
+        const id = String(raw?.id || '').trim().slice(0, 80)
+        const incType = String(raw?.type || '').trim().slice(0, 64)
+        if (!id || !incType || seen.has(id)) continue
+        seen.add(id)
+        const item = {
+          id,
+          type: incType,
+          atWall: Number(raw?.atWall) || now,
+          detail: String(raw?.detail || '').trim().slice(0, 300),
+          reason: String(raw?.reason || '').trim().slice(0, 200),
+          enginePhase: String(raw?.enginePhase || '').trim().slice(0, 32),
+          healthStatus: String(raw?.healthStatus || '').trim().slice(0, 32),
+          pkg: String(raw?.pkg || '').trim().slice(0, 120),
+          receivedAt: now,
+        }
+        list.push(item)
+        accepted += 1
+        record({
+          state: 'guardian-offline',
+          at: now,
+          incidentType: item.type,
+          detail: item.detail,
+          pkg: item.pkg,
+        })
+      }
+      if (accepted > 0) writeJson(file, list.slice(-200))
+      return { v: 1, ok: true, accepted }
+    }
     return { v: 1, ok: false, error: { code: 'unknown-event' } }
   }
   /** 任务期间拦下的通知，整理成一句简报（取完就清）。 */
@@ -7755,6 +7791,55 @@ export function apply(ctx) {
     liveCoreBridgeSnapshot: (n, t) => liveCoreBridgeSnapshot(n, t),
     markLiveCoreReceipt: (o) => markLiveCoreReceipt(o),
     liveCoreRoute: (b, m) => liveCoreRoute(b, m),
+    getV6BridgeSnapshot: (n, t) => {
+      const tz = zoneOr(t || config.timeZone)
+      const mod = zoneMinuteOfDay(n, tz)
+      const st = loadV6(n)
+      const win = v6EvaluateWindowMode(st.framework, mod)
+      const day = dayString(n, tz)
+      const cad = v6TickCadence(st.cadence, n, day).cadence
+      const tel = v6ComputePoolTelemetry(st.pool, n)
+      const ng = v6BuildNineGrid({ pool: st.pool, stelesCount: st.steles.length, now: n })
+      const face = lastRolledDice || 0
+      const rolledTile = face && Array.isArray(ng?.tiles) ? ng.tiles.find((x) => Number(x?.diceFace) === face) : null
+      return {
+        windowId: win.mode,
+        windowLabel: win.label,
+        deskMoat: win.mode === 'desk_moat',
+        cadenceActive: Boolean(cad?.active),
+        cadenceTarget: String(cad?.target || ''),
+        cadenceEndsAt: Number(cad?.dueAt) || 0,
+        poolCount: Number(tel?.activeCount ?? tel?.active ?? 0) || 0,
+        lastRoll: rolledTile
+          ? { title: String(rolledTile.title || ''), actionKind: String(rolledTile.actionKind || ''), diceLabel: `骰${face}` }
+          : (face ? { title: String(cad?.target || ''), actionKind: 'cadence_5m', diceLabel: `骰${face}` } : null),
+      }
+    },
+    applyV6Op: (payload) => {
+      const action = String(payload?.action || '').trim()
+      if (!['nine_grid_roll', 'cadence_start', 'pool_ingest'].includes(action)) {
+        return { v: 1, ok: false, error: 'disallowed-v6-op' }
+      }
+      return v6Route({ ...payload, action }, 'POST')
+    },
+    onPcActivity: (pc) => {
+      if (!pc || typeof pc !== 'object') return
+      const nowTs = Date.now()
+      savePcHeartbeat({
+        at: Number(pc.at) || nowTs,
+        receivedAt: nowTs,
+        isAfk: Boolean(pc.isAfk || pc.screenLocked),
+        afkStatus: pc.screenLocked ? 'screen-locked' : (pc.isAfk ? 'afk' : 'not-afk'),
+        activeApp: String(pc.activeApp || '').slice(0, 80),
+        activeTitle: String(pc.activeTitle || '').slice(0, 120),
+        category: pc.focusActive ? 'coding' : (Number(pc.entertainmentMinutes) > 0 ? 'dual' : 'other'),
+        focusMinutes: Math.max(0, Math.round(Number(pc.workMinutes) || 0)),
+        entertainmentMinutes: Math.max(0, Math.round(Number(pc.entertainmentMinutes) || 0)),
+        switches: Math.max(0, Math.round(Number(pc.blocksTriggered) || 0)),
+        screenLocked: Boolean(pc.screenLocked),
+        strictArmed: Boolean(pc.strictArmed),
+      })
+    },
   })
 
   /** role -> {sid, agent, off}：两个会话各挂各的人设。 */

@@ -657,6 +657,53 @@ test('dafeiyu_issue_sprint_custody 签发托管冲刺轨；dafeiyu_today 与 /br
     const relayDone = (await relayP).result
     assert.ok(!relayDone.isError)
     assert.match(relayDone.content[0].text, /判断推理 15 题/)
+
+    // 4. POST /bridge/local/pc-activity 与 /bridge/local/v6-op 双向闭环测试
+    const key = store.state.secret.localKey
+    const pcPost = await (await fetch(L + '/bridge/local/pc-activity', {
+      method: 'POST',
+      headers: { ...auth(key), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        dayKey: '2026-11-27',
+        workMinutes: 42.5,
+        entertainmentMinutes: 8,
+        activeApp: 'code',
+        activeTitle: 'dsh_go_fish_pc',
+        focusActive: true,
+        focusTask: '申论大作文框架',
+        strictArmed: true,
+      }),
+    })).json()
+    assert.equal(pcPost.ok, true)
+    assert.equal(pcPost.pcActivity.workMinutes, 42.5)
+
+    // phoneSync 顺带将 pcActivity 下发给手机，且 /bridge/local/today 与 dafeiyu_today 可见
+    const syncWithPc = await sync({ snapshot: { ...SNAP, v6: { windowId: 'desk_moat', windowLabel: '桌前护城河窗', deskMoat: true, cadenceActive: true, cadenceTarget: '完成5题资料分析', poolCount: 12 } } })
+    assert.equal(syncWithPc.pcActivity.activeApp, 'code')
+    const locToday2 = await (await fetch(L + '/bridge/local/today', { headers: auth(key) })).json()
+    assert.equal(locToday2.v6.deskMoat, true)
+    assert.equal(locToday2.pcActivity.workMinutes, 42.5)
+    const todayWithPc = (await call('dafeiyu_today', {}, 34)).result
+    assert.match(todayWithPc.content[0].text, /电脑端实测：专注 43m \/ 娱乐 8m/)
+    assert.match(todayWithPc.content[0].text, /桌前护城河窗/)
+
+    // /bridge/local/v6-op 拒绝越权动作，放行 nine_grid_roll & pool_ingest
+    const badOp = await fetch(L + '/bridge/local/v6-op', {
+      method: 'POST',
+      headers: { ...auth(key), 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'unlock' }),
+    })
+    assert.equal(badOp.status, 400)
+
+    const v6OpP = fetch(L + '/bridge/local/v6-op?async=1', {
+      method: 'POST',
+      headers: { ...auth(key), 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'pool_ingest', text: '增长率等于现期减去基期再除以基期。', source: 'pc_clipboard' }),
+    }).then((r) => r.json())
+    const v6Res = await v6OpP
+    assert.equal(v6Res.ok, true)
+    const pulledV6 = await sync({})
+    assert.equal(pulledV6.commands.some((c) => c.type === 'v6_op' && c.payload.action === 'pool_ingest'), true)
   } finally {
     pub.close()
     loc.close()

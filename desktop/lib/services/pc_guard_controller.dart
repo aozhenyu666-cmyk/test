@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -48,6 +49,40 @@ class PcGuardController extends ChangeNotifier {
   static const int maxEmergencyPassesPerDay = 2;
   static const int emergencyPassMinutes = 5;
   static const int bridgeSyncIntervalMs = 20 * 1000;
+  static const int pcActivityReportIntervalMs = 60 * 1000;
+
+  static const List<({String title, String task, String prompt})> _icebreakerDeck = [
+    (
+      title: '1. 资料分析 5 题极限速算',
+      task: '5m 速算 5 题资料分析',
+      prompt: '别想整张卷子，只打开资料分析做 5 题，只抓基期/增长率公式，5 分钟后交付正确率。',
+    ),
+    (
+      title: '2. 错题本挑刺 1 处陷阱',
+      task: '5m 错题挑刺 1 道旧错题',
+      prompt: '翻出最近 1 道错题或 Obsidian 卡片，用 1 句话写出当时掉进哪个选项陷阱。',
+    ),
+    (
+      title: '3. 判断推理 6 题清脆切片',
+      task: '5m 判断推理 6 题快刷',
+      prompt: '定 5 分钟微局做 6 道图形/逻辑推理，不纠结超 40 秒的题，先把节奏拉起来。',
+    ),
+    (
+      title: '4. 申论/结构化 3 行破题框架',
+      task: '5m 写 3 行破题骨架',
+      prompt: '打开 Obsidian 只写 3 行提纲（总论点 + 2 个分论点对策动词），写完就算过关。',
+    ),
+    (
+      title: '5. 记忆卡片抽背 3 张',
+      task: '5m 口述抽背 3 张记忆卡',
+      prompt: '从手机/Anki/笔记抽出 3 个概念，遮住答案用自己的话复述因果机制。',
+    ),
+    (
+      title: '6. 知识海盲点 1 条入库',
+      task: '5m 提炼 1 条核心盲点进知识海',
+      prompt: '把刚才卡壳的 1 个结论浓缩成 20–60 字，复制喂进大肥鱼知识海，立刻止损。',
+    ),
+  ];
 
   int get currentNowUtcMs => _nowUtcMs();
 
@@ -68,11 +103,18 @@ class PcGuardController extends ChangeNotifier {
   bool aiRequestBusy = false;
   bool coachBusy = false;
   final List<CoachMessage> coachMessages = [];
+  int lastPcActivityPushedAtUtcMs = 0;
+  String? lastIcebreakerPrompt;
+  String? lastIcebreakerSource;
+  int _pendingFeedCount = 0;
+  int get pendingFeedCount => _pendingFeedCount;
 
   Timer? _loopTimer;
   bool _tickBusy = false;
   bool _bridgeSyncBusy = false;
+  bool _pcPushBusy = false;
   int _lastBridgeSyncAttemptUtcMs = 0;
+  int _lastPcPushAttemptUtcMs = 0;
   int _lastTickUtcMs = 0;
   int _tickCount = 0;
   final Set<String> _inFlightAiKeys = <String>{};
@@ -150,6 +192,11 @@ class PcGuardController extends ChangeNotifier {
       phoneLockSyncEnabled = bridgeJson['phoneLockSyncEnabled'] != false;
     }
 
+    final pendingFeedJson = await store.readJsonFile('pending_knowledge_feeds.json');
+    if (pendingFeedJson['items'] is List) {
+      _pendingFeedCount = (pendingFeedJson['items'] as List).length;
+    }
+
     await store.clearAuthorizedExitFlag();
 
     final watchdogRestarts = await store.consumeWatchdogRestartLog();
@@ -209,6 +256,9 @@ class PcGuardController extends ChangeNotifier {
     try {
       final next = await bridgeSync.fetchToday();
       bridgeState = next;
+      if (next.bridgeOnline && _pendingFeedCount > 0) {
+        unawaited(_flushPendingKnowledgeFeeds());
+      }
       if (activeBlock != null &&
           next.isEffective &&
           next.directive == PhoneSyncDirective.relax) {
@@ -300,7 +350,7 @@ class PcGuardController extends ChangeNotifier {
           : ((now - _lastTickUtcMs) / 1000).round().clamp(0, 30);
       _lastTickUtcMs = now;
 
-      final isAfk = snap.idleSec >= afkThresholdSec;
+      final isAfk = snap.screenLocked || snap.idleSec >= afkThresholdSec;
       final cls = RuleEngine.classifyWindow(
         app: snap.app,
         title: snap.title,
@@ -324,12 +374,18 @@ class PcGuardController extends ChangeNotifier {
         );
       }
 
-      // 7. Heartbeat watchdog supervision, periodic bridge sync & persistence
+      // 7. Heartbeat watchdog supervision, periodic bridge sync & PC telemetry upload
       if (sensorRunning &&
           phoneLockSyncEnabled &&
           (_lastBridgeSyncAttemptUtcMs == 0 ||
               now - _lastBridgeSyncAttemptUtcMs >= bridgeSyncIntervalMs)) {
         unawaited(syncBridgeNow());
+      }
+      if (phoneLockSyncEnabled &&
+          bridgeState.bridgeOnline &&
+          (_lastPcPushAttemptUtcMs == 0 ||
+              now - _lastPcPushAttemptUtcMs >= pcActivityReportIntervalMs)) {
+        unawaited(pushPcActivityNow());
       }
       if (rules.strictGuardArmed && _tickCount % 3 == 0) {
         unawaited(
@@ -966,6 +1022,151 @@ class PcGuardController extends ChangeNotifier {
   Future<void> setCapsuleMode(bool enable) async {
     capsuleMode = await win32.setCapsuleMode(enable);
     notifyListeners();
+  }
+
+  Future<bool> pushPcActivityNow() async {
+    if (_pcPushBusy || !phoneLockSyncEnabled || !bridgeState.bridgeOnline) {
+      return false;
+    }
+    _pcPushBusy = true;
+    final now = _nowUtcMs();
+    _lastPcPushAttemptUtcMs = now;
+    try {
+      final sample = latestSample;
+      final ok = await bridgeSync.pushPcActivity({
+        'at': now,
+        'dayKey': ledger.dayKey,
+        'workMinutes': double.parse(ledger.workMinutes.toStringAsFixed(1)),
+        'entertainmentMinutes':
+            double.parse(ledger.entertainmentMinutes.toStringAsFixed(1)),
+        'dualMinutes': double.parse(ledger.dualMinutes.toStringAsFixed(1)),
+        'afkMinutes': double.parse(ledger.afkMinutes.toStringAsFixed(1)),
+        'activeApp': sample?.snapshot.app ?? '',
+        'activeTitle': sample?.snapshot.title ?? '',
+        'isAfk': sample?.isAfk ?? false,
+        'screenLocked': sample?.snapshot.screenLocked ?? false,
+        'focusActive': focusSession.isActiveAt(now),
+        'focusTask': focusSession.taskName,
+        'blocksTriggered': ledger.blocksTriggered,
+        'strictArmed': rules.strictGuardArmed,
+      });
+      if (ok) {
+        lastPcActivityPushedAtUtcMs = now;
+        notifyListeners();
+      }
+      return ok;
+    } finally {
+      _pcPushBusy = false;
+    }
+  }
+
+  Future<({bool ok, String prompt, String message})>
+      rollZeroDecisionIcebreaker({int? forcedIndex}) async {
+    final now = _nowUtcMs();
+    final idx = forcedIndex != null
+        ? forcedIndex.clamp(0, _icebreakerDeck.length - 1)
+        : Random(now).nextInt(_icebreakerDeck.length);
+    final pick = _icebreakerDeck[idx];
+
+    lastIcebreakerPrompt = '${pick.title}：${pick.prompt}';
+    var syncedPhone = false;
+    var remoteMsg = '';
+    if (phoneLockSyncEnabled && bridgeState.bridgeOnline) {
+      final res = await bridgeSync.triggerV6Op('nine_grid_roll');
+      syncedPhone = res.ok;
+      remoteMsg = res.message;
+    }
+    lastIcebreakerSource = syncedPhone ? 'PC + 手机联动' : 'PC 本地零决策';
+
+    if (!focusSession.isActiveAt(now)) {
+      await startFocusSession(
+        minutes: 5,
+        taskName: pick.task,
+        hardLocked: false,
+      );
+    } else {
+      _appendLog(now, 'icebreaker', '抽取 5m 破冰动作：${pick.title}');
+      await _persistLedger();
+    }
+
+    final summary = syncedPhone
+        ? '已同步摇出手机 V6 破冰局并锁定 PC 5 分钟：${pick.title}（$remoteMsg）'
+        : '已开启 5 分钟零决策破冰局：${pick.title}';
+    statusBanner = summary;
+    notifyListeners();
+    return (ok: true, prompt: lastIcebreakerPrompt!, message: summary);
+  }
+
+  Future<({bool ok, String message})> feedKnowledgeSea(String rawText) async {
+    final clean = rawText.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (clean.length < 8) {
+      return (ok: false, message: '内容太短（至少 8 个字），先复制完整的一条题目结论或要点');
+    }
+    final clipped = clean.length > 600 ? clean.substring(0, 600) : clean;
+    final now = _nowUtcMs();
+
+    if (phoneLockSyncEnabled && bridgeState.bridgeOnline) {
+      final res = await bridgeSync.triggerV6Op('pool_ingest', {
+        'source': 'pc_clipboard',
+        'text': clipped,
+      });
+      if (res.ok) {
+        _appendLog(now, 'knowledge_feed', '电脑剪贴板已投喂手机知识海（${clipped.length} 字）');
+        await _persistLedger();
+        statusBanner = res.message;
+        notifyListeners();
+        return res;
+      }
+    }
+
+    final raw = await store.readJsonFile('pending_knowledge_feeds.json');
+    final list = <Map<String, Object?>>[
+      if (raw['items'] is List)
+        for (final item in raw['items'] as List)
+          if (item is Map) item.cast<String, Object?>(),
+      {'text': clipped, 'atUtcMs': now},
+    ];
+    final capped = list.length > 30 ? list.sublist(list.length - 30) : list;
+    await store.writeJsonFile('pending_knowledge_feeds.json', {'items': capped});
+    _pendingFeedCount = capped.length;
+    _appendLog(now, 'knowledge_feed', '本机桥离线，已暂存待同步知识卡（共 $_pendingFeedCount 条）');
+    await _persistLedger();
+    final msg = '本机桥暂离线，已保存到电脑待同步池（$_pendingFeedCount 条），桥恢复上线后自动推送手机';
+    statusBanner = msg;
+    notifyListeners();
+    return (ok: true, message: msg);
+  }
+
+  Future<void> _flushPendingKnowledgeFeeds() async {
+    if (!phoneLockSyncEnabled || !bridgeState.bridgeOnline) return;
+    final raw = await store.readJsonFile('pending_knowledge_feeds.json');
+    if (raw['items'] is! List || (raw['items'] as List).isEmpty) {
+      _pendingFeedCount = 0;
+      return;
+    }
+    final items = (raw['items'] as List).whereType<Map>().toList();
+    final remaining = <Map<String, Object?>>[];
+    var sent = 0;
+    for (final item in items) {
+      final text = (item['text'] ?? '').toString().trim();
+      if (text.isEmpty) continue;
+      final res = await bridgeSync.triggerV6Op('pool_ingest', {
+        'source': 'pc_clipboard',
+        'text': text,
+      });
+      if (res.ok) {
+        sent++;
+      } else {
+        remaining.add(item.cast<String, Object?>());
+      }
+    }
+    await store.writeJsonFile('pending_knowledge_feeds.json', {'items': remaining});
+    _pendingFeedCount = remaining.length;
+    if (sent > 0) {
+      _appendLog(_nowUtcMs(), 'knowledge_feed', '桥恢复上线：已自动补送 $sent 条暂存知识进手机知识海');
+      await _persistLedger();
+      notifyListeners();
+    }
   }
 
   Future<void> _syncNativeGuardState() async {

@@ -51,6 +51,9 @@ export function createBridgeRuntime(deps) {
     liveCoreBridgeSnapshot,
     markLiveCoreReceipt,
     liveCoreRoute,
+    getV6BridgeSnapshot,
+    applyV6Op,
+    onPcActivity,
   } = deps
 
   const BRIDGE_TICK_MS = 10_000
@@ -61,6 +64,7 @@ export function createBridgeRuntime(deps) {
   const BRIDGE_TIMEOUT_MS = 10_000
 
   let bridgeSent = { core: '', covenant: '', week: '', bossBrief: '', fullAt: 0 }
+  let lastPcSyncedAt = 0
   let bridgeInflight = null
   let bridgeTimer = null
 
@@ -277,6 +281,13 @@ export function createBridgeRuntime(deps) {
           return null
         }
       })(),
+      v6: (() => {
+        try {
+          return typeof getV6BridgeSnapshot === 'function' ? getV6BridgeSnapshot(now, tz) : null
+        } catch {
+          return null
+        }
+      })(),
       names: sisterNames(),
     }
   }
@@ -427,6 +438,32 @@ export function createBridgeRuntime(deps) {
       }, 'POST')
       return { ok: r?.ok === true, text: r?.toast || '已完成本轮 Live 接力交接。' }
     }
+    if (cmd?.type === 'v6_op') {
+      const action = String(p.action || '').trim()
+      if (!['nine_grid_roll', 'cadence_start', 'pool_ingest'].includes(action)) {
+        return { ok: false, text: '手机拒绝了不在安全白名单内的 V6 指令：' + action }
+      }
+      if (typeof applyV6Op !== 'function') {
+        return { ok: false, text: '手机端未挂载 applyV6Op。' }
+      }
+      const r = applyV6Op(p, now)
+      if (!r || r.ok === false) {
+        return { ok: false, text: r?.error || '手机执行 V6 操作失败' }
+      }
+      if (action === 'nine_grid_roll') {
+        const title = r.roll?.tile?.title || r.roll?.target || '随机微动作'
+        return { ok: true, text: `已为手机摇出「${title}」（${r.cadenceArmed ? '并已拉起 5m 节拍锁' : r.roll?.diceLabel || 'V6 破冰'}）。` }
+      }
+      if (action === 'cadence_start') {
+        return { ok: true, text: `已启动 5 分钟节拍：「${r.cadence?.target || p.target || '微突破'}」。` }
+      }
+      return {
+        ok: true,
+        text: r.kind === 'contract'
+          ? `已从文本立下契约：「${r.contract?.target || '今日契约'}」。`
+          : `已吸收 ${r.addedCount || 0} 条知识进大肥鱼知识海（共 ${r.telemetry?.active ?? ''} 条活跃）。`,
+      }
+    }
     return { ok: false, text: '手机不认识这种命令：' + String(cmd?.type || '') }
   }
 
@@ -483,6 +520,13 @@ export function createBridgeRuntime(deps) {
       }
       try {
         const first = await sendSnap(st.pendingResults, force)
+        if (first?.pcActivity && typeof first.pcActivity === 'object') {
+          const pcAt = Number(first.pcActivity.at) || 0
+          if (pcAt > lastPcSyncedAt) {
+            lastPcSyncedAt = pcAt
+            try { onPcActivity?.(first.pcActivity) } catch {}
+          }
+        }
         st = { ...st, pendingResults: [], lastOkAt: Date.now(), lastError: '' }
         const results = []
         for (const cmd of Array.isArray(first?.commands) ? first.commands : []) {

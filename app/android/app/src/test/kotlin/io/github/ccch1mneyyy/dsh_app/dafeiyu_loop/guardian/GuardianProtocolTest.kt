@@ -125,11 +125,17 @@ class GuardianProtocolTest {
             blockWhys = mapOf("tv.danmaku.bili" to "计划未验收"),
             allow = listOf("com.android.dialer", "com.tencent.mm"),
             todayMinutes = mapOf("tv.danmaku.bili" to 12),
+            lockShadow = true,
+            disarmedUntil = 1_760_000_300_000L,
+            neverLock = listOf("com.google.android.apps.bard", "moe.nb4a"),
         )
         val encoded = snap.toJson()
         val decoded = GuardianPolicySnapshot.fromJson(encoded)
         assertNotNull(decoded)
         assertEquals(snap, decoded)
+        assertTrue(decoded!!.lockShadow)
+        assertEquals(1_760_000_300_000L, decoded.disarmedUntil)
+        assertEquals(listOf("com.google.android.apps.bard", "moe.nb4a"), decoded.neverLock)
     }
 
     @Test

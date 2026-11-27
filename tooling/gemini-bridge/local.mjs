@@ -4,10 +4,12 @@
 // Funnel 转进来的请求在本机看来也是 127.0.0.1——所以「看来源 IP 是不是本机」挡不住公网，必须换一个端口、不 funnel。
 // 另外还要一把单独的本机密钥（localKey，跟手机密钥不是一把）：Authorization: Bearer <localKey>。
 //
-//   GET  /bridge/local/today              手机最近一次同步的「今天」（时间轴、验收、到期复习卡）
+//   GET  /bridge/local/today              手机最近一次同步的「今天」（时间轴、验收、到期复习卡、V6 状态、电脑端活动）
 //   GET  /bridge/local/inbox              电脑端收件箱（大肥鱼/收件箱.md）+ 手机端收件箱/卡壳/未过保底/复习摘要
 //   POST /bridge/local/ingest             推复习卡（BrainOS 命题卡）/ 报复习评分 / 顺带一条回执
 //   POST /bridge/local/import-questions   一批题灌进手机题库（按题干去重）
+//   POST /bridge/local/pc-activity        电脑端哨兵每分钟回传工作/娱乐/锁屏时长到本机桥
+//   POST /bridge/local/v6-op              安全调度手机 V6（仅限 nine_grid_roll / cadence_start / pool_ingest）
 //
 // 写操作和 Gemini 一样只是排一条命令，手机下次同步取走、按手机上的规矩再验一遍。
 // 这里同样没有任何解锁、加额度、豁免、改小、删除的口子。
@@ -131,6 +133,8 @@ export function createLocalApi({ store, events, vaultDir = '', resultWaitMs = RE
           verifyLockCenter: snap?.verifyLockCenter || null,
           verifier: snap?.verify || null,
           review: snap?.review || null,
+          v6: snap?.v6 || null,
+          pcActivity: store.state.pcActivity || null,
           health: snap?.health?.line || '',
         })
       }
@@ -178,6 +182,49 @@ export function createLocalApi({ store, events, vaultDir = '', resultWaitMs = RE
         return queue(req, res, url, 'import_questions', {
           bankId: str(body.bankId ?? body.bank_id, 48), bankName: str(body.bankName ?? body.bank_name, 60), raw: rawStr || undefined, questions: questions || undefined,
         })
+      }
+      if (path === '/bridge/local/pc-activity') {
+        const nowTs = store.now()
+        const pc = {
+          at: Number(body?.at) || nowTs,
+          receivedAt: nowTs,
+          dayKey: str(body?.dayKey, 16),
+          workMinutes: Math.max(0, Number(body?.workMinutes) || 0),
+          entertainmentMinutes: Math.max(0, Number(body?.entertainmentMinutes) || 0),
+          dualMinutes: Math.max(0, Number(body?.dualMinutes) || 0),
+          afkMinutes: Math.max(0, Number(body?.afkMinutes) || 0),
+          activeApp: str(body?.activeApp, 80),
+          activeTitle: str(body?.activeTitle, 120),
+          isAfk: Boolean(body?.isAfk),
+          screenLocked: Boolean(body?.screenLocked),
+          focusActive: Boolean(body?.focusActive),
+          focusTask: str(body?.focusTask, 80),
+          blocksTriggered: Math.max(0, Math.round(Number(body?.blocksTriggered) || 0)),
+          strictArmed: Boolean(body?.strictArmed),
+        }
+        store.state.pcActivity = pc
+        store.save()
+        return send(res, 200, { ok: true, pcActivity: pc })
+      }
+      if (path === '/bridge/local/v6-op') {
+        const action = str(body?.action, 40)
+        if (!['nine_grid_roll', 'cadence_start', 'pool_ingest'].includes(action)) {
+          return send(res, 400, { ok: false, error: 'disallowed-action', text: '仅允许 nine_grid_roll / cadence_start / pool_ingest' })
+        }
+        const payload = { action }
+        if (action === 'cadence_start') {
+          if (body?.target != null) payload.target = str(body.target, 120)
+          if (Number.isFinite(Number(body?.intervalSec))) payload.intervalSec = Number(body.intervalSec)
+        } else if (action === 'pool_ingest') {
+          const text = str(body?.text, 800)
+          if (!text) return send(res, 400, { ok: false, error: 'empty', text: 'text 不能为空' })
+          payload.text = text
+          payload.source = str(body?.source || 'pc_clipboard', 40)
+        } else if (action === 'nine_grid_roll') {
+          if (body?.autoArm === false) payload.autoArm = false
+          if (body?.excludeTileId) payload.excludeTileId = str(body.excludeTileId, 48)
+        }
+        return queue(req, res, url, 'v6_op', payload)
       }
       return send(res, 404, { ok: false, error: 'not_found' })
     } catch (e) {

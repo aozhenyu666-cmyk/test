@@ -30,11 +30,16 @@ class MiniCapsuleHud extends StatelessWidget {
                 controller.ledger.entertainmentMinutes)
             .clamp(0, 999)
             .toStringAsFixed(0);
+    final v6 = controller.bridgeState;
     final subtitle = inFocus
         ? '专注锁剩余 ${(controller.focusSession.remainingSecondsAt(now) / 60).ceil()}m · ${controller.focusSession.taskName}'
-        : (sample != null && sample.snapshot.app.isNotEmpty)
-            ? '${sample.snapshot.app} | 娱乐余 ${remainEntMin}m'
-            : '大肥鱼 PC 严防待命 · 娱乐余 ${remainEntMin}m';
+        : (v6.isSyncedOnline && v6.v6CadenceActive && v6.v6CadenceTarget.isNotEmpty)
+            ? '手机5m节拍：${v6.v6CadenceTarget} | 娱乐余 ${remainEntMin}m'
+            : (v6.isSyncedOnline && v6.v6DeskMoat)
+                ? '🛡 桌前护城河中 | ${(sample != null && sample.snapshot.app.isNotEmpty) ? sample.snapshot.app : "PC待命"}'
+                : (sample != null && sample.snapshot.app.isNotEmpty)
+                    ? '${sample.snapshot.app} | 娱乐余 ${remainEntMin}m'
+                    : '大肥鱼 PC 严防待命 · 娱乐余 ${remainEntMin}m';
 
     return Scaffold(
       backgroundColor: Colors.transparent,

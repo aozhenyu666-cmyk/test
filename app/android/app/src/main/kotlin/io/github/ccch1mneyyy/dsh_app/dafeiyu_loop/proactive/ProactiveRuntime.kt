@@ -3453,6 +3453,9 @@ object ProactiveRuntime {
         val todayMap = runCatching {
             NowFeed.today(SystemClock.elapsedRealtime(), dayOf(now)).associate { it.first to it.second }
         }.getOrDefault(emptyMap())
+        val disarmedUntilWall = LockSafety.disarmUntil(app)
+        val baseEmergencyUntil = if (inEmergencyPass(now)) emergencyUntilAt else 0L
+        val neverLockSet = (io.github.ccch1mneyyy.dsh_app.phone.a11y.SystemSafeAllowlist.SAFE_BASE + allowSet).toList().sorted()
         val snapshot = GuardianPolicySnapshot(
             updatedAtWall = now,
             enginePhase = runCatching { RuntimeController.get(app).phase.wire }.getOrDefault("unknown"),
@@ -3465,13 +3468,16 @@ object ProactiveRuntime {
             lockUntil = lockUntil(now),
             refuseUntil = refuseUntil(),
             breakUntil = if (breaking()) breakUntil else 0L,
-            emergencyUntil = if (inEmergencyPass(now)) emergencyUntilAt else 0L,
+            emergencyUntil = maxOf(baseEmergencyUntil, disarmedUntilWall),
             sessionUntil = if (sessionActive()) sessionUntil else 0L,
             sessionGraceMs = sessionGrace,
             blocked = blockedNow().toList().sorted(),
             blockWhys = HashMap(blockWhys),
             allow = allowSet.toList().sorted(),
             todayMinutes = todayMap,
+            lockShadow = LockSafety.shadow(app),
+            disarmedUntil = disarmedUntilWall,
+            neverLock = neverLockSet,
         )
         GuardianPolicyMirror.update(app, snapshot)
     }

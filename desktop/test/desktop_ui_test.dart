@@ -133,6 +133,13 @@ void main() {
 
     expect(find.text('独立运行（未连本机桥）'), findsOneWidget);
     expect(find.text('自愿跟锁手机（127.0.0.1:8788 本机桥联动）'), findsOneWidget);
+    expect(find.byKey(const ValueKey('pc-icebreaker-roll-btn')), findsOneWidget);
+    expect(find.byKey(const ValueKey('pc-feed-clipboard-btn')), findsOneWidget);
+
+    await tester.runAsync(() => ctrl.rollZeroDecisionIcebreaker(forcedIndex: 0));
+    await tester.pump();
+    expect(ctrl.focusSession.active, isTrue);
+    expect(find.textContaining('资料分析 5 题极限速算'), findsWidgets);
 
     online = true;
     await tester.runAsync(() => ctrl.syncBridgeNow());

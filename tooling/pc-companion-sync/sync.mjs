@@ -7,19 +7,21 @@
  * 通过局域网 / Tailscale 推送至手机端伴侣 `/dsh-go-companion/v1/event`（或写入本地 JSON 快照）。
  */
 
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
 
 const DEFAULT_AW_URL = process.env.AW_BASE_URL || 'http://127.0.0.1:5600'
 const DEFAULT_COMPANION_URL = process.env.COMPANION_EVENT_URL || ''
+const DEFAULT_LOCAL_BRIDGE_URL = process.env.DAFEIYU_LOCAL_BRIDGE_URL || ''
 const DEFAULT_LOOKBACK_SEC = Number(process.env.AW_LOOKBACK_SEC || 900) || 900
 
-const CODING_APPS = /(code|cursor|windsurf|idea|pycharm|webstorm|goland|rustrover|vim|nvim|wt|windows terminal|powershell|pwsh|iterm|alacritty|cmd)/i
-const DOCS_APPS = /(obsidian|notion|logseq|typora|word|wps|acrobat|zotero|onenote|excel)/i
+const CODING_APPS = /(code|cursor|windsurf|antigravity|idea|pycharm|webstorm|goland|rustrover|vim|nvim|wt|windows terminal|powershell|pwsh|iterm|alacritty|cmd)/i
+const DOCS_APPS = /(obsidian|notion|logseq|typora|word|wps|acrobat|zotero|onenote|excel|anki)/i
 const VIDEO_ENTERTAINMENT = /(bilibili|youtube|douyin|tiktok|iqiyi|youku|netflix|twitch|steam|epicgames|genshin|league|valorant)/i
 const BROWSER_APPS = /(chrome|msedge|edge|firefox|brave|arc|safari)/i
-const LEARNING_KEYWORDS = /(docs|github|stackoverflow|arxiv|mdn|wikipedia|rfc|tutorial|course|paper|算法|源码|文档)/i
+const LEARNING_KEYWORDS = /(docs|github|stackoverflow|arxiv|mdn|wikipedia|rfc|tutorial|course|paper|算法|源码|文档|考公|行测|申论|资料分析|判断推理|粉笔|花生十三|面试|简历|牛客|leetcode|gemini|claude|obsidian|deeptutor|127\.0\.0\.1:8001)/i
 
 export function classifyPcActivity(app = '', title = '', afkStatus = 'not-afk') {
   if (afkStatus === 'afk') return 'afk'
@@ -94,9 +96,22 @@ export function summarizeHeartbeat({ windowEvents = [], afkEvents = [], now = Da
   }
 }
 
+function readLocalBridgeKey(explicitKey = '') {
+  if (explicitKey) return String(explicitKey).trim()
+  if (process.env.DAFEIYU_LOCAL_KEY) return String(process.env.DAFEIYU_LOCAL_KEY).trim()
+  try {
+    const raw = readFileSync(join(homedir(), '.dafeiyu-bridge', 'bridge-state.json'), 'utf8')
+    return String(JSON.parse(raw)?.secret?.localKey || '').trim()
+  } catch {
+    return ''
+  }
+}
+
 export async function collectAndPush({
   awUrl = DEFAULT_AW_URL,
   companionUrl = DEFAULT_COMPANION_URL,
+  localBridgeUrl = DEFAULT_LOCAL_BRIDGE_URL,
+  localKey = '',
   outFile = '',
   lookbackSec = DEFAULT_LOOKBACK_SEC,
   now = Date.now(),
@@ -119,6 +134,7 @@ export async function collectAndPush({
   }
 
   let pushed = false
+  let localPushed = false
   let mobileState = null
   if (companionUrl) {
     const res = await fetchFn(companionUrl, {
@@ -139,11 +155,33 @@ export async function collectAndPush({
       }
     }
   }
+  if (localBridgeUrl) {
+    const token = readLocalBridgeKey(localKey)
+    if (token) {
+      const target = String(localBridgeUrl).replace(/\/+$/, '') + '/bridge/local/pc-activity'
+      const lRes = await fetchFn(target, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          at: payload.at,
+          isAfk: payload.isAfk,
+          activeApp: payload.activeApp,
+          activeTitle: payload.activeTitle,
+          workMinutes: payload.focusMinutes,
+          entertainmentMinutes: payload.entertainmentMinutes,
+          blocksTriggered: 0,
+        }),
+      })
+      if (!lRes.ok) throw new Error(`Local bridge push HTTP ${lRes.status}`)
+      localPushed = true
+    }
+  }
 
   return {
     ok: true,
     payload,
     pushed,
+    localPushed,
     ...(mobileState ? { mobileBout: { running: Boolean(mobileState.running), strict: Boolean(mobileState.strict) } } : {}),
     buckets: { winBucket, afkBucket },
   }
@@ -155,6 +193,8 @@ function parseArgs(argv) {
     const k = argv[i]
     if (k === '--aw' && argv[i + 1]) out.awUrl = argv[++i]
     else if (k === '--target' && argv[i + 1]) out.companionUrl = argv[++i]
+    else if (k === '--local-bridge' && argv[i + 1]) out.localBridgeUrl = argv[++i]
+    else if (k === '--local-key' && argv[i + 1]) out.localKey = argv[++i]
     else if (k === '--out' && argv[i + 1]) out.outFile = argv[++i]
     else if (k === '--window-sec' && argv[i + 1]) out.lookbackSec = Number(argv[++i]) || DEFAULT_LOOKBACK_SEC
     else if (k === '--interval-sec' && argv[i + 1]) out.intervalSec = Number(argv[++i]) || 0

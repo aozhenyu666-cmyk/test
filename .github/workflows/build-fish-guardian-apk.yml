@@ -2,7 +2,7 @@ name: Build 大肥鱼哨兵 Android APK
 
 on:
   push:
-    branches: [feat/dafeiyu-v3-on-1016]
+    branches: [feat/dafeiyu-v3-on-1016, feat/super-dafeiyu-v4-exp]
     paths:
       - ".github/workflows/build-fish-guardian-apk.yml"
       - "guardian-android/**"
@@ -85,12 +85,48 @@ jobs:
           assert total >= 5 and fail == 0
           PY
 
+      - name: Prepare persistent fish signing config (if configured)
+        env:
+          FISH_KEYSTORE_BASE64: ${{ secrets.FISH_KEYSTORE_BASE64 }}
+          FISH_KEYSTORE_PASS: ${{ secrets.FISH_KEYSTORE_PASS }}
+          FISH_KEY_ALIAS: ${{ secrets.FISH_KEY_ALIAS }}
+          FISH_KEY_PASS: ${{ secrets.FISH_KEY_PASS }}
+        run: |
+          if [ -n "$FISH_KEYSTORE_BASE64" ] && [ -n "$FISH_KEYSTORE_PASS" ] && [ -n "$FISH_KEY_ALIAS" ]; then
+            python3 - <<'PY'
+          import base64, os, re
+          from pathlib import Path
+          raw = re.sub(r"[^A-Za-z0-9+/=]", "", os.environ["FISH_KEYSTORE_BASE64"])
+          Path("/tmp/fish-guardian.jks").write_bytes(base64.b64decode(raw))
+          store_pass = os.environ["FISH_KEYSTORE_PASS"]
+          key_pass = os.environ.get("FISH_KEY_PASS") or store_pass
+          key_alias = os.environ["FISH_KEY_ALIAS"]
+          def esc(v: str) -> str:
+              return v.replace("\\", "\\\\").replace("\r", "").replace("\n", "")
+          Path("guardian-android/key.properties").write_text(
+              f"storeFile=/tmp/fish-guardian.jks\n"
+              f"storePassword={esc(store_pass)}\n"
+              f"keyAlias={esc(key_alias)}\n"
+              f"keyPassword={esc(key_pass)}\n",
+              encoding="utf-8",
+          )
+          PY
+            echo "Prepared guardian Gradle release signing via guardian-android/key.properties."
+          else
+            rm -f /tmp/fish-guardian.jks guardian-android/key.properties
+            echo "::notice::FISH_KEYSTORE_BASE64 not set; keeping default Gradle debug signature."
+          fi
+
       - name: Build release APK
         run: |
           cd guardian-android
           bash gradlew :app:assembleRelease --console=plain \
             -Dorg.gradle.internal.repository.max.retries=10 \
             -Dorg.gradle.internal.repository.initial.backoff=2000
+
+      - name: Cleanup signing secrets
+        if: always()
+        run: rm -f /tmp/fish-guardian.jks guardian-android/key.properties
 
       - name: Package & inspect guardian APK
         run: |

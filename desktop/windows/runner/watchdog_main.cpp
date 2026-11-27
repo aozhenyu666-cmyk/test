@@ -196,7 +196,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       break;
     }
 
-    DWORD wait_rc = ::WaitForSingleObject(stop_event, 1500);
+    DWORD wait_rc = ::WaitForSingleObject(stop_event, 500);
     if (wait_rc == WAIT_OBJECT_0) {
       break;
     }
